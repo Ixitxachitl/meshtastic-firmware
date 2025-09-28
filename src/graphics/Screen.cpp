@@ -456,7 +456,11 @@ void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
             digitalWrite(VTFT_CTRL, LOW);
             ui->init();
 #ifdef ESP_PLATFORM
-            analogWrite(VTFT_LEDA, BRIGHTNESS_DEFAULT);
+            #if defined(M5STACK_CARDPUTER_ADV)
+              analogWrite(VTFT_LEDA, uiconfig.screen_brightness);
+            #else
+              analogWrite(VTFT_LEDA, BRIGHTNESS_DEFAULT);
+            #endif
 #else
             pinMode(VTFT_LEDA, OUTPUT);
             digitalWrite(VTFT_LEDA, TFT_BACKLIGHT_ON);
