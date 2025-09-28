@@ -50,9 +50,9 @@
 #define HAS_I2S
 #define DAC_I2S_BCK 41
 #define DAC_I2S_WS 43
-#define DAC_I2S_DOUT 46
-#define DAC_I2S_DIN 42
-#define DAC_I2S_MCLK -1 //???
+#define DAC_I2S_DOUT 42
+#define DAC_I2S_DIN 46
+#define DAC_I2S_MCLK 45 // Not connected, dummy PIN
 
 // lovyan
 #if 0
