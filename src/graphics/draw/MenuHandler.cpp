@@ -10,10 +10,7 @@
 #include "graphics/Screen.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/draw/UIRenderer.h"
-#include "input/RotaryEncoderInterruptImpl1.h"
-#include "input/UpDownInterruptImpl1.h"
 #include "main.h"
-#include "mesh/MeshTypes.h"
 #include "modules/AdminModule.h"
 #include "modules/CannedMessageModule.h"
 #include "modules/KeyVerificationModule.h"
@@ -523,7 +520,7 @@ void menuHandler::systemBaseMenu()
     optionsArray[options] = "Notifications";
     optionsEnumArray[options++] = Notifications;
 #if defined(ST7789_CS) || defined(ST7796_CS) || defined(USE_OLED) || defined(USE_SSD1306) || defined(USE_SH1106) ||              \
-    defined(USE_SH1107) || defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190) || HAS_TFT
+    defined(USE_SH1107) || defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190) || defined(M5STACK_CARDPUTER_ADV) || HAS_TFT
     optionsArray[options] = "Screen Options";
     optionsEnumArray[options++] = ScreenOptions;
 #endif
@@ -888,7 +885,7 @@ void menuHandler::BrightnessPickerMenu()
     bannerOptions.optionsCount = 4;
     bannerOptions.bannerCallback = [](int selected) -> void {
         if (selected == 1) { // Medium
-            uiconfig.screen_brightness = 64;
+            uiconfig.screen_brightness = 80; // 64 is too low for the ST7789 analog value
         } else if (selected == 2) { // High
             uiconfig.screen_brightness = 128;
         } else if (selected == 3) { // Very High
@@ -897,7 +894,7 @@ void menuHandler::BrightnessPickerMenu()
 
         if (selected != 0) { // Not "Back"
                              // Apply brightness immediately
-#if defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190)
+#if defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190) || defined(M5STACK_CARDPUTER_ADV)
             // For HELTEC devices, use analogWrite to control backlight
             analogWrite(VTFT_LEDA, uiconfig.screen_brightness);
 #elif defined(ST7789_CS) || defined(ST7796_CS)
@@ -943,7 +940,7 @@ void menuHandler::TFTColorPickerMenu(OLEDDisplay *display)
     bannerOptions.optionsArrayPtr = optionsArray;
     bannerOptions.optionsCount = 10;
     bannerOptions.bannerCallback = [display](int selected) -> void {
-#if defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190) || defined(T_DECK) || defined(T_LORA_PAGER) || HAS_TFT
+#if defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190) || defined(T_DECK) || defined(T_LORA_PAGER) || defined(M5STACK_CARDPUTER_ADV) || HAS_TFT
         uint8_t TFT_MESH_r = 0;
         uint8_t TFT_MESH_g = 0;
         uint8_t TFT_MESH_b = 0;
@@ -1010,7 +1007,7 @@ void menuHandler::TFTColorPickerMenu(OLEDDisplay *display)
                 TFT_MESH = COLOR565(TFT_MESH_r, TFT_MESH_g, TFT_MESH_b);
             }
 
-#if defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190)
+#if defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190) || defined(M5STACK_CARDPUTER_ADV)
             static_cast<ST7789Spi *>(screen->getDisplayDevice())->setRGB(TFT_MESH);
 #endif
 
@@ -1229,7 +1226,7 @@ void menuHandler::screenOptionsMenu()
 {
     // Check if brightness is supported
     bool hasSupportBrightness = false;
-#if defined(ST7789_CS) || defined(USE_OLED) || defined(USE_SSD1306) || defined(USE_SH1106) || defined(USE_SH1107)
+#if defined(ST7789_CS) || defined(USE_OLED) || defined(USE_SSD1306) || defined(USE_SH1106) || defined(USE_SH1107) || defined(M5STACK_CARDPUTER_ADV)
     hasSupportBrightness = true;
 #endif
 
@@ -1250,7 +1247,7 @@ void menuHandler::screenOptionsMenu()
     }
 
     // Only show screen color for TFT displays
-#if defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190) || defined(T_DECK) || defined(T_LORA_PAGER) || HAS_TFT
+#if defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190) || defined(T_DECK) || defined(T_LORA_PAGER) || defined(M5STACK_CARDPUTER_ADV) || HAS_TFT
     optionsArray[options] = "Screen Color";
     optionsEnumArray[options++] = ScreenColor;
 #endif
