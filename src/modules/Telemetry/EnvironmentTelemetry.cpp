@@ -453,21 +453,24 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
 
         // === IAQ alert logic ===
         static uint32_t lastAlertTime = 0;
+        static bool inBanner = false;           // NEW re-entry guard
+
         uint32_t now = millis();
-
-        bool isOwnTelemetry = lastMeasurementPacket->from == nodeDB->getNodeNum();
         bool isCooldownOver = (now - lastAlertTime > 60000);
+        bool isOwnTelemetry = lastMeasurementPacket->from == nodeDB->getNodeNum();
 
-        if (isOwnTelemetry && bannerMsg && isCooldownOver) {
+        if (!inBanner && isOwnTelemetry && bannerMsg && isCooldownOver) {
+            inBanner = true;                    // guard BEFORE calling UI
+            lastAlertTime = now;                // set cooldown BEFORE calling UI
+
             LOG_INFO("drawFrame: IAQ %d (own) — showing banner: %s", m.iaq, bannerMsg);
             screen->showSimpleBanner(bannerMsg, 3000);
 
-            // Only buzz if IAQ is over 200
             if (m.iaq > 200 && moduleConfig.external_notification.enabled && !externalNotificationModule->getMute()) {
                 playLongBeep();
             }
 
-            lastAlertTime = now;
+            inBanner = false;                   // release guard
         }
     }
     if (m.voltage != 0 || m.current != 0)
