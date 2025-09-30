@@ -2,6 +2,8 @@
 
 #include "CardputerAdvKeyboard.h"
 #include "main.h"
+#include "configuration.h"        // for config.*
+#include "MeshService.h"          // for service->reloadConfig
 
 #define _TCA8418_COLS 8
 #define _TCA8418_ROWS 7
@@ -18,10 +20,9 @@ constexpr uint8_t modifierFnKey = 3 - 1;
 constexpr uint8_t modifierFn = 0b0010;
 
 constexpr uint8_t modifierCtrlKey = 4 - 1;
+constexpr uint8_t modifierOptKey  = 8 - 1;
+constexpr uint8_t modifierAltKey  = 12 - 1;
 
-constexpr uint8_t modifierOptKey = 8 - 1;
-
-constexpr uint8_t modifierAltKey = 12 - 1;
 
 // Num chars per key, Modulus for rotating through characters
 // https://m5stack-doc.oss-cn-shenzhen.aliyuncs.com/1178/Sch_M5CardputerAdv_v1.0_2025_06_20_17_19_58_page_02.png
@@ -105,45 +106,52 @@ void CardputerAdvKeyboard::reset(void)
     last_key = -1;
     _released_key_raw = 0;
     _released_key_idx = -1;
+    _repeatStartMs = _repeatNextMs = 0;
 }
 
-// handle multi-key presses (shift and alt)
+// handle multi-key presses (shift and alt) + run auto-repeat while held
 void CardputerAdvKeyboard::trigger()
 {
     uint8_t count = keyCount();
-    if (count == 0) return;
 
-    for (uint8_t i = 0; i < count; ++i) {
-        uint8_t k = readRegister(TCA8418_REG_KEY_EVENT_A + i);
-        uint8_t key = k & 0x7F; // raw TCA8418 key number (1..)
-        if (k & 0x80) {
-            // PRESS
-            pressed(key);
-        } else {
-            // RELEASE
-            int row = (key - 1) / 10;
-            int col = (key - 1) % 10;
-            if (row >= _TCA8418_ROWS || col >= _TCA8418_COLS) continue;
-            int idx = row * _TCA8418_COLS + col;
+    // Drain hardware key FIFO as usual
+    if (count) {
+        for (uint8_t i = 0; i < count; ++i) {
+            uint8_t k = readRegister(TCA8418_REG_KEY_EVENT_A + i);
+            uint8_t key = k & 0x7F; // raw TCA8418 key number (1..)
+            if (k & 0x80) {
+                // PRESS
+                pressed(key);
+            } else {
+                // RELEASE
+                int row = (key - 1) / 10;
+                int col = (key - 1) % 10;
+                if (row >= _TCA8418_ROWS || col >= _TCA8418_COLS) continue;
+                int idx = row * _TCA8418_COLS + col;
 
-            // --- FIX: if it's a modifier, clear it now and skip released() ---
-            if (isModifierKey(idx)) {
-                setModifierOff(idx);
-                state = Idle;        // nothing to emit for modifier release
-                continue;
+                // if it's a modifier, clear it now and skip released()
+                if (isModifierKey(idx)) {
+                    setModifierOff(idx);
+                    state = Idle;        // nothing to emit for modifier release
+                    continue;
+                }
+
+                // Non-modifier release -> go through normal release handling
+                _released_key_raw = key;
+                _released_key_idx = idx;
+                released();              // emit based on current held mods
+                state = Idle;
+
+                // clear carry + stop repeating
+                _released_key_raw = 0;
+                _released_key_idx = -1;
+                _repeatStartMs = _repeatNextMs = 0;
             }
-
-            // Non-modifier release -> go through normal release handling
-            _released_key_raw = key;
-            _released_key_idx = idx;
-            released();              // will emit based on last_key and current held mods
-            state = Idle;
-
-            // clear carry
-            _released_key_raw = 0;
-            _released_key_idx = -1;
         }
     }
+
+    // Even if no new events, generate repeats if a repeatable key is held
+    maybeAutoRepeat();
 }
 
 void CardputerAdvKeyboard::pressed(uint8_t key)
@@ -159,7 +167,7 @@ void CardputerAdvKeyboard::pressed(uint8_t key)
     // Set mods while held
     setModifierOn(next_key);
 
-    // --- Optional: don't treat modifiers as the "last_key" for tap logic
+    // don't treat modifiers as the "last_key" for tap/hold logic
     if (isModifierKey(next_key)) {
         state = Held;   // still mark as held so subsequent key sees held mod
         return;
@@ -180,13 +188,30 @@ void CardputerAdvKeyboard::pressed(uint8_t key)
 
     last_key = next_key;
     last_tap = now;
-}
 
+    // (Re)arm auto-repeat if this key supports it
+    if (keyIsRepeatable(last_key)) {
+        _repeatStartMs = now + _repeatInitialDelayMs;
+        _repeatNextMs  = _repeatStartMs;
+    } else {
+        _repeatStartMs = _repeatNextMs = 0;
+    }
+}
 
 void CardputerAdvKeyboard::released()
 {
-    // Don't require Held; key-up events can arrive when state is Idle.
-    if (last_key < 0 || last_key >= _TCA8418_NUM_KEYS) {
+    // If we somehow got here without a carried key index, fall back safely.
+    const int key_idx = (_released_key_idx >= 0) ? _released_key_idx : last_key;
+
+    // --- If the released key is NOT the active composing key, do nothing. ---
+    // This prevents the bug where: hold 'd' -> press 'f' (types 'f') -> release 'd' (would wrongly type 'f' again).
+    if (_released_key_idx >= 0 && _released_key_idx != last_key) {
+        // We only clear repeat timers if this released key was the one arming repeat (it isn't, by definition),
+        // so nothing else to do. Keep state/last_key as-is (another key may still be held).
+        return;
+    }
+
+    if (key_idx < 0 || key_idx >= _TCA8418_NUM_KEYS) {
         last_key = -1;
         state = Idle;
         return;
@@ -195,22 +220,43 @@ void CardputerAdvKeyboard::released()
     uint32_t now = millis();
     last_tap = now;
 
-    uint8_t idx = modIndex();  // 0=base, 1=shift, 2=fn (based on *current* held flags)
-
-    // Reverse base<->fn for keys whose 3rd entry is nav/ESC
-    if (isNavOrEscKey(last_key)) {
-        if (idx == 0)      idx = 2;
-        else if (idx == 2) idx = 0;
+    // --- FN shortcuts (consume release without generating a character) ---
+    if (fnHeld) {
+        unsigned char base = CardputerAdvTapMap[key_idx][0];
+        if (base == 's' || base == 'S') {
+            config.display.wake_on_tap_or_motion = !config.display.wake_on_tap_or_motion;
+            service->reloadConfig(SEGMENT_CONFIG);
+            IF_SCREEN(screen->showSimpleBanner(
+                config.display.wake_on_tap_or_motion ?
+                    "Wake on Tap/Motion: ON" : "Wake on Tap/Motion: OFF", 1000));
+            // keep holding state intact for other keys
+            return;
+        } else if (base == 'c' || base == 'C') {
+            if (accelerometerThread) { accelerometerThread->calibrate(30); }
+            return;
+        }
     }
 
-    uint8_t modCount = CardputerAdvTapMod[last_key];
-    if (idx >= modCount) idx = 0;
+    // choose output by current held-mod index, with nav<->fn swap rule preserved
+    unsigned char out = resolveOutput(key_idx);
+    if (out == 0x00 || out == Key::BL_TOGGLE) {
+        // No output for unmapped/disabled keys
+        // Clear timers if this was the active one
+        if (key_idx == last_key) { _repeatStartMs = _repeatNextMs = 0; }
+        // If we just released the active key, mark idle
+        if (key_idx == last_key) { last_key = -1; state = Idle; }
+        return;
+    }
 
-    unsigned char out = CardputerAdvTapMap[last_key][idx];
-    if (out == 0x00 || out == Key::BL_TOGGLE) { state = Idle; return; }
-
+    // Emit the released key (not some other currently-held key)
     queueEvent(out);
-    state = Idle;
+
+    // If we just released the active key, stop repeating & go idle.
+    if (key_idx == last_key) {
+        _repeatStartMs = _repeatNextMs = 0;
+        last_key = -1;
+        state = Idle;
+    }
 }
 
 void CardputerAdvKeyboard::setModifierOn(uint8_t key) {
@@ -235,6 +281,46 @@ bool CardputerAdvKeyboard::isNavOrEscKey(uint8_t key) const {
     unsigned char alt = CardputerAdvTapMap[key][2];
     return (alt == Key::LEFT || alt == Key::RIGHT || alt == Key::UP ||
             alt == Key::DOWN || alt == Key::ESC);
+}
+
+// --- helpers ---
+unsigned char CardputerAdvKeyboard::resolveOutput(uint8_t key) const {
+    uint8_t idx = modIndex();  // 0=base, 1=shift, 2=fn (based on *current* held flags)
+
+    // Reverse base<->fn for keys whose 3rd entry is nav/ESC
+    if (isNavOrEscKey(key)) {
+        if (idx == 0)      idx = 2;
+        else if (idx == 2) idx = 0;
+    }
+
+    uint8_t modCount = CardputerAdvTapMod[key];
+    if (idx >= modCount) idx = 0;
+
+    return CardputerAdvTapMap[key][idx];
+}
+
+bool CardputerAdvKeyboard::keyIsRepeatable(uint8_t key) const {
+    if (key >= _TCA8418_NUM_KEYS) return false;
+    unsigned char base = CardputerAdvTapMap[key][0];
+    // repeat printable ASCII and backspace
+    return (base == Key::BSP) ||
+           (base >= 0x20 && base <= 0x7E);
+}
+
+void CardputerAdvKeyboard::maybeAutoRepeat() {
+    if (state != Held) return;
+    if (last_key < 0 || last_key >= _TCA8418_NUM_KEYS) return;
+    if (!keyIsRepeatable(last_key)) return;
+    uint32_t now = millis();
+    if (_repeatStartMs == 0) return;
+
+    if (now >= _repeatNextMs) {
+        unsigned char out = resolveOutput(last_key);
+        if (out != 0x00 && out != Key::BL_TOGGLE) {
+            queueEvent(out);
+        }
+        _repeatNextMs = now + _repeatRateMs;
+    }
 }
 
 #endif
