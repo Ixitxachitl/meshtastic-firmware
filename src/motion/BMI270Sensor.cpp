@@ -134,7 +134,6 @@ bool BMI270Sensor::init()
   (void)boschI2CWrite(0x7E, &SOFT_RESET, 1, impl); delay(10);
 
   if (!selectAddress(*impl)) {
-    impl->wire->setClock(400000);
     LOG_DEBUG("BMI270: WHOAMI 0x24 not found at 0x69/0x68");
     delete impl;
     return false;
