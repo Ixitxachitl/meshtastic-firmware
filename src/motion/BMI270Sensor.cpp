@@ -255,6 +255,7 @@ int32_t BMI270Sensor::runOnce()
           if (now - s_lastMotionTs > MOTION_DEBOUNCE_MS) {
             s_lastMotionTs = now;
             wakeScreen(); // Meshtastic: wake
+            powerFSM.trigger(EVENT_PRESS);
           }
         }
         s_lastAx = ax; s_lastAy = ay; s_lastAz = az;
@@ -275,6 +276,7 @@ int32_t BMI270Sensor::runOnce()
               } else {
                 s_lastTapTs = now;
                 wakeScreen();     // single tap wakes
+                powerFSM.trigger(EVENT_PRESS);
               }
               s_tapArmed = false;
             }
