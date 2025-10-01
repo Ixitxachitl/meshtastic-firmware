@@ -173,6 +173,13 @@ void CardputerAdvKeyboard::pressed(uint8_t key)
         return;
     }
 
+    if (handleFnShortcutOnPress(next_key)) {
+        // We intentionally do NOT set last_key nor arm repeat.
+        // Leave state as Held so other keys can continue to interact with fn.
+        state = Held;
+        return;
+    }
+
     state = Held;
 
     uint32_t now = millis();
@@ -220,23 +227,6 @@ void CardputerAdvKeyboard::released()
     uint32_t now = millis();
     last_tap = now;
 
-    // --- FN shortcuts (consume release without generating a character) ---
-    if (fnHeld) {
-        unsigned char base = CardputerAdvTapMap[key_idx][0];
-        if (base == 's' || base == 'S') {
-            config.display.wake_on_tap_or_motion = !config.display.wake_on_tap_or_motion;
-            service->reloadConfig(SEGMENT_CONFIG);
-            IF_SCREEN(screen->showSimpleBanner(
-                config.display.wake_on_tap_or_motion ?
-                    "Wake on Tap/Motion: ON" : "Wake on Tap/Motion: OFF", 1000));
-            // keep holding state intact for other keys
-            return;
-        } else if (base == 'c' || base == 'C') {
-            if (accelerometerThread) { accelerometerThread->calibrate(30); }
-            return;
-        }
-    }
-
     // choose output by current held-mod index, with nav<->fn swap rule preserved
     unsigned char out = resolveOutput(key_idx);
     if (out == 0x00 || out == Key::BL_TOGGLE) {
@@ -257,6 +247,32 @@ void CardputerAdvKeyboard::released()
         last_key = -1;
         state = Idle;
     }
+}
+
+// Returns true if we handled a FN shortcut on key press and consumed the event.
+bool CardputerAdvKeyboard::handleFnShortcutOnPress(uint8_t key_idx) {
+    if (!fnHeld) return false;
+    if (key_idx >= _TCA8418_NUM_KEYS) return false;
+
+    unsigned char base = CardputerAdvTapMap[key_idx][0];
+
+    // fn + s  → toggle wake_on_tap_or_motion
+    if (base == 's' || base == 'S') {
+        config.display.wake_on_tap_or_motion = !config.display.wake_on_tap_or_motion;
+        service->reloadConfig(SEGMENT_CONFIG);
+        IF_SCREEN(screen->showSimpleBanner(
+            config.display.wake_on_tap_or_motion ?
+            "Wake on Tap/Motion: ON" : "Wake on Tap/Motion: OFF", 1000));
+        return true;  // consumed
+    }
+
+    // fn + c  → calibrate compass (30s)
+    if (base == 'c' || base == 'C') {
+        if (accelerometerThread) { accelerometerThread->calibrate(30); }
+        return true;  // consumed
+    }
+
+    return false;
 }
 
 void CardputerAdvKeyboard::setModifierOn(uint8_t key) {

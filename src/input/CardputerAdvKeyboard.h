@@ -31,6 +31,7 @@ class CardputerAdvKeyboard : public TCA8418KeyboardBase
     bool isNavOrEscKey(uint8_t key) const; // checks if TapMap[key][2] is nav or ESC
     void setModifierOn(uint8_t key);
     void setModifierOff(uint8_t key);
+    bool handleFnShortcutOnPress(uint8_t key_idx);
 
     // --- Auto-repeat support ---
     bool keyIsRepeatable(uint8_t key) const;
