@@ -448,6 +448,8 @@ void menuHandler::messageResponseMenu()
     bannerOptions.optionsEnumPtr = optionsEnumArray;
     bannerOptions.optionsCount = options;
     bannerOptions.bannerCallback = [](int selected) -> void {
+        // Overlay is about to close (a selection happened)
+        graphics::setOverlayActive(false);
         LOG_DEBUG("messageResponseMenu: selected %d", selected);
 
         auto mode = graphics::MessageRenderer::getThreadMode();
@@ -516,6 +518,8 @@ void menuHandler::messageResponseMenu()
 #endif
         }
     };
+    // Overlay is now open
+    graphics::setOverlayActive(true);
     screen->showOverlayBanner(bannerOptions);
 }
 
@@ -639,6 +643,7 @@ void menuHandler::messageViewModeMenu()
     bannerOptions.InitialSelected = initialIndex;
 
     bannerOptions.bannerCallback = [=](int selected) -> void {
+        graphics::setOverlayActive(false);
         LOG_DEBUG("messageViewModeMenu: selected=%d", selected);
         if (selected == -1) {
             menuHandler::menuQueue = menuHandler::message_response_menu;
@@ -656,6 +661,7 @@ void menuHandler::messageViewModeMenu()
             }
         }
     };
+    graphics::setOverlayActive(true);
     screen->showOverlayBanner(bannerOptions);
 }
 

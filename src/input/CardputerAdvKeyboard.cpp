@@ -4,6 +4,8 @@
 #include "main.h"
 #include "configuration.h"        // for config.*
 #include "MeshService.h"          // for service->reloadConfig
+#include "graphics/draw/MessageRenderer.h" // scrollUp/Down()
+#include "graphics/SharedUIDisplay.h"      // isMessagesScreenActive()
 
 #define _TCA8418_COLS 8
 #define _TCA8418_ROWS 7
@@ -107,6 +109,7 @@ void CardputerAdvKeyboard::reset(void)
     _released_key_raw = 0;
     _released_key_idx = -1;
     _repeatStartMs = _repeatNextMs = 0;
+    _handledNavOnPress = false;
 }
 
 // handle multi-key presses (shift and alt) + run auto-repeat while held
@@ -180,6 +183,24 @@ void CardputerAdvKeyboard::pressed(uint8_t key)
         return;
     }
 
+   // NAV KEYS: scroll on PRESS, immediately
+   unsigned char out = resolveOutput(next_key);
+   if (out == Key::UP || out == Key::DOWN) {
+       // Scroll immediately on PRESS
+       if (graphics::isMessagesScreenActive() && !graphics::isOverlayActive()) {
+           if (out == Key::UP)   graphics::MessageRenderer::scrollUp();
+           if (out == Key::DOWN) graphics::MessageRenderer::scrollDown();
+       }
+       // Arm repeat for hold
+       last_key = next_key;
+       uint32_t now = millis();
+       _repeatStartMs = now + _repeatInitialDelayMs;
+       _repeatNextMs  = _repeatStartMs;
+       _handledNavOnPress = true;
+       state = Held;
+       return;
+   }
+
     state = Held;
 
     uint32_t now = millis();
@@ -238,7 +259,9 @@ void CardputerAdvKeyboard::released()
         return;
     }
 
-    // Emit the released key (not some other currently-held key)
+    if ((graphics::isMessagesScreenActive() && !graphics::isOverlayActive()) && (out == Key::UP || out == Key::DOWN)) return;
+
+    // Not on messages screen (or not an arrow): emit the key normally
     queueEvent(out);
 
     // If we just released the active key, stop repeating & go idle.
@@ -318,9 +341,11 @@ unsigned char CardputerAdvKeyboard::resolveOutput(uint8_t key) const {
 bool CardputerAdvKeyboard::keyIsRepeatable(uint8_t key) const {
     if (key >= _TCA8418_NUM_KEYS) return false;
     unsigned char base = CardputerAdvTapMap[key][0];
-    // repeat printable ASCII and backspace
-    return (base == Key::BSP) ||
-           (base >= 0x20 && base <= 0x7E);
+    unsigned char alt  = CardputerAdvTapMap[key][2];
+    // Repeat printable ASCII & BSP, and also NAV keys (UP/DOWN/LEFT/RIGHT)
+    bool printable = (base == Key::BSP) || (base >= 0x20 && base <= 0x7E);
+    bool isNav     = (alt == Key::UP || alt == Key::DOWN || alt == Key::LEFT || alt == Key::RIGHT);
+    return printable || isNav;
 }
 
 void CardputerAdvKeyboard::maybeAutoRepeat() {
@@ -332,7 +357,17 @@ void CardputerAdvKeyboard::maybeAutoRepeat() {
 
     if (now >= _repeatNextMs) {
         unsigned char out = resolveOutput(last_key);
-        if (out != 0x00 && out != Key::BL_TOGGLE) {
+        if (graphics::isMessagesScreenActive() && !graphics::isOverlayActive()) {
+            if (out == Key::UP) {
+                graphics::MessageRenderer::scrollUp();
+            } else if (out == Key::DOWN) {
+                graphics::MessageRenderer::scrollDown();
+            } else if (out != 0x00 && out != Key::BL_TOGGLE) {
+                // normal repeat behavior for other keys
+                queueEvent(out);
+            }
+        } else if (out != 0x00 && out != Key::BL_TOGGLE) {
+            // not in messages: always emit repeats
             queueEvent(out);
         }
         _repeatNextMs = now + _repeatRateMs;

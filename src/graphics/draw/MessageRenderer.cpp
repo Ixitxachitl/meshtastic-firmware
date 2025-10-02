@@ -153,6 +153,11 @@ uint32_t pauseStart = 0;
 bool waitingToReset = false;
 bool scrollStarted = false;
 static bool didReset = false; // <-- add here
+static bool manualScrollActive = false; // when true, auto-scroll is paused:contentReference[oaicite:2]{index=2}
+static uint32_t lastManualMs = 0;
+static constexpr uint32_t MANUAL_SCROLL_TIMEOUT_MS = 5000;
+// Cache the last computed usable scroll height from drawTextMessageFrame()
+static int lastUsableScrollHeight = 0;
 
 // Reset scroll state when new messages arrive
 void resetScrollState()
@@ -164,6 +169,7 @@ void resetScrollState()
     lastTime = millis();
 
     didReset = false; // <-- now valid
+    manualScrollActive = false; // clear manual override on new content/thread
 }
 // Current thread state
 static ThreadMode currentMode = ThreadMode::ALL;
@@ -292,6 +298,20 @@ void drawRelayMark(OLEDDisplay *display, int x, int y, int size = 8)
 
 void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
+    // Freeze any background motion while a menu/banner is visible.
+    if (graphics::isOverlayActive()) {
+        // Don’t advance scroll timers; render the current static frame.
+        lastTime = millis();
+    }
+
+    // If user hasn’t touched the keys recently, allow auto-scroll to resume.
+    // Do NOT count overlay time as "idle".
+    if (!graphics::isOverlayActive() &&
+        manualScrollActive &&
+        (millis() - lastManualMs) > MANUAL_SCROLL_TIMEOUT_MS) {
+        manualScrollActive = false;
+    }
+
     // Ensure any boot-relative timestamps are upgraded if RTC is valid
     messageStore.upgradeBootRelativeTimestamps();
 
@@ -508,8 +528,16 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     if (!scrollStarted && now - scrollStartDelay > 2000)
         scrollStarted = true;
 
-    if (totalHeight > usableScrollHeight) {
-        if (scrollStarted) {
+    // Remember the most recent usable height for manual scroll helpers
+#if defined(M5STACK_UNITC6L)
+    lastUsableScrollHeight = windowHeight;
+#else
+    lastUsableScrollHeight = usableHeight;
+#endif
+
+    // Skip auto-scroll while the user is manually scrolling
+    if (!graphics::isOverlayActive() && totalHeight > usableScrollHeight) {
+        if (!manualScrollActive && scrollStarted) {
             if (!waitingToReset) {
                 scrollY += delta * scrollSpeed;
                 if (scrollY >= scrollStop) {
@@ -524,7 +552,8 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 scrollStartDelay = lastTime;
             }
         }
-    } else {
+    } else if (totalHeight <= usableScrollHeight) {
+        // Only snap to top when content fits; otherwise preserve manual position
         scrollY = 0;
     }
 
@@ -774,6 +803,44 @@ void setThreadFor(const StoredMessage &sm, const meshtastic_MeshPacket &packet)
         setThreadMode(ThreadMode::DIRECT, -1, peer);
     }
 }
+
+// -------- Manual scroll controls (UP/DOWN) ----------
+static int computeMaxScroll()
+{
+    int totalHeight = 0;
+    for (int h : cachedHeights) totalHeight += h;
+    // Use height computed in drawTextMessageFrame(); if not set yet, fall back
+    int usableScrollHeight = (lastUsableScrollHeight > 0) ? lastUsableScrollHeight
+                                                         : (FONT_HEIGHT_SMALL * 6); // conservative fallback
+    if (cachedHeights.empty()) return 0;
+    return std::max(0, totalHeight - usableScrollHeight + cachedHeights.back());
+}
+
+void scrollUp()
+{
+    manualScrollActive = true;
+    lastManualMs = millis();          // ← refresh idle timer
+    scrollY -= (FONT_HEIGHT_SMALL);   // apply immediately
+    lastTime = millis();
+    // Wake/keepalive after we’ve updated state
+    powerFSM.trigger(EVENT_PRESS);
+    if (scrollY < 0) scrollY = 0;
+}
+
+void scrollDown()
+{
+    manualScrollActive = true;
+    lastManualMs = millis();          // ← refresh idle timer
+    scrollY += (FONT_HEIGHT_SMALL);   // apply immediately
+    lastTime = millis();
+    int maxScroll = computeMaxScroll();
+    if (maxScroll >= 0 && scrollY > maxScroll) {
+        scrollY = maxScroll;
+    }
+    // Wake/keepalive after state change
+    powerFSM.trigger(EVENT_PRESS);
+}
+
 
 } // namespace MessageRenderer
 } // namespace graphics

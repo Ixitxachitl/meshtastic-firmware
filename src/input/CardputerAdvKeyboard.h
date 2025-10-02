@@ -54,4 +54,10 @@ class CardputerAdvKeyboard : public TCA8418KeyboardBase
     uint32_t _repeatNextMs  = 0;
     static constexpr uint16_t _repeatInitialDelayMs = 400; // first delay
     static constexpr uint16_t _repeatRateMs         = 45;  // between repeats
+
+    // Faster repeat for message scrolling with arrow keys
+    static constexpr uint16_t _repeatInitialDelayMsNav = 150; // quicker to start
+    static constexpr uint16_t _repeatRateMsNav         = 20;  // faster repeat    
+    
+    bool _handledNavOnPress = false;
 };
