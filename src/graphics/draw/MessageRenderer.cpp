@@ -304,6 +304,16 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         lastTime = millis();
     }
 
+    if (manualScrollActive && (millis() - lastManualMs) < 200) {
+        // Ensure the very next frame uses the new scrollY without startup delays.
+        scrollStarted    = true;
+        scrollStartDelay = millis();
+        waitingToReset   = false;
+        pauseStart       = 0;
+        // lastTime is already refreshed above when overlay is active; refresh here too:
+        lastTime = millis();
+    }
+
     // If user hasn’t touched the keys recently, allow auto-scroll to resume.
     // Do NOT count overlay time as "idle".
     if (!graphics::isOverlayActive() &&
@@ -819,26 +829,44 @@ static int computeMaxScroll()
 void scrollUp()
 {
     manualScrollActive = true;
-    lastManualMs = millis();          // ← refresh idle timer
-    scrollY -= (FONT_HEIGHT_SMALL);   // apply immediately
+    lastManualMs = millis();
+
+    // NEW: ensure no auto-pause state bleeds into manual inputs
+    waitingToReset = false;
+    pauseStart = 0;
+    scrollStarted = true;        // avoid any auto 'start delay' affecting the next frame
+
+    scrollY -= FONT_HEIGHT_SMALL;   // immediate step
+    if (scrollY < 0) scrollY = 0;   // clamp (no wrap)
+
+    // Keep auto timing fresh so there’s no stall on the next frame
     lastTime = millis();
-    // Wake/keepalive after we’ve updated state
+
     powerFSM.trigger(EVENT_PRESS);
-    if (scrollY < 0) scrollY = 0;
+    screen->forceDisplay();
 }
 
 void scrollDown()
 {
     manualScrollActive = true;
-    lastManualMs = millis();          // ← refresh idle timer
-    scrollY += (FONT_HEIGHT_SMALL);   // apply immediately
-    lastTime = millis();
+    lastManualMs = millis();
+
+    // NEW: ensure no auto-pause state bleeds into manual inputs
+    waitingToReset = false;
+    pauseStart = 0;
+    scrollStarted = true;        // avoid any auto 'start delay' affecting the next frame
+
+    scrollY += FONT_HEIGHT_SMALL;   // immediate step
     int maxScroll = computeMaxScroll();
     if (maxScroll >= 0 && scrollY > maxScroll) {
-        scrollY = maxScroll;
+        scrollY = maxScroll;        // clamp (no wrap)
     }
-    // Wake/keepalive after state change
+
+    // Keep auto timing fresh so there’s no stall on the next frame
+    lastTime = millis();
+
     powerFSM.trigger(EVENT_PRESS);
+    screen->forceDisplay();
 }
 
 

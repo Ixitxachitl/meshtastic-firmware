@@ -1347,6 +1347,7 @@ void menuHandler::shutdownMenu()
 
 void menuHandler::addFavoriteMenu()
 {
+    graphics::setOverlayActive(true); 
 #if defined(M5STACK_UNITC6L)
     screen->showNodePicker("Node Favorite", 30000, [](uint32_t nodenum) -> void {
 #else
@@ -1355,6 +1356,7 @@ void menuHandler::addFavoriteMenu()
 #endif
         LOG_WARN("Nodenum: %u", nodenum);
         nodeDB->set_favorite(true, nodenum);
+        graphics::setOverlayActive(false);
         screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
     });
 }
@@ -1384,11 +1386,13 @@ void menuHandler::removeFavoriteMenu()
 
 void menuHandler::traceRouteMenu()
 {
+    graphics::setOverlayActive(true);
     screen->showNodePicker("Node to Trace", 30000, [](uint32_t nodenum) -> void {
         LOG_INFO("Menu: Node picker selected node 0x%08x, traceRouteModule=%p", nodenum, traceRouteModule);
         if (traceRouteModule) {
             traceRouteModule->startTraceRoute(nodenum);
         }
+        graphics::setOverlayActive(true);
     });
 }
 

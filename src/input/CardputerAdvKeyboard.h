@@ -60,4 +60,5 @@ class CardputerAdvKeyboard : public TCA8418KeyboardBase
     static constexpr uint16_t _repeatRateMsNav         = 20;  // faster repeat    
     
     bool _handledNavOnPress = false;
+    bool _repeatIsNav = false;
 };

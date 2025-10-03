@@ -183,23 +183,22 @@ void CardputerAdvKeyboard::pressed(uint8_t key)
         return;
     }
 
-   // NAV KEYS: scroll on PRESS, immediately
-   unsigned char out = resolveOutput(next_key);
-   if (out == Key::UP || out == Key::DOWN) {
-       // Scroll immediately on PRESS
-       if (graphics::isMessagesScreenActive() && !graphics::isOverlayActive()) {
-           if (out == Key::UP)   graphics::MessageRenderer::scrollUp();
-           if (out == Key::DOWN) graphics::MessageRenderer::scrollDown();
-       }
-       // Arm repeat for hold
-       last_key = next_key;
-       uint32_t now = millis();
-       _repeatStartMs = now + _repeatInitialDelayMs;
-       _repeatNextMs  = _repeatStartMs;
-       _handledNavOnPress = true;
-       state = Held;
-       return;
-   }
+    // NAV KEYS: scroll on PRESS, immediately
+    unsigned char out = resolveOutput(next_key);
+    if (out == Key::UP || out == Key::DOWN) {
+        if (graphics::isMessagesScreenActive() && !graphics::isOverlayActive()) {
+            if (out == Key::UP)   graphics::MessageRenderer::scrollUp();
+            if (out == Key::DOWN) graphics::MessageRenderer::scrollDown();
+        }
+        last_key = next_key;
+        uint32_t now = millis();
+        _repeatIsNav   = graphics::isMessagesScreenActive();
+        _repeatStartMs = now + (_repeatIsNav ? _repeatInitialDelayMsNav : _repeatInitialDelayMs);  // 150 ms
+        _repeatNextMs  = _repeatStartMs;
+        _handledNavOnPress = true;
+        state = Held;
+        return;
+    }
 
     state = Held;
 
@@ -370,7 +369,7 @@ void CardputerAdvKeyboard::maybeAutoRepeat() {
             // not in messages: always emit repeats
             queueEvent(out);
         }
-        _repeatNextMs = now + _repeatRateMs;
+        _repeatNextMs = now + (_repeatIsNav ? _repeatRateMsNav : _repeatRateMs);
     }
 }
 
