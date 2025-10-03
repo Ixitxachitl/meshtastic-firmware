@@ -843,7 +843,7 @@ void scrollUp()
     lastTime = millis();
 
     powerFSM.trigger(EVENT_PRESS);
-    screen->forceDisplay();
+    screen->forceDisplay(true);
 }
 
 void scrollDown()
@@ -866,7 +866,7 @@ void scrollDown()
     lastTime = millis();
 
     powerFSM.trigger(EVENT_PRESS);
-    screen->forceDisplay();
+    screen->forceDisplay(true);
 }
 
 
