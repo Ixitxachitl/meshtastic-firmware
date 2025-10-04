@@ -9,7 +9,10 @@
 #include "PowerMon.h"
 #include "ReliableRouter.h"
 #include "airtime.h"
-#include "buzz.h"
+#include "buzz.h"   // if you have this
+#ifdef HAS_I2S
+void pumpAudioTick();   // forward declaration
+#endif
 
 #include "FSCommon.h"
 #include "Led.h"
@@ -1622,6 +1625,22 @@ void loop()
 #endif
 
     service->loop();
+#ifdef HAS_I2S
+    // Pump the I2S/RTTTL engine ~every 10 ms so audio keeps flowing.
+    // This is cheap and keeps input responsive.
+    {
+        static uint32_t lastPump = 0;
+        uint32_t now = millis();
+        if ((now - lastPump) >= 10) {
+            pumpAudioTick();               // advances playback
+            lastPump = now;
+        }
+        // If something is playing, avoid long sleeps so pumping stays smooth.
+        if (audioThread && audioThread->isPlaying()) {
+            runASAP = true;                // prefer immediate reschedule
+        }
+    }
+#endif
 #if !MESHTASTIC_EXCLUDE_INPUTBROKER && defined(HAS_FREE_RTOS)
     inputBroker->processInputEventQueue();
 #endif

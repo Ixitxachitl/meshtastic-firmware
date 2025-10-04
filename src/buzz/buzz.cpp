@@ -30,8 +30,10 @@ static inline void playRttlI2S(const char* rttl)
 {
     if (!audioThread || !rttl || !*rttl) return;
     audioThread->beginRttl(rttl, strlen(rttl));
-    // IMPORTANT: isPlaying() must be polled to keep audio flowing
-    while (audioThread->isPlaying()) { delay(10); }
+}
+
+void pumpAudioTick() {
+    if (audioThread) { (void)audioThread->isPlaying(); }
 }
 #endif // HAS_I2S
 
