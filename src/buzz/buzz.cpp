@@ -10,10 +10,30 @@
 extern "C" void delay(uint32_t dwMs);
 #endif
 
-struct ToneDuration {
-    int frequency_khz;
-    int duration_ms;
-};
+#include <cstdio>
+#include <cstring>
+#include <algorithm>
+
+// ---- I2S/RTTTL glue ---------------------------------------------------------
+#ifdef HAS_I2S
+#include "main.h"
+
+// If you already expose a flag for using I2S as buzzer, reuse it here.
+// Fall back to false if you don't have such a flag yet.
+extern meshtastic_LocalModuleConfig moduleConfig;
+static inline bool i2sBuzzerEnabled() {
+    return moduleConfig.external_notification.use_i2s_as_buzzer;
+}
+
+// Begin an RTTTL string on the I2S audio thread and pump until done.
+static inline void playRttlI2S(const char* rttl)
+{
+    if (!audioThread || !rttl || !*rttl) return;
+    audioThread->beginRttl(rttl, strlen(rttl));
+    // IMPORTANT: isPlaying() must be polled to keep audio flowing
+    while (audioThread->isPlaying()) { delay(10); }
+}
+#endif // HAS_I2S
 
 // Some common frequencies.
 #define NOTE_C3 131
@@ -30,6 +50,94 @@ struct ToneDuration {
 #define NOTE_B3 247
 #define NOTE_CS4 277
 
+// ---- Tone[] -> RTTTL converter ----------------------------------------------
+// We choose BPM=240 so that note lengths match your millisecond constants:
+// whole=1000ms, 1/2=500ms, 1/4=250ms, 1/8=125ms, dotted 1/2=750ms (3/4)
+static constexpr int kRtttlBpm = 240;
+
+// Map your discrete frequencies to RTTTL tokens (with explicit octave).
+// If a new freq appears, we'll pick the closest known one.
+struct NoteToken { int freq; const char* tok; };
+static const NoteToken kNoteMap[] = {
+    { NOTE_C3,  "c3"  }, { NOTE_CS3, "c#3" }, { NOTE_D3,  "d3"  }, { NOTE_DS3, "d#3" },
+    { NOTE_E3,  "e3"  }, { NOTE_F3,  "f3"  }, { NOTE_FS3, "f#3" }, { NOTE_G3,  "g3"  },
+    { NOTE_GS3, "g#3" }, { NOTE_A3,  "a3"  }, { NOTE_AS3, "a#3" }, { NOTE_B3,  "b3"  },
+    { NOTE_CS4, "c#4" },
+};
+
+// Nearest-note lookup by absolute frequency difference
+static inline const char* freqToRtttl(int f)
+{
+    const char* best = "p"; // rest as last-resort
+    int bestErr = 1e9;
+    for (auto &m : kNoteMap) {
+        int err = (m.freq > f) ? (m.freq - f) : (f - m.freq);
+        if (err < bestErr) { bestErr = err; best = m.tok; }
+    }
+    return best;
+}
+
+// Duration token (1,2,4,8,16) + optional dotted flag, chosen by closest ms.
+// We only need to cover the lengths used in buzz.cpp.
+struct DurCand { int denom; bool dotted; int ms; };
+static const DurCand kDur[] = {
+    { 1,  false, 1000 }, // whole
+    { 2,  true,   750 }, // dotted half (3/4)
+    { 2,  false,  500 }, // half
+    { 4,  false,  250 }, // quarter
+    { 8,  false,  125 }, // eighth
+    // { 16,false,   63 }, // 1/16th if you add faster blips later
+};
+
+static inline void chooseDur(int ms, int &denom, bool &dotted)
+{
+    int bestIdx = 0, bestErr = 1e9;
+    for (int i = 0; i < (int)(sizeof(kDur)/sizeof(kDur[0])); ++i) {
+        int err = (kDur[i].ms > ms) ? (kDur[i].ms - ms) : (ms - kDur[i].ms);
+        if (err < bestErr) { bestErr = err; bestIdx = i; }
+    }
+    denom = kDur[bestIdx].denom;
+    dotted = kDur[bestIdx].dotted;
+}
+
+// Build an RTTTL string into a caller-supplied buffer.
+// Format: <name>:d=8,o=5,b=240:<notes...>
+// We emit explicit durations per note to be precise; default d/o are still set.
+size_t tonesToRtttl(char* out, size_t outCap,
+                                  const ToneDuration* td, int n,
+                                  const char* name = "sys")
+{
+    if (!out || outCap == 0) return 0;
+    out[0] = '\0';
+
+    // Header
+    int wrote = snprintf(out, outCap, "%s:d=8,o=5,b=%d:", name, kRtttlBpm);
+    if (wrote <= 0 || (size_t)wrote >= outCap) return (size_t)std::max(0, wrote);
+    size_t pos = (size_t)wrote;
+
+    // Body
+    for (int i = 0; i < n; ++i) {
+        int denom; bool dotted;
+        chooseDur(td[i].duration_ms, denom, dotted);
+        const char* note = freqToRtttl(td[i].frequency_khz);
+
+        // token like "8c#3." or "4b3"
+        char token[16];
+        if (dotted)
+            snprintf(token, sizeof(token), "%d%s.", denom, note);
+        else
+            snprintf(token, sizeof(token), "%d%s", denom, note);
+
+        // append, with comma if not last
+        int need = (int)strlen(token) + ((i+1<n) ? 1 : 0);
+        if (pos + (size_t)need >= outCap) break; // avoid overflow; truncated is fine
+        memcpy(out + pos, token, strlen(token)); pos += strlen(token);
+        if (i+1 < n) out[pos++] = ',';
+        out[pos] = '\0';
+    }
+    return pos;
+}
+
 const int DURATION_1_8 = 125;  // 1/8 note
 const int DURATION_1_4 = 250;  // 1/4 note
 const int DURATION_1_2 = 500;  // 1/2 note
@@ -43,6 +151,17 @@ void playTones(const ToneDuration *tone_durations, int size)
         // Buzzer is disabled or not set to system tones
         return;
     }
+    
+#ifdef HAS_I2S
+    if (i2sBuzzerEnabled()) {
+        // Convert current ToneDuration[] to RTTTL and play over I2S
+        char rttl[192]; // plenty for the short melodies in buzz.cpp
+        tonesToRtttl(rttl, sizeof(rttl), tone_durations, size, "sys");
+        playRttlI2S(rttl);
+        return;
+    }
+#endif    
+    
 #ifdef PIN_BUZZER
     if (!config.device.buzzer_gpio)
         config.device.buzzer_gpio = PIN_BUZZER;
