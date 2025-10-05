@@ -1626,20 +1626,18 @@ void loop()
 
     service->loop();
 #ifdef HAS_I2S
-    // Pump the I2S/RTTTL engine ~every 10 ms so audio keeps flowing.
-    // This is cheap and keeps input responsive.
-    {
-        static uint32_t lastPump = 0;
-        uint32_t now = millis();
-        if ((now - lastPump) >= 10) {
-            pumpAudioTick();               // advances playback
-            lastPump = now;
-        }
-        // If something is playing, avoid long sleeps so pumping stays smooth.
-        if (audioThread && audioThread->isPlaying()) {
-            runASAP = true;                // prefer immediate reschedule
-        }
+{
+    static uint32_t lastPump = 0;
+    uint32_t now = millis();
+    if ((now - lastPump) >= 10) {
+        pumpAudioTick();               // advances playback
+        lastPump = now;
     }
+    // If something is playing, avoid long sleeps so pumping stays smooth.
+    if (audioIsPlaying()) {
+        runASAP = true;                // prefer immediate reschedule
+    }
+}
 #endif
 #if !MESHTASTIC_EXCLUDE_INPUTBROKER && defined(HAS_FREE_RTOS)
     inputBroker->processInputEventQueue();

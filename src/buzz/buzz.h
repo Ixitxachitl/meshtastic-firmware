@@ -1,6 +1,14 @@
 #pragma once
 #include <cstddef> 
 
+#ifdef HAS_I2S
+// Advance I2S/RTTTL playback one tick (cheap & non-blocking)
+void pumpAudioTick();
+
+// Returns true while something is playing (also advances one tick)
+bool audioIsPlaying();
+#endif
+
 struct ToneDuration {
     int frequency_khz;
     int duration_ms;

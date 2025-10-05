@@ -16,24 +16,52 @@ extern "C" void delay(uint32_t dwMs);
 
 // ---- I2S/RTTTL glue ---------------------------------------------------------
 #ifdef HAS_I2S
-#include "main.h"
+#include "main.h"   // for audioThread
+#include "NodeDB.h"        // for moduleConfig type
 
-// If you already expose a flag for using I2S as buzzer, reuse it here.
-// Fall back to false if you don't have such a flag yet.
+// match the declaration already in NodeDB.h
 extern meshtastic_LocalModuleConfig moduleConfig;
+
+// Return the same flag your ExternalNotificationModule uses
 static inline bool i2sBuzzerEnabled() {
+    // If your LocalModuleConfig doesn’t have this field on some targets,
+    // you can temporarily return false to compile:
+    // return false;
     return moduleConfig.external_notification.use_i2s_as_buzzer;
 }
 
-// Begin an RTTTL string on the I2S audio thread and pump until done.
-static inline void playRttlI2S(const char* rttl)
-{
-    if (!audioThread || !rttl || !*rttl) return;
-    audioThread->beginRttl(rttl, strlen(rttl));
+// Single pending slot is enough for startup melody & rare overlaps
+static char g_pendingRttl[384];        // big enough for your longest tune
+static volatile bool g_hasPending = false;
+
+static inline void queueRttl(const char* rttl) {
+    if (!rttl || !*rttl) return;
+    std::strncpy(g_pendingRttl, rttl, sizeof(g_pendingRttl) - 1);
+    g_pendingRttl[sizeof(g_pendingRttl) - 1] = '\0';
+    g_hasPending = true;
 }
 
+// Non-blocking start. If audioThread isn't ready yet, queue it.
+static inline void startRttlI2S(const char* rttl) {
+    if (!rttl || !*rttl) return;
+    if (!audioThread) { queueRttl(rttl); return; }
+    audioThread->beginRttl(rttl, std::strlen(rttl));
+}
+
+// Called from main loop every ~10ms. Also starts pending item when ready.
 void pumpAudioTick() {
-    if (audioThread) { (void)audioThread->isPlaying(); }
+    if (audioThread) {
+        (void)audioThread->isPlaying();        // advance current playback
+        if (!audioThread->isPlaying() && g_hasPending) {
+            audioThread->beginRttl(g_pendingRttl, std::strlen(g_pendingRttl));
+            g_hasPending = false;
+        }
+    }
+}
+
+bool audioIsPlaying() {
+    if (!audioThread) return false;
+    return audioThread->isPlaying();
 }
 #endif // HAS_I2S
 
@@ -53,9 +81,9 @@ void pumpAudioTick() {
 #define NOTE_CS4 277
 
 // ---- Tone[] -> RTTTL converter ----------------------------------------------
-// We choose BPM=240 so that note lengths match your millisecond constants:
-// whole=1000ms, 1/2=500ms, 1/4=250ms, 1/8=125ms, dotted 1/2=750ms (3/4)
-static constexpr int kRtttlBpm = 240;
+// Faster tempo so we can express very short beeps:
+// At 480 BPM: whole=500ms, 1/2=250ms, 1/4=125ms, 1/8=62ms, 1/16=31ms, 1/32=15–16ms
+static constexpr int kRtttlBpm = 480;
 
 // Map your discrete frequencies to RTTTL tokens (with explicit octave).
 // If a new freq appears, we'll pick the closest known one.
@@ -83,12 +111,13 @@ static inline const char* freqToRtttl(int f)
 // We only need to cover the lengths used in buzz.cpp.
 struct DurCand { int denom; bool dotted; int ms; };
 static const DurCand kDur[] = {
-    { 1,  false, 1000 }, // whole
-    { 2,  true,   750 }, // dotted half (3/4)
-    { 2,  false,  500 }, // half
-    { 4,  false,  250 }, // quarter
-    { 8,  false,  125 }, // eighth
-    // { 16,false,   63 }, // 1/16th if you add faster blips later
+    { 1,  false,  500 }, // whole
+    { 2,  true,   375 }, // dotted half
+    { 2,  false,  250 }, // half
+    { 4,  false,  125 }, // quarter
+    { 8,  false,   62 }, // eighth
+    { 16, false,   31 }, // sixteenth
+    { 32, false,   16 }, // thirty-second  (handy for 20–50ms chirps)
 };
 
 static inline void chooseDur(int ms, int &denom, bool &dotted)
@@ -131,10 +160,12 @@ size_t tonesToRtttl(char* out, size_t outCap,
             snprintf(token, sizeof(token), "%d%s", denom, note);
 
         // append, with comma if not last
-        int need = (int)strlen(token) + ((i+1<n) ? 1 : 0);
+        // We’ll also add a 1/32 rest after non-final notes to mimic spacing.
+        const char* sepRest = (i + 1 < n) ? ",32p" : "";
+        int need = (int)strlen(token) + (int)strlen(sepRest);
         if (pos + (size_t)need >= outCap) break; // avoid overflow; truncated is fine
         memcpy(out + pos, token, strlen(token)); pos += strlen(token);
-        if (i+1 < n) out[pos++] = ',';
+        if (*sepRest) { memcpy(out + pos, sepRest, strlen(sepRest)); pos += strlen(sepRest); }
         out[pos] = '\0';
     }
     return pos;
@@ -143,7 +174,7 @@ size_t tonesToRtttl(char* out, size_t outCap,
 const int DURATION_1_8 = 125;  // 1/8 note
 const int DURATION_1_4 = 250;  // 1/4 note
 const int DURATION_1_2 = 500;  // 1/2 note
-const int DURATION_3_4 = 750;  // 1/4 note
+const int DURATION_3_4 = 750;  // 3/4 note
 const int DURATION_1_1 = 1000; // 1/1 note
 
 void playTones(const ToneDuration *tone_durations, int size)
@@ -157,9 +188,9 @@ void playTones(const ToneDuration *tone_durations, int size)
 #ifdef HAS_I2S
     if (i2sBuzzerEnabled()) {
         // Convert current ToneDuration[] to RTTTL and play over I2S
-        char rttl[192]; // plenty for the short melodies in buzz.cpp
+        char rttl[384]; // plenty for the short melodies in buzz.cpp
         tonesToRtttl(rttl, sizeof(rttl), tone_durations, size, "sys");
-        playRttlI2S(rttl);
+        startRttlI2S(rttl);
         return;
     }
 #endif    
@@ -181,36 +212,86 @@ void playTones(const ToneDuration *tone_durations, int size)
 void playBeep()
 {
     ToneDuration melody[] = {{NOTE_B3, DURATION_1_8}};
+#ifdef HAS_I2S
+    if (i2sBuzzerEnabled()) {
+        char rttl[384];  // match or smaller than g_pendingRttl
+        tonesToRtttl(rttl, sizeof(rttl), melody, (int)(sizeof(melody)/sizeof(melody[0])), "start");
+        startRttlI2S(rttl);   // fire-and-forget; queues if audioThread not ready
+        return;
+    }
+#endif
     playTones(melody, sizeof(melody) / sizeof(ToneDuration));
 }
 
 void playLongBeep()
 {
     ToneDuration melody[] = {{NOTE_B3, DURATION_1_1}};
+#ifdef HAS_I2S
+    if (i2sBuzzerEnabled()) {
+        char rttl[384];  // match or smaller than g_pendingRttl
+        tonesToRtttl(rttl, sizeof(rttl), melody, (int)(sizeof(melody)/sizeof(melody[0])), "start");
+        startRttlI2S(rttl);   // fire-and-forget; queues if audioThread not ready
+        return;
+    }
+#endif
     playTones(melody, sizeof(melody) / sizeof(ToneDuration));
 }
 
 void playGPSEnableBeep()
 {
     ToneDuration melody[] = {{NOTE_C3, DURATION_1_8}, {NOTE_FS3, DURATION_1_4}, {NOTE_CS4, DURATION_1_4}};
+#ifdef HAS_I2S
+    if (i2sBuzzerEnabled()) {
+        char rttl[384];  // match or smaller than g_pendingRttl
+        tonesToRtttl(rttl, sizeof(rttl), melody, (int)(sizeof(melody)/sizeof(melody[0])), "start");
+        startRttlI2S(rttl);   // fire-and-forget; queues if audioThread not ready
+        return;
+    }
+#endif
     playTones(melody, sizeof(melody) / sizeof(ToneDuration));
 }
 
 void playGPSDisableBeep()
 {
     ToneDuration melody[] = {{NOTE_CS4, DURATION_1_8}, {NOTE_FS3, DURATION_1_4}, {NOTE_C3, DURATION_1_4}};
+#ifdef HAS_I2S
+    if (i2sBuzzerEnabled()) {
+        char rttl[384];  // match or smaller than g_pendingRttl
+        tonesToRtttl(rttl, sizeof(rttl), melody, (int)(sizeof(melody)/sizeof(melody[0])), "start");
+        startRttlI2S(rttl);   // fire-and-forget; queues if audioThread not ready
+        return;
+    }
+#endif
     playTones(melody, sizeof(melody) / sizeof(ToneDuration));
 }
 
-void playStartMelody()
-{
-    ToneDuration melody[] = {{NOTE_FS3, DURATION_1_8}, {NOTE_AS3, DURATION_1_8}, {NOTE_CS4, DURATION_1_4}};
-    playTones(melody, sizeof(melody) / sizeof(ToneDuration));
+void playStartMelody() {
+    ToneDuration melody[] = {
+        { NOTE_FS3, 250 }, { NOTE_AS3, 250 }, { NOTE_CS4, 500 }
+    };
+#ifdef HAS_I2S
+    if (i2sBuzzerEnabled()) {
+        char rttl[384];  // match or smaller than g_pendingRttl
+        tonesToRtttl(rttl, sizeof(rttl), melody, (int)(sizeof(melody)/sizeof(melody[0])), "start");
+        startRttlI2S(rttl);   // fire-and-forget; queues if audioThread not ready
+        return;
+    }
+#endif
+    // GPIO fallback
+    playTones(melody, (int)(sizeof(melody)/sizeof(melody[0])));
 }
 
 void playShutdownMelody()
 {
     ToneDuration melody[] = {{NOTE_CS4, DURATION_1_8}, {NOTE_AS3, DURATION_1_8}, {NOTE_FS3, DURATION_1_4}};
+#ifdef HAS_I2S
+    if (i2sBuzzerEnabled()) {
+        char rttl[384];  // match or smaller than g_pendingRttl
+        tonesToRtttl(rttl, sizeof(rttl), melody, (int)(sizeof(melody)/sizeof(melody[0])), "start");
+        startRttlI2S(rttl);   // fire-and-forget; queues if audioThread not ready
+        return;
+    }
+#endif
     playTones(melody, sizeof(melody) / sizeof(ToneDuration));
 }
 
@@ -218,6 +299,14 @@ void playChirp()
 {
     // A short, friendly "chirp" sound for key presses
     ToneDuration melody[] = {{NOTE_AS3, 20}}; // Very short AS3 note
+#ifdef HAS_I2S
+    if (i2sBuzzerEnabled()) {
+        char rttl[384];  // match or smaller than g_pendingRttl
+        tonesToRtttl(rttl, sizeof(rttl), melody, (int)(sizeof(melody)/sizeof(melody[0])), "start");
+        startRttlI2S(rttl);   // fire-and-forget; queues if audioThread not ready
+        return;
+    }
+#endif
     playTones(melody, sizeof(melody) / sizeof(ToneDuration));
 }
 
@@ -225,6 +314,14 @@ void playBoop()
 {
     // A short, friendly "boop" sound for button presses
     ToneDuration melody[] = {{NOTE_A3, 50}}; // Very short A3 note
+#ifdef HAS_I2S
+    if (i2sBuzzerEnabled()) {
+        char rttl[384];  // match or smaller than g_pendingRttl
+        tonesToRtttl(rttl, sizeof(rttl), melody, (int)(sizeof(melody)/sizeof(melody[0])), "start");
+        startRttlI2S(rttl);   // fire-and-forget; queues if audioThread not ready
+        return;
+    }
+#endif
     playTones(melody, sizeof(melody) / sizeof(ToneDuration));
 }
 
@@ -237,6 +334,14 @@ void playLongPressLeadUp()
         {NOTE_G3, 100}, // Keep climbing
         {NOTE_B3, 150}  // Peak with longer note for emphasis
     };
+#ifdef HAS_I2S
+    if (i2sBuzzerEnabled()) {
+        char rttl[384];  // match or smaller than g_pendingRttl
+        tonesToRtttl(rttl, sizeof(rttl), melody, (int)(sizeof(melody)/sizeof(melody[0])), "start");
+        startRttlI2S(rttl);   // fire-and-forget; queues if audioThread not ready
+        return;
+    }
+#endif
     playTones(melody, sizeof(melody) / sizeof(ToneDuration));
 }
 
@@ -284,5 +389,13 @@ void playComboTune()
         {NOTE_CS4, 60}, // Quick trill up
         {NOTE_B3, 120}  // Ending chirp
     };
+#ifdef HAS_I2S
+    if (i2sBuzzerEnabled()) {
+        char rttl[384];  // match or smaller than g_pendingRttl
+        tonesToRtttl(rttl, sizeof(rttl), melody, (int)(sizeof(melody)/sizeof(melody[0])), "start");
+        startRttlI2S(rttl);   // fire-and-forget; queues if audioThread not ready
+        return;
+    }
+#endif
     playTones(melody, sizeof(melody) / sizeof(ToneDuration));
 }
