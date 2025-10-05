@@ -20,6 +20,16 @@
 #include "sleep.h"
 #include "target_specific.h"
 #include <OLEDDisplay.h>
+#include <math.h>
+
+// Magnus-Tetens over water (good for typical indoor temps)
+static float dewPointC(float tempC, float rhPercent) {
+  if (!(rhPercent > 0.0f && rhPercent <= 100.0f)) return NAN;
+  const float a = 17.62f;
+  const float b = 243.12f; // °C
+  const float gamma = (a * tempC) / (b + tempC) + logf(rhPercent / 100.0f);
+  return (b * gamma) / (a - gamma);
+}
 
 #if !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR_EXTERNAL
 
@@ -394,8 +404,10 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     const auto &m = telemetry.variant.environment_metrics;
 
     // Check if any telemetry field has valid data
-    bool hasAny = m.has_temperature || m.has_relative_humidity || m.barometric_pressure != 0 || m.iaq != 0 || m.voltage != 0 ||
-                  m.current != 0 || m.lux != 0 || m.white_lux != 0 || m.weight != 0 || m.distance != 0 || m.radiation != 0;
+    bool hasAny = m.has_temperature || m.has_relative_humidity || m.barometric_pressure != 0 || m.iaq != 0 ||
+                  m.has_gas_resistance || m.gas_resistance != 0 ||
+                  m.voltage != 0 || m.current != 0 || m.lux != 0 || m.white_lux != 0 || m.weight != 0 ||
+                  m.distance != 0 || m.radiation != 0;
 
     if (!hasAny) {
         display->drawString(x, currentY, "No Telemetry");
@@ -424,8 +436,23 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     }
     if (m.has_relative_humidity)
         entries.push_back("Hum: " + String(m.relative_humidity, 0) + "%");
+    if (m.has_temperature && m.has_relative_humidity) {
+      const float dpC = dewPointC(m.temperature, m.relative_humidity);
+      if (!isnan(dpC)) {
+        if (moduleConfig.telemetry.environment_display_fahrenheit) { // same flag you use for Temp
+          const float dpF = dpC * 9.0f / 5.0f + 32.0f;
+          entries.push_back("Dew: " + String(dpF, 1) + " °F");
+        } else {
+          entries.push_back("Dew: " + String(dpC, 1) + " °C");
+        }
+      }
+    }
     if (m.barometric_pressure != 0)
         entries.push_back("Prss: " + String(m.barometric_pressure, 0) + " hPa");
+    if (m.has_gas_resistance || m.gas_resistance != 0) {
+      // We’re now sending kΩ from the sensor code; display as kΩ:
+      entries.push_back("Gas: " + String(m.gas_resistance, 2) + " kOhm");
+    }
     if (m.iaq != 0) {
         String aqi = "IAQ: " + String(m.iaq);
         const char *bannerMsg = nullptr; // Default: no banner
