@@ -1525,6 +1525,7 @@ void Screen::switchToMessagesPage()
     ui->switchToFrame(framesetInfo.positions.textMessage);
     setFastFramerate();
     forceDisplay(true);
+    powerFSM.trigger(EVENT_PRESS);
 }
 
 // Triggered by MeshModules
