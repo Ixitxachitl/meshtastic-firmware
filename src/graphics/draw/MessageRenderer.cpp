@@ -15,6 +15,7 @@
 #include "graphics/emotes.h"
 #include "main.h"
 #include "meshUtils.h"
+#include "buzz/buzz.h"
 #include <string>
 #include <vector>
 
@@ -802,6 +803,11 @@ void handleNewMessage(const StoredMessage &sm, const meshtastic_MeshPacket &pack
     // No setFrames() here anymore
     setThreadFor(sm, packet);
     resetScrollState();
+    
+    // Switch UI to the Messages page immediately
+    if (screen) {
+        screen->switchToMessagesPage();
+    }
 }
 
 void setThreadFor(const StoredMessage &sm, const meshtastic_MeshPacket &packet)
@@ -844,6 +850,7 @@ void scrollUp()
 
     powerFSM.trigger(EVENT_PRESS);
     screen->forceDisplay(true);
+    playChirp();
 }
 
 void scrollDown()
@@ -867,6 +874,7 @@ void scrollDown()
 
     powerFSM.trigger(EVENT_PRESS);
     screen->forceDisplay(true);
+    playChirp();
 }
 
 

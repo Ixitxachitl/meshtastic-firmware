@@ -76,6 +76,12 @@ namespace {
   constexpr float    TAP_PEAK_G           = 1.25f;
   constexpr uint32_t TAP_WINDOW_MS        = 120;
   constexpr uint32_t DOUBLE_TAP_GAP_MS    = 300;
+  constexpr float G_LPF_ALPHA     = 0.02f;   // accel LPF for gravity dir
+  constexpr float G_VALID_TOL_G   = 0.20f;   // accept accel norm ~ 1g ± tol
+  
+  // Gravity (LPF) and gyro bias as full vectors
+  float s_gxLP = 0.0f, s_gyLP = 0.0f, s_gzLP = 1.0f;  // init world-up ~ +Z
+  float s_biasX = 0.0f, s_biasY = 0.0f, s_biasZ = 0.0f;
 
   // Tuning for fake compass drift control
   constexpr float GYRO_DRIFT_TRIM = 0.0005f;   // small nudge while still
@@ -306,36 +312,55 @@ int32_t BMI270Sensor::runOnce()
         LOG_DEBUG("BMI270: anchored north (biasZ=%.3f dps, zero=%.1f deg)", s_gyroBiasZ, s_yawZeroDeg);
       }
 
-      // Integrate yaw with bias compensation
+      // --- Tilt-compensated yaw integration ---
       uint32_t nowUs = micros();
       if (s_lastMicros == 0) s_lastMicros = nowUs;
       float dt = (nowUs - s_lastMicros) * 1e-6f;
       s_lastMicros = nowUs;
 
-      float gzUnbiased = gz - s_gyroBiasZ;
-      s_yawDeg += gzUnbiased * dt;  // degrees
+      // 1) Update gravity estimate when accel looks like gravity (not linear motion)
+      float aMag = sqrtf(ax*ax + ay*ay + az*az); // g
+      bool aLooksLikeGravity = fabsf(aMag - 1.0f) < G_VALID_TOL_G;
+      if (aLooksLikeGravity) {
+        // simple first-order LPF
+        s_gxLP = s_gxLP + G_LPF_ALPHA * (ax - s_gxLP);
+        s_gyLP = s_gyLP + G_LPF_ALPHA * (ay - s_gyLP);
+        s_gzLP = s_gzLP + G_LPF_ALPHA * (az - s_gzLP);
+        // normalize to unit
+        float gn = sqrtf(s_gxLP*s_gxLP + s_gyLP*s_gyLP + s_gzLP*s_gzLP);
+        if (gn > 1e-3f) { s_gxLP/=gn; s_gyLP/=gn; s_gzLP/=gn; }
+      }
 
-      // Wrap to [-180,180)
+      // 2) Project gyro onto gravity to get world-yaw rate
+      float gxUnb = gx - s_biasX;
+      float gyUnb = gy - s_biasY;
+      float gzUnb = gz - s_biasZ;
+      float yawRateDegPerSec = (gxUnb * s_gxLP + gyUnb * s_gyLP + gzUnb * s_gzLP);
+
+      // 3) Integrate
+      s_yawDeg += yawRateDegPerSec * dt;
+
+      // 4) Keep angle in [-180, 180)
       if (s_yawDeg > 180.0f)  s_yawDeg -= 360.0f;
       if (s_yawDeg <= -180.0f) s_yawDeg += 360.0f;
 
-      // Small self-trim while still to reduce long-term drift
-      if (fabsf(gx) + fabsf(gy) + fabsf(gz) < STILL_THR_DPS) {
-        float residual = gz - s_gyroBiasZ;
-        s_gyroBiasZ += residual * GYRO_DRIFT_TRIM;
+      // 5) Bias self-trim while still (use original still threshold)
+      if (fabsf(gx) + fabsf(gy) + fabsf(gz) < STILL_THR_DPS && aLooksLikeGravity) {
+        // Nudge bias toward current gyro (like your existing single-axis trim)
+        s_biasX += (gx - s_biasX) * GYRO_DRIFT_TRIM;
+        s_biasY += (gy - s_biasY) * GYRO_DRIFT_TRIM;
+        s_biasZ += (gz - s_biasZ) * GYRO_DRIFT_TRIM;
       }
 
-      // Present 0..360 heading so that NORTH stays fixed
-      float rel = s_yawDeg - s_yawZeroDeg;          // device yaw relative to "calibrated north"
-      while (rel <   0.0f) rel += 360.0f;
+      // 6) Present heading (unchanged)
+      float rel = s_yawDeg - s_yawZeroDeg;
+      while (rel < 0.0f)   rel += 360.0f;
       while (rel >= 360.0f) rel -= 360.0f;
-
-      float heading = 360.0f - rel;                 // invert
+      float heading = 360.0f - rel;
       if (heading >= 360.0f) heading -= 360.0f;
-
-      #if !defined(MESHTASTIC_EXCLUDE_SCREEN) && HAS_SCREEN
-      if (screen) screen->setHeading(heading);
-      #endif
+#if !defined(MESHTASTIC_EXCLUDE_SCREEN) && HAS_SCREEN
+      if (screen) { screen->setHeading(heading); screen->forceDisplay(true); }
+#endif
     }
   }
 #endif

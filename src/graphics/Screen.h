@@ -344,6 +344,8 @@ class Screen : public concurrency::OSThread
     /// Stops showing the boot screen.
     void stopBootScreen() { enqueueCmd(ScreenCmd{.cmd = Cmd::STOP_BOOT_SCREEN}); }
 
+    void switchToMessagesPage();
+
     void runNow()
     {
         setFastFramerate();
@@ -574,6 +576,7 @@ class Screen : public concurrency::OSThread
     int handleUIFrameEvent(const UIFrameEvent *arg);
     int handleInputEvent(const InputEvent *arg);
     int handleAdminMessage(AdminModule_ObserverData *arg);
+    int handleTextMessage(const meshtastic_MeshPacket *packet);
 
     /// Used to force (super slow) eink displays to draw critical frames
     void forceDisplay(bool forceUiUpdate = false);

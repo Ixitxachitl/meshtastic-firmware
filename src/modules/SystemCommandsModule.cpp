@@ -12,6 +12,7 @@
 #include "main.h"
 #include "modules/AdminModule.h"
 #include "modules/ExternalNotificationModule.h"
+#include "buzz/buzz.h"
 
 SystemCommandsModule *systemCommandsModule;
 

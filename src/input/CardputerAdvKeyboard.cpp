@@ -6,6 +6,7 @@
 #include "MeshService.h"          // for service->reloadConfig
 #include "graphics/draw/MessageRenderer.h" // scrollUp/Down()
 #include "graphics/SharedUIDisplay.h"      // isMessagesScreenActive()
+#include "buzz/buzz.h"
 
 #define _TCA8418_COLS 8
 #define _TCA8418_ROWS 7
@@ -282,6 +283,12 @@ bool CardputerAdvKeyboard::handleFnShortcutOnPress(uint8_t key_idx) {
     if (base == 's' || base == 'S') {
         config.display.wake_on_tap_or_motion = !config.display.wake_on_tap_or_motion;
         service->reloadConfig(SEGMENT_CONFIG);
+        // play the same sounds as the GPS toggle
+        if (config.display.wake_on_tap_or_motion) {
+           playGPSEnableBeep();
+        } else {
+           playGPSDisableBeep();
+        }
         IF_SCREEN(screen->showSimpleBanner(
             config.display.wake_on_tap_or_motion ?
             "Wake on Tap/Motion: ON" : "Wake on Tap/Motion: OFF", 1000));
