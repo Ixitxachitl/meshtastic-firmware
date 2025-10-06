@@ -1,4 +1,5 @@
 #include "BMI270Sensor.h"
+#include "graphics/draw/Math3D.h"
 
 #if !defined(ARCH_STM32WL) && !MESHTASTIC_EXCLUDE_I2C
 
@@ -122,6 +123,39 @@ namespace {
 BMI270Sensor::BMI270Sensor(ScanI2C::FoundDevice foundDevice)
   : MotionSensor::MotionSensor(foundDevice) {}
 
+// ---- 3D compass handoff for CompassRenderer (no UI plumbing needed) ----
+static BMI270Sensor* g_bmi270_instance = nullptr;
+extern "C" Quat GetAttitudeForRenderer()
+{
+  return (g_bmi270_instance) ? g_bmi270_instance->getAttitudeQuat() : Quat::identity();
+}
+
+// Return the current (unit) gravity vector in BODY frame from the LPF accel
+extern "C" Vec3 GetGravityForRenderer() {
+  Vec3 g(s_gxLP, s_gyLP, s_gzLP);
+  float n = g.norm();
+  if (n > 1e-3f) g = g * (1.0f / n);
+  else g = Vec3(0, 1, 0);
+  return g;
+}
+
+// Return the current (fake-gyro) heading in radians, same convention as screen heading.
+// Heading increases clockwise, '0' = North at top.
+extern "C" float GetHeadingRadiansForRenderer()
+{
+#if HAS_BOSCH_BMI270
+    // Reuse the same math you use just before screen->setHeading(heading)
+    float rel = s_yawDeg - s_yawZeroDeg;
+    while (rel <   0.0f) rel += 360.0f;
+    while (rel >= 360.0f) rel -= 360.0f;
+    float headingDeg = 360.0f - rel;           // matches your screen heading
+    if (headingDeg >= 360.0f) headingDeg -= 360.0f;
+    return headingDeg * (float)M_PI / 180.0f;
+#else
+    return 0.0f;
+#endif
+}
+
 bool BMI270Sensor::init()
 {
 #if !HAS_BOSCH_BMI270
@@ -207,6 +241,7 @@ bool BMI270Sensor::init()
 
   impl_    = impl;
   inited_  = true;
+  g_bmi270_instance = this; // allow renderer to fetch attitude
   LOG_DEBUG("BMI270: init ok at 0x%02X", impl->addr);
   return true;
 #endif
@@ -381,3 +416,56 @@ void BMI270Sensor::calibrate(uint16_t /*forSeconds*/)
 }
 
 #endif // build guard
+
+// ------------------------------ 3D attitude export ------------------------------
+// Build a quaternion from the current low-pass gravity vector (tilt) and the integrated
+// yaw-about-gravity (relative “north”). This avoids changing your sampling pipeline.
+//  - Tilt comes from s_gxLP/s_gyLP/s_gzLP (unit gravity vector in body frame)
+//  - Yaw is the same angle you already present to the screen
+//
+// Conventions:
+//  * World up = +Y. We rotate model points by this quaternion before projecting.
+//
+static Quat quatBetweenUnit(const Vec3& a, const Vec3& b)
+{
+  // Assumes a,b are unit. Handles 180° by choosing an arbitrary ortho axis.
+  float d = a.dot(b);
+  Vec3 v = a.cross(b);
+  float w = 1.0f + d;
+  if (w < 1e-6f) {
+    // a ≈ -b: pick an orthogonal axis
+    Vec3 axis = (std::fabs(a.x) < 0.5f) ? Vec3(1,0,0) : Vec3(0,1,0);
+    v = a.cross(axis).normalized();
+    return Quat(0, v.x, v.y, v.z); // 180°
+  }
+  Quat q(w, v.x, v.y, v.z);
+  q.normalize();
+  return q;
+}
+
+Quat BMI270Sensor::getAttitudeQuat() const
+{
+#if HAS_BOSCH_BMI270
+  // 1) Tilt: rotate world up (+Y) onto measured gravity dir in body frame.
+  //    s_g*_LP are file-scope and already normalized when valid.
+  Vec3 ghat(s_gxLP, s_gyLP, s_gzLP);           // gravity (unit) in body frame
+  if (ghat.norm() < 1e-3f) ghat = Vec3(0,1,0); // fallback
+  Quat qTilt = quatBetweenUnit(Vec3(0,1,0), ghat);
+
+  // 2) Yaw: current relative yaw about gravity (same sign as screen heading logic)
+  float rel = s_yawDeg - s_yawZeroDeg;
+  while (rel <   0.0f) rel += 360.0f;
+  while (rel >= 360.0f) rel -= 360.0f;
+  // Note: screen heading = 360 - rel; we want positive rotation about +gravity.
+  float yawDeg = rel;
+  float yawRad = yawDeg * (float)M_PI / 180.0f;
+  Quat qYaw = Quat::fromAxisAngle(ghat, yawRad);
+
+  Quat q = qYaw * qTilt;
+  q.normalize();
+  return q;
+#else
+  (void)ghat; // silence warnings if branches change
+  return Quat::identity();
+#endif
+}

@@ -4,6 +4,8 @@
 
 #include "MotionSensor.h"
 
+struct Quat;  // forward declaration for getAttitudeQuat()
+
 #if !defined(ARCH_STM32WL) && !MESHTASTIC_EXCLUDE_I2C
 
 // We keep Bosch types out of the header (opaque pointer).
@@ -15,6 +17,12 @@ public:
     bool init() override;
     int32_t runOnce() override;
     void calibrate(uint16_t forSeconds) override;
+    
+    // 3D compass: get current orientation as quaternion
+    Quat getAttitudeQuat() const;
+
+    // New: request visual re-anchor (optional)
+    void anchorHeading3D();
 
 private:
     // Implementation owned by the .cpp (holds bmi2_dev, bus, addr…)
