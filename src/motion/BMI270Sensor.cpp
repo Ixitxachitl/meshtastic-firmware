@@ -381,11 +381,17 @@ int32_t BMI270Sensor::runOnce()
       // 3) Integrate
       s_yawDeg += yawRateDegPerSec * dt;
 
-      // 4) Keep angle in [-180, 180)
+      // 4) Leaky Integrator: Apply a weak pull-to-zero to counteract long-term drift.
+      // This acts as a final software correction for any residual gyro bias.
+      constexpr float YAW_DRIFT_CORRECTION_STRENGTH = 0.002f; // Corrects 0.2% of the drift error per second
+      float yaw_error_deg = s_yawDeg - s_yawZeroDeg;
+      s_yawDeg -= yaw_error_deg * YAW_DRIFT_CORRECTION_STRENGTH * dt;
+
+      // 5) Keep angle in [-180, 180)
       if (s_yawDeg > 180.0f)  s_yawDeg -= 360.0f;
       if (s_yawDeg <= -180.0f) s_yawDeg += 360.0f;
 
-      // 5) Bias self-trim while still (use original still threshold)
+      // 6) Bias self-trim while still (use original still threshold)
       if (fabsf(gx) + fabsf(gy) + fabsf(gz) < STILL_THR_DPS && aLooksLikeGravity) {
         // Nudge bias toward current gyro (like your existing single-axis trim)
         s_biasX += (gx - s_biasX) * GYRO_DRIFT_TRIM;
