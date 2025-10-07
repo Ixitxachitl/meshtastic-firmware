@@ -276,7 +276,7 @@ int32_t BMI270Sensor::runOnce()
       const float aScale = 4.0f    / 32768.0f;   // ±4 g
       const float gScale = 2000.0f / 32768.0f;   // 2000 dps
 
-      const float ax = raw.acc.x * aScale;
+      const float ax = -raw.acc.x * aScale;
       const float ay = raw.acc.y * aScale;
       const float az = raw.acc.z * aScale;
 
