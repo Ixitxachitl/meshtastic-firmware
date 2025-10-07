@@ -176,6 +176,80 @@ inline void drawPolylineProjected(OLEDDisplay* d, const Quat& qAtt,
 }
 } // anon
 
+void drawCenterNeedle3D(OLEDDisplay* display, int16_t cx, int16_t cy, uint16_t radius,
+                        const Quat& attitude, float bearingRad, float elevRad)
+{
+    const uint16_t rDraw   = (uint16_t)std::max<int>(1, (int)radius);
+    const int16_t  cxShift = (int16_t)(cx - (int)(rDraw * 0.14f)); // same left shift
+
+    // Build the shared render transform, then CANCEL yaw so the needle is ring-locked
+    const Quat  qFull     = buildSmoothedRenderQuat(attitude);     // (tilt * yaw(-heading))
+    const float heading   = GetHeadingRadiansForRenderer();        // 0 = North, +CW
+    const Quat  qYawInv   = Quat::fromAxisAngle(Vec3(0,1,0), +heading);
+    const Quat  qTiltOnly = qFull * qYawInv;                       // remove yaw
+
+    // Relative bearing (same convention as the little compass): (bearing - heading), wrapped
+    float rel = bearingRad - heading;
+    while (rel >  M_PI) rel -= 2.0f * M_PI;
+    while (rel <= -M_PI) rel += 2.0f * M_PI;
+
+    // Target vector in COMPASS frame (X=East, Y=Up, Z=North-on-compass).
+    // With camera forward = -Z, use -cos(rel)*cos(elev) for Z.
+    const float ca = std::cos(rel), sa = std::sin(rel);
+    const float ce = std::cos(elevRad), se = std::sin(elevRad);
+    Vec3 vComp(sa*ce, se, +ca*ce);
+
+    // Camera-space forward unit vector (tilt only)
+    Vec3 vCam = qTiltOnly.rotate(vComp);
+    float n3 = std::sqrt(vCam.x*vCam.x + vCam.y*vCam.y + vCam.z*vCam.z);
+    if (n3 < 1e-6f) return;
+    vCam.x/=n3; vCam.y/=n3; vCam.z/=n3;
+
+    // Compass-locked left/right axis: Up × Forward (with pole fallback), then tilt to screen
+    Vec3 upC(0.f, 1.f, 0.f);
+    Vec3 pComp = upC.cross(vComp);
+    float pn = std::sqrt(pComp.x*pComp.x + pComp.y*pComp.y + pComp.z*pComp.z);
+    if (pn < 1e-6f) {
+        pComp = Vec3(1.f,0.f,0.f).cross(vComp);
+        pn = std::sqrt(pComp.x*pComp.x + pComp.y*pComp.y + pComp.z*pComp.z);
+        if (pn < 1e-6f) return;
+    }
+    pComp.x/=pn; pComp.y/=pn; pComp.z/=pn;
+
+    Vec3 pCam = qTiltOnly.rotate(pComp);
+    float lenP = std::sqrt(pCam.x*pCam.x + pCam.y*pCam.y);
+    const float px = (lenP > 1e-6f) ? (pCam.x/lenP) : 1.f;
+    const float py = (lenP > 1e-6f) ? (pCam.y/lenP) : 0.f;
+
+    // ---------------- geometry (unchanged) ----------------
+    const float frontInsetFrac = 0.015f;
+    const float edgeBackFrac   = 0.75f;
+    const float backSurfaceInsetFrac = 0.015f;
+
+    const float rFrontEdge = rDraw * (1.f - frontInsetFrac);
+    const float rBackEdge  = rDraw * edgeBackFrac;
+    const float rBackSurf  = rDraw * (1.f - backSurfaceInsetFrac);
+
+    const int16_t xEfront = cxShift + (int16_t)std::lround(+rFrontEdge * vCam.x);
+    const int16_t yEfront = cy      + (int16_t)std::lround(+rFrontEdge * vCam.y);
+    const int16_t xEback  = cxShift + (int16_t)std::lround(-rBackEdge  * vCam.x);
+    const int16_t yEback  = cy      + (int16_t)std::lround(-rBackEdge  * vCam.y);
+
+    const float backSpread = rDraw * 0.38f;
+    const int16_t xBL = cxShift + (int16_t)std::lround(-rBackSurf * vCam.x - backSpread * px);
+    const int16_t yBL = cy      + (int16_t)std::lround(-rBackSurf * vCam.y - backSpread * py);
+    const int16_t xBR = cxShift + (int16_t)std::lround(-rBackSurf * vCam.x + backSpread * px);
+    const int16_t yBR = cy      + (int16_t)std::lround(-rBackSurf * vCam.y + backSpread * py);
+
+    display->drawTriangle(xEfront, yEfront, xEback, yEback, xBL, yBL);
+#ifdef USE_EINK
+    display->drawTriangle(xEfront, yEfront, xBR, yBR, xEback, yEback);
+#else
+    display->fillTriangle(xEfront, yEfront, xBR, yBR, xEback, yEback);
+#endif
+}
+
+
 void drawCompassSphere(OLEDDisplay* d, int16_t cx, int16_t cy,
                        uint16_t radius, const Quat& attitude)
 {

@@ -5,6 +5,7 @@
 #include "NodeDB.h"
 #include "NodeListRenderer.h"
 #include "UIRenderer.h"
+#include "graphics/draw/Math3D.h"
 #include "airtime.h"
 #include "configuration.h"
 #include "gps/GeoCoord.h"
@@ -20,6 +21,7 @@
 
 // External variables
 extern graphics::Screen *screen;
+extern "C" Quat GetAttitudeForRenderer();
 #if defined(M5STACK_UNITC6L)
 static uint32_t lastSwitchTime = 0;
 #endif
@@ -485,17 +487,28 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
             float d =
                 GeoCoord::latLongToMeter(DegD(p.latitude_i), DegD(p.longitude_i), DegD(op.latitude_i), DegD(op.longitude_i));
             */
-            float bearing = GeoCoord::bearing(DegD(op.latitude_i), DegD(op.longitude_i), DegD(p.latitude_i), DegD(p.longitude_i));
-            if (uiconfig.compass_mode == meshtastic_CompassMode_FREEZE_HEADING) {
-                myHeading = 0;
-            } else {
-                bearing -= myHeading;
-            }
+            // Absolute world bearing (do NOT subtract heading here; the 3D renderer already does -heading)
+            float bearingWorld = GeoCoord::bearing(DegD(op.latitude_i), DegD(op.longitude_i),
+                                                   DegD(p.latitude_i),  DegD(p.longitude_i));
+            // If you still draw any legacy 2D bits, you can keep this relative bearing:
+            float bearingRel = bearingWorld;
+            if (uiconfig.compass_mode != meshtastic_CompassMode_FREEZE_HEADING)
+                bearingRel -= myHeading;
 
-            // Spherical compass replaces flat ring + north marker
-            // display->drawCircle(compassX, compassY, compassRadius);
-            // CompassRenderer::drawCompassNorth(display, compassX, compassY, myHeading, compassRadius);
-            // CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, bearing);
+            // Elevation (radians)
+            int32_t myAltM = ourNode ? ourNode->position.altitude : 0;
+            if (myAltM == 0) myAltM = geoCoord.getAltitude();
+            int32_t tgtAltM = p.altitude;
+            float groundM = GeoCoord::latLongToMeter(DegD(p.latitude_i), DegD(p.longitude_i),
+                                                     DegD(op.latitude_i), DegD(op.longitude_i));
+            float dzM = float(tgtAltM - myAltM);
+            float elevRad = (fabsf(groundM) > 0.5f) ? atanf(dzM / groundM) : 0.0f;
+
+            // 3D spherical compass + 3D-aware rim chevron toward favorite node
+            const Quat att = GetAttitudeForRenderer();
+            graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, bearingRel);
+            graphics::CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius,
+                att, bearingWorld, elevRad);
         }
         // else show nothing
     } else {
@@ -536,20 +549,37 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
                 myHeading = screen->hasHeading() ? screen->getHeading() * PI / 180
                                                  : screen->estimatedHeading(DegD(op.latitude_i), DegD(op.longitude_i));
             }
-            // Spherical compass replaces flat ring + north marker
-            // graphics::CompassRenderer::drawCompassNorth(display, compassX, compassY, myHeading, compassRadius);
-
+                
             const auto &p = node->position;
             /* unused
             float d =
                 GeoCoord::latLongToMeter(DegD(p.latitude_i), DegD(p.longitude_i), DegD(op.latitude_i), DegD(op.longitude_i));
             */
-            float bearing = GeoCoord::bearing(DegD(op.latitude_i), DegD(op.longitude_i), DegD(p.latitude_i), DegD(p.longitude_i));
+            float bearingWorld = GeoCoord::bearing(DegD(op.latitude_i), DegD(op.longitude_i),
+                                                   DegD(p.latitude_i),  DegD(p.longitude_i));
+            float bearingRel = bearingWorld;
             if (uiconfig.compass_mode != meshtastic_CompassMode_FREEZE_HEADING)
-                bearing -= myHeading;
-            graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, bearing);
+                bearingRel -= myHeading;
 
-            //display->drawCircle(compassX, compassY, compassRadius);
+            // --- Elevation angle (radians) for 3D chevron ---
+            // My altitude: prefer ourNode->position.altitude, else GeoCoord (same units: meters)
+            int32_t myAltM = ourNode ? ourNode->position.altitude : 0;
+            if (myAltM == 0) { // fall back to current GeoCoord altitude if set
+                myAltM = geoCoord.getAltitude();
+            }
+            // Target altitude:
+            int32_t tgtAltM = p.altitude;
+            // Ground range in meters:
+            float groundM = GeoCoord::latLongToMeter(DegD(p.latitude_i), DegD(p.longitude_i),
+                                                     DegD(op.latitude_i), DegD(op.longitude_i));
+            // Elevation angle: +up = positive
+            float dzM = float(tgtAltM - myAltM);
+            float elevRad = (fabsf(groundM) > 0.5f) ? atanf(dzM / groundM) : 0.0f;
+            
+            const Quat att = GetAttitudeForRenderer();
+            graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, bearingRel);
+            graphics::CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius,
+                att, bearingWorld, elevRad);
         }
         // else show nothing
     }
