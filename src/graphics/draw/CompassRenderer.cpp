@@ -49,60 +49,50 @@ static inline float wrapPi(float a) {
     return a;
 }
 
-// Build a stable render quaternion:
-//  - Align +Y to gravity (CAMERA space), remove twist (yaw) from tilt
-//  - Smooth tilt (nlerp) and unwrap+EMA smooth heading
-//  - Apply yaw = -heading so North stays world-fixed
-static Quat buildSmoothedRenderQuat(const Quat& attitude) {
-    static bool  init = false;
-    static Quat  qTiltFilt(1,0,0,0);
-    static float headFilt = 0.0f;
-    static float headPrev = 0.0f;
-    static float yawFromTiltPrev = 0.0f;
+// Build a stable render quaternion for a "world view" compass.
+// - Tilt is based ONLY on gravity, keeping the globe level with the world.
+// - Yaw is based ONLY on the magnetic heading.
+static Quat buildSmoothedRenderQuat(const Quat& /* attitude unused */) {
+    static bool init = false;
+    static Quat qRenderFilt(1, 0, 0, 0);
 
-    // Tilt from gravity (camera space)
-    const Vec3 g_body = GetGravityForRenderer();
-    const Vec3 g_cam  = attitude.rotate(g_body);
-    Vec3 up_cam = g_cam.normalized();                 // screen-Y grows down; +g puts pole visually up
-    const Quat qUp = quatBetweenUnit(Vec3(0,1,0), up_cam);
+    // 1. Calculate Tilt based on Gravity
+    // We want the globe's North Pole (+Y) to point opposite to gravity.
+    // The screen's "up" is -Y, so we align the screen's up with anti-gravity.
+    Vec3 g_body = GetGravityForRenderer();
+    Vec3 anti_g = g_body * -1.0f;
+    Quat qTilt = quatBetweenUnit(Vec3(0, -1, 0), anti_g.normalized());
 
-    // Remove twist about +Y (untwist yaw from tilt) — avoid instability near pole-on
-    Vec3 f1 = qUp.rotate(Vec3(0,0,-1)); f1.y = 0.0f;
-    float r = std::sqrt(f1.x*f1.x + f1.z*f1.z);
-    float yawFromTilt = 0.0f;
-    if (r > 1e-3f) {
-        f1.x /= r; f1.z /= r;
-        yawFromTilt = std::atan2(f1.x, -f1.z);
-        float d = wrapPi(yawFromTilt - yawFromTiltPrev);
-        yawFromTiltPrev += d;
-    } else {
-        yawFromTilt = yawFromTiltPrev;
+    // 2. Calculate Yaw based on Heading
+    // We rotate the globe around its pole axis (now Y) by the heading.
+    float heading_rad = GetHeadingRadiansForRenderer();
+    Quat qYaw = Quat::fromAxisAngle(Vec3(0, 1, 0), -heading_rad); // -rad for clockwise heading
+
+    // 3. Combine them: First orient to gravity, then rotate to North.
+    Quat qRender = qTilt * qYaw;
+
+    // 4. Apply smoothing to the final quaternion
+    const float alpha = init ? 0.25f : 1.0f;
+
+    // NLERP for smooth animation
+    if (qRender.dot(qRenderFilt) < 0.0f) {
+        // Negate the quaternion to ensure the shortest rotational path
+        qRenderFilt.w = -qRenderFilt.w;
+        qRenderFilt.x = -qRenderFilt.x;
+        qRenderFilt.y = -qRenderFilt.y;
+        qRenderFilt.z = -qRenderFilt.z;
     }
-    const Quat qUntwist  = Quat::fromAxisAngle(Vec3(0,1,0), -yawFromTilt);
-    const Quat qTiltOnly = qUntwist * qUp;
-
-    // Smooth tilt (first frame snaps)
-    const float aTilt = init ? 0.25f : 1.0f;
     Quat qBlend(
-        (1.0f - aTilt)*qTiltFilt.w + aTilt*qTiltOnly.w,
-        (1.0f - aTilt)*qTiltFilt.x + aTilt*qTiltOnly.x,
-        (1.0f - aTilt)*qTiltFilt.y + aTilt*qTiltOnly.y,
-        (1.0f - aTilt)*qTiltFilt.z + aTilt*qTiltOnly.z
+        (1.0f - alpha) * qRenderFilt.w + alpha * qRender.w,
+        (1.0f - alpha) * qRenderFilt.x + alpha * qRender.x,
+        (1.0f - alpha) * qRenderFilt.y + alpha * qRender.y,
+        (1.0f - alpha) * qRenderFilt.z + alpha * qRender.z
     );
     qBlend.normalize();
-    qTiltFilt = qBlend;
+    qRenderFilt = qBlend;
 
-    // Unwrap + smooth heading (radians)
-    float h  = GetHeadingRadiansForRenderer();
-    float dh = wrapPi(h - headPrev);
-    headPrev += dh;
-    const float aHead = init ? 0.20f : 1.0f;
-    headFilt += aHead * (headPrev - headFilt);
-
-    // Final: yaw(-heading) * tilt
-    const Quat qYaw = Quat::fromAxisAngle(Vec3(0,1,0), -headFilt);
     init = true;
-    return qYaw * qTiltFilt;
+    return qRenderFilt;
 }
 
 // Draw a ring but only the parts on the FRONT hemisphere.

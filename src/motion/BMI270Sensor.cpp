@@ -77,7 +77,7 @@ namespace {
   constexpr float    TAP_PEAK_G           = 1.25f;
   constexpr uint32_t TAP_WINDOW_MS        = 120;
   constexpr uint32_t DOUBLE_TAP_GAP_MS    = 300;
-  constexpr float G_LPF_ALPHA     = 0.02f;   // accel LPF for gravity dir
+  constexpr float G_LPF_ALPHA     = 0.1f;    // accel LPF for gravity dir
   constexpr float G_VALID_TOL_G   = 0.20f;   // accept accel norm ~ 1g ± tol
   
   // Gravity (LPF) and gyro bias as full vectors
@@ -85,8 +85,8 @@ namespace {
   float s_biasX = 0.0f, s_biasY = 0.0f, s_biasZ = 0.0f;
 
   // Tuning for fake compass drift control
-  constexpr float GYRO_DRIFT_TRIM = 0.0005f;   // small nudge while still
-  constexpr float STILL_THR_DPS   = 2.0f;      // consider still if |g| sum < this
+  constexpr float GYRO_DRIFT_TRIM = 0.005f;    // small nudge while still
+  constexpr float STILL_THR_DPS   = 0.5f;      // consider still if |g| sum < this
 
   // Persistent state across runOnce()
   float     s_lastAx = 0, s_lastAy = 0, s_lastAz = 0;
@@ -334,8 +334,13 @@ int32_t BMI270Sensor::runOnce()
       // ------------------------ Fake compass (gyro-only yaw) ------------------------
       // ---- Instant anchor: lock current facing as "north" (no countdown) ----
       if (s_anchorRequested) {
-        // Snap current Z bias (reduces immediate drift feeling)
-        s_gyroBiasZ = gz;          // quick bias estimate from the current sample
+        // Snap all three bias components to the current gyro reading,
+        // assuming the device is held still for calibration. This is
+        // critical for reducing 3D drift.
+        s_biasX = gx;
+        s_biasY = gy;
+        s_biasZ = gz;
+
         s_yawZeroDeg = s_yawDeg;   // anchor "north" to current yaw
         s_anchorRequested = false;
 
@@ -344,7 +349,8 @@ int32_t BMI270Sensor::runOnce()
         if (screen) screen->endAlert();
       #endif
 
-        LOG_DEBUG("BMI270: anchored north (biasZ=%.3f dps, zero=%.1f deg)", s_gyroBiasZ, s_yawZeroDeg);
+        LOG_DEBUG("BMI270: anchored north (bias=%.3f, %.3f, %.3f dps, zero=%.1f deg)",
+                  s_biasX, s_biasY, s_biasZ, s_yawZeroDeg);
       }
 
       // --- Tilt-compensated yaw integration ---
@@ -446,26 +452,30 @@ static Quat quatBetweenUnit(const Vec3& a, const Vec3& b)
 Quat BMI270Sensor::getAttitudeQuat() const
 {
 #if HAS_BOSCH_BMI270
-  // 1) Tilt: rotate world up (+Y) onto measured gravity dir in body frame.
-  //    s_g*_LP are file-scope and already normalized when valid.
-  Vec3 ghat(s_gxLP, s_gyLP, s_gzLP);           // gravity (unit) in body frame
-  if (ghat.norm() < 1e-3f) ghat = Vec3(0,1,0); // fallback
-  Quat qTilt = quatBetweenUnit(Vec3(0,1,0), ghat);
+    // 1) Tilt: Define the world's "up" as -Y to match screen coordinates,
+    //    then align it with the device's physical UP vector (anti_ghat).
+    //    This corrects the pole orientation while keeping the tilt direction intuitive.
+    Vec3 ghat(s_gxLP, s_gyLP, s_gzLP);           // Gravity vector (points DOWN) in BODY frame
+    if (ghat.norm() < 1e-3f) ghat = Vec3(0,1,0); // Fallback
+    Vec3 anti_ghat = ghat * -1.0f;               // Anti-Gravity / Body UP axis
 
-  // 2) Yaw: current relative yaw about gravity (same sign as screen heading logic)
-  float rel = s_yawDeg - s_yawZeroDeg;
-  while (rel <   0.0f) rel += 360.0f;
-  while (rel >= 360.0f) rel -= 360.0f;
-  // Note: screen heading = 360 - rel; we want positive rotation about +gravity.
-  float yawDeg = rel;
-  float yawRad = yawDeg * (float)M_PI / 180.0f;
-  Quat qYaw = Quat::fromAxisAngle(ghat, yawRad);
+    // Align World DOWN (0,-1,0) with the Body UP vector. This is the key change.
+    Quat qTilt = quatBetweenUnit(Vec3(0,-1,0), anti_ghat);
 
-  Quat q = qYaw * qTilt;
-  q.normalize();
-  return q;
+    // 2) Yaw: Rotate around the device's physical UP axis.
+    float rel = s_yawDeg - s_yawZeroDeg;
+    while (rel <   0.0f) rel += 360.0f;
+    while (rel >= 360.0f) rel -= 360.0f;
+    float yawRad = rel * (float)M_PI / 180.0f;
+
+    // Rotate around the physical UP axis with the corrected yaw direction.
+    Quat qYaw = Quat::fromAxisAngle(anti_ghat, -yawRad);
+
+    // Full attitude quaternion: q = qYaw * qTilt
+    Quat q = qYaw * qTilt;
+    q.normalize();
+    return q;
 #else
-  (void)ghat; // silence warnings if branches change
-  return Quat::identity();
+    return Quat::identity();
 #endif
 }
