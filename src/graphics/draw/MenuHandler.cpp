@@ -1785,14 +1785,15 @@ void menuHandler::envTelemetrySourceMenu()
         sources = environmentTelemetryModule->getSourcesWithTelemetry();
     std::sort(sources.begin(), sources.end());
 
-    // If none, go back to the top Environment menu (old behavior)
+    // If none, say "No Sources" and go back to the top Environment menu
     if (sources.empty()) {
         graphics::BannerOverlayOptions o;
         o.message          = "No Sources";
         o.durationMs       = 1200;
         o.notificationType = graphics::notificationTypeEnum::text_banner;
-        screen->showOverlayBanner(o);   // now uses text_banner correctly
-        // Brief sleep to let the SELECT key-up settle so we don't re-enter immediately
+        screen->showOverlayBanner(o);
+
+        // Let SELECT key-up settle so we don't re-enter immediately
         #if defined(FREERTOS)
           vTaskDelay(pdMS_TO_TICKS(o.durationMs));
         #elif defined(ARDUINO)
@@ -1800,8 +1801,9 @@ void menuHandler::envTelemetrySourceMenu()
         #else
           usleep(o.durationMs * 1000);
         #endif
-        graphics::setOverlayActive(true);  // keep overlay alive
-        menuHandler::envTelemetryMenu();   // reopen the top menu immediately
+
+        graphics::setOverlayActive(true);   // keep overlay alive
+        menuHandler::envTelemetryMenu();    // return to top Environment menu
         return;
     }
 
@@ -1809,47 +1811,47 @@ void menuHandler::envTelemetrySourceMenu()
     static const int kMax = 64;
     static const char* optionsArray[kMax];
     static int optionsEnumArray[kMax];
+    static char labelBuf[kMax][24];   // per-slot stable storage for labels
     int count = 0;
 
-    // Keep strings alive for c_str()
-    static std::vector<std::string> nameStorage;
-    nameStorage.clear();
-
     // Back sentinel = -1
-    optionsArray[count]   = "Back";
-    optionsEnumArray[count++] = -1;
+    optionsArray[count]     = "Back";
+    optionsEnumArray[count] = -1;
+    count++;
 
     // Node short names (only sources with env telemetry)
     for (uint32_t num : sources) {
         if (count >= kMax - 1) break; // leave room for Exit
 
         const meshtastic_NodeInfoLite* n = nodeDB->getMeshNode(num);
-        std::string label;
-        if (n && n->has_user && n->user.short_name && n->user.short_name[0]) {
-            label = n->user.short_name;              // short name only
+        const char* shortName = (n && n->has_user && n->user.short_name && n->user.short_name[0])
+                                ? n->user.short_name
+                                : nullptr;
+
+        if (shortName) {
+            snprintf(labelBuf[count], sizeof(labelBuf[count]), "%s", shortName);
         } else {
-            char buf[16];
-            snprintf(buf, sizeof(buf), "%08X", num); // hex fallback
-            label = buf;
+            snprintf(labelBuf[count], sizeof(labelBuf[count]), "%08X", num); // hex fallback
         }
 
-        nameStorage.push_back(label);
-        optionsArray[count]    = nameStorage.back().c_str();
-        optionsEnumArray[count++] = static_cast<int>(num); // real nodenum
+        optionsArray[count]     = labelBuf[count];             // stable pointer
+        optionsEnumArray[count] = static_cast<int>(num);       // real nodenum
+        count++;
     }
 
     // Exit sentinel = -2 (always LAST)
-    optionsArray[count]    = "Exit";
-    optionsEnumArray[count++] = -2;
+    optionsArray[count]     = "Exit";
+    optionsEnumArray[count] = -2;
+    count++;
 
-    BannerOverlayOptions o;
+    graphics::BannerOverlayOptions o;
     o.message         = "Telemetry Source";
     o.optionsArrayPtr = optionsArray;
     o.optionsEnumPtr  = optionsEnumArray;
     o.optionsCount    = count;
 
     o.bannerCallback = [](int selected) -> void {
-        if (selected == -1) {                 // Back → return to Env menu
+        if (selected == -1) {                 // Back → return to Environment menu
             menuHandler::menuQueue = menuHandler::env_menu;
             screen->runNow();
         } else if (selected == -2) {          // Exit → close overlay

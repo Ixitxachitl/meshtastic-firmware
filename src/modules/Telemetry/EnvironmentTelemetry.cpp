@@ -419,7 +419,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     }
 
     // Decode the telemetry message from the latest received packet
-    const meshtastic_Data &p = lastMeasurementPacket->decoded;
+    const meshtastic_Data &p = packetToShow->decoded;
     meshtastic_Telemetry telemetry;
     if (!pb_decode_from_bytes(p.payload.bytes, p.payload.size, &meshtastic_Telemetry_msg, &telemetry)) {
         display->drawString(x, currentY, "No Telemetry");
@@ -440,8 +440,8 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     }
 
     // === First line: Show sender name + time since received (left), and first metric (right) ===
-    const char *sender = getSenderShortName(*lastMeasurementPacket);
-    uint32_t agoSecs = service->GetTimeSinceMeshPacket(lastMeasurementPacket);
+    const char *sender = getSenderShortName(*packetToShow);
+    uint32_t agoSecs = service->GetTimeSinceMeshPacket(packetToShow);
     String agoStr = (agoSecs > 864000) ? "?"
                     : (agoSecs > 3600) ? String(agoSecs / 3600) + "h"
                     : (agoSecs > 60)   ? String(agoSecs / 60) + "m"
