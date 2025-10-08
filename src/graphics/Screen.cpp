@@ -469,6 +469,7 @@ void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
             enabled = true;
             setInterval(0); // Draw ASAP
             runASAP = true;
+            graphics::MessageRenderer::resetScrollState();
         } else {
             powerMon->clearState(meshtastic_PowerMon_State_Screen_On);
 #ifdef USE_EINK
