@@ -419,7 +419,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     std::vector<bool> isHeader; // track header lines
     std::vector<AckStatus> ackForLine;
 
-    for (auto it = filtered.rbegin(); it != filtered.rend(); ++it) {
+    for (auto it = filtered.begin(); it != filtered.end(); ++it) {
         const auto &m = *it;
 
         // Build header line for this message
@@ -529,6 +529,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         totalHeight += cachedHeights[i];
     int usableScrollHeight = usableHeight;
     int scrollStop = std::max(0, totalHeight - usableScrollHeight + cachedHeights.back());
+    if (!manualScrollActive && !scrollStarted) scrollY = scrollStop;
 
     float delta = (now - lastTime) / 400.0f;
     lastTime = now;
@@ -550,22 +551,22 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     if (!graphics::isOverlayActive() && totalHeight > usableScrollHeight) {
         if (!manualScrollActive && scrollStarted) {
             if (!waitingToReset) {
-                scrollY += delta * scrollSpeed;
-                if (scrollY >= scrollStop) {
-                    scrollY = scrollStop;
+                scrollY -= delta * scrollSpeed;               // scroll upward
+                if (scrollY <= 0) {                            // reached top
+                    scrollY = 0;
                     waitingToReset = true;
                     pauseStart = lastTime;
                 }
             } else if (lastTime - pauseStart > 3000) {
-                scrollY = 0;
+                scrollY = scrollStop;
                 waitingToReset = false;
                 scrollStarted = false;
                 scrollStartDelay = lastTime;
             }
         }
     } else if (totalHeight <= usableScrollHeight) {
-        // Only snap to top when content fits; otherwise preserve manual position
-        scrollY = 0;
+        // Only snap to bottom when content fits; otherwise preserve manual position
+        scrollY = scrollStop;
     }
 
     int scrollOffset = static_cast<int>(scrollY);
