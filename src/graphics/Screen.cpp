@@ -63,6 +63,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "modules/ExternalNotificationModule.h"
 #include "modules/TextMessageModule.h"
 #include "modules/WaypointModule.h"
+#include "modules/Telemetry/EnvironmentTelemetry.h"
 #include "sleep.h"
 #include "target_specific.h"
 extern MessageStore messageStore;
@@ -1088,6 +1089,9 @@ void Screen::setFrames(FrameFocus focus)
                 fsi.positions.focusedModule = numframes;
             if (m && m == waypointModule)
                 fsi.positions.waypoint = numframes;
+            if (m && m == environmentTelemetryModule->asMesh()) {
+                fsi.positions.environment = numframes;
+            }
 
             indicatorIcons.push_back(icon_module);
             numframes++;
@@ -1626,6 +1630,8 @@ int Screen::handleInputEvent(const InputEvent *event)
                     menuHandler::clockMenu();
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.lora) {
                     menuHandler::loraMenu();
+                } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.environment) {
+                    menuHandler::envTelemetryMenu();
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.textMessage) {
                     if (!messageStore.getMessages().empty()) {
                         menuHandler::messageResponseMenu();

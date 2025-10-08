@@ -16,6 +16,7 @@
 #include "modules/AdminModule.h"
 #include "modules/CannedMessageModule.h"
 #include "modules/KeyVerificationModule.h"
+#include "modules/Telemetry/EnvironmentTelemetry.h"
 
 #include "modules/TraceRouteModule.h"
 #include <functional>
@@ -1746,6 +1747,125 @@ void menuHandler::FrameToggles_menu()
     screen->showOverlayBanner(bannerOptions);
 }
 
+// === Environment page menus ===
+void menuHandler::envTelemetryMenu()
+{
+    enum optionsNumbers { ExitOpt, PickSource, AutoMostRecent };
+    static const char *optionsArray[] = {"Back", "Pick Source", "Auto (Most Recent)"};
+    static int optionsEnumArray[] = {ExitOpt, PickSource, AutoMostRecent};
+
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = "Environment";
+    bannerOptions.optionsArrayPtr = optionsArray;
+    bannerOptions.optionsCount = 3;
+    bannerOptions.optionsEnumPtr = optionsEnumArray;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        if (selected == PickSource) {
+            menuHandler::menuQueue = menuHandler::env_source_picker;   // route to picker
+            screen->runNow();
+        } else if (selected == AutoMostRecent) {
+            if (environmentTelemetryModule) {
+                environmentTelemetryModule->setEnvDisplaySource(0);     // 0 = Auto (most recent)
+            }
+            screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
+        } else {
+            graphics::setOverlayActive(false);
+            screen->runNow();
+        }
+    };
+
+    screen->showOverlayBanner(bannerOptions);
+}
+
+void menuHandler::envTelemetrySourceMenu()
+{
+    // Collect sources that actually have env telemetry
+    std::vector<uint32_t> sources;
+    if (environmentTelemetryModule)
+        sources = environmentTelemetryModule->getSourcesWithTelemetry();
+    std::sort(sources.begin(), sources.end());
+
+    // If none, go back to the top Environment menu (old behavior)
+    if (sources.empty()) {
+        graphics::BannerOverlayOptions o;
+        o.message          = "No Sources";
+        o.durationMs       = 1200;
+        o.notificationType = graphics::notificationTypeEnum::text_banner;
+        screen->showOverlayBanner(o);   // now uses text_banner correctly
+        // Brief sleep to let the SELECT key-up settle so we don't re-enter immediately
+        #if defined(FREERTOS)
+          vTaskDelay(pdMS_TO_TICKS(o.durationMs));
+        #elif defined(ARDUINO)
+          delay(o.durationMs);
+        #else
+          usleep(o.durationMs * 1000);
+        #endif
+        graphics::setOverlayActive(true);  // keep overlay alive
+        menuHandler::envTelemetryMenu();   // reopen the top menu immediately
+        return;
+    }
+
+    // Build picker: Back, [nodes...], Exit (Exit goes last)
+    static const int kMax = 64;
+    static const char* optionsArray[kMax];
+    static int optionsEnumArray[kMax];
+    int count = 0;
+
+    // Keep strings alive for c_str()
+    static std::vector<std::string> nameStorage;
+    nameStorage.clear();
+
+    // Back sentinel = -1
+    optionsArray[count]   = "Back";
+    optionsEnumArray[count++] = -1;
+
+    // Node short names (only sources with env telemetry)
+    for (uint32_t num : sources) {
+        if (count >= kMax - 1) break; // leave room for Exit
+
+        const meshtastic_NodeInfoLite* n = nodeDB->getMeshNode(num);
+        std::string label;
+        if (n && n->has_user && n->user.short_name && n->user.short_name[0]) {
+            label = n->user.short_name;              // short name only
+        } else {
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%08X", num); // hex fallback
+            label = buf;
+        }
+
+        nameStorage.push_back(label);
+        optionsArray[count]    = nameStorage.back().c_str();
+        optionsEnumArray[count++] = static_cast<int>(num); // real nodenum
+    }
+
+    // Exit sentinel = -2 (always LAST)
+    optionsArray[count]    = "Exit";
+    optionsEnumArray[count++] = -2;
+
+    BannerOverlayOptions o;
+    o.message         = "Telemetry Source";
+    o.optionsArrayPtr = optionsArray;
+    o.optionsEnumPtr  = optionsEnumArray;
+    o.optionsCount    = count;
+
+    o.bannerCallback = [](int selected) -> void {
+        if (selected == -1) {                 // Back → return to Env menu
+            menuHandler::menuQueue = menuHandler::env_menu;
+            screen->runNow();
+        } else if (selected == -2) {          // Exit → close overlay
+            graphics::setOverlayActive(false);
+            screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
+        } else {                               // Nodenum chosen
+            if (environmentTelemetryModule)
+                environmentTelemetryModule->setEnvDisplaySource(static_cast<uint32_t>(selected));
+            graphics::setOverlayActive(false);
+            screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
+        }
+    };
+
+    screen->showOverlayBanner(o);
+}
+
 void menuHandler::handleMenuSwitch(OLEDDisplay *display)
 {
     if (menuQueue != menu_none)
@@ -1865,6 +1985,12 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
         break;
     case message_viewmode_menu:
         messageViewModeMenu();
+        break;
+    case env_menu:
+        envTelemetryMenu();
+        break;
+    case env_source_picker:
+        envTelemetrySourceMenu();
         break;
     }
     menuQueue = menu_none;

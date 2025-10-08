@@ -38,6 +38,8 @@ static float dewPointC(float tempC, float rhPercent) {
 #include "Sensor/RCWL9620Sensor.h"
 #include "Sensor/nullSensor.h"
 
+EnvironmentTelemetryModule* environmentTelemetryModule = nullptr;
+
 namespace graphics
 {
 extern void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *titleStr, bool force_no_invert,
@@ -369,6 +371,15 @@ bool EnvironmentTelemetryModule::wantUIFrame()
     return moduleConfig.telemetry.environment_screen_enabled;
 }
 
+
+std::vector<uint32_t> EnvironmentTelemetryModule::getSourcesWithTelemetry() const {
+    std::vector<uint32_t> out;
+    out.reserve(lastBySource.size());
+    for (const auto &kv : lastBySource) out.push_back(kv.first);
+    std::sort(out.begin(), out.end()); // nice to have
+    return out;
+}
+
 void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     // === Setup display ===
@@ -389,6 +400,20 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
 
     // === Show "No Telemetry" if no data available ===
     if (!lastMeasurementPacket) {
+        display->drawString(x, currentY, "No Telemetry");
+        return;
+    }
+
+    const meshtastic_MeshPacket* packetToShow = nullptr;
+
+    if (selectedSource != 0) {
+        auto it = lastBySource.find(selectedSource);
+        if (it != lastBySource.end()) packetToShow = it->second;
+    } else {
+        packetToShow = lastMeasurementPacket;
+    }
+
+    if (!packetToShow) {
         display->drawString(x, currentY, "No Telemetry");
         return;
     }
@@ -567,6 +592,14 @@ bool EnvironmentTelemetryModule::handleReceivedProtobuf(const meshtastic_MeshPac
             packetPool.release(lastMeasurementPacket);
 
         lastMeasurementPacket = packetPool.allocCopy(mp);
+        
+                // NEW: track per-source
+        uint32_t from = mp.from;            // (sender nodenum)
+        auto it = lastBySource.find(from);
+        if (it != lastBySource.end() && it->second) {
+            packetPool.release(it->second);
+        }
+        lastBySource[from] = packetPool.allocCopy(mp);
     }
 
     return false; // Let others look at this message also if they want
@@ -801,6 +834,13 @@ bool EnvironmentTelemetryModule::sendTelemetry(NodeNum dest, bool phoneOnly)
             packetPool.release(lastMeasurementPacket);
 
         lastMeasurementPacket = packetPool.allocCopy(*p);
+        uint32_t self = nodeDB->getNodeNum();
+        auto it = lastBySource.find(self);
+        if (it != lastBySource.end() && it->second) {
+            packetPool.release(it->second);
+        }
+        lastBySource[self] = packetPool.allocCopy(*p);
+        
         if (phoneOnly) {
             LOG_INFO("Send packet to phone");
             service->sendToPhone(p);

@@ -19,6 +19,8 @@ extern "C" void delay(uint32_t dwMs);
 #include "main.h"   // for audioThread
 #include "NodeDB.h"        // for moduleConfig type
 
+static uint32_t g_pumpTicks = 0;
+
 // match the declaration already in NodeDB.h
 extern meshtastic_LocalModuleConfig moduleConfig;
 
@@ -52,7 +54,8 @@ static inline void startRttlI2S(const char* rttl) {
 void pumpAudioTick() {
     if (audioThread) {
         (void)audioThread->isPlaying();        // advance current playback
-        if (!audioThread->isPlaying() && g_hasPending) {
+        g_pumpTicks++;
+        if (g_pumpTicks >= 3 && !audioThread->isPlaying() && g_hasPending) {
             audioThread->beginRttl(g_pendingRttl, std::strlen(g_pendingRttl));
             g_hasPending = false;
         }
@@ -161,7 +164,8 @@ size_t tonesToRtttl(char* out, size_t outCap,
 
         // append, with comma if not last
         // We’ll also add a 1/32 rest after non-final notes to mimic spacing.
-        const char* sepRest = (i + 1 < n) ? ",32p" : "";
+        bool veryShort = (td[i].duration_ms < 80);
+        const char* sepRest = (i + 1 < n) ? (veryShort ? ",32p" : ",") : "";
         int need = (int)strlen(token) + (int)strlen(sepRest);
         if (pos + (size_t)need >= outCap) break; // avoid overflow; truncated is fine
         memcpy(out + pos, token, strlen(token)); pos += strlen(token);

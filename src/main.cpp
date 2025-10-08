@@ -1625,17 +1625,20 @@ void loop()
 #endif
 
     service->loop();
+    long delayMsec = mainController.runOrDelay();
 #ifdef HAS_I2S
 {
     static uint32_t lastPump = 0;
     uint32_t now = millis();
-    if ((now - lastPump) >= 10) {
+    if ((now - lastPump) >= 5) {
         pumpAudioTick();               // advances playback
         lastPump = now;
     }
     // If something is playing, avoid long sleeps so pumping stays smooth.
     if (audioIsPlaying()) {
-        runASAP = true;                // prefer immediate reschedule
+       runASAP = true;
+       // also cap the sleep so pumping stays smooth
+       if (delayMsec > 5) delayMsec = 5;
     }
 }
 #endif
@@ -1651,8 +1654,6 @@ void loop()
             static_cast<TFTDisplay *>(dispdev)->sdlLoop();
     }
 #endif
-    long delayMsec = mainController.runOrDelay();
-
     // We want to sleep as long as possible here - because it saves power
     if (!runASAP && loopCanSleep()) {
 #ifdef DEBUG_LOOP_TIMING
