@@ -970,6 +970,7 @@ void setup()
 #ifdef HAS_I2S
     LOG_DEBUG("Start audio thread");
     audioThread = new AudioThread();
+    ensureAudioPumpTaskStarted();
 #endif
 
 #ifdef HAS_UDP_MULTICAST

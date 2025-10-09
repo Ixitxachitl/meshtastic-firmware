@@ -19,7 +19,38 @@ extern "C" void delay(uint32_t dwMs);
 #include "main.h"   // for audioThread
 #include "NodeDB.h"        // for moduleConfig type
 
+#if defined(HAS_I2S) && defined(ESP32)
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
+static TaskHandle_t sAudioPumpTask = nullptr;
+
+// ---- Pending/queue state must live here (one definition, file-local) ----
+extern AudioThread* audioThread;     // ok to keep extern for the pointer
+static char g_pendingRttl[384];
+static volatile bool g_hasPending = false;
 static uint32_t g_pumpTicks = 0;
+
+// 5 ms while playing/pending, 20 ms idle
+static inline TickType_t pumpIntervalTicks() {
+    if (!audioThread) return pdMS_TO_TICKS(20);
+    bool playing = audioThread->isPlaying();   // also advances one frame
+    return pdMS_TO_TICKS((playing || g_hasPending) ? 5 : 20);
+}
+
+static void AudioPumpTask(void*) {
+    for (;;) {
+        if (audioThread) (void)audioThread->isPlaying();
+        vTaskDelay(pumpIntervalTicks());
+    }
+}
+
+void ensureAudioPumpTaskStarted() {
+    if (!sAudioPumpTask && audioThread) {
+        xTaskCreatePinnedToCore(AudioPumpTask, "audpump", 2048, nullptr, 3, &sAudioPumpTask, tskNO_AFFINITY);
+    }
+}
+#endif
 
 // match the declaration already in NodeDB.h
 extern meshtastic_LocalModuleConfig moduleConfig;
@@ -31,10 +62,6 @@ static inline bool i2sBuzzerEnabled() {
     // return false;
     return moduleConfig.external_notification.use_i2s_as_buzzer;
 }
-
-// Single pending slot is enough for startup melody & rare overlaps
-static char g_pendingRttl[384];        // big enough for your longest tune
-static volatile bool g_hasPending = false;
 
 static inline void queueRttl(const char* rttl) {
     if (!rttl || !*rttl) return;

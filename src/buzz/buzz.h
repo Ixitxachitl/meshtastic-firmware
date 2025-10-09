@@ -31,4 +31,7 @@ void playChirp();
 void playLongPressLeadUp();
 bool playNextLeadUpNote();  // Play the next note in the lead-up sequence
 void resetLeadUpSequence(); // Reset the lead-up sequence to start from beginning
-size_t tonesToRtttl(char* out, size_t outCap, const ToneDuration* td, int n, const char* name);
+
+#ifdef HAS_I2S
+void ensureAudioPumpTaskStarted();
+#endif
