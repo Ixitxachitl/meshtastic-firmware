@@ -334,22 +334,37 @@ int32_t BMI270Sensor::runOnce()
       // ------------------------ Fake compass (gyro-only yaw) ------------------------
       // ---- Instant anchor: lock current facing as "north" (no countdown) ----
       if (s_anchorRequested) {
-        // Snap all three bias components to the current gyro reading,
-        // assuming the device is held still for calibration. This is
-        // critical for reducing 3D drift.
+        // 1) Freeze gyro bias to current sample (assumes user is holding still)
         s_biasX = gx;
         s_biasY = gy;
         s_biasZ = gz;
 
-        s_yawZeroDeg = s_yawDeg;   // anchor "north" to current yaw
-        s_anchorRequested = false;
+        // 2) Snap the gravity LPF to the current accel direction (kills LPF lag)
+        float n = sqrtf(ax*ax + ay*ay + az*az);
+        if (n > 1e-3f) {
+          s_gxLP = ax / n;
+          s_gyLP = ay / n;
+          s_gzLP = az / n;
+        }
 
+        // 3) Make “north” *immediately* equal to what we’re facing now
+        s_yawZeroDeg = s_yawDeg;
+        s_yawDeg     = s_yawZeroDeg;   // ensures rel = 0 this frame (instant snap)
+
+        // 4) Guard against a big first dt after anchoring
+        s_lastMicros = micros();
+
+        // 5) Clear request and close any lingering UI
+        s_anchorRequested = false;
       #if !defined(MESHTASTIC_EXCLUDE_SCREEN) && HAS_SCREEN
-        // Make sure no alert is left open (in case of older behavior)
-        if (screen) screen->endAlert();
+        if (screen) {
+          screen->setHeading(0.0f);   // force the snap visually this frame
+          screen->forceDisplay(true);
+          screen->endAlert();
+        }
       #endif
 
-        LOG_DEBUG("BMI270: anchored north (bias=%.3f, %.3f, %.3f dps, zero=%.1f deg)",
+        LOG_DEBUG("BMI270: anchored & snapped (bias=%.3f, %.3f, %.3f dps, zero=%.1f deg)",
                   s_biasX, s_biasY, s_biasZ, s_yawZeroDeg);
       }
 
