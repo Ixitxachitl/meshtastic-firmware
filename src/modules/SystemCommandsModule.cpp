@@ -9,11 +9,13 @@
 
 #include "GPS.h"
 #include "MeshService.h"
+#include "MessageStore.h"
 #include "Module.h"
 #include "NodeDB.h"
 #include "main.h"
 #include "modules/AdminModule.h"
 #include "modules/ExternalNotificationModule.h"
+#include "buzz/buzz.h"
 
 SystemCommandsModule *systemCommandsModule;
 

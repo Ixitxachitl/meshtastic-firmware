@@ -19,6 +19,16 @@ bool in_array(uint8_t *array, int size, uint8_t lookfor)
     return false;
 }
 
+static bool detectBMI270(TwoWire* w, uint8_t addr) {
+    // BMI270 chip ID register 0x00 should read 0x24
+    w->beginTransmission(addr);
+    w->write(0x00);
+    if (w->endTransmission(false) != 0) return false;
+    if (w->requestFrom((int)addr, 1) != 1) return false;
+    uint8_t id = w->read();
+    return id == 0x24;
+}
+
 ScanI2C::FoundDevice ScanI2CTwoWire::find(ScanI2C::DeviceType type) const
 {
     concurrency::LockGuard guard((concurrency::Lock *)&lock);
@@ -511,21 +521,33 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
 
             case ICM20948_ADDR:     // same as BMX160_ADDR
             case ICM20948_ADDR_ALT: // same as MPU6050_ADDR
-                registerValue = getRegisterValue(ScanI2CTwoWire::RegisterLocation(addr, 0x00), 1);
-                if (registerValue == 0xEA) {
+            {
+                // First try explicit ID reads in a robust order:
+                uint16_t id = getRegisterValue(ScanI2CTwoWire::RegisterLocation(addr, 0x00), 1);
+
+                if (id == 0xEA) {                         // ICM-20948 ID
                     type = ICM20948;
                     logFoundDevice("ICM20948", (uint8_t)addr.address);
                     break;
-                } else if (addr.address == BMX160_ADDR) {
+                }
+
+                // BMI270 ID is 0x24 on reg 0x00; some boards need a repeated read, so use helper
+                if (id == 0x24 || detectBMI270(i2cBus, addr.address)) {
+                    type = BMI270;
+                    logFoundDevice("BMI270", (uint8_t)addr.address);
+                    break;
+                }
+
+                // Legacy fallbacks by address if nothing matched
+                if (addr.address == BMX160_ADDR) {
                     type = BMX160;
                     logFoundDevice("BMX160", (uint8_t)addr.address);
-                    break;
                 } else {
                     type = MPU6050;
                     logFoundDevice("MPU6050", (uint8_t)addr.address);
-                    break;
                 }
                 break;
+            }
 
             case CGRADSENS_ADDR:
                 // Register 0x00 of the RadSens sensor contains is product identifier 0x7D

@@ -53,6 +53,10 @@ void renderMessageContent(OLEDDisplay *display, const std::vector<std::string> &
 // Reset scroll state when new messages arrive
 void resetScrollState();
 
+// Manual scroll controls (used by keyboard to override auto-scroll)
+void scrollUp();
+void scrollDown();
+
 // Helper to auto-select the correct thread mode from a message
 void setThreadFor(const StoredMessage &sm, const meshtastic_MeshPacket &packet);
 

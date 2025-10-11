@@ -7,6 +7,11 @@
 #include "configuration.h"
 #include "graphics/Screen.h"
 #include "graphics/draw/MessageRenderer.h"
+
+
+// Access the screen instance
+extern graphics::Screen* screen;
+
 TextMessageModule *textMessageModule;
 
 ProcessMessage TextMessageModule::handleReceived(const meshtastic_MeshPacket &mp)
@@ -29,6 +34,10 @@ ProcessMessage TextMessageModule::handleReceived(const meshtastic_MeshPacket &mp
     // Only trigger screen wake if configuration allows it
     if (shouldWakeOnReceivedMessage()) {
         powerFSM.trigger(EVENT_RECEIVED_MSG);
+    }
+    
+    if (screen) {
+        screen->handleTextMessage(&mp);
     }
 
     // Notify any observers (e.g. external modules that care about packets)

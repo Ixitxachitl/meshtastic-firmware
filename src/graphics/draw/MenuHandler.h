@@ -45,7 +45,9 @@ class menuHandler
         throttle_message,
         FrameToggles,
         message_response_menu,
-        message_viewmode_menu
+        message_viewmode_menu,
+        env_menu,
+        env_source_picker
     };
     static screenMenus menuQueue;
 
@@ -90,6 +92,8 @@ class menuHandler
     static void powerMenu();
     static void FrameToggles_menu();
     static void textMessageMenu();
+    static void envTelemetryMenu();
+    static void envTelemetrySourceMenu();
 
   private:
     static void saveUIConfig();
