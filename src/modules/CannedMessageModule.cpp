@@ -50,6 +50,10 @@ namespace {
 // Remove Canned message screen if no action is taken for some milliseconds
 #define INACTIVATE_AFTER_MS 20000
 
+namespace graphics
+{
+extern int bannerSignalBars;
+}
 extern ScanI2C::DeviceAddress cardkb_found;
 extern bool graphics::isMuted;
 extern bool osk_found;
@@ -219,13 +223,13 @@ void CannedMessageModule::drawHeader(OLEDDisplay *display, int16_t x, int16_t y,
         if (this->dest == NODENUM_BROADCAST) {
             display->drawStringf(x, y, buffer, "To: #%s", channels.getName(this->channel));
         } else {
-            display->drawStringf(x, y, buffer, "To: %s", getNodeName(this->dest));
+            display->drawStringf(x, y, buffer, "To: @%s", getNodeName(this->dest));
         }
     } else {
         if (this->dest == NODENUM_BROADCAST) {
-            display->drawStringf(x, y, buffer, "To: #%.5s", channels.getName(this->channel));
+            display->drawStringf(x, y, buffer, "To: #%.20s", channels.getName(this->channel));
         } else {
-            display->drawStringf(x, y, buffer, "To: %s", getNodeName(this->dest));
+            display->drawStringf(x, y, buffer, "To: @%s", getNodeName(this->dest));
         }
     }
 }
@@ -713,9 +717,9 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
             if (osk_found && screen) {
                 char headerBuffer[64];
                 if (this->dest == NODENUM_BROADCAST) {
-                    snprintf(headerBuffer, sizeof(headerBuffer), "To: Broadcast#%s", channels.getName(this->channel));
+                    snprintf(headerBuffer, sizeof(headerBuffer), "To: #%s", channels.getName(this->channel));
                 } else {
-                    snprintf(headerBuffer, sizeof(headerBuffer), "To: %s", getNodeName(this->dest));
+                    snprintf(headerBuffer, sizeof(headerBuffer), "To: @%s", getNodeName(this->dest));
                 }
                 screen->showTextInput(headerBuffer, "", 300000, [this](const std::string &text) {
                     if (!text.empty()) {
@@ -765,22 +769,12 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
         if (runState == CANNED_MESSAGE_RUN_STATE_INACTIVE || runState == CANNED_MESSAGE_RUN_STATE_DISABLED) {
         } else {
 #if CANNED_MESSAGE_ADD_CONFIRMATION
-            // Show confirmation dialog before sending canned message
-            NodeNum destNode = dest;
-            ChannelIndex chan = channel;
-            graphics::menuHandler::showConfirmationBanner("Send message?", [this, destNode, chan, current]() {
-                this->sendText(destNode, chan, current, false);
-                payload = runState;
-                graphics::setOverlayActive(false); 
-                runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
-                screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
-                currentMessageIndex = -1;
-
-                // Notify UI to regenerate frame set and redraw
-                UIFrameEvent e;
-                e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
-                notifyObservers(&e);
-                screen->forceDisplay();
+            const int savedIndex = currentMessageIndex;
+            graphics::menuHandler::showConfirmationBanner("Send message?", [this, savedIndex]() {
+                this->currentMessageIndex = savedIndex;
+                this->payload = this->runState;
+                this->runState = CANNED_MESSAGE_RUN_STATE_ACTION_SELECT;
+                this->setIntervalFromNow(0);
             });
 #else
             payload = runState;
@@ -1181,7 +1175,6 @@ int32_t CannedMessageModule::runOnce()
         (this->runState == CANNED_MESSAGE_RUN_STATE_MESSAGE_SELECTION)) {
         graphics::setOverlayActive(false); 
         this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
-        screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
         e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
         this->currentMessageIndex = -1;
         this->freetext = "";
@@ -1190,9 +1183,7 @@ int32_t CannedMessageModule::runOnce()
     }
     // Handle SENDING_ACTIVE state transition after virtual keyboard message
     else if (this->runState == CANNED_MESSAGE_RUN_STATE_SENDING_ACTIVE && this->payload == 0) {
-        graphics::setOverlayActive(false); 
         this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
-        screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
         this->currentMessageIndex = -1;
         this->freetext = "";
         this->cursor = 0;
@@ -1239,7 +1230,6 @@ int32_t CannedMessageModule::runOnce()
 
                 // Now deactivate this module
                 this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
-                screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
 
                 return INT32_MAX; // don’t fall back into canned list
             } else {
@@ -1269,7 +1259,6 @@ int32_t CannedMessageModule::runOnce()
 
                     // Now deactivate this module
                     this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
-                    screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
 
                     return INT32_MAX; // don’t fall back into canned list
                 }
@@ -2225,6 +2214,48 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
     }
 }
 
+// Return SNR limit based on modem preset
+static float getSnrLimit(meshtastic_Config_LoRaConfig_ModemPreset preset)
+{
+    switch (preset) {
+    case meshtastic_Config_LoRaConfig_ModemPreset_LONG_SLOW:
+    case meshtastic_Config_LoRaConfig_ModemPreset_LONG_MODERATE:
+    case meshtastic_Config_LoRaConfig_ModemPreset_LONG_FAST:
+        return -6.0f;
+    case meshtastic_Config_LoRaConfig_ModemPreset_MEDIUM_SLOW:
+    case meshtastic_Config_LoRaConfig_ModemPreset_MEDIUM_FAST:
+        return -5.5f;
+    case meshtastic_Config_LoRaConfig_ModemPreset_SHORT_SLOW:
+    case meshtastic_Config_LoRaConfig_ModemPreset_SHORT_FAST:
+    case meshtastic_Config_LoRaConfig_ModemPreset_SHORT_TURBO:
+        return -4.5f;
+    default:
+        return -6.0f;
+    }
+}
+
+// Return Good/Fair/Bad label and set 1–5 bars based on SNR and RSSI
+static const char *getSignalGrade(float snr, int32_t rssi, float snrLimit, int &bars)
+{
+    // 5-bar logic: strength inside Good/Fair/Bad category
+    if (snr > snrLimit && rssi > -10) {
+        bars = 5; // very strong good
+        return "Good";
+    } else if (snr > snrLimit && rssi > -20) {
+        bars = 4; // normal good
+        return "Good";
+    } else if (snr > 0 && rssi > -50) {
+        bars = 3; // weaker good (on edge of fair)
+        return "Good";
+    } else if (snr > -10 && rssi > -100) {
+        bars = 2; // fair
+        return "Fair";
+    } else {
+        bars = 1; // bad
+        return "Bad";
+    }
+}
+
 ProcessMessage CannedMessageModule::handleReceived(const meshtastic_MeshPacket &mp)
 {
     // Only process routing ACK/NACK packets that are responses to our own outbound
@@ -2260,7 +2291,7 @@ ProcessMessage CannedMessageModule::handleReceived(const meshtastic_MeshPacket &
             } else if (isAck) {
                 // Relay ACK → mark as RELAYED, still no final ACK
                 this->ack = false;
-                waitingForAck = false; // don’t wait for more
+                waitingForAck = false;
             } else {
                 // Explicit failure
                 this->ack = false;
@@ -2295,18 +2326,23 @@ ProcessMessage CannedMessageModule::handleReceived(const meshtastic_MeshPacket &
                 const char *channelName = channels.getName(this->channel);
                 const char *nodeName = getNodeName(this->incoming);
 
+                // Calculate signal quality and bars based on preset, SNR, and RSSI
+                float snrLimit = getSnrLimit(config.lora.modem_preset);
+                int bars = 0;
+                const char *qualityLabel = getSignalGrade(this->lastRxSnr, this->lastRxRssi, snrLimit, bars);
+
                 if (this->ack) {
                     if (this->lastSentNode == NODENUM_BROADCAST) {
-                        snprintf(buf, sizeof(buf), "Message sent to\n#%s\n\nSNR: %.1f dB RSSI: %d dBm",
-                                 (channelName && channelName[0]) ? channelName : "unknown", this->lastRxSnr, this->lastRxRssi);
+                        snprintf(buf, sizeof(buf), "Message sent to\n#%s\n\nSignal: %s",
+                                 (channelName && channelName[0]) ? channelName : "unknown", qualityLabel);
                     } else {
-                        snprintf(buf, sizeof(buf), "DM sent to\n@%s\n\nSNR: %.1f dB RSSI: %d dBm",
-                                 (nodeName && nodeName[0]) ? nodeName : "unknown", this->lastRxSnr, this->lastRxRssi);
+                        snprintf(buf, sizeof(buf), "DM sent to\n@%s\n\nSignal: %s",
+                                 (nodeName && nodeName[0]) ? nodeName : "unknown", qualityLabel);
                     }
                 } else if (isAck && !isFromDest) {
                     // Relay ACK banner
-                    snprintf(buf, sizeof(buf), "DM Relayed\n(Status Unknown)%s\n\nSNR: %.1f dB RSSI: %d dBm",
-                             (nodeName && nodeName[0]) ? nodeName : "unknown", this->lastRxSnr, this->lastRxRssi);
+                    snprintf(buf, sizeof(buf), "DM Relayed\n(Status Unknown)\n%s\n\nSignal: %s",
+                             (nodeName && nodeName[0]) ? nodeName : "unknown", qualityLabel);
                 } else {
                     if (this->lastSentNode == NODENUM_BROADCAST) {
                         snprintf(buf, sizeof(buf), "Message failed to\n#%s",
@@ -2318,7 +2354,8 @@ ProcessMessage CannedMessageModule::handleReceived(const meshtastic_MeshPacket &
 
                 opts.message = buf;
                 opts.durationMs = 3000;
-                screen->showOverlayBanner(opts);
+                graphics::bannerSignalBars = bars; // tell banner renderer how many bars to draw
+                screen->showOverlayBanner(opts);   // this triggers drawNotificationBox()
             }
         }
     }

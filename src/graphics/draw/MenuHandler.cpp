@@ -433,16 +433,35 @@ void menuHandler::messageResponseMenu()
     optionsEnumArray[options++] = DismissOldest;
 
 #if defined(M5STACK_UNITC6L)
-    optionsArray[options] = "Reply Preset";
+    optionsArray[options] = "Respond Preset";
 #else
-    optionsArray[options] = "Reply via Preset";
+    optionsArray[options] = "Respond via Preset";
 #endif
     optionsEnumArray[options++] = Preset;
 
     if (kb_found) {
-        optionsArray[options] = "Reply via Freetext";
+        optionsArray[options] = "Respond via Freetext";
         optionsEnumArray[options++] = Freetext;
     }
+
+    optionsArray[options] = "View Chats";
+    optionsEnumArray[options++] = ViewMode;
+
+    // Only show Dismiss All in View All mode
+    if (mode == graphics::MessageRenderer::ThreadMode::ALL) {
+#if defined(M5STACK_UNITC6L)
+        optionsArray[options] = "Delete All";
+#else
+        optionsArray[options] = "Delete All Chats";
+#endif
+        optionsEnumArray[options++] = DismissAll;
+    }
+    if (isHighResolution) {
+        optionsArray[options] = "Delete Oldest Message";
+    } else {
+        optionsArray[options] = "Delete Oldest Msg";
+    }
+    optionsEnumArray[options++] = DismissOldest;
 
 #ifdef HAS_I2S
     optionsArray[options] = "Read Aloud";
@@ -529,8 +548,6 @@ void menuHandler::messageResponseMenu()
 #endif
         }
     };
-    // Overlay is now open
-    graphics::setOverlayActive(true);
     screen->showOverlayBanner(bannerOptions);
 }
 
@@ -549,7 +566,7 @@ void menuHandler::messageViewModeMenu()
 
     labels.push_back("Back");
     ids.push_back(-1);
-    labels.push_back("View All");
+    labels.push_back("View All"); // shorter label
     ids.push_back(-2);
 
     // Channels with messages
@@ -565,7 +582,7 @@ void menuHandler::messageViewModeMenu()
         }
     }
 
-    // Registry channels
+    // Registry channels (seen before)
     for (int ch : graphics::MessageRenderer::getSeenChannels()) {
         if (ch < 0 || ch >= 8)
             continue;
@@ -588,11 +605,13 @@ void menuHandler::messageViewModeMenu()
     std::vector<uint32_t> uniquePeers;
     for (auto &m : dms) {
         uint32_t peer = (m.sender == nodeDB->getNodeNum()) ? m.dest : m.sender;
-        if (peer != nodeDB->getNodeNum() && std::find(uniquePeers.begin(), uniquePeers.end(), peer) == uniquePeers.end())
+        if (peer != nodeDB->getNodeNum() &&
+            std::find(uniquePeers.begin(), uniquePeers.end(), peer) == uniquePeers.end())
             uniquePeers.push_back(peer);
     }
     for (uint32_t peer : graphics::MessageRenderer::getSeenPeers()) {
-        if (peer != nodeDB->getNodeNum() && std::find(uniquePeers.begin(), uniquePeers.end(), peer) == uniquePeers.end())
+        if (peer != nodeDB->getNodeNum() &&
+            std::find(uniquePeers.begin(), uniquePeers.end(), peer) == uniquePeers.end())
             uniquePeers.push_back(peer);
     }
     std::sort(uniquePeers.begin(), uniquePeers.end());
@@ -609,7 +628,7 @@ void menuHandler::messageViewModeMenu()
             snprintf(buf, sizeof(buf), "Node %08X", peer);
             name = buf;
         }
-        labels.push_back("DM: " + name);
+        labels.push_back("DM: " + name); // explicit DM label
         int encPeer = 1000 + (int)idToPeer.size();
         ids.push_back(encPeer);
         idToPeer.push_back(peer);
@@ -654,7 +673,7 @@ void menuHandler::messageViewModeMenu()
     bannerOptions.InitialSelected = initialIndex;
 
     bannerOptions.bannerCallback = [=](int selected) -> void {
-        graphics::setOverlayActive(false);
+        graphics::setOverlayActive(false); // ensure overlay closes on selection
         LOG_DEBUG("messageViewModeMenu: selected=%d", selected);
         if (selected == -1) {
             menuHandler::menuQueue = menuHandler::message_response_menu;
@@ -672,6 +691,8 @@ void menuHandler::messageViewModeMenu()
             }
         }
     };
+
+    // Open overlay with the menu
     graphics::setOverlayActive(true);
     screen->showOverlayBanner(bannerOptions);
 }
@@ -861,19 +882,37 @@ void menuHandler::systemBaseMenu()
 
 void menuHandler::favoriteBaseMenu()
 {
-    enum optionsNumbers { Back, Preset, Freetext, Remove, TraceRoute, enumEnd };
+    enum optionsNumbers { Back, Preset, Freetext, GoToChat, Remove, TraceRoute, enumEnd };
+
+    static const char *optionsArray[enumEnd] = {"Back"};
+    static int optionsEnumArray[enumEnd] = {Back};
+    int options = 1;
+
+    // Only show "View Conversation" if a message exists with this node
+    uint32_t peer = graphics::UIRenderer::currentFavoriteNodeNum;
+    bool hasConversation = false;
+    for (const auto &m : messageStore.getMessages()) {
+        if ((m.sender == peer || m.dest == peer)) {
+            hasConversation = true;
+            break;
+        }
+    }
+    if (hasConversation) {
+        optionsArray[options] = "Go To Chat";
+        optionsEnumArray[options++] = GoToChat;
+    }
 #if defined(M5STACK_UNITC6L)
-    static const char *optionsArray[enumEnd] = {"Back", "New Preset"};
+    optionsArray[options] = "New Preset";
 #else
-    static const char *optionsArray[enumEnd] = {"Back", "New Preset Msg"};
+    optionsArray[options] = "New Preset Msg";
 #endif
-    static int optionsEnumArray[enumEnd] = {Back, Preset};
-    int options = 2;
+    optionsEnumArray[options++] = Preset;
 
     if (kb_found) {
         optionsArray[options] = "New Freetext Msg";
         optionsEnumArray[options++] = Freetext;
     }
+
 #if !defined(M5STACK_UNITC6L)
     optionsArray[options] = "Trace Route";
     optionsEnumArray[options++] = TraceRoute;
@@ -895,6 +934,20 @@ void menuHandler::favoriteBaseMenu()
             cannedMessageModule->LaunchWithDestination(graphics::UIRenderer::currentFavoriteNodeNum);
         } else if (selected == Freetext) {
             cannedMessageModule->LaunchFreetextWithDestination(graphics::UIRenderer::currentFavoriteNodeNum);
+        }
+        // Handle new Go To Thread action
+        else if (selected == GoToChat) {
+            // Switch thread to direct conversation with this node
+            graphics::MessageRenderer::setThreadMode(graphics::MessageRenderer::ThreadMode::DIRECT, -1,
+                                                     graphics::UIRenderer::currentFavoriteNodeNum);
+
+            // Reset scroll state for a fresh view
+            graphics::MessageRenderer::resetScrollState();
+
+            // Manually create and send a UIFrameEvent to trigger the jump
+            UIFrameEvent evt;
+            evt.action = UIFrameEvent::Action::SWITCH_TO_TEXTMESSAGE;
+            screen->handleUIFrameEvent(&evt);
         } else if (selected == Remove) {
             menuHandler::menuQueue = menuHandler::remove_favorite;
             screen->runNow();
@@ -1987,12 +2040,6 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
         break;
     case message_viewmode_menu:
         messageViewModeMenu();
-        break;
-    case env_menu:
-        envTelemetryMenu();
-        break;
-    case env_source_picker:
-        envTelemetrySourceMenu();
         break;
     }
     menuQueue = menu_none;
