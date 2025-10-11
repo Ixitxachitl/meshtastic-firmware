@@ -16,10 +16,21 @@ extern "C" void delay(uint32_t dwMs);
 
 // ---- I2S/RTTTL glue ---------------------------------------------------------
 #ifdef HAS_I2S
+#define BUZZ_DEFAULT_START_BOOST_MS 800  // works well across boots
 #include "main.h"   // for audioThread
 #include "NodeDB.h"        // for moduleConfig type
 
 #if defined(HAS_I2S) && defined(ESP32)
+
+static volatile uint32_t g_audioBoostUntilMs = 0;
+
+void buzzBoostFor(uint32_t ms) {
+    g_audioBoostUntilMs = millis() + ms;
+}
+bool buzzBoostActive() {
+    // true while 'now' is before the deadline (handles wrap naturally)
+    return (int32_t)(millis() - g_audioBoostUntilMs) < 0;
+}
 
 // ---- Pending/queue state must live here (one definition, file-local) ----
 extern AudioThread* audioThread;     // ok to keep extern for the pointer
@@ -56,6 +67,7 @@ static inline void queueRttl(const char* rttl) {
 static inline void startRttlI2S(const char* rttl) {
     if (!rttl || !*rttl) return;
     if (!audioThread) { queueRttl(rttl); return; }
+    buzzBoostFor(BUZZ_DEFAULT_START_BOOST_MS);
     audioThread->beginRttl(rttl, std::strlen(rttl));
 }
 
@@ -63,6 +75,7 @@ void buzzOnAudioThreadReady() {
     if (!audioThread || !g_hasPending) return;
     // If nothing is currently playing, start the queued RTTTL
     if (!audioThread->isPlaying()) {
+        buzzBoostFor(BUZZ_DEFAULT_START_BOOST_MS);
         audioThread->beginRttl(g_pendingRttl, std::strlen(g_pendingRttl));
         g_hasPending = false;
         // Warm prime the DMA a few frames so the first audible chunk is smooth.

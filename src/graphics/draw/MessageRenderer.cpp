@@ -545,6 +545,14 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 cachedLines = allLines;
 cachedHeights = calculateLineHeights(cachedLines, emotes);
 
+// Add breathing room under each message header
+constexpr int kHeaderExtraLeading = 8;
+for (size_t i = 0; i < cachedHeights.size() && i < isHeader.size(); ++i) {
+    if (isHeader[i]) {
+        cachedHeights[i] += kHeaderExtraLeading;
+    }
+}
+
 // --- Reverse auto-scroll logic (from second block), de-duped 'now' ---
 int totalHeight = 0;
 for (size_t i = 0; i < cachedHeights.size(); ++i)
@@ -632,7 +640,7 @@ for (size_t i = 0; i < cachedLines.size(); ++i) {
             }
 
             // Draw underline just under header text
-            int underlineY = lineY + FONT_HEIGHT_SMALL;
+            int underlineY = lineY + FONT_HEIGHT_SMALL + 1;
             for (int px = 0; px < w; ++px) {
                 display->setPixel(headerX + px, underlineY);
             }

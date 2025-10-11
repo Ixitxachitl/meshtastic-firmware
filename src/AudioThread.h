@@ -84,17 +84,24 @@ class AudioThread : public concurrency::OSThread
   protected:
     int32_t runOnce() override
     {
-     ++pump_tick_count_;
-    canSleep = true;                  // by default we allow sleep
-    if (i2sRtttl != nullptr && i2sRtttl->isRunning()) {
-        canSleep = false;             // keep the board awake while playing
-        // Prefill several chunks to survive brief scheduler gaps
-        for (int i = 0; i < 6; ++i) {    // 3–5 is a good range; start with 4
-            (void)i2sRtttl->loop();
-        }
-        return 3;  // keep cadence tight while playing
-    }
-    return AUDIO_THREAD_INTERVAL_MS;  // e.g. 100ms when idle
+      canSleep = true;                  // by default we allow sleep
+      if (i2sRtttl && i2sRtttl->isRunning()) {
+        canSleep = false;
+          // Ask buzzer module if we should over-prefill right now.
+          bool boost = false;
+  #ifdef HAS_I2S
+          extern bool buzzBoostActive();
+          boost = buzzBoostActive();
+  #endif
+          // Prefill more chunks when boosting, a bit less otherwise.
+          const int prefill = boost ? 12 : 6;  // try 12; 8–14 is fine too
+          for (int i = 0; i < prefill; ++i) {
+              (void)i2sRtttl->loop();
+          }
+          // Tick faster while boosting to keep DMA topped up.
+          return boost ? 2 : 3;
+      }
+      return AUDIO_THREAD_INTERVAL_MS;  // e.g. 100 ms idle
     }
 
   private:

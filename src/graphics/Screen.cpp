@@ -1460,8 +1460,7 @@ int Screen::handleTextMessage(const meshtastic_MeshPacket *packet)
 
             // Only wake/force display if the configuration allows it
             if (shouldWakeOnReceivedMessage()) {
-                setOn(true);    // Wake up the screen first
-                forceDisplay(); // Forces screen redraw
+                switchToMessagesPage();
             }
             // === Prepare banner content ===
             const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(packet->from);
@@ -1564,9 +1563,12 @@ int Screen::handleUIFrameEvent(const UIFrameEvent *event)
 
         // Jump directly to the Text Message screen
         else if (event->action == UIFrameEvent::Action::SWITCH_TO_TEXTMESSAGE) {
-            setFrames(FOCUS_PRESERVE); // preserve current frame ordering
+            setOn(true);                       // ensure display is on
+            setFrames(FOCUS_PRESERVE);         // preserve current frame ordering
             ui->switchToFrame(framesetInfo.positions.textMessage);
-            setFastFramerate(); // force redraw ASAP
+            setFastFramerate();                // draw ASAP
+            forceDisplay(true);                // commit the frame
+            powerFSM.trigger(EVENT_PRESS);     // reset auto-off timer
         }
     }
 
