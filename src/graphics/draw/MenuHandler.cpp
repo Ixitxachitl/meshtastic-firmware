@@ -407,65 +407,55 @@ void menuHandler::clockMenu()
 
 void menuHandler::messageResponseMenu()
 {
-    enum optionsNumbers { Back = 0, ViewMode, DismissAll, DismissOldest, Preset, Freetext, Aloud, enumEnd };
+    enum OptionId { Back = 0, ViewMode, DismissAll, DismissOldest, Preset, Freetext, Aloud };
 
-    static const char *optionsArray[enumEnd];
-    static int optionsEnumArray[enumEnd];
-    int options = 0;
+    static std::vector<const char*> options;
+    static std::vector<int> optionIds;
+    options.clear();
+    optionIds.clear();
 
     auto mode = graphics::MessageRenderer::getThreadMode();
-    int ch = graphics::MessageRenderer::getThreadChannel();
-    uint32_t peer = graphics::MessageRenderer::getThreadPeer();
 
-    optionsArray[options] = "Back";
-    optionsEnumArray[options++] = Back;
+    // 1) Back
+    options.push_back("Back");
+    optionIds.push_back(Back);
 
-    optionsArray[options] = "Conversations";
-    optionsEnumArray[options++] = ViewMode;
+    // 2) Conversations (view mode switcher)
+    options.push_back("Conversations");
+    optionIds.push_back(ViewMode);
 
-    // Only show Dismiss All in View All mode
+    // 3) Dismiss All — only in ALL view
     if (mode == graphics::MessageRenderer::ThreadMode::ALL) {
-        optionsArray[options] = "Dismiss All";
-        optionsEnumArray[options++] = DismissAll;
+        options.push_back("Dismiss All");
+        optionIds.push_back(DismissAll);
     }
 
-    optionsArray[options] = "Dismiss Oldest";
-    optionsEnumArray[options++] = DismissOldest;
+    // 4) Dismiss Oldest — always available
+    options.push_back("Dismiss Oldest");
+    optionIds.push_back(DismissOldest);
 
+    // 5) Preset
 #if defined(M5STACK_UNITC6L)
-    optionsArray[options] = "Respond Preset";
+    options.push_back("Respond Preset");
 #else
-    optionsArray[options] = "Respond via Preset";
+    options.push_back("Respond via Preset");
 #endif
-    optionsEnumArray[options++] = Preset;
+    optionIds.push_back(Preset);
 
+    // 6) Freetext (keyboard only)
     if (kb_found) {
-        optionsArray[options] = "Respond via Freetext";
-        optionsEnumArray[options++] = Freetext;
-    }
-
-    optionsArray[options] = "View Chats";
-    optionsEnumArray[options++] = ViewMode;
-
-    // Only show Dismiss All in View All mode
-    if (mode == graphics::MessageRenderer::ThreadMode::ALL) {
 #if defined(M5STACK_UNITC6L)
-        optionsArray[options] = "Delete All";
+        options.push_back("Respond Freetext");
 #else
-        optionsArray[options] = "Delete All Chats";
+        options.push_back("Respond via Freetext");
 #endif
-        optionsEnumArray[options++] = DismissAll;
+        optionIds.push_back(Freetext);
     }
-    if (isHighResolution) {
-        optionsArray[options] = "Delete Oldest Message";
-    } else {
-        optionsArray[options] = "Delete Oldest Msg";
-    }
-    optionsEnumArray[options++] = DismissOldest;
 
+    // 7) Read Aloud (I2S only)
 #ifdef HAS_I2S
-    optionsArray[options] = "Read Aloud";
-    optionsEnumArray[options++] = Aloud;
+    options.push_back("Read Aloud");
+    optionIds.push_back(Aloud);
 #endif
 
     BannerOverlayOptions bannerOptions;
@@ -474,11 +464,11 @@ void menuHandler::messageResponseMenu()
 #else
     bannerOptions.message = "Message Action";
 #endif
-    bannerOptions.optionsArrayPtr = optionsArray;
-    bannerOptions.optionsEnumPtr = optionsEnumArray;
-    bannerOptions.optionsCount = options;
+    bannerOptions.optionsArrayPtr = options.data();
+    bannerOptions.optionsEnumPtr  = optionIds.data();
+    bannerOptions.optionsCount    = static_cast<int>(options.size());
+
     bannerOptions.bannerCallback = [](int selected) -> void {
-        // Overlay is about to close (a selection happened)
         graphics::setOverlayActive(false);
         LOG_DEBUG("messageResponseMenu: selected %d", selected);
 
@@ -486,32 +476,23 @@ void menuHandler::messageResponseMenu()
         int ch = graphics::MessageRenderer::getThreadChannel();
         uint32_t peer = graphics::MessageRenderer::getThreadPeer();
 
-        LOG_DEBUG("[ReplyCtx] mode=%d ch=%d peer=0x%08x", (int)mode, ch, (unsigned int)peer);
-
         if (selected == ViewMode) {
             menuHandler::menuQueue = menuHandler::message_viewmode_menu;
             screen->runNow();
+
         } else if (selected == DismissAll) {
             messageStore.clearAllMessages();
             graphics::MessageRenderer::clearThreadRegistries();
 
-            // Reset back to "View All"
-            graphics::MessageRenderer::setThreadMode(graphics::MessageRenderer::ThreadMode::ALL);
         } else if (selected == DismissOldest) {
-            auto mode = graphics::MessageRenderer::getThreadMode();
-            int ch = graphics::MessageRenderer::getThreadChannel();
-            uint32_t peer = graphics::MessageRenderer::getThreadPeer();
-
             if (mode == graphics::MessageRenderer::ThreadMode::ALL) {
-                // Global oldest
                 messageStore.dismissOldestMessage();
             } else if (mode == graphics::MessageRenderer::ThreadMode::CHANNEL) {
-                // Oldest in current channel
                 messageStore.dismissOldestMessageInChannel(ch);
             } else if (mode == graphics::MessageRenderer::ThreadMode::DIRECT) {
-                // Oldest in current DM
                 messageStore.dismissOldestMessageWithPeer(peer);
             }
+
         } else if (selected == Preset || selected == Freetext) {
             if (mode == graphics::MessageRenderer::ThreadMode::CHANNEL) {
                 LOG_DEBUG("Replying to CHANNEL %d", ch);
@@ -519,20 +500,23 @@ void menuHandler::messageResponseMenu()
                     cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST, ch);
                 else
                     cannedMessageModule->LaunchFreetextWithDestination(NODENUM_BROADCAST, ch);
+
             } else if (mode == graphics::MessageRenderer::ThreadMode::DIRECT) {
                 LOG_DEBUG("Replying to DIRECT peer=0x%08x", peer);
                 if (selected == Preset)
                     cannedMessageModule->LaunchWithDestination(peer);
                 else
                     cannedMessageModule->LaunchFreetextWithDestination(peer);
+
             } else {
                 LOG_DEBUG("Fallback reply using last rx_text_message");
                 if (devicestate.rx_text_message.to == NODENUM_BROADCAST) {
                     if (selected == Preset)
-                        cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST, devicestate.rx_text_message.channel);
+                        cannedMessageModule->LaunchWithDestination(
+                            NODENUM_BROADCAST, devicestate.rx_text_message.channel);
                     else
-                        cannedMessageModule->LaunchFreetextWithDestination(NODENUM_BROADCAST,
-                                                                           devicestate.rx_text_message.channel);
+                        cannedMessageModule->LaunchFreetextWithDestination(
+                            NODENUM_BROADCAST, devicestate.rx_text_message.channel);
                 } else {
                     if (selected == Preset)
                         cannedMessageModule->LaunchWithDestination(devicestate.rx_text_message.from);
@@ -540,14 +524,21 @@ void menuHandler::messageResponseMenu()
                         cannedMessageModule->LaunchFreetextWithDestination(devicestate.rx_text_message.from);
                 }
             }
+
 #ifdef HAS_I2S
         } else if (selected == Aloud) {
+            // Use the most recent received message already stored in devicestate
             const meshtastic_MeshPacket &mp = devicestate.rx_text_message;
-            const char *msg = reinterpret_cast<const char *>(mp.decoded.payload.bytes);
-            audioThread->readAloud(msg);
+            // NOTE: meshtastic_Data (mp.decoded) doesn't have a 'has_payload' flag; check size/bytes.
+            if (mp.decoded.payload.bytes && mp.decoded.payload.size > 0) {
+                const char *msg = reinterpret_cast<const char *>(mp.decoded.payload.bytes);
+                audioThread->readAloud(msg);
+            }
 #endif
         }
     };
+
+    graphics::setOverlayActive(true);
     screen->showOverlayBanner(bannerOptions);
 }
 
@@ -575,7 +566,11 @@ void menuHandler::messageViewModeMenu()
         if (!msgs.empty()) {
             char buf[40];
             const char *cname = channels.getName(ch);
-            snprintf(buf, sizeof(buf), cname && cname[0] ? "#%s" : "#Ch%d", cname ? cname : "", ch);
+            if (cname && cname[0]) {
+                snprintf(buf, sizeof(buf), "#%s", cname);
+            } else {
+                snprintf(buf, sizeof(buf), "#Ch%d", ch);
+            }
             labels.push_back(buf);
             ids.push_back(encodeChannelId(ch));
             LOG_DEBUG("messageViewModeMenu: Added live channel %s (id=%d)", buf, encodeChannelId(ch));
@@ -593,7 +588,11 @@ void menuHandler::messageViewModeMenu()
         if (std::find(ids.begin(), ids.end(), enc) == ids.end()) {
             char buf[40];
             const char *cname = channels.getName(ch);
-            snprintf(buf, sizeof(buf), cname && cname[0] ? "#%s" : "#Ch%d", cname ? cname : "", ch);
+            if (cname && cname[0]) {
+                snprintf(buf, sizeof(buf), "#%s", cname);
+            } else {
+                snprintf(buf, sizeof(buf), "#Ch%d", ch);
+            }
             labels.push_back(buf);
             ids.push_back(enc);
             LOG_DEBUG("messageViewModeMenu: Added registry channel %s (id=%d)", buf, enc);
@@ -669,7 +668,7 @@ void menuHandler::messageViewModeMenu()
     bannerOptions.message = "Select Conversation";
     bannerOptions.optionsArrayPtr = options.data();
     bannerOptions.optionsEnumPtr = optionIds.data();
-    bannerOptions.optionsCount = options.size();
+    bannerOptions.optionsCount = static_cast<int>(options.size());
     bannerOptions.InitialSelected = initialIndex;
 
     bannerOptions.bannerCallback = [=](int selected) -> void {
@@ -2040,6 +2039,12 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
         break;
     case message_viewmode_menu:
         messageViewModeMenu();
+        break;
+    case env_menu:
+        menuHandler::envTelemetryMenu();
+        break;
+    case env_source_picker:
+        menuHandler::envTelemetrySourceMenu();
         break;
     }
     menuQueue = menu_none;

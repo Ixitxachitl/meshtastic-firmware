@@ -383,10 +383,11 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     }
     case ThreadMode::DIRECT: {
         meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(currentPeer);
-        if (node && node->has_user) {
-            snprintf(titleBuf, sizeof(titleBuf), "@%s", node->user.short_name);
+        const char *sn = (node && node->has_user) ? node->user.short_name : nullptr;
+        if (sn && sn[0]) {
+            snprintf(titleBuf, sizeof(titleBuf), "DM: %s", sn);
         } else {
-            snprintf(titleBuf, sizeof(titleBuf), "@%08x", currentPeer);
+            snprintf(titleBuf, sizeof(titleBuf), "DM: %08x", currentPeer);
         }
         titleStr = titleBuf;
         break;
@@ -408,125 +409,137 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     std::vector<bool> isHeader; // track header lines
     std::vector<AckStatus> ackForLine;
 
-// merged: reverse scrolling (second), time/formatting (first), sender selection + truncation (both)
-for (auto it = filtered.rbegin(); it != filtered.rend(); ++it) {
-    const auto &m = *it;
+    for (auto it = filtered.begin(); it != filtered.end(); ++it) {
+        const auto &m = *it;
 
-    // --- Channel / destination labeling (only when showing ALL) ---
-    char chanType[32] = "";
-    if (currentMode == ThreadMode::ALL) {
-        if (m.dest == NODENUM_BROADCAST) {
-            snprintf(chanType, sizeof(chanType), "(Ch%d)", m.channelIndex);
-        } else {
-            snprintf(chanType, sizeof(chanType), "(DM)");
-        }
-    }
-
-    // --- Calculate "time ago" (format from first block, no "ago") ---
-    uint32_t nowSecs = getValidTime(RTCQuality::RTCQualityDevice, true);
-    uint32_t seconds = 0;
-    bool invalidTime = true;
-
-    if (m.timestamp > 0 && nowSecs > 0) {
-        if (nowSecs >= m.timestamp) {
-            seconds = nowSecs - m.timestamp;
-            invalidTime = (seconds > 315360000); // >10 years
-        } else {
-            uint32_t ahead = m.timestamp - nowSecs;
-            if (ahead <= 600) { // allow small skew
-                seconds = 0;
-                invalidTime = false;
+        // Channel / destination label only in ALL mode
+        char chanType[32] = "";
+        if (currentMode == ThreadMode::ALL) {
+            if (m.dest == NODENUM_BROADCAST) {
+                snprintf(chanType, sizeof(chanType), "(Ch%d)", m.channelIndex);
+            } else {
+                snprintf(chanType, sizeof(chanType), "(DM)");
             }
         }
-    } else if (m.timestamp > 0 && nowSecs == 0) {
-        // RTC not valid: only trust boot-relative if same boot
-        uint32_t bootNow = millis() / 1000;
-        if (m.isBootRelative && m.timestamp <= bootNow) {
-            seconds = bootNow - m.timestamp;
-            invalidTime = false;
+
+        // Time delta (no “ago”)
+        uint32_t nowSecs = getValidTime(RTCQuality::RTCQualityDevice, true);
+        uint32_t seconds = 0;
+        bool invalidTime = true;
+        if (m.timestamp > 0 && nowSecs > 0) {
+            if (nowSecs >= m.timestamp) {
+                seconds = nowSecs - m.timestamp;
+                invalidTime = (seconds > 315360000); // >10 years
+            } else {
+                uint32_t ahead = m.timestamp - nowSecs;
+                if (ahead <= 600) {
+                    seconds = 0;
+                    invalidTime = false;
+                }
+            }
+        } else if (m.timestamp > 0 && nowSecs == 0) {
+            uint32_t bootNow = millis() / 1000;
+            if (m.isBootRelative && m.timestamp <= bootNow) {
+                seconds = bootNow - m.timestamp;
+                invalidTime = false;
+            } else {
+                invalidTime = true;
+            }
+        }
+        char timeBuf[16];
+        if (invalidTime) {
+            snprintf(timeBuf, sizeof(timeBuf), "???");
+        } else if (seconds < 60) {
+            snprintf(timeBuf, sizeof(timeBuf), "%us", seconds);
+        } else if (seconds < 3600) {
+            snprintf(timeBuf, sizeof(timeBuf), "%um", seconds / 60);
+        } else if (seconds < 86400) {
+            snprintf(timeBuf, sizeof(timeBuf), "%uh", seconds / 3600);
         } else {
-            invalidTime = true; // old persisted boot-relative, ignore until healed
+            snprintf(timeBuf, sizeof(timeBuf), "%ud", seconds / 86400);
         }
-    }
 
-    char timeBuf[16];
-    if (invalidTime) {
-        snprintf(timeBuf, sizeof(timeBuf), "???");
-    } else if (seconds < 60) {
-        snprintf(timeBuf, sizeof(timeBuf), "%us", seconds);
-    } else if (seconds < 3600) {
-        snprintf(timeBuf, sizeof(timeBuf), "%um", seconds / 60);
-    } else if (seconds < 86400) {
-        snprintf(timeBuf, sizeof(timeBuf), "%uh", seconds / 3600);
-    } else {
-        snprintf(timeBuf, sizeof(timeBuf), "%ud", seconds / 86400);
-    }
-
-    // --- Sender selection (second block) ---
-    meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(m.sender);
-    std::string senderStr = "???";
-#if defined(M5STACK_UNITC6L)
-    if (node && node->has_user && node->user.short_name && node->user.short_name[0]) {
-        senderStr = node->user.short_name;
-    }
-#else
-    if (node && node->has_user) {
-        if (SCREEN_WIDTH >= 200 && node->user.long_name && node->user.long_name[0]) {
-            senderStr = node->user.long_name;
-        } else if (node->user.short_name && node->user.short_name[0]) {
-            senderStr = node->user.short_name;
+        // --- Sender (null-safe, device/width aware) ---
+        meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(m.sender);
+        const char *sender = "???";
+        #if defined(M5STACK_UNITC6L)
+        if (node && node->has_user) {
+            const char *sn = node->user.short_name;
+            if (sn && sn[0]) sender = sn;
         }
-    }
-#endif
-
-    // If this is *our own* message, override sender to "Me" (first block)
-    bool mine = (m.sender == nodeDB->getNodeNum());
-    if (mine) {
-        senderStr = "Me";
-    }
-
-    // --- Pixel-width truncation (first block) ---
-    const char *senderC = senderStr.c_str();
-    if (display->getStringWidth(senderC) + display->getStringWidth(timeBuf) + display->getStringWidth(chanType) +
-            display->getStringWidth(" @") + display->getStringWidth("... ") - 10 >
-        SCREEN_WIDTH) {
-        // truncate sender name if too long
-        int availWidth = SCREEN_WIDTH - display->getStringWidth(timeBuf) - display->getStringWidth(chanType) -
-                         display->getStringWidth(" @") - display->getStringWidth("... ") - 10;
-
-        int len = static_cast<int>(senderStr.size());
-        while (len > 0 && display->getStringWidth(senderC, len) > availWidth) {
-            --len;
+        #else
+        if (node && node->has_user) {
+            const char *ln = node->user.long_name;
+            const char *sn = node->user.short_name;
+            if (SCREEN_WIDTH >= 200 && ln && ln[0]) {
+                sender = ln;
+            } else if (sn && sn[0]) {
+                sender = sn;
+            } else if (ln && ln[0]) {
+                sender = ln;
+            }
         }
-        if (len < static_cast<int>(senderStr.size())) {
-            senderStr = senderStr.substr(0, len) + "...";
-            senderC = senderStr.c_str();
+        #endif
+
+        // Use a std::string for safe mutation/truncation
+        std::string senderStrSafe = (sender && sender[0]) ? sender : "???";
+
+        // If this is *our own* message, override sender to "Me"
+        bool mine = (m.sender == nodeDB->getNodeNum());
+        if (mine) {
+            senderStrSafe = "Me";
         }
-    }
 
-    // --- Final header line (first block formatting) ---
-    char headerStr[96];
-    if (mine) {
-        snprintf(headerStr, sizeof(headerStr), "%s %s", timeBuf, chanType);
-    } else {
-        snprintf(headerStr, sizeof(headerStr), "%s @%s %s", timeBuf, senderC, chanType);
-    }
+        // --- Pixel-width truncation so header fits on one line ---
+        const char *senderC = senderStrSafe.c_str();
+        int required =  display->getStringWidth(senderC)
+                      + display->getStringWidth(" @")
+                      + display->getStringWidth(timeBuf)
+                      + display->getStringWidth(chanType)
+                      + display->getStringWidth("... ")
+                      - 10; // small slack
 
-    // Push header line
-    allLines.push_back(std::string(headerStr));
-    isMine.push_back(mine);
-    isHeader.push_back(true);
-    ackForLine.push_back(m.ackStatus);
+        if (required > SCREEN_WIDTH) {
+            int availWidth = SCREEN_WIDTH
+                           - display->getStringWidth(" @")
+                           - display->getStringWidth(timeBuf)
+                           - display->getStringWidth(chanType)
+                           - display->getStringWidth("... ")
+                           - 10;
 
-    // Split message text into wrapped lines
-    std::vector<std::string> wrapped = generateLines(display, "", m.text.c_str(), textWidth);
-    for (auto &ln : wrapped) {
-        allLines.push_back(ln);
+            // If your display API doesn't have getStringWidth(char*,len), fall back to shrinking string
+            int len = static_cast<int>(senderStrSafe.size());
+            while (len > 0 && display->getStringWidth(senderStrSafe.substr(0, len).c_str()) > availWidth) {
+                --len;
+            }
+            if (len < static_cast<int>(senderStrSafe.size())) {
+                senderStrSafe = senderStrSafe.substr(0, std::max(0, len)) + "...";
+                senderC = senderStrSafe.c_str();
+            }
+        }
+
+        // --- Final header line ---
+        char headerStr[96];
+        if (mine) {
+            snprintf(headerStr, sizeof(headerStr), "%s %s", timeBuf, chanType);
+        } else {
+            snprintf(headerStr, sizeof(headerStr), "%s @%s %s", timeBuf, senderC, chanType);
+        }
+
+        allLines.push_back(std::string(headerStr));
         isMine.push_back(mine);
-        isHeader.push_back(false);
-        ackForLine.push_back(AckStatus::NONE);
+        isHeader.push_back(true);
+        ackForLine.push_back(m.ackStatus);
+
+        // Wrapped body lines
+        std::vector<std::string> wrapped = generateLines(display, "", m.text.c_str(), textWidth);
+        for (auto &ln : wrapped) {
+            allLines.push_back(ln);
+            isMine.push_back(mine);
+            isHeader.push_back(false);
+            ackForLine.push_back(AckStatus::NONE);
+        }
     }
-}
 
 // Cache lines and heights
 cachedLines = allLines;
@@ -941,4 +954,3 @@ void scrollDown()
 
 } // namespace MessageRenderer
 } // namespace graphics
-#endif
