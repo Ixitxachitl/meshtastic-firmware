@@ -10,9 +10,6 @@
 #include "ReliableRouter.h"
 #include "airtime.h"
 #include "buzz.h"   // if you have this
-#ifdef HAS_I2S
-void pumpAudioTick();   // forward declaration
-#endif
 
 #include "FSCommon.h"
 #include "Led.h"
@@ -970,7 +967,6 @@ void setup()
 #ifdef HAS_I2S
     LOG_DEBUG("Start audio thread");
     audioThread = new AudioThread();
-    ensureAudioPumpTaskStarted();
 #endif
 
 #ifdef HAS_UDP_MULTICAST
@@ -1627,26 +1623,39 @@ void loop()
 
     service->loop();
     long delayMsec = mainController.runOrDelay();
-#ifdef HAS_I2S
-{
-    static uint32_t lastPump = 0;
-    uint32_t now = millis();
-    if ((now - lastPump) >= 5) {
-        pumpAudioTick();               // advances playback
-        lastPump = now;
-    }
-    // If something is playing, avoid long sleeps so pumping stays smooth.
-    if (audioIsPlaying()) {
-       runASAP = true;
-       // also cap the sleep so pumping stays smooth
-       if (delayMsec > 5) delayMsec = 5;
-    }
-}
-#endif
 #if !MESHTASTIC_EXCLUDE_INPUTBROKER && defined(HAS_FREE_RTOS)
     if (inputBroker)
         inputBroker->processInputEventQueue();
 #endif
+
+    // --- FLUSH PENDING BOOT MELODY ONCE THE SCHEDULER IS RUNNING ---
+#ifdef HAS_I2S
+{
+    static bool bootMelodyFlushed = false;
+    static uint32_t flushStartMs = 0;
+
+    if (!bootMelodyFlushed) {
+        // Record when we first see a valid audioThread
+        extern AudioThread* audioThread;
+        if (audioThread) {
+            if (flushStartMs == 0) flushStartMs = millis();
+
+            const bool warmedUp =
+                (audioThread->pumpTicks() >= 20);   // be conservative; 20 is enough
+
+            const bool timeFallback =
+                (millis() - flushStartMs) >= 800;   // hard fallback after ~0.8s
+
+            if (warmedUp || timeFallback) {
+                buzzOnAudioThreadReady();           // starts queued boot RTTTL
+                bootMelodyFlushed = true;
+            }
+        }
+    }
+}
+#endif
+    // --- END FLUSH ---
+
 #if ARCH_PORTDUINO && HAS_TFT
     if (screen && portduino_config.displayPanel == x11 &&
         config.display.displaymode != meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {

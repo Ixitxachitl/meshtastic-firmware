@@ -20,35 +20,17 @@ extern "C" void delay(uint32_t dwMs);
 #include "NodeDB.h"        // for moduleConfig type
 
 #if defined(HAS_I2S) && defined(ESP32)
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
-
-static TaskHandle_t sAudioPumpTask = nullptr;
 
 // ---- Pending/queue state must live here (one definition, file-local) ----
 extern AudioThread* audioThread;     // ok to keep extern for the pointer
 static char g_pendingRttl[384];
 static volatile bool g_hasPending = false;
-static uint32_t g_pumpTicks = 0;
 
 // 5 ms while playing/pending, 20 ms idle
 static inline TickType_t pumpIntervalTicks() {
     if (!audioThread) return pdMS_TO_TICKS(20);
     bool playing = audioThread->isPlaying();   // also advances one frame
     return pdMS_TO_TICKS((playing || g_hasPending) ? 5 : 20);
-}
-
-static void AudioPumpTask(void*) {
-    for (;;) {
-        if (audioThread) (void)audioThread->isPlaying();
-        vTaskDelay(pumpIntervalTicks());
-    }
-}
-
-void ensureAudioPumpTaskStarted() {
-    if (!sAudioPumpTask && audioThread) {
-        xTaskCreatePinnedToCore(AudioPumpTask, "audpump", 2048, nullptr, 3, &sAudioPumpTask, tskNO_AFFINITY);
-    }
 }
 #endif
 
@@ -77,21 +59,18 @@ static inline void startRttlI2S(const char* rttl) {
     audioThread->beginRttl(rttl, std::strlen(rttl));
 }
 
-// Called from main loop every ~10ms. Also starts pending item when ready.
-void pumpAudioTick() {
-    if (audioThread) {
-        (void)audioThread->isPlaying();        // advance current playback
-        g_pumpTicks++;
-        if (g_pumpTicks >= 3 && !audioThread->isPlaying() && g_hasPending) {
-            audioThread->beginRttl(g_pendingRttl, std::strlen(g_pendingRttl));
-            g_hasPending = false;
+void buzzOnAudioThreadReady() {
+    if (!audioThread || !g_hasPending) return;
+    // If nothing is currently playing, start the queued RTTTL
+    if (!audioThread->isPlaying()) {
+        audioThread->beginRttl(g_pendingRttl, std::strlen(g_pendingRttl));
+        g_hasPending = false;
+        // Warm prime the DMA a few frames so the first audible chunk is smooth.
+        for (int i = 0; i < 6; ++i) {
+            (void)audioThread->isPlaying();  // advances one frame
+            delay(0);                         // yield without sleeping
         }
     }
-}
-
-bool audioIsPlaying() {
-    if (!audioThread) return false;
-    return audioThread->isPlaying();
 }
 #endif // HAS_I2S
 

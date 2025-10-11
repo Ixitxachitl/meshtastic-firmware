@@ -2,11 +2,7 @@
 #include <cstddef> 
 
 #ifdef HAS_I2S
-// Advance I2S/RTTTL playback one tick (cheap & non-blocking)
-void pumpAudioTick();
-
-// Returns true while something is playing (also advances one tick)
-bool audioIsPlaying();
+void buzzOnAudioThreadReady();
 #endif
 
 struct ToneDuration {
@@ -33,5 +29,5 @@ bool playNextLeadUpNote();  // Play the next note in the lead-up sequence
 void resetLeadUpSequence(); // Reset the lead-up sequence to start from beginning
 
 #ifdef HAS_I2S
-void ensureAudioPumpTaskStarted();
+extern "C" void armAudioWarmup(uint8_t ticks);
 #endif
