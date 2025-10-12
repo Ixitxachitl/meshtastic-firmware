@@ -36,6 +36,15 @@ class EnvironmentTelemetryModule : private concurrency::OSThread, public Protobu
     virtual void drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y) override;
 #endif
 
+    void setEnvDisplaySource(uint32_t nodenum) { selectedSource = nodenum; } // 0 = Auto
+    
+    void clearEnvCache() {
+        for (auto &kv : lastBySource) if (kv.second) packetPool.release(kv.second);
+        lastBySource.clear();
+    }
+    MeshModule* asMesh() { return this; }
+    std::vector<uint32_t> getSourcesWithTelemetry() const;
+
   protected:
     /** Called to handle a particular incoming message
     @return true if you've guaranteed you've handled this message and no other handlers should be considered for it
@@ -63,6 +72,10 @@ class EnvironmentTelemetryModule : private concurrency::OSThread, public Protobu
     uint32_t lastSentToMesh = 0;
     uint32_t lastSentToPhone = 0;
     uint32_t sensor_read_error_count = 0;
+    std::unordered_map<uint32_t, meshtastic_MeshPacket*> lastBySource;
+    uint32_t selectedSource = 0; // 0 = Auto (most recent), otherwise a nodenum
 };
+
+extern EnvironmentTelemetryModule* environmentTelemetryModule;
 
 #endif

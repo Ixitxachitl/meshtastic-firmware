@@ -457,7 +457,10 @@ class AnalogBatteryLevel : public HasBatteryLevel
         // if it's not HIGH - check the battery
 #endif
 #endif
-        return getBattVoltage() > chargingVolt;
+        const uint16_t v = getBattVoltage();
+        LOG_DEBUG("USB infer: batMv=%u, thresh=%0.0f, usb=%s",
+                  v, chargingVolt, (v > chargingVolt ? "true" : "false"));
+        return v > chargingVolt;
     }
 
     /// Assume charging if we have a battery and external power is connected.
@@ -493,11 +496,13 @@ class AnalogBatteryLevel : public HasBatteryLevel
   private:
     /// If we see a battery voltage higher than physics allows - assume charger is pumping
     /// in power
-
+#ifndef CHARGING_MARGIN_MV
+#define CHARGING_MARGIN_MV (10)  // treat ≥ 4.15–4.20 V as USB present
+#endif
     /// For heltecs with no battery connected, the measured voltage is 2204, so
     // need to be higher than that, in this case is 2500mV (3000-500)
     const uint16_t OCV[NUM_OCV_POINTS] = {OCV_ARRAY};
-    const float chargingVolt = (OCV[0] + 10) * NUM_CELLS;
+    const float chargingVolt = (OCV[0] + CHARGING_MARGIN_MV) * NUM_CELLS;
     const float noBatVolt = (OCV[NUM_OCV_POINTS - 1] - 500) * NUM_CELLS;
     // Start value from minimum voltage for the filter to not start from 0
     // that could trigger some events.
