@@ -546,21 +546,52 @@ cachedLines = allLines;
 cachedHeights = calculateLineHeights(cachedLines, emotes);
 
 // Add breathing room under each message header
-constexpr int kHeaderExtraLeading = 8;
+int kHeaderExtraLeading = 8;
 for (size_t i = 0; i < cachedHeights.size() && i < isHeader.size(); ++i) {
     if (isHeader[i]) {
         cachedHeights[i] += kHeaderExtraLeading;
     }
 }
 
+// Extra pixel gap AFTER each message body (or header if no body)
+int kAfterBodyExtraPx = 8; 
+for (size_t i = 0; i < cachedHeights.size(); ++i) {
+    bool thisIsHeader = isHeader[i];
+    bool nextIsHeader = (i + 1 >= isHeader.size()) ? true : isHeader[i + 1];
+
+    // A "message end" is the last non-header before next header,
+    // or (if there's no body) the header itself right before next header.
+    bool isEndOfMessageBody =
+        (!thisIsHeader && (i + 1 == isHeader.size() || nextIsHeader));
+
+    bool isHeaderOnlyMessageEnd =
+        (thisIsHeader && (i + 1 == isHeader.size() || nextIsHeader));
+
+    if (isEndOfMessageBody || isHeaderOnlyMessageEnd) {
+        cachedHeights[i] += kAfterBodyExtraPx;
+    }
+}
+
 // --- Reverse auto-scroll logic (from second block), de-duped 'now' ---
+// Total content height
 int totalHeight = 0;
 for (size_t i = 0; i < cachedHeights.size(); ++i)
     totalHeight += cachedHeights[i];
 
-int usableScrollHeight = usableHeight;
-int scrollStop = std::max(0, totalHeight - usableScrollHeight + cachedHeights.back());
-if (!manualScrollActive && !scrollStarted) scrollY = scrollStop;
+const int usableScrollHeight = usableHeight;
+
+// One text row pad at the bottom. Use your body text row height here.
+// If you're unsure, FONT_HEIGHT_SMALL is a reasonable choice.
+int kBottomPadPx = FONT_HEIGHT_SMALL;
+
+// Bottom alignment offset *one row above the bottom*.
+// (May be negative when content < viewport — that's fine, it bottom-aligns.)
+const int bottomOffsetOneRow = totalHeight - usableScrollHeight + kBottomPadPx;
+
+// Initial snap: newest message sits one row above bottom
+if (!manualScrollActive && !scrollStarted) {
+    scrollY = bottomOffsetOneRow;
+}
 
 #ifndef USE_EINK
 uint32_t now = millis();
@@ -568,46 +599,41 @@ float delta = (now - lastTime) / 400.0f;
 lastTime = now;
 const float scrollSpeed = 2.0f;
 
-if (scrollStartDelay == 0)
-    scrollStartDelay = now;
-if (!scrollStarted && now - scrollStartDelay > 2000)
-    scrollStarted = true;
+if (scrollStartDelay == 0) scrollStartDelay = now;
+if (!scrollStarted && now - scrollStartDelay > 2000) scrollStarted = true;
 
-// Remember the most recent usable height for manual scroll helpers
 #if defined(M5STACK_UNITC6L)
 lastUsableScrollHeight = windowHeight;
 #else
 lastUsableScrollHeight = usableHeight;
 #endif
 
-// Skip auto-scroll while the user is manually scrolling
 if (!graphics::isOverlayActive() && totalHeight > usableScrollHeight) {
     if (!manualScrollActive && scrollStarted) {
-        // reverse scroll (up), then pause at top, jump to bottom
         if (!waitingToReset) {
-            scrollY -= delta * scrollSpeed;               // scroll upward
-            if (scrollY <= 0) {                            // reached top
+            scrollY -= delta * scrollSpeed;
+            if (scrollY <= 0) {
                 scrollY = 0;
                 waitingToReset = true;
                 pauseStart = lastTime;
             }
         } else if (lastTime - pauseStart > 3000) {
-            scrollY = scrollStop;
+            // When jumping back to bottom, keep the 1-row pad
+            scrollY = bottomOffsetOneRow;
             waitingToReset = false;
             scrollStarted = false;
             scrollStartDelay = lastTime;
         }
     }
-} else if (totalHeight <= usableScrollHeight) {
-    // Only snap to bottom when content fits; otherwise preserve manual position
-    scrollY = scrollStop;
+} else {
+    // Content fits: still bottom-align with the 1-row pad
+    scrollY = bottomOffsetOneRow;
 }
 #else
-// E-Ink: disable autoscroll
 scrollY = 0.0f;
 waitingToReset = false;
 scrollStarted = false;
-lastTime = millis(); // keep timebase sane
+lastTime = millis();
 #endif
 
 int scrollOffset = static_cast<int>(scrollY);
@@ -619,7 +645,9 @@ for (size_t i = 0; i < cachedLines.size(); ++i) {
     for (size_t j = 0; j < i; ++j)
         lineY += cachedHeights[j];
 
-    if (lineY > -cachedHeights[i] && lineY < scrollBottom) {
+    const int bottomClip = scrollBottom + FONT_HEIGHT_SMALL;
+
+    if ((lineY + cachedHeights[i]) > 0 && lineY < bottomClip) {
         if (isHeader[i]) {
             // Render header
             int w = display->getStringWidth(cachedLines[i].c_str());
@@ -641,8 +669,8 @@ for (size_t i = 0; i < cachedLines.size(); ++i) {
 
             // Draw underline just under header text
             int underlineY = lineY + FONT_HEIGHT_SMALL + 1;
-            for (int px = 0; px < w; ++px) {
-                display->setPixel(headerX + px, underlineY);
+            if (underlineY >= 0 && underlineY < bottomClip) {
+                for (int px = 0; px < w; ++px) display->setPixel(headerX + px, underlineY);
             }
         } else {
             // Render message line
@@ -656,7 +684,6 @@ for (size_t i = 0; i < cachedLines.size(); ++i) {
         }
     }
 }
-
 graphics::drawCommonHeader(display, x, y, titleStr);
 }
 
@@ -774,7 +801,8 @@ void renderMessageContent(OLEDDisplay *display, const std::vector<std::string> &
         int lineY = yOffset;
         for (size_t j = 0; j < i; ++j)
             lineY += rowHeights[j];
-        if (lineY > -rowHeights[i] && lineY < scrollBottom) {
+        const int bottomClip = scrollBottom + FONT_HEIGHT_SMALL;
+        if (lineY > -rowHeights[i] && lineY < bottomClip) {
             if (i == 0 && isInverted) {
                 display->drawString(x, lineY, lines[i].c_str());
                 if (isBold)
