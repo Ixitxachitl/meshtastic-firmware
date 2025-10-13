@@ -46,7 +46,7 @@ class menuHandler
         FrameToggles,
         message_response_menu,
         message_viewmode_menu,
-        node_name_length_menu
+        node_name_length_menu,
         env_menu,
         env_source_picker
     };
