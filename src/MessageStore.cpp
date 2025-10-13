@@ -203,8 +203,44 @@ void MessageStore::loadFromFlash()
         f.readBytes((char *)&m.sender, sizeof(m.sender));
         f.readBytes((char *)&m.channelIndex, sizeof(m.channelIndex));
         f.readBytes((char *)&m.dest, sizeof(m.dest));
-        f.readBytes(m.text, MAX_MESSAGE_SIZE - 1);
-        m.text[MAX_MESSAGE_SIZE - 1] = '\0';
+        // Read text as variable-length NUL-terminated string (written by saveToFlash()).
+        // Store up to MAX_MESSAGE_SIZE-1 and ALWAYS realign to the next field.
+        {
+            size_t ti = 0;
+            char c = '\0';
+            bool sawTerminator = false;
+
+            // Read until NUL or EOF, keeping up to MAX_MESSAGE_SIZE-1 bytes
+            while (f.available() > 0) {
+                if (f.readBytes(&c, 1) != 1) break;      // truncated file
+                if (ti < MAX_MESSAGE_SIZE - 1) {
+                    m.text[ti++] = c;
+                }
+                if (c == '\0') {                         // string terminator written by saver
+                    sawTerminator = true;
+                    break;
+                }
+            }
+
+            // If we filled our buffer without seeing a terminator, consume until NUL to realign
+            if (!sawTerminator) {
+                // ensure NUL-termination of what we kept
+                if (ti >= MAX_MESSAGE_SIZE) ti = MAX_MESSAGE_SIZE - 1;
+                m.text[ti] = '\0';
+
+                // discard the remainder of this (oversized) string until NUL or EOF
+                while (f.available() > 0) {
+                    if (f.readBytes(&c, 1) != 1 || c == '\0') break;
+                }
+            } else {
+                // Normal case: we stored the NUL as part of the bytes above
+                if (ti == 0 || m.text[ti - 1] != '\0') {
+                    // belt-and-suspenders: ensure terminator if edge case
+                    if (ti >= MAX_MESSAGE_SIZE) ti = MAX_MESSAGE_SIZE - 1;
+                    m.text[ti] = '\0';
+                }
+            }
+        }
 
         // Try to read boot-relative flag (new format)
         uint8_t bootFlag = 0;
