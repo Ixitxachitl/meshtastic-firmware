@@ -45,7 +45,7 @@ static void pushHist(std::deque<float> &q, float v) {
 // Boxed + aligned tiny sparkline (fits in a defined box)
 static void drawMiniSparkBoxed(OLEDDisplay *dpy, int x, int y, int w, int h, const std::deque<float> &hist) {
     // frame
-    dpy->drawRect(x, y, w, h);
+    dpy->drawRect(x, y + 1, w, h);
 
     if (hist.size() < 2) return;
 
@@ -57,7 +57,7 @@ static void drawMiniSparkBoxed(OLEDDisplay *dpy, int x, int y, int w, int h, con
 
     // inner drawing area (leave a 1px margin inside the box)
     const int ix = x + 1;
-    const int iy = y + 1;
+    const int iy = y + 2;
     const int iw = w - 2;
     const int ih = h - 2;
 

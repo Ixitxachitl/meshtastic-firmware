@@ -38,8 +38,8 @@ namespace graphics
 #define textSixthLine_large (textFifthLine_large + (FONT_HEIGHT_SMALL + 5))
 
 // Quick screen access
-#define SCREEN_WIDTH  ((display) ? (display)->getWidth()  : 128)
-#define SCREEN_HEIGHT ((display) ? (display)->getHeight() : 64)
+#define SCREEN_WIDTH display->getWidth()
+#define SCREEN_HEIGHT display->getHeight()
 
 // Shared state (declare inside namespace)
 extern bool hasUnreadMessage;

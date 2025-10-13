@@ -48,6 +48,31 @@ inline size_t utf8CharLen(uint8_t c)
     return 1;
 }
 
+// Prefer long_name when width allows (or short on some targets), else hex node id.
+static inline const char* bestNodeName(uint32_t nodeId, int screenW) {
+    static char buf[16]; // "FFFFFFFF\0"
+    const meshtastic_NodeInfoLite* node = nodeDB->getMeshNode(nodeId);
+    if (node && node->has_user) {
+        const char* ln = node->user.long_name;
+        const char* sn = node->user.short_name;
+    #if defined(M5STACK_UNITC6L)
+        // UnitC6L special-case: short first
+        if (sn && sn[0]) return sn;
+        if (ln && ln[0]) return ln;
+    #else
+        if (screenW >= 200) {            // <-- keep the 200px guard
+            if (ln && ln[0]) return ln;
+            if (sn && sn[0]) return sn;
+        } else {
+            if (sn && sn[0]) return sn;
+            if (ln && ln[0]) return ln;
+        }
+    #endif
+    }
+    snprintf(buf, sizeof(buf), "%08x", (unsigned)nodeId);
+    return buf;
+}
+
 void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string &line, const Emote *emotes, int emoteCount)
 {
     int cursorX = x;
@@ -281,6 +306,9 @@ void drawRelayMark(OLEDDisplay *display, int x, int y, int size = 8)
 
 void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
+    if (!display) return; 
+    const int screenW = display->getWidth();
+    const int screenH = display->getHeight();
     // Freeze any background motion while a menu/banner is visible.
     if (graphics::isOverlayActive()) {
         // Don’t advance scroll timers; render the current static frame.
@@ -380,7 +408,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         graphics::drawCommonHeader(display, x, y, titleStr);
         didReset = false;
         const char *messageString = "No messages";
-        int center_text = (SCREEN_WIDTH / 2) - (display->getStringWidth(messageString) / 2);
+        int center_text = (screenW / 2) - (display->getStringWidth(messageString) / 2);
         display->drawString(center_text, getTextPositions(display)[2], messageString);
         return;
     }
@@ -441,39 +469,18 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             snprintf(timeBuf, sizeof(timeBuf), "%ud", seconds / 86400);
         }
 
-        // --- Sender (null-safe, device/width aware) ---
-        meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(m.sender);
-        const char *sender = "???";
-        #if defined(M5STACK_UNITC6L)
-        if (node && node->has_user) {
-            const char *sn = node->user.short_name;
-            if (sn && sn[0]) sender = sn;
-        }
-        #else
-        if (node && node->has_user) {
-            const char *ln = node->user.long_name;
-            const char *sn = node->user.short_name;
-            if (SCREEN_WIDTH >= 200 && ln && ln[0]) {
-                sender = ln;
-            } else if (sn && sn[0]) {
-                sender = sn;
-            } else if (ln && ln[0]) {
-                sender = ln;
-            }
-        }
-        #endif
+        // --- Sender (null-safe; prefers name, falls back to hex id) ---
+        const char* senderC = bestNodeName(m.sender, screenW);
+        std::string senderStrSafe = senderC;
 
-        // Use a std::string for safe mutation/truncation
-        std::string senderStrSafe = (sender && sender[0]) ? sender : "???";
-
-        // If this is *our own* message, override sender to "Me"
+        // If this is our own message, override sender to "Me"
         bool mine = (m.sender == nodeDB->getNodeNum());
         if (mine) {
             senderStrSafe = "Me";
         }
 
         // --- Pixel-width truncation so header fits on one line ---
-        const char *senderC = senderStrSafe.c_str();
+        senderC = senderStrSafe.c_str();
         int required =  display->getStringWidth(senderC)
                       + display->getStringWidth(" @")
                       + display->getStringWidth(timeBuf)
@@ -633,7 +640,7 @@ for (size_t i = 0; i < cachedLines.size(); ++i) {
         if (isHeader[i]) {
             // Render header
             int w = display->getStringWidth(cachedLines[i].c_str());
-            int headerX = isMine[i] ? (SCREEN_WIDTH - w - 2) : x;
+            int headerX = isMine[i] ? (screenW - w - 2) : x;
             display->drawString(headerX, lineY, cachedLines[i].c_str());
 
             // Draw ACK/NACK mark for our own messages
@@ -658,7 +665,7 @@ for (size_t i = 0; i < cachedLines.size(); ++i) {
             // Render message line
             if (isMine[i]) {
                 display->setTextAlignment(TEXT_ALIGN_RIGHT);
-                drawStringWithEmotes(display, SCREEN_WIDTH, lineY, cachedLines[i], emotes, numEmotes);
+                drawStringWithEmotes(display, screenW, lineY, cachedLines[i], emotes, numEmotes);
                 display->setTextAlignment(TEXT_ALIGN_LEFT);
             } else {
                 drawStringWithEmotes(display, x, lineY, cachedLines[i], emotes, numEmotes);
@@ -798,6 +805,8 @@ void renderMessageContent(OLEDDisplay *display, const std::vector<std::string> &
 
 void handleNewMessage(const StoredMessage &sm, const meshtastic_MeshPacket &packet)
 {
+    if (!display) return;
+    const int screenW = display->getWidth();
     if (packet.from != 0) {
         hasUnreadMessage = true;
 
@@ -814,8 +823,7 @@ void handleNewMessage(const StoredMessage &sm, const meshtastic_MeshPacket &pack
         }
 
         // Banner logic
-        const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(packet.from);
-        const char *longName = (node && node->has_user) ? node->user.long_name : nullptr;
+        const char* dispName = bestNodeName(packet.from, screenW);
         const char *msgRaw = reinterpret_cast<const char *>(packet.decoded.payload.bytes);
 
         char banner[256];
@@ -833,23 +841,29 @@ void handleNewMessage(const StoredMessage &sm, const meshtastic_MeshPacket &pack
         }
 
         if (isAlert) {
-            if (longName && longName[0])
-                snprintf(banner, sizeof(banner), "Alert Received from\n%s", longName);
+        #if defined(M5STACK_UNITC6L)
+            // keep short banner on small display
+            strcpy(banner, (dispName && dispName[0]) ? "Alert Received" : "Alert Received");
+        #else
+            if (dispName && dispName[0])
+                snprintf(banner, sizeof(banner), "Alert Received from\n%s", dispName);
             else
                 strcpy(banner, "Alert Received");
+        #endif
         } else {
             // Skip muted channels unless it's an alert
             if (isChannelMuted)
                 return;
 
-            if (longName && longName[0]) {
-#if defined(M5STACK_UNITC6L)
+        #if defined(M5STACK_UNITC6L)
+            // keep it short on this target
+            strcpy(banner, "New Message");
+        #else
+            if (dispName && dispName[0])
+                snprintf(banner, sizeof(banner), "New Message from\n%s", dispName);
+            else
                 strcpy(banner, "New Message");
-#else
-                snprintf(banner, sizeof(banner), "New Message from\n%s", longName);
-#endif
-            } else
-                strcpy(banner, "New Message");
+        #endif
         }
 
         // Append context (which channel or DM) so the banner shows where the message arrived
