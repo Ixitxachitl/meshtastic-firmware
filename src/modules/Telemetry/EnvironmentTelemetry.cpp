@@ -21,6 +21,82 @@
 #include "target_specific.h"
 #include <OLEDDisplay.h>
 #include <math.h>
+#include <deque>
+#include <map>
+#include <algorithm>
+
+OLEDDisplay *display = nullptr;
+
+// keep last N samples per source
+static constexpr int    kSparkW  = 120;         // pixels wide
+static constexpr int    kSparkH  = 10;         // pixels tall
+static constexpr size_t kHistLen = size_t(kSparkW);         // ~ last 24 updates
+
+static std::map<uint32_t, std::deque<float>> s_tempHist;
+static std::map<uint32_t, std::deque<float>> s_humHist;
+static std::map<uint32_t, std::deque<float>> s_pressHist;
+
+static void pushHist(std::deque<float> &q, float v) {
+    if (std::isnan(v)) return;
+    if (q.size() >= kHistLen) q.pop_front();
+    q.push_back(v);
+}
+
+// Boxed + aligned tiny sparkline (fits in a defined box)
+static void drawMiniSparkBoxed(OLEDDisplay *dpy, int x, int y, int w, int h, const std::deque<float> &hist) {
+    // frame
+    dpy->drawRect(x, y, w, h);
+
+    if (hist.size() < 2) return;
+
+    auto mm = std::minmax_element(hist.begin(), hist.end());
+    float lo = *mm.first;
+    float hi = *mm.second;
+    float span = (hi - lo);
+    if (span < 1e-6f) span = 1.0f;
+
+    // inner drawing area (leave a 1px margin inside the box)
+    const int ix = x + 1;
+    const int iy = y + 1;
+    const int iw = w - 2;
+    const int ih = h - 2;
+
+    const float step = float(iw) / float(hist.size() - 1);
+    for (size_t i = 1; i < hist.size(); ++i) {
+        int x1 = ix + int(std::lround(step * (i - 1)));
+        int x2 = ix + int(std::lround(step * i));
+        int y1 = iy + ih - int(std::lround(((hist[i - 1] - lo) / span) * ih));
+        int y2 = iy + ih - int(std::lround(((hist[i]     - lo) / span) * ih));
+        dpy->drawLine(x1, y1, x2, y2);
+    }
+}
+
+// Prefer long_name when available (and width allows), else short_name, else hex id.
+// Mirrors the selection logic used by MessageRenderer.
+static inline const char *getSenderLongName(const meshtastic_MeshPacket &mp) {
+    static char buf[64];
+
+    const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(mp.from);
+    if (node && node->has_user) {
+        const char *ln = node->user.long_name;
+        const char *sn = node->user.short_name;
+
+    #if defined(M5STACK_UNITC6L)
+        // On this target, MessageRenderer prefers short_name.
+        if (sn && sn[0]) return sn;
+        if (ln && ln[0]) return ln;
+    #else
+        // On wider screens, prefer long_name; otherwise short_name.
+        if (SCREEN_WIDTH >= 200 && ln && ln[0]) return ln;
+        if (sn && sn[0]) return sn;
+        if (ln && ln[0]) return ln; // last resort if short_name empty
+    #endif
+    }
+
+    // Fallback: hex node id like "ABCDEF12"
+    snprintf(buf, sizeof(buf), "%08x", (unsigned int)mp.from);
+    return buf;
+}
 
 // Magnus-Tetens over water (good for typical indoor temps)
 static float dewPointC(float tempC, float rhPercent) {
@@ -382,6 +458,7 @@ std::vector<uint32_t> EnvironmentTelemetryModule::getSourcesWithTelemetry() cons
 
 void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
+    ::display = display;
     // === Setup display ===
     display->clear();
     display->setFont(FONT_SMALL);
@@ -439,127 +516,137 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         return;
     }
 
-    // === First line: Show sender name + time since received (left), and first metric (right) ===
-    const char *sender = getSenderShortName(*packetToShow);
+    // === First line: Show sender LONG name + time since received (left)
+    const char *sender = getSenderLongName(*packetToShow);  // long name per your request
     uint32_t agoSecs = service->GetTimeSinceMeshPacket(packetToShow);
     String agoStr = (agoSecs > 864000) ? "?"
                     : (agoSecs > 3600) ? String(agoSecs / 3600) + "h"
                     : (agoSecs > 60)   ? String(agoSecs / 60) + "m"
                                        : String(agoSecs) + "s";
-
     String leftStr = String(sender) + " (" + agoStr + ")";
-    display->drawString(x, currentY, leftStr); // Left side: who and when
+    display->drawString(x, currentY, leftStr);
+    currentY += rowHeight;
 
-    // === Collect sensor readings as label strings (no icons) ===
+    // look up per-source history for sparklines
+    uint32_t from = packetToShow->from;
+    auto &th = s_tempHist[from];
+    auto &hh = s_humHist[from];
+    auto &ph = s_pressHist[from];
+
+    // Where to draw all graphs (aligned)
+    const int graphX = SCREEN_WIDTH - (kSparkW + 2);
+
+    // Utility: seed a history with the current value so we draw at least a flat line
+    auto seedIfEmpty = [](std::deque<float>& q, float v) {
+        if (q.empty() && !isnan(v)) { q.push_back(v); q.push_back(v); }
+    };
+
+    // === Temperature row (Tmp) ===
+    if (m.has_temperature) {
+        seedIfEmpty(th, m.temperature);
+        String tStr = moduleConfig.telemetry.environment_display_fahrenheit
+                      ? String(UnitConversions::CelsiusToFahrenheit(m.temperature), 1) + "°F"
+                      : String(m.temperature, 1) + "°C";
+        display->drawString(x, currentY, "Tmp: " + tStr);  // abbreviation kept from original code :contentReference[oaicite:1]{index=1}
+        // Box height = roughly rowHeight - 2 so it sits nicely on the text baseline
+        drawMiniSparkBoxed(display, graphX, currentY, kSparkW, rowHeight - 2, th);
+        currentY += rowHeight;
+    }
+
+    // === Humidity row (Hum) ===
+    if (m.has_relative_humidity) {
+        seedIfEmpty(hh, m.relative_humidity);
+        String hStr = String(m.relative_humidity, 0) + "%";
+        display->drawString(x, currentY, "Hum: " + hStr);  // abbreviation kept from original code :contentReference[oaicite:2]{index=2}
+        drawMiniSparkBoxed(display, graphX, currentY, kSparkW, rowHeight - 2, hh);
+        currentY += rowHeight;
+    }
+
+    // === Pressure row (Prss) ===
+    if (m.barometric_pressure != 0) {
+        seedIfEmpty(ph, m.barometric_pressure);
+        String pStr = String(m.barometric_pressure, 0) + " hPa";
+        display->drawString(x, currentY, "Prss: " + pStr); // abbreviation kept from original code :contentReference[oaicite:3]{index=3}
+        drawMiniSparkBoxed(display, graphX, currentY, kSparkW, rowHeight - 2, ph);
+        currentY += rowHeight;
+    }
+
+    // === Collect the REST (compact 'Dew' + 'Gas' on the same line) ===
     std::vector<String> entries;
 
-    if (m.has_temperature) {
-        String tempStr = moduleConfig.telemetry.environment_display_fahrenheit
-                             ? "Tmp: " + String(UnitConversions::CelsiusToFahrenheit(m.temperature), 1) + "°F"
-                             : "Tmp: " + String(m.temperature, 1) + "°C";
-        entries.push_back(tempStr);
-    }
-    if (m.has_relative_humidity)
-        entries.push_back("Hum: " + String(m.relative_humidity, 0) + "%");
+    String dewGas;
+
+    // Dew (same calc as before)
     if (m.has_temperature && m.has_relative_humidity) {
-      const float dpC = dewPointC(m.temperature, m.relative_humidity);
-      if (!isnan(dpC)) {
-        if (moduleConfig.telemetry.environment_display_fahrenheit) { // same flag you use for Temp
-          const float dpF = dpC * 9.0f / 5.0f + 32.0f;
-          entries.push_back("Dew: " + String(dpF, 1) + " °F");
-        } else {
-          entries.push_back("Dew: " + String(dpC, 1) + " °C");
+        const float dpC = dewPointC(m.temperature, m.relative_humidity);
+        if (!isnan(dpC)) {
+            if (moduleConfig.telemetry.environment_display_fahrenheit) {
+                const float dpF = dpC * 9.0f / 5.0f + 32.0f;
+                dewGas += "Dew: " + String(dpF, 1) + "°F";
+            } else {
+                dewGas += "Dew: " + String(dpC, 1) + "°C";
+            }
         }
-      }
     }
-    if (m.barometric_pressure != 0)
-        entries.push_back("Prss: " + String(m.barometric_pressure, 0) + " hPa");
+
+    // Gas (append to same line)
     if (m.has_gas_resistance || m.gas_resistance != 0) {
-      // We’re now sending kΩ from the sensor code; display as kΩ:
-      entries.push_back("Gas: " + String(m.gas_resistance, 2) + " kOhm");
+        if (dewGas.length()) dewGas += "  ";
+        dewGas += "Gas: " + String(m.gas_resistance, 2) + " kOhm";
     }
+
+    // Push combined Dew+Gas; then a placeholder to force next entry to a NEW ROW
+    if (dewGas.length()) {
+        entries.push_back(dewGas);
+        entries.push_back("");   // <-- reserve right column so IAQ starts on next line
+    }
+
+    // IAQ goes after this and will now render on its own row
     if (m.iaq != 0) {
         String aqi = "IAQ: " + String(m.iaq);
-        const char *bannerMsg = nullptr; // Default: no banner
-
-        if (m.iaq <= 25)
-            aqi += " (Excellent)";
-        else if (m.iaq <= 50)
-            aqi += " (Good)";
-        else if (m.iaq <= 100)
-            aqi += " (Moderate)";
-        else if (m.iaq <= 150)
-            aqi += " (Poor)";
-        else if (m.iaq <= 200) {
-            aqi += " (Unhealthy)";
-            bannerMsg = "Unhealthy IAQ";
-        } else if (m.iaq <= 300) {
-            aqi += " (Very Unhealthy)";
-            bannerMsg = "Very Unhealthy IAQ";
-        } else {
-            aqi += " (Hazardous)";
-            bannerMsg = "Hazardous IAQ";
-        }
+        const char *bannerMsg = nullptr;
+        if (m.iaq <= 25) aqi += " (Excellent)";
+        else if (m.iaq <= 50) aqi += " (Good)";
+        else if (m.iaq <= 100) aqi += " (Moderate)";
+        else if (m.iaq <= 150) { aqi += " (Poor)"; }
+        else if (m.iaq <= 200) { aqi += " (Unhealthy)";      bannerMsg = "Unhealthy IAQ"; }
+        else if (m.iaq <= 300) { aqi += " (Very Unhealthy)"; bannerMsg = "Very Unhealthy IAQ"; }
+        else                   { aqi += " (Hazardous)";      bannerMsg = "Hazardous IAQ"; }
 
         entries.push_back(aqi);
 
-        // === IAQ alert logic ===
-        static uint32_t lastAlertTime = 0;
-        static bool inBanner = false;           // NEW re-entry guard
-
-        uint32_t now = millis();
-        bool isCooldownOver = (now - lastAlertTime > 60000);
-        bool isOwnTelemetry = lastMeasurementPacket->from == nodeDB->getNodeNum();
-
-        if (!inBanner && isOwnTelemetry && bannerMsg && isCooldownOver) {
-            inBanner = true;                    // guard BEFORE calling UI
-            lastAlertTime = now;                // set cooldown BEFORE calling UI
-
-            LOG_INFO("drawFrame: IAQ %d (own) — showing banner: %s", m.iaq, bannerMsg);
-            screen->showSimpleBanner(bannerMsg, 3000);
-
-            if (m.iaq > 200 && moduleConfig.external_notification.enabled && !externalNotificationModule->getMute()) {
-                playLongBeep();
-            }
-
-            inBanner = false;                   // release guard
-        }
+      // IAQ alert logic unchanged
+      static uint32_t lastAlertTime = 0;
+      static bool inBanner = false;
+      uint32_t now = millis();
+      bool isCooldownOver = (now - lastAlertTime > 60000);
+      bool isOwnTelemetry = lastMeasurementPacket->from == nodeDB->getNodeNum();
+      if (!inBanner && isOwnTelemetry && bannerMsg && isCooldownOver) {
+          inBanner = true; lastAlertTime = now;
+          LOG_INFO("drawFrame: IAQ %d (own) — showing banner: %s", m.iaq, bannerMsg);
+          screen->showSimpleBanner(bannerMsg, 3000);
+          if (m.iaq > 200 && moduleConfig.external_notification.enabled && !externalNotificationModule->getMute())
+              playLongBeep();
+          inBanner = false;
+      }
     }
+
+    // keep your remaining entries untouched
     if (m.voltage != 0 || m.current != 0)
         entries.push_back(String(m.voltage, 1) + "V / " + String(m.current, 0) + "mA");
-    if (m.lux != 0)
-        entries.push_back("Light: " + String(m.lux, 0) + "lx");
-    if (m.white_lux != 0)
-        entries.push_back("White: " + String(m.white_lux, 0) + "lx");
-    if (m.weight != 0)
-        entries.push_back("Weight: " + String(m.weight, 0) + "kg");
-    if (m.distance != 0)
-        entries.push_back("Level: " + String(m.distance, 0) + "mm");
-    if (m.radiation != 0)
-        entries.push_back("Rad: " + String(m.radiation, 2) + " µR/h");
+    if (m.lux != 0)         entries.push_back("Light: " + String(m.lux, 0) + "lx");
+    if (m.white_lux != 0)   entries.push_back("White: " + String(m.white_lux, 0) + "lx");
+    if (m.weight != 0)      entries.push_back("Weight: " + String(m.weight, 0) + "kg");
+    if (m.distance != 0)    entries.push_back("Level: " + String(m.distance, 0) + "mm");
+    if (m.radiation != 0)   entries.push_back("Rad: " + String(m.radiation, 2) + " µR/h");
 
-    // === Show first available metric on top-right of first line ===
-    if (!entries.empty()) {
-        String valueStr = entries.front();
-        int rightX = SCREEN_WIDTH - display->getStringWidth(valueStr);
-        display->drawString(rightX, currentY, valueStr);
-        entries.erase(entries.begin()); // Remove from queue
-    }
-
-    // === Advance to next line for remaining telemetry entries ===
-    currentY += rowHeight;
-
-    // === Draw remaining entries in 2-column format (left and right) ===
+    // draw remaining entries using your existing 2-column layout (unchanged)
     for (size_t i = 0; i < entries.size(); i += 2) {
-        // Left column
         display->drawString(x, currentY, entries[i]);
-
-        // Right column if it exists
         if (i + 1 < entries.size()) {
             int rightX = SCREEN_WIDTH / 2;
             display->drawString(rightX, currentY, entries[i + 1]);
         }
-
         currentY += rowHeight;
     }
 }
@@ -600,6 +687,11 @@ bool EnvironmentTelemetryModule::handleReceivedProtobuf(const meshtastic_MeshPac
             packetPool.release(it->second);
         }
         lastBySource[from] = packetPool.allocCopy(mp);
+        // record per-source history for tiny graphs
+        const auto &em = t->variant.environment_metrics;
+        if (em.has_temperature)       pushHist(s_tempHist[from],  em.temperature);
+        if (em.has_relative_humidity) pushHist(s_humHist[from],   em.relative_humidity);
+        if (em.barometric_pressure)   pushHist(s_pressHist[from], em.barometric_pressure);
     }
 
     return false; // Let others look at this message also if they want
@@ -840,6 +932,10 @@ bool EnvironmentTelemetryModule::sendTelemetry(NodeNum dest, bool phoneOnly)
             packetPool.release(it->second);
         }
         lastBySource[self] = packetPool.allocCopy(*p);
+        const auto &em = m.variant.environment_metrics;
+        if (em.has_temperature)       pushHist(s_tempHist[self],  em.temperature);
+        if (em.has_relative_humidity) pushHist(s_humHist[self],   em.relative_humidity);
+        if (em.barometric_pressure)   pushHist(s_pressHist[self], em.barometric_pressure);
         
         if (phoneOnly) {
             LOG_INFO("Send packet to phone");

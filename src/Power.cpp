@@ -458,8 +458,6 @@ class AnalogBatteryLevel : public HasBatteryLevel
 #endif
 #endif
         const uint16_t v = getBattVoltage();
-        LOG_DEBUG("USB infer: batMv=%u, thresh=%0.0f, usb=%s",
-                  v, chargingVolt, (v > chargingVolt ? "true" : "false"));
         return v > chargingVolt;
     }
 
