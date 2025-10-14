@@ -1632,24 +1632,28 @@ void loop()
 #ifdef HAS_I2S
 {
     static bool bootMelodyFlushed = false;
+    static bool saidBrand = false;
     static uint32_t flushStartMs = 0;
 
-    if (!bootMelodyFlushed) {
-        // Record when we first see a valid audioThread
-        extern AudioThread* audioThread;
-        if (audioThread) {
-            if (flushStartMs == 0) flushStartMs = millis();
+    extern AudioThread* audioThread;
 
-            const bool warmedUp =
-                (audioThread->pumpTicks() >= 20);   // be conservative; 20 is enough
+    if (!bootMelodyFlushed && audioThread) {
+        if (flushStartMs == 0) flushStartMs = millis();
 
-            const bool timeFallback =
-                (millis() - flushStartMs) >= 800;   // hard fallback after ~0.8s
+        const bool warmedUp     = (audioThread->pumpTicks() >= 20);
+        const bool timeFallback = (millis() - flushStartMs) >= 800;
 
-            if (warmedUp || timeFallback) {
-                buzzOnAudioThreadReady();           // starts queued boot RTTTL
-                bootMelodyFlushed = true;
-            }
+        if (warmedUp || timeFallback) {
+            buzzOnAudioThreadReady();          // queues/starts the RTTTL boot melody
+            bootMelodyFlushed = true;
+        }
+    }
+
+    // After the melody ends, speak once.
+    if (bootMelodyFlushed && !saidBrand && audioThread) {
+        if (!audioThread->isPlaying()) {       // melody finished
+            audioThread->readAloud("Meshtastic");
+            saidBrand = true;
         }
     }
 }

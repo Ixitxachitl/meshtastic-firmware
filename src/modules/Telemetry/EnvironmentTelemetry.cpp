@@ -43,25 +43,26 @@ static void pushHist(std::deque<float> &q, float v) {
 }
 
 // Boxed + aligned tiny sparkline (fits in a defined box)
-static void drawMiniSparkBoxed(OLEDDisplay *dpy, int x, int y, int w, int h, const std::deque<float> &hist) {
-    // frame
-    dpy->drawRect(x, y + 1, w, h);
+static constexpr int kSparkYOffset = 1;
+static constexpr int kSparkXOffset = -3;  // move 3px left
+
+// Helper: apply both offsets centrally
+static void drawMiniSparkBoxed(OLEDDisplay *dpy, int x, int y, int w, int h,
+                               const std::deque<float> &hist) {
+    const int x0 = x + kSparkXOffset;   // << left shift
+    const int y0 = y + kSparkYOffset;   // you already added this
+
+    dpy->drawRect(x0, y0, w, h);
 
     if (hist.size() < 2) return;
 
     auto mm = std::minmax_element(hist.begin(), hist.end());
-    float lo = *mm.first;
-    float hi = *mm.second;
-    float span = (hi - lo);
+    float lo = *mm.first, hi = *mm.second, span = hi - lo;
     if (span < 1e-6f) span = 1.0f;
 
-    // inner drawing area (leave a 1px margin inside the box)
-    const int ix = x + 1;
-    const int iy = y + 2;
-    const int iw = w - 2;
-    const int ih = h - 2;
-
+    const int ix = x0 + 1, iy = y0 + 1, iw = w - 2, ih = h - 2;
     const float step = float(iw) / float(hist.size() - 1);
+
     for (size_t i = 1; i < hist.size(); ++i) {
         int x1 = ix + int(std::lround(step * (i - 1)));
         int x2 = ix + int(std::lround(step * i));

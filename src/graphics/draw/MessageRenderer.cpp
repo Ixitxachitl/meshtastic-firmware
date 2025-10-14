@@ -805,6 +805,10 @@ void renderMessageContent(OLEDDisplay *display, const std::vector<std::string> &
 
 void handleNewMessage(const StoredMessage &sm, const meshtastic_MeshPacket &packet)
 {
+    // Always pick the correct conversation (CHANNEL or DIRECT) for this message,
+    // even if we're in "All" or headless / display is null.
+    setThreadFor(sm, packet);
+    resetScrollState();
     if (!display) return;
     const int screenW = display->getWidth();
     if (packet.from != 0) {
@@ -908,12 +912,6 @@ void handleNewMessage(const StoredMessage &sm, const meshtastic_MeshPacket &pack
 
         screen->showSimpleBanner(banner, inThread ? 1000 : 3000);
     }
-
-    // No setFrames() here anymore
-    if (packet.from == 0) {
-        setThreadFor(sm, packet);
-    }
-    resetScrollState();
 }
 
 void setThreadFor(const StoredMessage &sm, const meshtastic_MeshPacket &packet)
