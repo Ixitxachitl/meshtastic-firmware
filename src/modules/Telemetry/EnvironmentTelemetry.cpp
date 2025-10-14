@@ -27,6 +27,73 @@
 
 OLEDDisplay *display = nullptr;
 
+// Your chosen layout constants
+static constexpr int kRulerPadLR       = 4;  // L/R padding (px)
+static constexpr int kNeedleH          = 5;  // triangle height below baseline
+static constexpr int kNeedleBaseHalf   = 5;  // half base width
+static constexpr int kRulerBaselineOfs = 8;  // baseline = y + this
+static constexpr int kLabelGap         = -1;  // pixels below triangle base
+
+// IAQ "ruler": |-----▲-----| with danger ticks and filled up-triangle below baseline
+static void drawIAQRuler(OLEDDisplay* dpy, int x, int y, int w, int iaqValue, const String& label) {
+    // inner rect after padding
+    int ix = x + kRulerPadLR;
+    int iw = w - (kRulerPadLR * 2);
+    if (iw < 12) { ix = x; iw = w; }
+
+    // clamp + layout
+    int iaq = iaqValue; if (iaq < 0) iaq = 0; if (iaq > 500) iaq = 500;
+    const int baselineY = y + kRulerBaselineOfs;
+    const int capHalf   = 3;
+
+    // end caps ‘|’
+    dpy->drawLine(ix,          baselineY - capHalf, ix,          baselineY + capHalf);
+    dpy->drawLine(ix + iw - 1, baselineY - capHalf, ix + iw - 1, baselineY + capHalf);
+
+    // dashed baseline
+    for (int i = ix + 1; i < ix + iw - 1; i += 3) {
+        dpy->drawLine(i, baselineY, std::min(i + 1, ix + iw - 2), baselineY);
+    }
+
+    // ticks at danger levels: 0,25,50,100,150,200,300,500
+    auto valToX = [&](int v) -> int {
+        return ix + (int)std::lround((float)v / 500.0f * (iw - 1));
+    };
+    const int tickShort = 2;  // minor tick half-height
+    const int tickLong  = 3;  // major tick half-height
+
+    auto drawTick = [&](int v, bool major) {
+        int tx = valToX(v);
+        int h  = major ? tickLong : tickShort;
+        dpy->drawLine(tx, baselineY - h, tx, baselineY + h);
+    };
+
+    // majors: 0,100,150,200,300,500 (category boundaries)
+    drawTick(0,   true);
+    drawTick(100, true);
+    drawTick(150, true);
+    drawTick(200, true);
+    drawTick(300, true);
+    drawTick(500, true);
+
+    // minors: 25, 50 (within "Excellent/Good/Moderate")
+    drawTick(25,  false);
+    drawTick(50,  false);
+
+    // filled upward triangle BELOW the baseline (tip pokes through)
+    const int nx = valToX(iaq);
+    for (int dy = 0; dy <= kNeedleH; ++dy) {
+        int half = (int)std::lround((float)kNeedleBaseHalf * ((float)dy / (float)kNeedleH));
+        int yrow = baselineY + dy;                 // rows below baseline
+        dpy->drawLine(nx - half, yrow, nx + half, yrow);
+    }
+
+    // centered label snug under the triangle base
+    const int lw = dpy->getStringWidth(label);
+    const int lx = x + (w - lw) / 2;
+    dpy->drawString(lx, baselineY + kNeedleH + kLabelGap, label);
+}
+
 // keep last N samples per source
 static constexpr int    kSparkW  = 120;         // pixels wide
 static constexpr int    kSparkH  = 10;         // pixels tall
@@ -44,7 +111,7 @@ static void pushHist(std::deque<float> &q, float v) {
 
 // Boxed + aligned tiny sparkline (fits in a defined box)
 static constexpr int kSparkYOffset = 1;
-static constexpr int kSparkXOffset = -3;  // move 3px left
+static constexpr int kSparkXOffset = -4;  // move 4px left
 
 // Helper: apply both offsets centrally
 static void drawMiniSparkBoxed(OLEDDisplay *dpy, int x, int y, int w, int h,
@@ -572,64 +639,25 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         currentY += rowHeight;
     }
 
-    // === Collect the REST (compact 'Dew' + 'Gas' on the same line) ===
+    // === Collect the REST of sensor readings as before (no icons) ===
     std::vector<String> entries;
 
-    String dewGas;
-
-    // Dew (same calc as before)
+    // Dew (same as your original, just push as its own entry)
     if (m.has_temperature && m.has_relative_humidity) {
-        const float dpC = dewPointC(m.temperature, m.relative_humidity);
-        if (!isnan(dpC)) {
-            if (moduleConfig.telemetry.environment_display_fahrenheit) {
-                const float dpF = dpC * 9.0f / 5.0f + 32.0f;
-                dewGas += "Dew: " + String(dpF, 1) + "°F";
-            } else {
-                dewGas += "Dew: " + String(dpC, 1) + "°C";
-            }
+      const float dpC = dewPointC(m.temperature, m.relative_humidity); // existing helper
+      if (!isnan(dpC)) {
+        if (moduleConfig.telemetry.environment_display_fahrenheit) {
+          const float dpF = dpC * 9.0f / 5.0f + 32.0f;
+          entries.push_back("Dew: " + String(dpF, 1) + " °F");
+        } else {
+          entries.push_back("Dew: " + String(dpC, 1) + " °C");
         }
-    }
-
-    // Gas (append to same line)
-    if (m.has_gas_resistance || m.gas_resistance != 0) {
-        if (dewGas.length()) dewGas += "  ";
-        dewGas += "Gas: " + String(m.gas_resistance, 2) + " kOhm";
-    }
-
-    // Push combined Dew+Gas; then a placeholder to force next entry to a NEW ROW
-    if (dewGas.length()) {
-        entries.push_back(dewGas);
-        entries.push_back("");   // <-- reserve right column so IAQ starts on next line
-    }
-
-    // IAQ goes after this and will now render on its own row
-    if (m.iaq != 0) {
-        String aqi = "IAQ: " + String(m.iaq);
-        const char *bannerMsg = nullptr;
-        if (m.iaq <= 25) aqi += " (Excellent)";
-        else if (m.iaq <= 50) aqi += " (Good)";
-        else if (m.iaq <= 100) aqi += " (Moderate)";
-        else if (m.iaq <= 150) { aqi += " (Poor)"; }
-        else if (m.iaq <= 200) { aqi += " (Unhealthy)";      bannerMsg = "Unhealthy IAQ"; }
-        else if (m.iaq <= 300) { aqi += " (Very Unhealthy)"; bannerMsg = "Very Unhealthy IAQ"; }
-        else                   { aqi += " (Hazardous)";      bannerMsg = "Hazardous IAQ"; }
-
-        entries.push_back(aqi);
-
-      // IAQ alert logic unchanged
-      static uint32_t lastAlertTime = 0;
-      static bool inBanner = false;
-      uint32_t now = millis();
-      bool isCooldownOver = (now - lastAlertTime > 60000);
-      bool isOwnTelemetry = lastMeasurementPacket->from == nodeDB->getNodeNum();
-      if (!inBanner && isOwnTelemetry && bannerMsg && isCooldownOver) {
-          inBanner = true; lastAlertTime = now;
-          LOG_INFO("drawFrame: IAQ %d (own) — showing banner: %s", m.iaq, bannerMsg);
-          screen->showSimpleBanner(bannerMsg, 3000);
-          if (m.iaq > 200 && moduleConfig.external_notification.enabled && !externalNotificationModule->getMute())
-              playLongBeep();
-          inBanner = false;
       }
+    }
+
+    // Gas (separate entry, as before)
+    if (m.has_gas_resistance || m.gas_resistance != 0) {
+      entries.push_back("Gas: " + String(m.gas_resistance, 2) + " kOhm");
     }
 
     // keep your remaining entries untouched
@@ -641,14 +669,71 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     if (m.distance != 0)    entries.push_back("Level: " + String(m.distance, 0) + "mm");
     if (m.radiation != 0)   entries.push_back("Rad: " + String(m.radiation, 2) + " µR/h");
 
-    // draw remaining entries using your existing 2-column layout (unchanged)
+    // Give the right column more space by shifting the split left.
+    // Positive value => wider right column.
+    static constexpr int kSplitShift = 14; // tweak to taste
+    const int splitX   = (SCREEN_WIDTH / 2) - kSplitShift;
+    const int leftMaxW = splitX - x - 2;
+
+    // === Draw remaining entries in 2-column format (left and right) ===
     for (size_t i = 0; i < entries.size(); i += 2) {
-        display->drawString(x, currentY, entries[i]);
-        if (i + 1 < entries.size()) {
-            int rightX = SCREEN_WIDTH / 2;
-            display->drawString(rightX, currentY, entries[i + 1]);
+        // Left column, truncated to avoid overlapping the right column
+        if (leftMaxW > 10) {
+            display->drawStringMaxWidth(x, currentY, leftMaxW, entries[i]);
+        } else {
+            display->drawString(x, currentY, entries[i]);
         }
+
+        // Right column starts at the new split, so it’s wider
+        if (i + 1 < entries.size()) {
+            display->drawString(splitX, currentY, entries[i + 1]);
+        }
+
+        // keep your existing spacing (no entrySpacing change)
         currentY += rowHeight;
+    }
+
+    // === IAQ gauge (0..500) instead of inline text ===
+    if (m.iaq != 0) {
+        // Build the same label text you used before (keeps your categories)
+        String aqi = "IAQ: " + String(m.iaq);
+        const char *bannerMsg = nullptr;
+        if (m.iaq <= 25) aqi += " (Excellent)";
+        else if (m.iaq <= 50) aqi += " (Good)";
+        else if (m.iaq <= 100) aqi += " (Moderate)";
+        else if (m.iaq <= 150) aqi += " (Poor)";
+        else if (m.iaq <= 200) { aqi += " (Unhealthy)";      bannerMsg = "Unhealthy IAQ"; }
+        else if (m.iaq <= 300) { aqi += " (Very Unhealthy)"; bannerMsg = "Very Unhealthy IAQ"; }
+        else                   { aqi += " (Hazardous)";      bannerMsg = "Hazardous IAQ"; }
+
+        // Full-row gauge at the bottom (monochrome)
+        const int gMargin = 2;
+        const int gX = x;
+        const int gW = SCREEN_WIDTH - gX - gMargin;
+        const int gH = rowHeight + 6;
+
+        // If there's not enough vertical room, nudge it up so it fits
+        if (currentY + gH > SCREEN_HEIGHT) {
+            currentY = SCREEN_HEIGHT - gH;
+            if (currentY < 0) currentY = 0;
+        }
+
+        drawIAQRuler(display, gX, currentY, gW, (int)m.iaq, aqi);
+        currentY += gH;
+
+        // Keep your existing IAQ alert logic (banner/beep) exactly as before:
+        static uint32_t lastAlertTime = 0;
+        static bool inBanner = false;
+        uint32_t now = millis();
+        bool isCooldownOver = (now - lastAlertTime > 60000);
+        bool isOwnTelemetry = lastMeasurementPacket->from == nodeDB->getNodeNum();
+        if (!inBanner && isOwnTelemetry && bannerMsg && isCooldownOver) {
+            inBanner = true; lastAlertTime = now;
+            screen->showSimpleBanner(bannerMsg, 3000);
+            if (m.iaq > 200 && moduleConfig.external_notification.enabled && !externalNotificationModule->getMute())
+                playLongBeep();
+            inBanner = false;
+        }
     }
 }
 

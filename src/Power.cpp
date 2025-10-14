@@ -343,6 +343,7 @@ class AnalogBatteryLevel : public HasBatteryLevel
             } else {
                 // Already initialized - filter this reading
                 last_read_value += (scaled - last_read_value) * 0.5; // Virtual LPF
+                updateTrendDecision();
             }
 
             // LOG_DEBUG("battery gpio %d raw val=%u scaled=%u filtered=%u", BATTERY_PIN, raw, (uint32_t)(scaled), (uint32_t)
@@ -458,7 +459,9 @@ class AnalogBatteryLevel : public HasBatteryLevel
 #endif
 #endif
         const uint16_t v = getBattVoltage();
-        return v > chargingVolt;
+        if (slopeCharging == OptTrue)   return true;
+        if (slopeCharging == OptFalse)  return false;
+        return v > chargingVolt; 
     }
 
     /// Assume charging if we have a battery and external power is connected.
@@ -487,20 +490,16 @@ class AnalogBatteryLevel : public HasBatteryLevel
         return isBatteryConnect() && isVbusIn();
 #endif
 #endif
+        if (slopeCharging != OptUnknown) return slopeCharging;
         // by default, we check the battery voltage only
         return isVbusIn();
     }
 
   private:
-    /// If we see a battery voltage higher than physics allows - assume charger is pumping
-    /// in power
-#ifndef CHARGING_MARGIN_MV
-#define CHARGING_MARGIN_MV (10)  // treat ≥ 4.15–4.20 V as USB present
-#endif
     /// For heltecs with no battery connected, the measured voltage is 2204, so
     // need to be higher than that, in this case is 2500mV (3000-500)
     const uint16_t OCV[NUM_OCV_POINTS] = {OCV_ARRAY};
-    const float chargingVolt = (OCV[0] + CHARGING_MARGIN_MV) * NUM_CELLS;
+    const float chargingVolt = (OCV[0] + 10) * NUM_CELLS;
     const float noBatVolt = (OCV[NUM_OCV_POINTS - 1] - 500) * NUM_CELLS;
     // Start value from minimum voltage for the filter to not start from 0
     // that could trigger some events.
@@ -509,6 +508,61 @@ class AnalogBatteryLevel : public HasBatteryLevel
     float last_read_value = (OCV[NUM_OCV_POINTS - 1] * NUM_CELLS);
     uint32_t last_read_time_ms = 0;
 
+    // Trend-based charge detection (default path when no PMU/INA/EXT pins)
+    uint32_t trend_t0_ms = 0;
+    float    trend_v0_mv = NAN;
+    OptionalBool slopeCharging = OptUnknown;
+    uint32_t last_decision_ms = 0;
+
+    // Tunables (can be #ifdef’d per board)
+    #ifndef CHARGE_TREND_WINDOW_MS
+    #define CHARGE_TREND_WINDOW_MS (120000) // 2 minutes
+    #endif
+    #ifndef CHARGE_TREND_UP_DELTA_MV
+    #define CHARGE_TREND_UP_DELTA_MV (20)   // require +20 mV rise
+    #endif
+    #ifndef CHARGE_TREND_DOWN_DELTA_MV
+    #define CHARGE_TREND_DOWN_DELTA_MV (20) // require -20 mV drop
+    #endif
+    #ifndef CHARGE_TREND_STICKY_MS
+    #define CHARGE_TREND_STICKY_MS (60000)  // don't flip for 60 s after a decision
+    #endif
+
+    void updateTrendDecision()
+    {
+        const uint32_t now = millis();
+        const float v1 = last_read_value;       // already filtered mV
+        // Initialize baseline the first time we have a sane reading
+        if (isnan(trend_v0_mv)) {
+            trend_v0_mv = v1;
+            trend_t0_ms = now;
+            return;
+        }
+        // Be sure we have enough time span to judge a trend
+        const uint32_t dt = now - trend_t0_ms;
+        if (dt < CHARGE_TREND_WINDOW_MS) return;
+
+        const float dv = v1 - trend_v0_mv;
+
+        // Respect stickiness/hysteresis to avoid chatter
+        if (last_decision_ms && (now - last_decision_ms) < CHARGE_TREND_STICKY_MS) return;
+
+        if (dv >= CHARGE_TREND_UP_DELTA_MV) {
+            slopeCharging = OptTrue;
+            last_decision_ms = now;
+            // Reset baseline for next window
+            trend_v0_mv = v1; trend_t0_ms = now;
+        } else if (dv <= -CHARGE_TREND_DOWN_DELTA_MV) {
+            slopeCharging = OptFalse;
+            last_decision_ms = now;
+            trend_v0_mv = v1; trend_t0_ms = now;
+        } else {
+            // no decision; extend window to accumulate more signal
+            // (optional) slowly advance baseline to prevent unbounded dt
+            trend_v0_mv = (trend_v0_mv * 0.9f) + (v1 * 0.1f);
+            trend_t0_ms = now - (CHARGE_TREND_WINDOW_MS / 2);
+        }
+    }
 #if HAS_TELEMETRY && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR && defined(HAS_RAKPROT)
 
     uint16_t getRAKVoltage() { return rak9154Sensor.getBusVoltageMv(); }
