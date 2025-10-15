@@ -1401,9 +1401,11 @@ int Screen::handleTextMessage(const meshtastic_MeshPacket *packet)
             hasUnreadMessage = true;                // Enables mail icon in the header
             setFrames(FOCUS_PRESERVE);              // Refresh frame list without switching view
 
-            // Only wake/force display if the configuration allows it
+            // Only wake (do not switch tabs) if the configuration allows it
             if (shouldWakeOnReceivedMessage()) {
-                switchToMessagesPage();
+                screen->setOn(true);      // wake the display
+                setFastFramerate();       // draw ASAP so the banner appears promptly
+                forceDisplay(true);       // commit a frame if we were idling
             }
             // === Prepare banner content ===
             const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(packet->from);
@@ -1467,18 +1469,6 @@ int Screen::handleTextMessage(const meshtastic_MeshPacket *packet)
     }
 
     return 0;
-}
-
-void Screen::switchToMessagesPage()
-{
-    // Ensure the display is on, make sure the textMessage frame is in the set,
-    // then jump to it and render quickly.
-    setOn(true);
-    setFrames(FOCUS_PRESERVE);
-    ui->switchToFrame(framesetInfo.positions.textMessage);
-    setFastFramerate();
-    forceDisplay(true);
-    powerFSM.trigger(EVENT_PRESS);
 }
 
 // Triggered by MeshModules

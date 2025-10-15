@@ -946,12 +946,6 @@ void renderMessageContent(OLEDDisplay *display, const std::vector<std::string> &
 
 void handleNewMessage(const StoredMessage &sm, const meshtastic_MeshPacket &packet)
 {
-    // Always pick the correct conversation (CHANNEL or DIRECT) for this message,
-    // even if we're in "All" or headless / display is null.
-    setThreadFor(sm, packet);
-    resetScrollState();
-    if (!display) return;
-    const int screenW = display->getWidth();
     if (packet.from != 0) {
         hasUnreadMessage = true;
 
@@ -962,13 +956,10 @@ void handleNewMessage(const StoredMessage &sm, const meshtastic_MeshPacket &pack
             if (channel.settings.has_module_settings && channel.settings.module_settings.is_muted)
                 isChannelMuted = true;
         }
-        if (shouldWakeOnReceivedMessage()) {
-            screen->setOn(true);
-            // screen->forceDisplay();  <-- remove, let Screen handle this
-        }
 
         // Banner logic
-        const char* dispName = bestNodeName(packet.from, screenW);
+        const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(packet.from);
+        const char *longName = (node && node->has_user) ? node->user.long_name : nullptr;
         const char *msgRaw = reinterpret_cast<const char *>(packet.decoded.payload.bytes);
 
         char banner[256];
@@ -986,32 +977,26 @@ void handleNewMessage(const StoredMessage &sm, const meshtastic_MeshPacket &pack
         }
 
         if (isAlert) {
-        #if defined(M5STACK_UNITC6L)
-            // keep short banner on small display
-            strcpy(banner, (dispName && dispName[0]) ? "Alert Received" : "Alert Received");
-        #else
-            if (dispName && dispName[0])
-                snprintf(banner, sizeof(banner), "Alert Received from\n%s", dispName);
+            if (longName && longName[0])
+                snprintf(banner, sizeof(banner), "Alert Received from\n%s", longName);
             else
                 strcpy(banner, "Alert Received");
-        #endif
         } else {
             // Skip muted channels unless it's an alert
             if (isChannelMuted)
                 return;
 
-        #if defined(M5STACK_UNITC6L)
-            // keep it short on this target
-            strcpy(banner, "New Message");
-        #else
-            if (dispName && dispName[0])
-                snprintf(banner, sizeof(banner), "New Message from\n%s", dispName);
-            else
+            if (longName && longName[0]) {
+#if defined(M5STACK_UNITC6L)
                 strcpy(banner, "New Message");
-        #endif
+#else
+                snprintf(banner, sizeof(banner), "New Message from\n%s", longName);
+#endif
+            } else
+                strcpy(banner, "New Message");
         }
 
-        // Append context (which channel or DM) so the banner shows where the message arrived
+        // Append context (which channel or DM)
         {
             char contextBuf[64] = "";
             if (sm.type == MessageType::BROADCAST) {
@@ -1021,14 +1006,7 @@ void handleNewMessage(const StoredMessage &sm, const meshtastic_MeshPacket &pack
                 else
                     snprintf(contextBuf, sizeof(contextBuf), "in Ch%d", sm.channelIndex);
             } else if (sm.type == MessageType::DM_TO_US) {
-                /* Commenting out to better understand if we need this info in the banner
-                uint32_t peer = (packet.from == 0) ? sm.dest : sm.sender;
-                const meshtastic_NodeInfoLite *peerNode = nodeDB->getMeshNode(peer);
-                if (peerNode && peerNode->has_user && peerNode->user.short_name)
-                    snprintf(contextBuf, sizeof(contextBuf), "Direct: @%s", peerNode->user.short_name);
-                else
-                    snprintf(contextBuf, sizeof(contextBuf), "Direct Message");
-                */
+                // (Intentionally omitted extra DM labeling to keep banner short)
             }
 
             if (contextBuf[0]) {
@@ -1044,24 +1022,30 @@ void handleNewMessage(const StoredMessage &sm, const meshtastic_MeshPacket &pack
             }
         }
 
-        // Shorter banner if already in a conversation (Channel or Direct)
-        bool inThread = (getThreadMode() != ThreadMode::ALL);
-
+        const bool inThreadView = (getThreadMode() != ThreadMode::ALL);
         if (shouldWakeOnReceivedMessage()) {
             screen->setOn(true);
         }
-
-        screen->showSimpleBanner(banner, inThread ? 1000 : 3000);
+        screen->showSimpleBanner(banner, inThreadView ? 1000 : 3000);
     }
 
-    // Always focus into the correct conversation thread when a message with real text arrives
-    const char *msgText = MessageStore::getText(sm);
-    if (msgText && msgText[0] != '\0') {
-        setThreadFor(sm, packet);
-    }
+    // NEW BEHAVIOR:
+    // Do NOT auto-switch threads. Only reset scroll if the new message belongs to the thread we are already viewing.
+    const bool isSameChannel =
+        (getThreadMode() == ThreadMode::CHANNEL) &&
+        (sm.type == MessageType::BROADCAST) &&
+        (getThreadChannel() == (int)sm.channelIndex);
 
-    // Reset scroll for a clean start
-    resetScrollState();
+    const bool isSameDM =
+        (getThreadMode() == ThreadMode::DIRECT) &&
+        (sm.type == MessageType::DM_TO_US) &&
+        (getThreadPeer() != 0) &&
+        (getThreadPeer() == sm.sender || getThreadPeer() == sm.dest);
+
+    if (isSameChannel || isSameDM) {
+        resetScrollState(); // clean refresh only for the open conversation
+    }
+    // If we’re in ALL view or a different thread, we leave the UI where it is.
 }
 
 void setThreadFor(const StoredMessage &sm, const meshtastic_MeshPacket &packet)
