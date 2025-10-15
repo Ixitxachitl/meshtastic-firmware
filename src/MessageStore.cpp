@@ -7,17 +7,58 @@
 #include "SafeFile.h"
 #include "gps/RTC.h"
 #include "graphics/draw/MessageRenderer.h"
+#include <cstring> // memcpy
 
-using graphics::MessageRenderer::setThreadMode;
-using graphics::MessageRenderer::ThreadMode;
+#ifndef MESSAGE_TEXT_POOL_SIZE
+#define MESSAGE_TEXT_POOL_SIZE (MAX_MESSAGES_SAVED * MAX_MESSAGE_SIZE)
+#endif
 
-// Calculate serialized size for a StoredMessage
-static inline size_t getMessageSize(const StoredMessage &m)
+// Global message text pool and state
+static char *g_messagePool = nullptr;
+static size_t g_poolWritePos = 0;
+
+// Reset pool (called on boot or clear)
+static inline void resetMessagePool()
 {
-    // serialized size = fixed 16 bytes + text length (capped at MAX_MESSAGE_SIZE)
-    return 16 + std::min<size_t>(MAX_MESSAGE_SIZE, strnlen(m.text, MAX_MESSAGE_SIZE));
+    if (!g_messagePool) {
+        g_messagePool = static_cast<char *>(malloc(MESSAGE_TEXT_POOL_SIZE));
+        if (!g_messagePool) {
+            LOG_ERROR("MessageStore: Failed to allocate %d bytes for message pool", MESSAGE_TEXT_POOL_SIZE);
+            return;
+        }
+    }
+    g_poolWritePos = 0;
+    memset(g_messagePool, 0, MESSAGE_TEXT_POOL_SIZE);
 }
 
+// Allocate text in pool and return offset
+// If not enough space remains, wrap around (ring buffer style)
+static inline uint16_t storeTextInPool(const char *src, size_t len)
+{
+    if (len >= MAX_MESSAGE_SIZE)
+        len = MAX_MESSAGE_SIZE - 1;
+
+    // Wrap pool if out of space
+    if (g_poolWritePos + len + 1 >= MESSAGE_TEXT_POOL_SIZE) {
+        g_poolWritePos = 0;
+    }
+
+    uint16_t offset = g_poolWritePos;
+    memcpy(&g_messagePool[g_poolWritePos], src, len);
+    g_messagePool[g_poolWritePos + len] = '\0';
+    g_poolWritePos += (len + 1);
+    return offset;
+}
+
+// Retrieve a const pointer to message text by offset
+static inline const char *getTextFromPool(uint16_t offset)
+{
+    if (!g_messagePool || offset >= MESSAGE_TEXT_POOL_SIZE)
+        return "";
+    return &g_messagePool[offset];
+}
+
+// Helper: assign a timestamp (RTC if available, else boot-relative)
 static inline void assignTimestamp(StoredMessage &sm)
 {
     uint32_t nowSecs = getValidTime(RTCQuality::RTCQualityDevice, true);
@@ -30,86 +71,81 @@ static inline void assignTimestamp(StoredMessage &sm)
     }
 }
 
-void MessageStore::logMemoryUsage(const char *context) const
+// Generic push with cap (used by live + persisted queues)
+template <typename T> static inline void pushWithLimit(std::deque<T> &queue, const T &msg)
 {
-    size_t total = 0;
-    for (const auto &m : messages) {
-        total += getMessageSize(m);
-    }
+    if (queue.size() >= MAX_MESSAGES_SAVED)
+        queue.pop_front();
+    queue.push_back(msg);
+}
 
-    LOG_DEBUG("MessageStore[%s]: %u messages, est %u bytes (~%u KB)", context, (unsigned)messages.size(), (unsigned)total,
-              (unsigned)(total / 1024));
+template <typename T> static inline void pushWithLimit(std::deque<T> &queue, T &&msg)
+{
+    if (queue.size() >= MAX_MESSAGES_SAVED)
+        queue.pop_front();
+    queue.emplace_back(std::move(msg));
 }
 
 MessageStore::MessageStore(const std::string &label)
 {
     filename = "/Messages_" + label + ".msgs";
+    resetMessagePool(); // initialize text pool on boot
 }
 
 // Live message handling (RAM only)
 void MessageStore::addLiveMessage(StoredMessage &&msg)
 {
-    if (liveMessages.size() >= MAX_MESSAGES_SAVED) {
-        liveMessages.pop_front(); // keep only most recent N
-    }
-    // Use emplace_back with std::move to avoid extra copy
-    liveMessages.emplace_back(std::move(msg));
+    pushWithLimit(liveMessages, std::move(msg));
 }
-
-// Persistence queue (used only on shutdown/reboot)
-void MessageStore::addMessage(StoredMessage &&msg)
+void MessageStore::addLiveMessage(const StoredMessage &msg)
 {
-    if (messages.size() >= MAX_MESSAGES_SAVED) {
-        messages.pop_front();
-    }
-    // Use emplace_back with std::move to avoid extra copy
-    messages.emplace_back(std::move(msg));
+    pushWithLimit(liveMessages, msg);
 }
 
+// Add from incoming/outgoing packet
 const StoredMessage &MessageStore::addFromPacket(const meshtastic_MeshPacket &packet)
 {
     StoredMessage sm;
-    // Always use our local time (helper handles RTC vs boot time)
     assignTimestamp(sm);
-
     sm.channelIndex = packet.channel;
-    strncpy(sm.text, reinterpret_cast<const char *>(packet.decoded.payload.bytes), MAX_MESSAGE_SIZE - 1);
-    sm.text[MAX_MESSAGE_SIZE - 1] = '\0';
 
+    const char *payload = reinterpret_cast<const char *>(packet.decoded.payload.bytes);
+    size_t len = strnlen(payload, MAX_MESSAGE_SIZE - 1);
+    sm.textOffset = storeTextInPool(payload, len);
+    sm.textLength = len;
+
+    uint32_t localNode = nodeDB->getNodeNum();
+    sm.sender = (packet.from == 0) ? localNode : packet.from;
+    sm.dest = packet.decoded.dest;
+
+    // DM detection: use decoded.dest if valid, otherwise fallback to header 'to'
+    bool isDM = false;
+    uint32_t actualDest = sm.dest;
+
+    if (actualDest == 0 || actualDest == 0xffffffff) {
+        actualDest = packet.to;
+    }
+
+    if (actualDest != 0 && actualDest != NODENUM_BROADCAST && actualDest == localNode) {
+        isDM = true;
+    }
+
+    // Incoming vs outgoing classification
     if (packet.from == 0) {
-        // Phone-originated (outgoing)
-        sm.sender = nodeDB->getNodeNum(); // our node ID
-        if (packet.decoded.dest == 0 || packet.decoded.dest == NODENUM_BROADCAST) {
-            sm.dest = NODENUM_BROADCAST;
-            sm.type = MessageType::BROADCAST;
-        } else {
-            sm.dest = packet.decoded.dest;
-            sm.type = MessageType::DM_TO_US;
-        }
-
-        // Outgoing messages start as NONE until ACK/NACK arrives
+        // Sent by us
+        sm.type = isDM ? MessageType::DM_TO_US : MessageType::BROADCAST;
         sm.ackStatus = AckStatus::NONE;
     } else {
-        // Normal incoming
-        sm.sender = packet.from;
-        if (packet.to == NODENUM_BROADCAST || packet.decoded.dest == NODENUM_BROADCAST) {
-            sm.dest = NODENUM_BROADCAST;
-            sm.type = MessageType::BROADCAST;
-        } else if (packet.to == nodeDB->getNodeNum()) {
-            sm.dest = nodeDB->getNodeNum(); // DM to us
+        // Received from another node
+        if (isDM) {
             sm.type = MessageType::DM_TO_US;
         } else {
-            sm.dest = NODENUM_BROADCAST; // fallback
             sm.type = MessageType::BROADCAST;
         }
-
-        // Received messages don’t wait for ACK mark as ACKED
         sm.ackStatus = AckStatus::ACKED;
     }
 
-    addLiveMessage(std::move(sm));
-
-    // Return reference to the most recently stored message
+    addLiveMessage(sm);
     return liveMessages.back();
 }
 
@@ -123,8 +159,8 @@ void MessageStore::addFromString(uint32_t sender, uint8_t channelIndex, const st
 
     sm.sender = sender;
     sm.channelIndex = channelIndex;
-    strncpy(sm.text, text.c_str(), MAX_MESSAGE_SIZE - 1);
-    sm.text[MAX_MESSAGE_SIZE - 1] = '\0';
+    sm.textOffset = storeTextInPool(text.c_str(), text.size());
+    sm.textLength = text.size();
 
     // Default manual adds to broadcast
     sm.dest = NODENUM_BROADCAST;
@@ -133,123 +169,126 @@ void MessageStore::addFromString(uint32_t sender, uint8_t channelIndex, const st
     // Outgoing messages start as NONE until ACK/NACK arrives
     sm.ackStatus = AckStatus::NONE;
 
-    addLiveMessage(std::move(sm));
+    addLiveMessage(sm);
 }
 
 #if ENABLE_MESSAGE_PERSISTENCE
-// Save RAM queue to flash (called on shutdown)
+
+// Compact, fixed-size on-flash representation using offset + length
+struct __attribute__((packed)) StoredMessageRecord {
+    uint32_t timestamp;
+    uint32_t sender;
+    uint8_t channelIndex;
+    uint32_t dest;
+    uint8_t isBootRelative;
+    uint8_t ackStatus;           // static_cast<uint8_t>(AckStatus)
+    uint8_t type;                // static_cast<uint8_t>(MessageType)
+    uint16_t textLength;         // message length
+    char text[MAX_MESSAGE_SIZE]; // <-- store actual text here
+};
+
+// Serialize one StoredMessage to flash
+static inline void writeMessageRecord(SafeFile &f, const StoredMessage &m)
+{
+    StoredMessageRecord rec = {};
+    rec.timestamp = m.timestamp;
+    rec.sender = m.sender;
+    rec.channelIndex = m.channelIndex;
+    rec.dest = m.dest;
+    rec.isBootRelative = m.isBootRelative;
+    rec.ackStatus = static_cast<uint8_t>(m.ackStatus);
+    rec.type = static_cast<uint8_t>(m.type);
+    rec.textLength = m.textLength;
+
+    // Copy the actual text into the record from RAM pool
+    const char *txt = getTextFromPool(m.textOffset);
+    strncpy(rec.text, txt, MAX_MESSAGE_SIZE - 1);
+    rec.text[MAX_MESSAGE_SIZE - 1] = '\0';
+
+    f.write(reinterpret_cast<const uint8_t *>(&rec), sizeof(rec));
+}
+
+// Deserialize one StoredMessage from flash; returns false on short read
+static inline bool readMessageRecord(File &f, StoredMessage &m)
+{
+    StoredMessageRecord rec = {};
+    if (f.readBytes(reinterpret_cast<char *>(&rec), sizeof(rec)) != sizeof(rec))
+        return false;
+
+    m.timestamp = rec.timestamp;
+    m.sender = rec.sender;
+    m.channelIndex = rec.channelIndex;
+    m.dest = rec.dest;
+    m.isBootRelative = rec.isBootRelative;
+    m.ackStatus = static_cast<AckStatus>(rec.ackStatus);
+    m.type = static_cast<MessageType>(rec.type);
+    m.textLength = rec.textLength;
+
+    // 💡 Re-store text into pool and update offset
+    m.textLength = strnlen(rec.text, MAX_MESSAGE_SIZE - 1);
+    m.textOffset = storeTextInPool(rec.text, m.textLength);
+
+    return true;
+}
+
 void MessageStore::saveToFlash()
 {
 #ifdef FSCom
-    // Copy live RAM buffer into persistence queue
-    messages = liveMessages;
-
+    // Ensure root exists
     spiLock->lock();
-    FSCom.mkdir("/"); // ensure root exists
+    FSCom.mkdir("/");
     spiLock->unlock();
 
     SafeFile f(filename.c_str(), false);
 
     spiLock->lock();
-    uint8_t count = messages.size();
+    uint8_t count = static_cast<uint8_t>(liveMessages.size());
+    if (count > MAX_MESSAGES_SAVED)
+        count = MAX_MESSAGES_SAVED;
     f.write(&count, 1);
 
-    for (uint8_t i = 0; i < messages.size() && i < MAX_MESSAGES_SAVED; i++) {
-        const StoredMessage &m = messages.at(i);
-        f.write((uint8_t *)&m.timestamp, sizeof(m.timestamp));
-        f.write((uint8_t *)&m.sender, sizeof(m.sender));
-        f.write((uint8_t *)&m.channelIndex, sizeof(m.channelIndex));
-        f.write((uint8_t *)&m.dest, sizeof(m.dest));
-        f.write((uint8_t *)m.text, strnlen(m.text, MAX_MESSAGE_SIZE));
-        f.write('\0'); // null terminator
-
-        uint8_t bootFlag = m.isBootRelative ? 1 : 0;
-        f.write(&bootFlag, 1); // persist boot-relative flag
-
-        uint8_t statusByte = static_cast<uint8_t>(m.ackStatus);
-        f.write(&statusByte, 1); // persist ackStatus
+    for (uint8_t i = 0; i < count; ++i) {
+        writeMessageRecord(f, liveMessages[i]);
     }
     spiLock->unlock();
 
     f.close();
-
-    // Debug after saving
-    logMemoryUsage("saveToFlash");
-#else
-    // Filesystem not available, skip persistence
 #endif
 }
 
-// Load persisted messages into RAM (called at boot)
 void MessageStore::loadFromFlash()
 {
-    messages.clear();
-    liveMessages.clear();
+    std::deque<StoredMessage>().swap(liveMessages);
+    resetMessagePool(); // reset pool when loading
+
 #ifdef FSCom
     concurrency::LockGuard guard(spiLock);
 
     if (!FSCom.exists(filename.c_str()))
         return;
+
     auto f = FSCom.open(filename.c_str(), FILE_O_READ);
     if (!f)
         return;
 
     uint8_t count = 0;
-    f.readBytes((char *)&count, 1);
+    f.readBytes(reinterpret_cast<char *>(&count), 1);
+    if (count > MAX_MESSAGES_SAVED)
+        count = MAX_MESSAGES_SAVED;
 
-    for (uint8_t i = 0; i < count && i < MAX_MESSAGES_SAVED; i++) {
+    for (uint8_t i = 0; i < count; ++i) {
         StoredMessage m;
-        f.readBytes((char *)&m.timestamp, sizeof(m.timestamp));
-        f.readBytes((char *)&m.sender, sizeof(m.sender));
-        f.readBytes((char *)&m.channelIndex, sizeof(m.channelIndex));
-        f.readBytes((char *)&m.dest, sizeof(m.dest));
-        f.readBytes(m.text, MAX_MESSAGE_SIZE - 1);
-        m.text[MAX_MESSAGE_SIZE - 1] = '\0';
-
-        // Try to read boot-relative flag (new format)
-        uint8_t bootFlag = 0;
-        if (f.available() > 0) {
-            if (f.readBytes((char *)&bootFlag, 1) == 1) {
-                m.isBootRelative = (bootFlag != 0);
-            } else {
-                // Old format, fallback heuristic
-                m.isBootRelative = (m.timestamp < 60u * 60u * 24u * 7u);
-            }
-        } else {
-            // Old format, fallback heuristic
-            m.isBootRelative = (m.timestamp < 60u * 60u * 24u * 7u);
-        }
-
-        // Try to read ackStatus (newer format)
-        if (f.available() > 0) {
-            uint8_t statusByte = 0;
-            if (f.readBytes((char *)&statusByte, 1) == 1) {
-                m.ackStatus = static_cast<AckStatus>(statusByte);
-            } else {
-                m.ackStatus = AckStatus::NONE;
-            }
-        } else {
-            m.ackStatus = AckStatus::NONE;
-        }
-
-        // Recompute type from dest
-        if (m.dest == NODENUM_BROADCAST) {
-            m.type = MessageType::BROADCAST;
-        } else {
-            m.type = MessageType::DM_TO_US;
-        }
-
-        messages.push_back(m);
-        liveMessages.push_back(m); // restore into RAM buffer
+        if (!readMessageRecord(f, m))
+            break;
+        liveMessages.push_back(m);
     }
-    f.close();
 
-    // Debug after loading
-    logMemoryUsage("loadFromFlash");
+    f.close();
 #endif
 }
+
 #else
-// Persistence disabled (saves flash space)
+// If persistence is disabled, these functions become no-ops
 void MessageStore::saveToFlash() {}
 void MessageStore::loadFromFlash() {}
 #endif
@@ -257,8 +296,8 @@ void MessageStore::loadFromFlash() {}
 // Clear all messages (RAM + persisted queue)
 void MessageStore::clearAllMessages()
 {
-    liveMessages.clear();
-    messages.clear();
+    std::deque<StoredMessage>().swap(liveMessages);
+    resetMessagePool();
 
 #ifdef FSCom
     SafeFile f(filename.c_str(), false);
@@ -280,8 +319,12 @@ template <typename Predicate> static void eraseIf(std::deque<StoredMessage> &deq
             }
         }
     } else {
-        // Erase the first matching message from the front
-        auto it = std::find_if(deque.begin(), deque.end(), pred);
+        // Manual forward search to avoid std::find_if
+        auto it = deque.begin();
+        for (; it != deque.end(); ++it) {
+            if (pred(*it))
+                break;
+        }
         if (it != deque.end())
             deque.erase(it);
     }
@@ -291,7 +334,6 @@ template <typename Predicate> static void eraseIf(std::deque<StoredMessage> &deq
 void MessageStore::dismissOldestMessage()
 {
     eraseIf(liveMessages, [](StoredMessage &) { return true; });
-    eraseIf(messages, [](StoredMessage &) { return true; });
     saveToFlash();
 }
 
@@ -300,36 +342,22 @@ void MessageStore::dismissOldestMessageInChannel(uint8_t channel)
 {
     auto pred = [channel](const StoredMessage &m) { return m.type == MessageType::BROADCAST && m.channelIndex == channel; };
     eraseIf(liveMessages, pred);
-    eraseIf(messages, pred);
     saveToFlash();
 }
 
-// Dismiss oldest message in a direct conversation with a peer
+// Dismiss oldest message in a direct chat with a node
 void MessageStore::dismissOldestMessageWithPeer(uint32_t peer)
 {
     auto pred = [peer](const StoredMessage &m) {
-        if (m.type == MessageType::DM_TO_US) {
-            uint32_t other = (m.sender == nodeDB->getNodeNum()) ? m.dest : m.sender;
-            return other == peer;
-        }
-        return false;
+        if (m.type != MessageType::DM_TO_US)
+            return false;
+        uint32_t other = (m.sender == nodeDB->getNodeNum()) ? m.dest : m.sender;
+        return other == peer;
     };
     eraseIf(liveMessages, pred);
-    eraseIf(messages, pred);
     saveToFlash();
 }
 
-// Dismiss newest message (RAM + persisted queue)
-void MessageStore::dismissNewestMessage()
-{
-    eraseIf(
-        liveMessages, [](StoredMessage &) { return true; }, true);
-    eraseIf(
-        messages, [](StoredMessage &) { return true; }, true);
-    saveToFlash();
-}
-
-// Helper filters for future use
 std::deque<StoredMessage> MessageStore::getChannelMessages(uint8_t channel) const
 {
     std::deque<StoredMessage> result;
@@ -363,23 +391,28 @@ void MessageStore::upgradeBootRelativeTimestamps()
 
     uint32_t bootNow = millis() / 1000;
 
-    for (auto &m : liveMessages) {
-        if (m.isBootRelative && m.timestamp <= bootNow) {
-            uint32_t bootOffset = nowSecs - bootNow;
-            m.timestamp += bootOffset;
-            m.isBootRelative = false;
+    auto fix = [&](std::deque<StoredMessage> &dq) {
+        for (auto &m : dq) {
+            if (m.isBootRelative && m.timestamp <= bootNow) {
+                uint32_t bootOffset = nowSecs - bootNow;
+                m.timestamp += bootOffset;
+                m.isBootRelative = false;
+            }
         }
-        // else: persisted from old boot → stays ??? forever
-    }
+    };
+    fix(liveMessages);
+}
 
-    for (auto &m : messages) {
-        if (m.isBootRelative && m.timestamp <= bootNow) {
-            uint32_t bootOffset = nowSecs - bootNow;
-            m.timestamp += bootOffset;
-            m.isBootRelative = false;
-        }
-        // else: persisted from old boot → stays ??? forever
-    }
+const char *MessageStore::getText(const StoredMessage &msg)
+{
+    // Wrapper around the internal helper
+    return getTextFromPool(msg.textOffset);
+}
+
+uint16_t MessageStore::storeText(const char *src, size_t len)
+{
+    // Wrapper around the internal helper
+    return storeTextInPool(src, len);
 }
 
 // Global definition

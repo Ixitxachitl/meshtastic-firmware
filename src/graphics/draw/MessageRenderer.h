@@ -28,7 +28,7 @@ int getThreadChannel();
 // Getter for current peer (valid if mode == DIRECT)
 uint32_t getThreadPeer();
 
-// --- Registry accessors for menuHandler ---
+// Registry accessors for menuHandler
 const std::vector<int> &getSeenChannels();
 const std::vector<uint32_t> &getSeenPeers();
 
@@ -44,7 +44,8 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 std::vector<std::string> generateLines(OLEDDisplay *display, const char *headerStr, const char *messageBuf, int textWidth);
 
 // Function to calculate heights for each line
-std::vector<int> calculateLineHeights(const std::vector<std::string> &lines, const Emote *emotes);
+std::vector<int> calculateLineHeights(const std::vector<std::string> &lines, const Emote *emotes,
+                                      const std::vector<bool> &isHeaderVec);
 
 // Function to render the message content
 void renderMessageContent(OLEDDisplay *display, const std::vector<std::string> &lines, const std::vector<int> &rowHeights, int x,
@@ -58,6 +59,9 @@ void setThreadFor(const StoredMessage &sm, const meshtastic_MeshPacket &packet);
 
 // Handles a new incoming/outgoing message: banner, wake, thread select, scroll reset
 void handleNewMessage(const StoredMessage &sm, const meshtastic_MeshPacket &packet);
+
+// Clear Message Line Cache from Message Renderer
+void clearMessageCache();
 
 } // namespace MessageRenderer
 } // namespace graphics

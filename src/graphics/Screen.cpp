@@ -67,10 +67,6 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "target_specific.h"
 extern MessageStore messageStore;
 
-using graphics::Emote;
-using graphics::emotes;
-using graphics::numEmotes;
-
 extern uint16_t TFT_MESH;
 
 #if HAS_WIFI && !defined(ARCH_PORTDUINO)
@@ -116,10 +112,6 @@ uint32_t dopThresholds[5] = {2000, 1000, 500, 200, 100};
 // At some point, we're going to ask all of the modules if they would like to display a screen frame
 // we'll need to hold onto pointers for the modules that can draw a frame.
 std::vector<MeshModule *> moduleFrames;
-
-// Global variables for screen function overlay symbols
-std::vector<std::string> functionSymbol;
-std::string functionSymbolString;
 
 #if HAS_GPS
 // GeoCoord object for the screen
@@ -276,9 +268,7 @@ static void drawModuleFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int
     } else {
         // otherwise, just display the module frame that's aligned with the current frame
         module_frame = state->currentFrame;
-        // LOG_DEBUG("Screen is not in transition.  Frame: %d", module_frame);
     }
-    // LOG_DEBUG("Draw Module Frame %d", module_frame);
     MeshModule &pi = *moduleFrames.at(module_frame);
     pi.drawFrame(display, state, x, y);
 }
@@ -329,7 +319,6 @@ Screen::Screen(ScanI2C::DeviceAddress address, meshtastic_Config_DisplayConfig_O
 {
     graphics::normalFrames = new FrameCallback[MAX_NUM_NODES + NUM_EXTRA_FRAMES];
 
-    LOG_INFO("Protobuf Value uiconfig.screen_rgb_color: %d", uiconfig.screen_rgb_color);
     int32_t rawRGB = uiconfig.screen_rgb_color;
 
     // Only validate the combined value once
@@ -338,9 +327,6 @@ Screen::Screen(ScanI2C::DeviceAddress address, meshtastic_Config_DisplayConfig_O
         int r = (rawRGB >> 16) & 0xFF;
         int g = (rawRGB >> 8) & 0xFF;
         int b = rawRGB & 0xFF;
-
-        LOG_INFO("Values of r,g,b: %d, %d, %d", r, g, b);
-
         if (r >= 0 && r <= 255 && g >= 0 && g <= 255 && b >= 0 && b <= 255) {
             TFT_MESH = COLOR565(static_cast<uint8_t>(r), static_cast<uint8_t>(g), static_cast<uint8_t>(b));
         }
@@ -729,6 +715,23 @@ int32_t Screen::runOnce()
     if (displayHeight == 0) {
         displayHeight = dispdev->getHeight();
     }
+
+    // Detect frame transitions and clear message cache when leaving text message screen
+    {
+        static int8_t lastFrameIndex = -1;
+        int8_t currentFrameIndex = ui->getUiState()->currentFrame;
+        int8_t textMsgIndex = framesetInfo.positions.textMessage;
+
+        if (lastFrameIndex != -1 && currentFrameIndex != lastFrameIndex) {
+
+            if (lastFrameIndex == textMsgIndex && currentFrameIndex != textMsgIndex) {
+                graphics::MessageRenderer::clearMessageCache();
+            }
+        }
+
+        lastFrameIndex = currentFrameIndex;
+    }
+
     menuHandler::handleMenuSwitch(dispdev);
 
     // Show boot screen for first logo_timeout seconds, then switch to normal operation.
@@ -784,17 +787,17 @@ int32_t Screen::runOnce()
             break;
         case Cmd::ON_PRESS:
             if (NotificationRenderer::current_notification_type != notificationTypeEnum::text_input) {
-                handleOnPress();
+                showFrame(FrameDirection::NEXT);
             }
             break;
         case Cmd::SHOW_PREV_FRAME:
             if (NotificationRenderer::current_notification_type != notificationTypeEnum::text_input) {
-                handleShowPrevFrame();
+                showFrame(FrameDirection::PREVIOUS);
             }
             break;
         case Cmd::SHOW_NEXT_FRAME:
             if (NotificationRenderer::current_notification_type != notificationTypeEnum::text_input) {
-                handleShowNextFrame();
+                showFrame(FrameDirection::NEXT);
             }
             break;
         case Cmd::START_ALERT_FRAME: {
@@ -1258,34 +1261,6 @@ bool Screen::isFrameHidden(const std::string &frameName) const
     return false;
 }
 
-// Dismisses the currently displayed screen frame, if possible
-// Relevant for text message, waypoint, others in future?
-// Triggered with a CardKB keycombo
-void Screen::hideCurrentFrame()
-{
-    uint8_t currentFrame = ui->getUiState()->currentFrame;
-    bool dismissed = false;
-
-    if (currentFrame == framesetInfo.positions.waypoint && devicestate.has_rx_waypoint) {
-        LOG_DEBUG("Hide Waypoint");
-        devicestate.has_rx_waypoint = false;
-        hiddenFrames.waypoint = true;
-        dismissed = true;
-    } else if (currentFrame == framesetInfo.positions.wifi) {
-        LOG_DEBUG("Hide WiFi Screen");
-        hiddenFrames.wifi = true;
-        dismissed = true;
-    } else if (currentFrame == framesetInfo.positions.lora) {
-        LOG_INFO("Hide LoRa");
-        hiddenFrames.lora = true;
-        dismissed = true;
-    }
-
-    if (dismissed) {
-        setFrames(FOCUS_DEFAULT);
-    }
-}
-
 void Screen::handleStartFirmwareUpdateScreen()
 {
     LOG_DEBUG("Show firmware screen");
@@ -1338,28 +1313,6 @@ void Screen::decreaseBrightness()
     /* TO DO: add little popup in center of screen saying what brightness level it is set to*/
 }
 
-void Screen::setFunctionSymbol(std::string sym)
-{
-    if (std::find(functionSymbol.begin(), functionSymbol.end(), sym) == functionSymbol.end()) {
-        functionSymbol.push_back(sym);
-        functionSymbolString = "";
-        for (auto symbol : functionSymbol) {
-            functionSymbolString = symbol + " " + functionSymbolString;
-        }
-        setFastFramerate();
-    }
-}
-
-void Screen::removeFunctionSymbol(std::string sym)
-{
-    functionSymbol.erase(std::remove(functionSymbol.begin(), functionSymbol.end(), sym), functionSymbol.end());
-    functionSymbolString = "";
-    for (auto symbol : functionSymbol) {
-        functionSymbolString = symbol + " " + functionSymbolString;
-    }
-    setFastFramerate();
-}
-
 void Screen::handleOnPress()
 {
     // If screen was off, just wake it, otherwise advance to next frame
@@ -1371,31 +1324,19 @@ void Screen::handleOnPress()
     }
 }
 
-void Screen::handleShowPrevFrame()
+void Screen::showFrame(FrameDirection direction)
 {
-    // If screen was off, just wake it, otherwise go back to previous frame
-    // If we are in a transition, the press must have bounced, drop it.
+    // Only advance frames when UI is stable
     if (ui->getUiState()->frameState == FIXED) {
-        ui->previousFrame();
+
+        if (direction == FrameDirection::NEXT) {
+            ui->nextFrame();
+        } else {
+            ui->previousFrame();
+        }
+
         lastScreenTransition = millis();
         setFastFramerate();
-
-        // Reset scroll state if we’re leaving the text message frame
-        graphics::MessageRenderer::resetScrollState();
-    }
-}
-
-void Screen::handleShowNextFrame()
-{
-    // If screen was off, just wake it, otherwise advance to next frame
-    // If we are in a transition, the press must have bounced, drop it.
-    if (ui->getUiState()->frameState == FIXED) {
-        ui->nextFrame();
-        lastScreenTransition = millis();
-        setFastFramerate();
-
-        // Reset scroll state if we’re leaving the text message frame
-        graphics::MessageRenderer::resetScrollState();
     }
 }
 
@@ -1419,7 +1360,6 @@ void Screen::setFastFramerate()
 
 int Screen::handleStatusUpdate(const meshtastic::Status *arg)
 {
-    // LOG_DEBUG("Screen got status update %d", arg->getStatusType());
     switch (arg->getStatusType()) {
     case STATUS_TYPE_NODE:
         if (showingNormalScreen && nodeStatus->getLastNumTotal() != nodeStatus->getNumTotal()) {
@@ -1516,9 +1456,9 @@ int Screen::handleInputEvent(const InputEvent *event)
         // If no modules are using the input, move between frames
         if (!inputIntercepted) {
             if (event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_ALT_PRESS) {
-                showPrevFrame();
+                showFrame(FrameDirection::PREVIOUS);
             } else if (event->inputEvent == INPUT_BROKER_RIGHT || event->inputEvent == INPUT_BROKER_USER_PRESS) {
-                showNextFrame();
+                showFrame(FrameDirection::NEXT);
             } else if (event->inputEvent == INPUT_BROKER_SELECT) {
                 if (this->ui->getUiState()->currentFrame == framesetInfo.positions.home) {
                     menuHandler::homeBaseMenu();
@@ -1557,7 +1497,7 @@ int Screen::handleInputEvent(const InputEvent *event)
                     menuHandler::wifiBaseMenu();
                 }
             } else if (event->inputEvent == INPUT_BROKER_BACK) {
-                showPrevFrame();
+                showFrame(FrameDirection::PREVIOUS);
             } else if (event->inputEvent == INPUT_BROKER_CANCEL) {
                 setOn(false);
             }

@@ -1,6 +1,7 @@
 #include "configuration.h"
 #if HAS_SCREEN
 #include "ClockRenderer.h"
+#include "Default.h"
 #include "GPS.h"
 #include "MenuHandler.h"
 #include "MeshRadio.h"
@@ -480,9 +481,7 @@ void menuHandler::messageResponseMenu()
         } else if (selected == DismissAll) {
             messageStore.clearAllMessages();
             graphics::MessageRenderer::clearThreadRegistries();
-
-            // Reset back to "View All"
-            graphics::MessageRenderer::setThreadMode(graphics::MessageRenderer::ThreadMode::ALL);
+            graphics::MessageRenderer::clearMessageCache();
         } else if (selected == DismissOldest) {
             auto mode = graphics::MessageRenderer::getThreadMode();
             int ch = graphics::MessageRenderer::getThreadChannel();
@@ -920,9 +919,6 @@ void menuHandler::favoriteBaseMenu()
             // Switch thread to direct conversation with this node
             graphics::MessageRenderer::setThreadMode(graphics::MessageRenderer::ThreadMode::DIRECT, -1,
                                                      graphics::UIRenderer::currentFavoriteNodeNum);
-
-            // Reset scroll state for a fresh view
-            graphics::MessageRenderer::resetScrollState();
 
             // Manually create and send a UIFrameEvent to trigger the jump
             UIFrameEvent evt;
