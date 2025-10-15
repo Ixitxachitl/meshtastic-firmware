@@ -1,5 +1,6 @@
 #include "BMI270Sensor.h"
 #include "graphics/draw/Math3D.h"
+#include "detect/ScanI2C.h"
 
 #if !defined(ARCH_STM32WL) && !MESHTASTIC_EXCLUDE_I2C
 
@@ -137,6 +138,13 @@ extern "C" Vec3 GetGravityForRenderer() {
   if (n > 1e-3f) g = g * (1.0f / n);
   else g = Vec3(0, 1, 0);
   return g;
+}
+
+extern "C" void GetGravityXYZ(float* gx, float* gy, float* gz) {
+  Vec3 g = GetGravityForRenderer();   // already normalized unit gravity
+  if (gx) *gx = g.x;
+  if (gy) *gy = g.y;
+  if (gz) *gz = g.z;
 }
 
 // Return the current (fake-gyro) heading in radians, same convention as screen heading.
@@ -357,11 +365,11 @@ int32_t BMI270Sensor::runOnce()
         // 5) Clear request and close any lingering UI
         s_anchorRequested = false;
       #if !defined(MESHTASTIC_EXCLUDE_SCREEN) && HAS_SCREEN
-        if (screen) {
+        if (screen && !ScanI2C::hasMagnetometer()) {
           screen->setHeading(0.0f);   // force the snap visually this frame
           screen->forceDisplay(true);
-          screen->endAlert();
         }
+        if (screen) screen->endAlert();
       #endif
 
         LOG_DEBUG("BMI270: anchored & snapped (bias=%.3f, %.3f, %.3f dps, zero=%.1f deg)",
@@ -421,7 +429,10 @@ int32_t BMI270Sensor::runOnce()
       float heading = 360.0f - rel;
       if (heading >= 360.0f) heading -= 360.0f;
 #if !defined(MESHTASTIC_EXCLUDE_SCREEN) && HAS_SCREEN
-      if (screen) { screen->setHeading(heading); screen->forceDisplay(true); }
+      if (screen && !ScanI2C::hasMagnetometer()) {
+        screen->setHeading(heading);
+        screen->forceDisplay(true);
+      }
 #endif
     }
   }

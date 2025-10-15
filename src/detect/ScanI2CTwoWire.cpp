@@ -128,6 +128,7 @@ uint16_t ScanI2CTwoWire::getRegisterValue(const ScanI2CTwoWire::RegisterLocation
 void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
 {
     concurrency::LockGuard guard((concurrency::Lock *)&lock);
+    ScanI2C::setMagOnPort(port, false);
 
     LOG_DEBUG("Scan for I2C devices on port %d", port);
 
@@ -418,7 +419,12 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
 
             case LPS22HB_ADDR_ALT:
                 SCAN_SIMPLE_CASE(LPS22HB_ADDR, LPS22HB, "LPS22HB", (uint8_t)addr.address)
-                SCAN_SIMPLE_CASE(QMC6310_ADDR, QMC6310, "QMC6310", (uint8_t)addr.address)
+            case QMC6310_ADDR: {
+                logFoundDevice("QMC6310", (uint8_t)addr.address);
+                type = QMC6310;
+                ScanI2C::setMagOnPort(port, true);
+                break;
+            }
 
             case QMI8658_ADDR:
                 registerValue = getRegisterValue(ScanI2CTwoWire::RegisterLocation(addr, 0x0A), 1); // get ID
@@ -442,9 +448,19 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
                     logFoundDevice("QMI8658", (uint8_t)addr.address);
                 }
                 break;
-
-                SCAN_SIMPLE_CASE(QMC5883L_ADDR, QMC5883L, "QMC5883L", (uint8_t)addr.address)
-                SCAN_SIMPLE_CASE(HMC5883L_ADDR, HMC5883L, "HMC5883L", (uint8_t)addr.address)
+                
+            case QMC5883L_ADDR: {
+                logFoundDevice("QMC5883L", (uint8_t)addr.address);
+                type = QMC5883L;
+                ScanI2C::setMagOnPort(port, true);
+                break;
+            }
+            case HMC5883L_ADDR: {
+                logFoundDevice("HMC5883L", (uint8_t)addr.address);
+                type = HMC5883L;
+                ScanI2C::setMagOnPort(port, true);
+                break;
+            }
 #ifdef HAS_QMA6100P
                 SCAN_SIMPLE_CASE(QMA6100P_ADDR, QMA6100P, "QMA6100P", (uint8_t)addr.address)
 #else
@@ -498,7 +514,12 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
                 SCAN_SIMPLE_CASE(LTR553ALS_ADDR, LTR553ALS, "LTR553ALS", (uint8_t)addr.address);
                 SCAN_SIMPLE_CASE(BHI260AP_ADDR, BHI260AP, "BHI260AP", (uint8_t)addr.address);
                 SCAN_SIMPLE_CASE(SCD4X_ADDR, SCD4X, "SCD4X", (uint8_t)addr.address);
-                SCAN_SIMPLE_CASE(BMM150_ADDR, BMM150, "BMM150", (uint8_t)addr.address);
+            case BMM150_ADDR: {
+                logFoundDevice("BMM150", (uint8_t)addr.address);
+                type = BMM150;
+                ScanI2C::setMagOnPort(port, true);   // <-- now runs
+                break;
+            }
 #ifdef HAS_TPS65233
                 SCAN_SIMPLE_CASE(TPS65233_ADDR, TPS65233, "TPS65233", (uint8_t)addr.address);
 #endif
@@ -529,6 +550,7 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
                 if (id == 0xEA) {                         // ICM-20948 ID
                     type = ICM20948;
                     logFoundDevice("ICM20948", (uint8_t)addr.address);
+                    ScanI2C::setMagOnPort(port, true);
                     break;
                 }
 
@@ -543,6 +565,7 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
                 if (addr.address == BMX160_ADDR) {
                     type = BMX160;
                     logFoundDevice("BMX160", (uint8_t)addr.address);
+                    ScanI2C::setMagOnPort(port, true);
                 } else {
                     type = MPU6050;
                     logFoundDevice("MPU6050", (uint8_t)addr.address);

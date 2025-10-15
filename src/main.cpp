@@ -135,6 +135,27 @@ AccelerometerThread *accelerometerThread = nullptr;
 AudioThread *audioThread = nullptr;
 #endif
 
+#ifdef ARDUINO_ARCH_ESP32
+#ifdef HAS_I2S
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
+extern AudioThread* audioThread;  // already declared
+
+static void AudioTaskShim(void* pv) {
+  auto* th = static_cast<concurrency::OSThread*>(pv);
+  for (;;) {
+    const int32_t delayMs = th->_rtosRunOnceShim();
+    if (delayMs <= 0) {
+      taskYIELD();
+    } else {
+      vTaskDelay(pdMS_TO_TICKS(delayMs));
+    }
+  }
+}
+#endif
+#endif
+
 #ifdef USE_XL9555
 #include "ExtensionIOXL9555.hpp"
 ExtensionIOXL9555 io;
@@ -965,8 +986,30 @@ void setup()
     nodeStatus->observe(&nodeDB->newStatus);
 
 #ifdef HAS_I2S
-    LOG_DEBUG("Start audio thread");
-    audioThread = new AudioThread();
+  audioThread = new AudioThread();
+
+  // Keep the public API untouched; just stop the cooperative scheduler
+  audioThread->disable();   // prevents the ThreadController from running it
+
+  // Run audio on a dedicated RTOS task (ESP32 only)
+  #ifdef ARDUINO_ARCH_ESP32
+    TaskHandle_t h = nullptr;
+    const uint32_t stackWords = 4096 / sizeof(StackType_t);   // adjust if needed
+    const UBaseType_t prio = tskIDLE_PRIORITY + 2;            // slightly above normal
+    xTaskCreatePinnedToCore(
+      AudioTaskShim,
+      "Audio",
+      stackWords,
+      audioThread,
+      prio,
+      &h,
+      #if CONFIG_FREERTOS_UNICORE
+        tskNO_AFFINITY
+      #else
+        1   // APP CPU; change if your I2S ISR is on the other core
+      #endif
+    );
+  #endif
 #endif
 
 #ifdef HAS_UDP_MULTICAST
@@ -1632,28 +1675,24 @@ void loop()
 #ifdef HAS_I2S
 {
     static bool bootMelodyFlushed = false;
-    static bool saidBrand = false;
     static uint32_t flushStartMs = 0;
 
-    extern AudioThread* audioThread;
+    if (!bootMelodyFlushed) {
+        // Record when we first see a valid audioThread
+        extern AudioThread* audioThread;
+        if (audioThread) {
+            if (flushStartMs == 0) flushStartMs = millis();
 
-    if (!bootMelodyFlushed && audioThread) {
-        if (flushStartMs == 0) flushStartMs = millis();
+            const bool warmedUp =
+                (audioThread->pumpTicks() >= 20);   // be conservative; 20 is enough
 
-        const bool warmedUp     = (audioThread->pumpTicks() >= 20);
-        const bool timeFallback = (millis() - flushStartMs) >= 800;
+            const bool timeFallback =
+                (millis() - flushStartMs) >= 800;   // hard fallback after ~0.8s
 
-        if (warmedUp || timeFallback) {
-            buzzOnAudioThreadReady();          // queues/starts the RTTTL boot melody
-            bootMelodyFlushed = true;
-        }
-    }
-
-    // After the melody ends, speak once.
-    if (bootMelodyFlushed && !saidBrand && audioThread) {
-        if (!audioThread->isPlaying()) {       // melody finished
-            audioThread->readAloud("Meshtastic");
-            saidBrand = true;
+            if (warmedUp || timeFallback) {
+                buzzOnAudioThreadReady();           // starts queued boot RTTTL
+                bootMelodyFlushed = true;
+            }
         }
     }
 }
