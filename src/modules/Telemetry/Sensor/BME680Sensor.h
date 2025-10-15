@@ -68,7 +68,6 @@ class BME680Sensor : public TelemetrySensor
     float lastGasOhms = NAN;
 
   protected:
-    virtual void setup() override;
     const char *bsecConfigFileName = "/prefs/bsec.dat";
     uint8_t bsecState[BSEC_MAX_STATE_BLOB_SIZE] = {0};
     uint8_t accuracy = 0;
@@ -89,9 +88,9 @@ class BME680Sensor : public TelemetrySensor
 
   public:
     BME680Sensor();
-    int32_t runTrigger();
     virtual int32_t runOnce() override;
     virtual bool getMetrics(meshtastic_Telemetry *measurement) override;
+    virtual bool initDevice(TwoWire *bus, ScanI2C::FoundDevice *dev) override;
     float getGasResistanceOhms() const { return lastGasOhms; }
 };
 

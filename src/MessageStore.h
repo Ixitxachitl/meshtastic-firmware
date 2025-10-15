@@ -7,7 +7,8 @@
 #define LOG_DEBUG(...)
 #endif
 
-// Disable message persistence to flash if you’re short on space
+// Enable or disable message persistence (flash storage)
+// Define -DENABLE_MESSAGE_PERSISTENCE=0 in build_flags to disable it entirely
 #ifndef ENABLE_MESSAGE_PERSISTENCE
 #define ENABLE_MESSAGE_PERSISTENCE 1
 #endif
@@ -17,14 +18,30 @@
 #include <deque>
 #include <string>
 
-// Max number of messages we’ll keep in history
-#ifndef MAX_MESSAGES_SAVED
-#define MAX_MESSAGES_SAVED 20
+// How many messages are stored (RAM + flash).
+// Define -DMESSAGE_HISTORY_LIMIT=N in build_flags to control memory usage.
+#ifndef MESSAGE_HISTORY_LIMIT
+#define MESSAGE_HISTORY_LIMIT 20
 #endif
-constexpr size_t MAX_MESSAGE_SIZE = 220; // safe bound for text payload
+
+// Internal alias used everywhere in code – do NOT redefine elsewhere.
+#define MAX_MESSAGES_SAVED MESSAGE_HISTORY_LIMIT
+
+// Maximum text payload size per message in bytes.
+// This still defines the max message length, but we no longer reserve this space per message.
+#define MAX_MESSAGE_SIZE 220
+
+// Total shared text pool size for all messages combined.
+// The text pool is RAM-only. Text is re-stored from flash into the pool on boot.
+#ifndef MESSAGE_TEXT_POOL_SIZE
+#define MESSAGE_TEXT_POOL_SIZE (MAX_MESSAGES_SAVED * MAX_MESSAGE_SIZE)
+#endif
 
 // Explicit message classification
-enum class MessageType : uint8_t { BROADCAST = 0, DM_TO_US = 1 };
+enum class MessageType : uint8_t {
+    BROADCAST = 0, // broadcast message
+    DM_TO_US = 1   // direct message addressed to this node
+};
 
 // Delivery status for messages we sent
 enum class AckStatus : uint8_t {
@@ -36,30 +53,22 @@ enum class AckStatus : uint8_t {
 };
 
 struct StoredMessage {
-    uint32_t timestamp;          // When message was created (secs since boot/RTC)
-    uint32_t sender;             // NodeNum of sender
-    uint8_t channelIndex;        // Channel index used
-    char text[MAX_MESSAGE_SIZE]; // UTF-8 text payload
+    uint32_t timestamp;   // When message was created (secs since boot or RTC)
+    uint32_t sender;      // NodeNum of sender
+    uint8_t channelIndex; // Channel index used
+    uint32_t dest;        // Destination node (broadcast or direct)
+    MessageType type;     // Derived from dest (explicit classification)
+    bool isBootRelative;  // true = millis()/1000 fallback; false = epoch/RTC absolute
+    AckStatus ackStatus;  // Delivery status (only meaningful for our own sent messages)
 
-    // Destination node.
-    // 0xffffffff (NODENUM_BROADCAST) means broadcast,
-    // otherwise this is the NodeNum of the DM recipient.
-    uint32_t dest;
+    // Text storage metadata — rebuilt from flash at boot
+    uint16_t textOffset; // Offset into global text pool (valid only after loadFromFlash())
+    uint16_t textLength; // Length of text in bytes
 
-    // Explicit classification (derived from dest when loading old messages)
-    MessageType type;
-
-    // Marks whether the timestamp was stored relative to boot time
-    // (true = millis()/1000 fallback, false = epoch/RTC absolute)
-    bool isBootRelative;
-
-    // Delivery status (only meaningful for our own sent messages)
-    AckStatus ackStatus;
-
-    // Default constructor to initialize all fields safely
+    // Default constructor initializes all fields safely
     StoredMessage()
-        : timestamp(0), sender(0), channelIndex(0), text(""), dest(0xffffffff), type(MessageType::BROADCAST),
-          isBootRelative(false), ackStatus(AckStatus::NONE) // start as NONE (waiting, no symbol)
+        : timestamp(0), sender(0), channelIndex(0), dest(0xffffffff), type(MessageType::BROADCAST), isBootRelative(false),
+          ackStatus(AckStatus::NONE), textOffset(0), textLength(0)
     {
     }
 };
@@ -71,21 +80,22 @@ class MessageStore
 
     // Live RAM methods (always current, used by UI and runtime)
     void addLiveMessage(StoredMessage &&msg);
+    void addLiveMessage(const StoredMessage &msg); // convenience overload
     const std::deque<StoredMessage> &getLiveMessages() const { return liveMessages; }
 
-    // Persistence methods (used only on boot/shutdown)
-    void addMessage(StoredMessage &&msg);
-    const StoredMessage &addFromPacket(const meshtastic_MeshPacket &mp); // Incoming/outgoing → RAM only
-    void addFromString(uint32_t sender, uint8_t channelIndex, const std::string &text);
-    void saveToFlash();
-    void loadFromFlash();
+    // Add new messages from packets or manual input
+    const StoredMessage &addFromPacket(const meshtastic_MeshPacket &mp);                // Incoming/outgoing → RAM only
+    void addFromString(uint32_t sender, uint8_t channelIndex, const std::string &text); // Manual add
 
-    // Clear all messages (RAM + persisted queue)
+    // Persistence methods (used only on boot/shutdown)
+    void saveToFlash();   // Save messages to flash
+    void loadFromFlash(); // Load messages from flash
+
+    // Clear all messages (RAM + persisted queue + text pool)
     void clearAllMessages();
 
     // Dismiss helpers
-    void dismissOldestMessage();
-    void dismissNewestMessage();
+    void dismissOldestMessage(); // remove oldest from RAM (and flash on save)
 
     // New targeted dismiss helpers
     void dismissOldestMessageInChannel(uint8_t channel);
@@ -94,24 +104,25 @@ class MessageStore
     // Unified accessor (for UI code, defaults to RAM buffer)
     const std::deque<StoredMessage> &getMessages() const { return liveMessages; }
 
-    // Optional: direct access to persisted copy (mainly for debugging/inspection)
-    const std::deque<StoredMessage> &getPersistedMessages() const { return messages; }
-
     // Helper filters for future use
-    std::deque<StoredMessage> getChannelMessages(uint8_t channel) const;
-    std::deque<StoredMessage> getDirectMessages() const;
-    std::deque<StoredMessage> getConversationWith(uint32_t peer) const;
+    std::deque<StoredMessage> getChannelMessages(uint8_t channel) const; // Only broadcast messages on a channel
+    std::deque<StoredMessage> getDirectMessages() const;                 // Only direct messages
 
     // Upgrade boot-relative timestamps once RTC is valid
     void upgradeBootRelativeTimestamps();
 
-    // Debug helper to log serialized size of messages
-    void logMemoryUsage(const char *context) const;
+    // Retrieve the C-string text for a stored message
+    static const char *getText(const StoredMessage &msg);
+
+    // Allocate text into pool (used by sender-side code)
+    static uint16_t storeText(const char *src, size_t len);
+
+    // Used when loading from flash to rebuild the text pool
+    static uint16_t rebuildTextFromFlash(const char *src, size_t len);
 
   private:
-    std::deque<StoredMessage> liveMessages;
-    std::deque<StoredMessage> messages; // persisted copy
-    std::string filename;
+    std::deque<StoredMessage> liveMessages; // Single in-RAM message buffer (also used for persistence)
+    std::string filename;                   // Flash filename for persistence
 };
 
 // Global instance (defined in MessageStore.cpp)
