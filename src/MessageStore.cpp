@@ -258,6 +258,7 @@ void MessageStore::saveToFlash()
 
 void MessageStore::loadFromFlash()
 {
+    // Fresh start for RAM mirrors
     std::deque<StoredMessage>().swap(liveMessages);
     resetMessagePool(); // reset pool when loading
 
@@ -271,15 +272,93 @@ void MessageStore::loadFromFlash()
     if (!f)
         return;
 
+    // Read record count (written by saveToFlash())
     uint8_t count = 0;
-    f.readBytes(reinterpret_cast<char *>(&count), 1);
+    if (f.readBytes(reinterpret_cast<char *>(&count), 1) != 1) {
+        f.close();
+        return;
+    }
     if (count > MAX_MESSAGES_SAVED)
         count = MAX_MESSAGES_SAVED;
 
     for (uint8_t i = 0; i < count; ++i) {
-        StoredMessage m;
-        if (!readMessageRecord(f, m))
+        if (f.available() == 0)
             break;
+
+        StoredMessage m{};
+        // Base fields
+        if (f.readBytes((char *)&m.timestamp, sizeof(m.timestamp)) != sizeof(m.timestamp)) break;
+        if (f.readBytes((char *)&m.sender, sizeof(m.sender)) != sizeof(m.sender)) break;
+        if (f.readBytes((char *)&m.channelIndex, sizeof(m.channelIndex)) != sizeof(m.channelIndex)) break;
+        if (f.readBytes((char *)&m.dest, sizeof(m.dest)) != sizeof(m.dest)) break;
+
+        // Text: variable-length, NUL-terminated. Keep up to MAX_MESSAGE_SIZE-1, always realign.
+        {
+            size_t ti = 0;
+            char c = '\0';
+            bool sawTerminator = false;
+
+            // Read until NUL or EOF, storing up to MAX_MESSAGE_SIZE-1
+            while (f.available() > 0) {
+                if (f.readBytes(&c, 1) != 1) break; // truncated file
+                if (ti < MAX_MESSAGE_SIZE - 1) {
+                    m.text[ti++] = c;
+                }
+                if (c == '\0') {
+                    sawTerminator = true;
+                    break;
+                }
+            }
+
+            if (!sawTerminator) {
+                // Ensure termination of what we kept
+                if (ti >= MAX_MESSAGE_SIZE) ti = MAX_MESSAGE_SIZE - 1;
+                m.text[ti] = '\0';
+
+                // Discard remainder of the oversized string to realign
+                while (f.available() > 0) {
+                    if (f.readBytes(&c, 1) != 1 || c == '\0') break;
+                }
+            } else {
+                // Ensure a final terminator (belt-and-suspenders for edge cases)
+                if (ti == 0 || m.text[ti - 1] != '\0') {
+                    if (ti >= MAX_MESSAGE_SIZE) ti = MAX_MESSAGE_SIZE - 1;
+                    m.text[ti] = '\0';
+                }
+            }
+        }
+
+        // Optional boot-relative flag (new format); otherwise fallback heuristic (old format)
+        uint8_t bootFlag = 0;
+        if (f.available() > 0) {
+            if (f.readBytes((char *)&bootFlag, 1) == 1) {
+                m.isBootRelative = (bootFlag != 0);
+            } else {
+                m.isBootRelative = (m.timestamp < 60u * 60u * 24u * 7u);
+            }
+        } else {
+            m.isBootRelative = (m.timestamp < 60u * 60u * 24u * 7u);
+        }
+
+        // Optional ackStatus (newer format); default NONE for older records
+        if (f.available() > 0) {
+            uint8_t statusByte = 0;
+            if (f.readBytes((char *)&statusByte, 1) == 1) {
+                m.ackStatus = static_cast<AckStatus>(statusByte);
+            } else {
+                m.ackStatus = AckStatus::NONE;
+            }
+        } else {
+            m.ackStatus = AckStatus::NONE;
+        }
+
+        // Recompute type from dest
+        m.type = (m.dest == NODENUM_BROADCAST)
+                   ? MessageType::BROADCAST
+                   : MessageType::DM_TO_US;
+
+        // Persist into in-memory stores
+        messages.push_back(m);
         liveMessages.push_back(m);
     }
 

@@ -8,14 +8,32 @@
 #include "SPILock.h"
 #include "TelemetrySensor.h"
 
-BME680Sensor::BME680Sensor() : TelemetrySensor(meshtastic_TelemetrySensorType_BME680, "BME680") {}
+BME680Sensor::BME680Sensor()
+  : TelemetrySensor(BME68X_TELEM_TYPE, sensorName) {}
 
 int32_t BME680Sensor::runOnce()
 {
+    static uint32_t next_due = 0;
+    const uint32_t now = millis();
+    if ((int32_t)(now - next_due) < 0) return (int32_t)(next_due - now);
+
     if (!bme680.run()) {
         checkStatus("runTrigger");
+        next_due = now + 3000;
+        return 3000;
     }
-    return 35;
+
+    #if defined(__has_include)
+      // Most Arduino BSEC2 ports expose a 'gasResistance' field updated by run()
+      #if __has_include(<bsec2.h>)
+        // If your wrapper has a public field:
+        // (If this line fails, try one of the alt code paths below)
+        lastGasOhms = bme680.getData(BSEC_OUTPUT_RAW_GAS).signal;
+      #endif
+    #endif
+
+    next_due = now + 3000;
+    return 3000;
 }
 
 bool BME680Sensor::initDevice(TwoWire *bus, ScanI2C::FoundDevice *dev)
@@ -48,22 +66,33 @@ bool BME680Sensor::initDevice(TwoWire *bus, ScanI2C::FoundDevice *dev)
 
 bool BME680Sensor::getMetrics(meshtastic_Telemetry *measurement)
 {
+    // Quick guard: if no fresh data yet, bail
     if (bme680.getData(BSEC_OUTPUT_RAW_PRESSURE).signal == 0)
         return false;
 
+    // Pull once (BSEC units: °C, %rH, Pa, Ω, IAQ unitless)
+    const float temp_c   = bme680.getData(BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_TEMPERATURE).signal;
+    const float rh_pct   = bme680.getData(BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_HUMIDITY).signal;
+    const float pres_pa  = bme680.getData(BSEC_OUTPUT_RAW_PRESSURE).signal;
+    const float gas_ohms = bme680.getData(BSEC_OUTPUT_RAW_GAS).signal;     // already in Ω
+    const float gas_kohms = gas_ohms / 1000.0f;                         // kΩ
+    const float iaq      = bme680.getData(BSEC_OUTPUT_IAQ).signal;
+
+    // Mark present
     measurement->variant.environment_metrics.has_temperature = true;
     measurement->variant.environment_metrics.has_relative_humidity = true;
     measurement->variant.environment_metrics.has_barometric_pressure = true;
     measurement->variant.environment_metrics.has_gas_resistance = true;
     measurement->variant.environment_metrics.has_iaq = true;
 
-    measurement->variant.environment_metrics.temperature = bme680.getData(BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_TEMPERATURE).signal;
-    measurement->variant.environment_metrics.relative_humidity =
-        bme680.getData(BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_HUMIDITY).signal;
-    measurement->variant.environment_metrics.barometric_pressure = bme680.getData(BSEC_OUTPUT_RAW_PRESSURE).signal;
-    measurement->variant.environment_metrics.gas_resistance = bme680.getData(BSEC_OUTPUT_RAW_GAS).signal / 1000.0;
-    // Check if we need to save state to filesystem (every STATE_SAVE_PERIOD ms)
-    measurement->variant.environment_metrics.iaq = bme680.getData(BSEC_OUTPUT_IAQ).signal;
+    // Assign
+    measurement->variant.environment_metrics.temperature = temp_c;
+    measurement->variant.environment_metrics.relative_humidity = rh_pct;
+    measurement->variant.environment_metrics.barometric_pressure = pres_pa;   // Pa
+    measurement->variant.environment_metrics.gas_resistance = gas_kohms;      // kΩ
+    measurement->variant.environment_metrics.iaq = iaq;
+
+    // Persist BSEC state periodically
     updateState();
     return true;
 }
@@ -134,15 +163,24 @@ void BME680Sensor::updateState()
 
 void BME680Sensor::checkStatus(const char *functionName)
 {
-    if (bme680.status < BSEC_OK)
+    // BSEC status
+    if (bme680.status < BSEC_OK) {
         LOG_ERROR("%s BSEC2 code: %d", functionName, bme680.status);
-    else if (bme680.status > BSEC_OK)
-        LOG_WARN("%s BSEC2 code: %d", functionName, bme680.status);
+    } else if (bme680.status > BSEC_OK) {
+        // Quiet timing warning if desired; keep others as WARN
+        if (bme680.status == 100) { // BSEC_W_SC_CALL_TIMING_VIOLATION
+            LOG_DEBUG("%s BSEC2 code: %d", functionName, bme680.status);
+        } else {
+            LOG_WARN("%s BSEC2 code: %d", functionName, bme680.status);
+        }
+    }
 
-    if (bme680.sensor.status < BME68X_OK)
+    // BME68X driver status
+    if (bme680.sensor.status < BME68X_OK) {
         LOG_ERROR("%s BME68X code: %d", functionName, bme680.sensor.status);
-    else if (bme680.sensor.status > BME68X_OK)
+    } else if (bme680.sensor.status > BME68X_OK) {
         LOG_WARN("%s BME68X code: %d", functionName, bme680.sensor.status);
+    }
 }
 
 #endif

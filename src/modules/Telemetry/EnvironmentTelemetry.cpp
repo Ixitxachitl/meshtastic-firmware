@@ -20,6 +20,160 @@
 #include "sleep.h"
 #include "target_specific.h"
 #include <OLEDDisplay.h>
+#include <math.h>
+#include <deque>
+#include <map>
+#include <algorithm>
+
+OLEDDisplay *display = nullptr;
+
+// Your chosen layout constants
+static constexpr int kRulerPadLR       = 4;  // L/R padding (px)
+static constexpr int kNeedleH          = 5;  // triangle height below baseline
+static constexpr int kNeedleBaseHalf   = 5;  // half base width
+static constexpr int kRulerBaselineOfs = 8;  // baseline = y + this
+static constexpr int kLabelGap         = -1;  // pixels below triangle base
+
+// IAQ "ruler": |-----▲-----| with danger ticks and filled up-triangle below baseline
+static void drawIAQRuler(OLEDDisplay* dpy, int x, int y, int w, int iaqValue, const String& label) {
+    // inner rect after padding
+    int ix = x + kRulerPadLR;
+    int iw = w - (kRulerPadLR * 2);
+    if (iw < 12) { ix = x; iw = w; }
+
+    // clamp + layout
+    int iaq = iaqValue; if (iaq < 0) iaq = 0; if (iaq > 500) iaq = 500;
+    const int baselineY = y + kRulerBaselineOfs;
+    const int capHalf   = 3;
+
+    // end caps ‘|’
+    dpy->drawLine(ix,          baselineY - capHalf, ix,          baselineY + capHalf);
+    dpy->drawLine(ix + iw - 1, baselineY - capHalf, ix + iw - 1, baselineY + capHalf);
+
+    // dashed baseline
+    for (int i = ix + 1; i < ix + iw - 1; i += 3) {
+        dpy->drawLine(i, baselineY, std::min(i + 1, ix + iw - 2), baselineY);
+    }
+
+    // ticks at danger levels: 0,25,50,100,150,200,300,500
+    auto valToX = [&](int v) -> int {
+        return ix + (int)std::lround((float)v / 500.0f * (iw - 1));
+    };
+    const int tickShort = 2;  // minor tick half-height
+    const int tickLong  = 3;  // major tick half-height
+
+    auto drawTick = [&](int v, bool major) {
+        int tx = valToX(v);
+        int h  = major ? tickLong : tickShort;
+        dpy->drawLine(tx, baselineY - h, tx, baselineY + h);
+    };
+
+    // majors: 0,100,150,200,300,500 (category boundaries)
+    drawTick(0,   true);
+    drawTick(100, true);
+    drawTick(150, true);
+    drawTick(200, true);
+    drawTick(300, true);
+    drawTick(500, true);
+
+    // minors: 25, 50 (within "Excellent/Good/Moderate")
+    drawTick(25,  false);
+    drawTick(50,  false);
+
+    // filled upward triangle BELOW the baseline (tip pokes through)
+    const int nx = valToX(iaq);
+    for (int dy = 0; dy <= kNeedleH; ++dy) {
+        int half = (int)std::lround((float)kNeedleBaseHalf * ((float)dy / (float)kNeedleH));
+        int yrow = baselineY + dy;                 // rows below baseline
+        dpy->drawLine(nx - half, yrow, nx + half, yrow);
+    }
+
+    // centered label snug under the triangle base
+    const int lw = dpy->getStringWidth(label);
+    const int lx = x + (w - lw) / 2;
+    dpy->drawString(lx, baselineY + kNeedleH + kLabelGap, label);
+}
+
+// keep last N samples per source
+static constexpr int    kSparkW  = 120;         // pixels wide
+static constexpr int    kSparkH  = 10;         // pixels tall
+static constexpr size_t kHistLen = size_t(kSparkW);         // ~ last 24 updates
+
+static std::map<uint32_t, std::deque<float>> s_tempHist;
+static std::map<uint32_t, std::deque<float>> s_humHist;
+static std::map<uint32_t, std::deque<float>> s_pressHist;
+
+static void pushHist(std::deque<float> &q, float v) {
+    if (std::isnan(v)) return;
+    if (q.size() >= kHistLen) q.pop_front();
+    q.push_back(v);
+}
+
+// Boxed + aligned tiny sparkline (fits in a defined box)
+static constexpr int kSparkYOffset = 1;
+static constexpr int kSparkXOffset = -4;  // move 4px left
+
+// Helper: apply both offsets centrally
+static void drawMiniSparkBoxed(OLEDDisplay *dpy, int x, int y, int w, int h,
+                               const std::deque<float> &hist) {
+    const int x0 = x + kSparkXOffset;   // << left shift
+    const int y0 = y + kSparkYOffset;   // you already added this
+
+    dpy->drawRect(x0, y0, w, h);
+
+    if (hist.size() < 2) return;
+
+    auto mm = std::minmax_element(hist.begin(), hist.end());
+    float lo = *mm.first, hi = *mm.second, span = hi - lo;
+    if (span < 1e-6f) span = 1.0f;
+
+    const int ix = x0 + 1, iy = y0 + 1, iw = w - 2, ih = h - 2;
+    const float step = float(iw) / float(hist.size() - 1);
+
+    for (size_t i = 1; i < hist.size(); ++i) {
+        int x1 = ix + int(std::lround(step * (i - 1)));
+        int x2 = ix + int(std::lround(step * i));
+        int y1 = iy + ih - int(std::lround(((hist[i - 1] - lo) / span) * ih));
+        int y2 = iy + ih - int(std::lround(((hist[i]     - lo) / span) * ih));
+        dpy->drawLine(x1, y1, x2, y2);
+    }
+}
+
+// Prefer long_name when available (and width allows), else short_name, else hex id.
+// Mirrors the selection logic used by MessageRenderer.
+static inline const char *getSenderLongName(const meshtastic_MeshPacket &mp) {
+    static char buf[64];
+
+    const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(mp.from);
+    if (node && node->has_user) {
+        const char *ln = node->user.long_name;
+        const char *sn = node->user.short_name;
+
+    #if defined(M5STACK_UNITC6L)
+        // On this target, MessageRenderer prefers short_name.
+        if (sn && sn[0]) return sn;
+        if (ln && ln[0]) return ln;
+    #else
+        // On wider screens, prefer long_name; otherwise short_name.
+        if (SCREEN_WIDTH >= 200 && ln && ln[0]) return ln;
+        if (sn && sn[0]) return sn;
+        if (ln && ln[0]) return ln; // last resort if short_name empty
+    #endif
+    }
+
+    // Fallback: hex node id like "ABCDEF12"
+    snprintf(buf, sizeof(buf), "%08x", (unsigned int)mp.from);
+    return buf;
+}
+
+// Magnus-Tetens over water (good for typical indoor temps)
+static float dewPointC(float tempC, float rhPercent) {
+  if (!(rhPercent > 0.0f && rhPercent <= 100.0f)) return NAN;
+  const float a = 17.62f;
+  const float b = 243.12f; // °C
+  const float gamma = (a * tempC) / (b + tempC) + logf(rhPercent / 100.0f);
+  return (b * gamma) / (a - gamma);
+}
 
 #if !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR_EXTERNAL
 
@@ -27,6 +181,8 @@
 #include "Sensor/CGRadSensSensor.h"
 #include "Sensor/RCWL9620Sensor.h"
 #include "Sensor/nullSensor.h"
+
+EnvironmentTelemetryModule* environmentTelemetryModule = nullptr;
 
 namespace graphics
 {
@@ -361,8 +517,18 @@ bool EnvironmentTelemetryModule::wantUIFrame()
     return moduleConfig.telemetry.environment_screen_enabled;
 }
 
+
+std::vector<uint32_t> EnvironmentTelemetryModule::getSourcesWithTelemetry() const {
+    std::vector<uint32_t> out;
+    out.reserve(lastBySource.size());
+    for (const auto &kv : lastBySource) out.push_back(kv.first);
+    std::sort(out.begin(), out.end()); // nice to have
+    return out;
+}
+
 void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
+    ::display = display;
     // === Setup display ===
     display->clear();
     display->setFont(FONT_SMALL);
@@ -385,8 +551,22 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         return;
     }
 
+    const meshtastic_MeshPacket* packetToShow = nullptr;
+
+    if (selectedSource != 0) {
+        auto it = lastBySource.find(selectedSource);
+        if (it != lastBySource.end()) packetToShow = it->second;
+    } else {
+        packetToShow = lastMeasurementPacket;
+    }
+
+    if (!packetToShow) {
+        display->drawString(x, currentY, "No Telemetry");
+        return;
+    }
+
     // Decode the telemetry message from the latest received packet
-    const meshtastic_Data &p = lastMeasurementPacket->decoded;
+    const meshtastic_Data &p = packetToShow->decoded;
     meshtastic_Telemetry telemetry;
     if (!pb_decode_from_bytes(p.payload.bytes, p.payload.size, &meshtastic_Telemetry_msg, &telemetry)) {
         display->drawString(x, currentY, "No Telemetry");
@@ -396,118 +576,166 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     const auto &m = telemetry.variant.environment_metrics;
 
     // Check if any telemetry field has valid data
-    bool hasAny = m.has_temperature || m.has_relative_humidity || m.barometric_pressure != 0 || m.iaq != 0 || m.voltage != 0 ||
-                  m.current != 0 || m.lux != 0 || m.white_lux != 0 || m.weight != 0 || m.distance != 0 || m.radiation != 0;
+    bool hasAny = m.has_temperature || m.has_relative_humidity || m.barometric_pressure != 0 || m.iaq != 0 ||
+                  m.has_gas_resistance || m.gas_resistance != 0 ||
+                  m.voltage != 0 || m.current != 0 || m.lux != 0 || m.white_lux != 0 || m.weight != 0 ||
+                  m.distance != 0 || m.radiation != 0;
 
     if (!hasAny) {
         display->drawString(x, currentY, "No Telemetry");
         return;
     }
 
-    // === First line: Show sender name + time since received (left), and first metric (right) ===
-    const char *sender = getSenderShortName(*lastMeasurementPacket);
-    uint32_t agoSecs = service->GetTimeSinceMeshPacket(lastMeasurementPacket);
+    // === First line: Show sender LONG name + time since received (left)
+    const char *sender = getSenderLongName(*packetToShow);  // long name per your request
+    uint32_t agoSecs = service->GetTimeSinceMeshPacket(packetToShow);
     String agoStr = (agoSecs > 864000) ? "?"
                     : (agoSecs > 3600) ? String(agoSecs / 3600) + "h"
                     : (agoSecs > 60)   ? String(agoSecs / 60) + "m"
                                        : String(agoSecs) + "s";
-
     String leftStr = String(sender) + " (" + agoStr + ")";
-    display->drawString(x, currentY, leftStr); // Left side: who and when
+    display->drawString(x, currentY, leftStr);
+    currentY += rowHeight;
 
-    // === Collect sensor readings as label strings (no icons) ===
+    // look up per-source history for sparklines
+    uint32_t from = packetToShow->from;
+    auto &th = s_tempHist[from];
+    auto &hh = s_humHist[from];
+    auto &ph = s_pressHist[from];
+
+    // Where to draw all graphs (aligned)
+    const int graphX = SCREEN_WIDTH - (kSparkW + 2);
+
+    // Utility: seed a history with the current value so we draw at least a flat line
+    auto seedIfEmpty = [](std::deque<float>& q, float v) {
+        if (q.empty() && !isnan(v)) { q.push_back(v); q.push_back(v); }
+    };
+
+    // === Temperature row (Tmp) ===
+    if (m.has_temperature) {
+        seedIfEmpty(th, m.temperature);
+        String tStr = moduleConfig.telemetry.environment_display_fahrenheit
+                      ? String(UnitConversions::CelsiusToFahrenheit(m.temperature), 1) + "°F"
+                      : String(m.temperature, 1) + "°C";
+        display->drawString(x, currentY, "Tmp: " + tStr);  // abbreviation kept from original code :contentReference[oaicite:1]{index=1}
+        // Box height = roughly rowHeight - 2 so it sits nicely on the text baseline
+        drawMiniSparkBoxed(display, graphX, currentY, kSparkW, rowHeight - 2, th);
+        currentY += rowHeight;
+    }
+
+    // === Humidity row (Hum) ===
+    if (m.has_relative_humidity) {
+        seedIfEmpty(hh, m.relative_humidity);
+        String hStr = String(m.relative_humidity, 0) + "%";
+        display->drawString(x, currentY, "Hum: " + hStr);  // abbreviation kept from original code :contentReference[oaicite:2]{index=2}
+        drawMiniSparkBoxed(display, graphX, currentY, kSparkW, rowHeight - 2, hh);
+        currentY += rowHeight;
+    }
+
+    // === Pressure row (Prss) ===
+    if (m.barometric_pressure != 0) {
+        seedIfEmpty(ph, m.barometric_pressure);
+        String pStr = String(m.barometric_pressure, 0) + " hPa";
+        display->drawString(x, currentY, "Prss: " + pStr); // abbreviation kept from original code :contentReference[oaicite:3]{index=3}
+        drawMiniSparkBoxed(display, graphX, currentY, kSparkW, rowHeight - 2, ph);
+        currentY += rowHeight;
+    }
+
+    // === Collect the REST of sensor readings as before (no icons) ===
     std::vector<String> entries;
 
-    if (m.has_temperature) {
-        String tempStr = moduleConfig.telemetry.environment_display_fahrenheit
-                             ? "Tmp: " + String(UnitConversions::CelsiusToFahrenheit(m.temperature), 1) + "°F"
-                             : "Tmp: " + String(m.temperature, 1) + "°C";
-        entries.push_back(tempStr);
-    }
-    if (m.has_relative_humidity)
-        entries.push_back("Hum: " + String(m.relative_humidity, 0) + "%");
-    if (m.barometric_pressure != 0)
-        entries.push_back("Prss: " + String(m.barometric_pressure, 0) + " hPa");
-    if (m.iaq != 0) {
-        String aqi = "IAQ: " + String(m.iaq);
-        const char *bannerMsg = nullptr; // Default: no banner
-
-        if (m.iaq <= 25)
-            aqi += " (Excellent)";
-        else if (m.iaq <= 50)
-            aqi += " (Good)";
-        else if (m.iaq <= 100)
-            aqi += " (Moderate)";
-        else if (m.iaq <= 150)
-            aqi += " (Poor)";
-        else if (m.iaq <= 200) {
-            aqi += " (Unhealthy)";
-            bannerMsg = "Unhealthy IAQ";
-        } else if (m.iaq <= 300) {
-            aqi += " (Very Unhealthy)";
-            bannerMsg = "Very Unhealthy IAQ";
+    // Dew (same as your original, just push as its own entry)
+    if (m.has_temperature && m.has_relative_humidity) {
+      const float dpC = dewPointC(m.temperature, m.relative_humidity); // existing helper
+      if (!isnan(dpC)) {
+        if (moduleConfig.telemetry.environment_display_fahrenheit) {
+          const float dpF = dpC * 9.0f / 5.0f + 32.0f;
+          entries.push_back("Dew: " + String(dpF, 1) + " °F");
         } else {
-            aqi += " (Hazardous)";
-            bannerMsg = "Hazardous IAQ";
+          entries.push_back("Dew: " + String(dpC, 1) + " °C");
         }
-
-        entries.push_back(aqi);
-
-        // === IAQ alert logic ===
-        static uint32_t lastAlertTime = 0;
-        uint32_t now = millis();
-
-        bool isOwnTelemetry = lastMeasurementPacket->from == nodeDB->getNodeNum();
-        bool isCooldownOver = (now - lastAlertTime > 60000);
-
-        if (isOwnTelemetry && bannerMsg && isCooldownOver) {
-            LOG_INFO("drawFrame: IAQ %d (own) — showing banner: %s", m.iaq, bannerMsg);
-            screen->showSimpleBanner(bannerMsg, 3000);
-
-            // Only buzz if IAQ is over 200
-            if (m.iaq > 200 && moduleConfig.external_notification.enabled && !externalNotificationModule->getMute()) {
-                playLongBeep();
-            }
-
-            lastAlertTime = now;
-        }
+      }
     }
+
+    // Gas (separate entry, as before)
+    if (m.has_gas_resistance || m.gas_resistance != 0) {
+      entries.push_back("Gas: " + String(m.gas_resistance, 2) + " kOhm");
+    }
+
+    // keep your remaining entries untouched
     if (m.voltage != 0 || m.current != 0)
         entries.push_back(String(m.voltage, 1) + "V / " + String(m.current, 0) + "mA");
-    if (m.lux != 0)
-        entries.push_back("Light: " + String(m.lux, 0) + "lx");
-    if (m.white_lux != 0)
-        entries.push_back("White: " + String(m.white_lux, 0) + "lx");
-    if (m.weight != 0)
-        entries.push_back("Weight: " + String(m.weight, 0) + "kg");
-    if (m.distance != 0)
-        entries.push_back("Level: " + String(m.distance, 0) + "mm");
-    if (m.radiation != 0)
-        entries.push_back("Rad: " + String(m.radiation, 2) + " µR/h");
+    if (m.lux != 0)         entries.push_back("Light: " + String(m.lux, 0) + "lx");
+    if (m.white_lux != 0)   entries.push_back("White: " + String(m.white_lux, 0) + "lx");
+    if (m.weight != 0)      entries.push_back("Weight: " + String(m.weight, 0) + "kg");
+    if (m.distance != 0)    entries.push_back("Level: " + String(m.distance, 0) + "mm");
+    if (m.radiation != 0)   entries.push_back("Rad: " + String(m.radiation, 2) + " µR/h");
 
-    // === Show first available metric on top-right of first line ===
-    if (!entries.empty()) {
-        String valueStr = entries.front();
-        int rightX = SCREEN_WIDTH - display->getStringWidth(valueStr);
-        display->drawString(rightX, currentY, valueStr);
-        entries.erase(entries.begin()); // Remove from queue
-    }
-
-    // === Advance to next line for remaining telemetry entries ===
-    currentY += rowHeight;
+    // Give the right column more space by shifting the split left.
+    // Positive value => wider right column.
+    static constexpr int kSplitShift = 14; // tweak to taste
+    const int splitX   = (SCREEN_WIDTH / 2) - kSplitShift;
+    const int leftMaxW = splitX - x - 2;
 
     // === Draw remaining entries in 2-column format (left and right) ===
     for (size_t i = 0; i < entries.size(); i += 2) {
-        // Left column
-        display->drawString(x, currentY, entries[i]);
-
-        // Right column if it exists
-        if (i + 1 < entries.size()) {
-            int rightX = SCREEN_WIDTH / 2;
-            display->drawString(rightX, currentY, entries[i + 1]);
+        // Left column, truncated to avoid overlapping the right column
+        if (leftMaxW > 10) {
+            display->drawStringMaxWidth(x, currentY, leftMaxW, entries[i]);
+        } else {
+            display->drawString(x, currentY, entries[i]);
         }
 
+        // Right column starts at the new split, so it’s wider
+        if (i + 1 < entries.size()) {
+            display->drawString(splitX, currentY, entries[i + 1]);
+        }
+
+        // keep your existing spacing (no entrySpacing change)
         currentY += rowHeight;
+    }
+
+    // === IAQ gauge (0..500) instead of inline text ===
+    if (m.iaq != 0) {
+        // Build the same label text you used before (keeps your categories)
+        String aqi = "IAQ: " + String(m.iaq);
+        const char *bannerMsg = nullptr;
+        if (m.iaq <= 25) aqi += " (Excellent)";
+        else if (m.iaq <= 50) aqi += " (Good)";
+        else if (m.iaq <= 100) aqi += " (Moderate)";
+        else if (m.iaq <= 150) aqi += " (Poor)";
+        else if (m.iaq <= 200) { aqi += " (Unhealthy)";      bannerMsg = "Unhealthy IAQ"; }
+        else if (m.iaq <= 300) { aqi += " (Very Unhealthy)"; bannerMsg = "Very Unhealthy IAQ"; }
+        else                   { aqi += " (Hazardous)";      bannerMsg = "Hazardous IAQ"; }
+
+        // Full-row gauge at the bottom (monochrome)
+        const int gMargin = 2;
+        const int gX = x;
+        const int gW = SCREEN_WIDTH - gX - gMargin;
+        const int gH = rowHeight + 6;
+
+        // If there's not enough vertical room, nudge it up so it fits
+        if (currentY + gH > SCREEN_HEIGHT) {
+            currentY = SCREEN_HEIGHT - gH;
+            if (currentY < 0) currentY = 0;
+        }
+
+        drawIAQRuler(display, gX, currentY, gW, (int)m.iaq, aqi);
+        currentY += gH;
+
+        // Keep your existing IAQ alert logic (banner/beep) exactly as before:
+        static uint32_t lastAlertTime = 0;
+        static bool inBanner = false;
+        uint32_t now = millis();
+        bool isCooldownOver = (now - lastAlertTime > 60000);
+        bool isOwnTelemetry = lastMeasurementPacket->from == nodeDB->getNodeNum();
+        if (!inBanner && isOwnTelemetry && bannerMsg && isCooldownOver) {
+            inBanner = true; lastAlertTime = now;
+            screen->showSimpleBanner(bannerMsg, 3000);
+            if (m.iaq > 200 && moduleConfig.external_notification.enabled && !externalNotificationModule->getMute())
+                playLongBeep();
+            inBanner = false;
+        }
     }
 }
 
@@ -539,6 +767,19 @@ bool EnvironmentTelemetryModule::handleReceivedProtobuf(const meshtastic_MeshPac
             packetPool.release(lastMeasurementPacket);
 
         lastMeasurementPacket = packetPool.allocCopy(mp);
+        
+                // NEW: track per-source
+        uint32_t from = mp.from;            // (sender nodenum)
+        auto it = lastBySource.find(from);
+        if (it != lastBySource.end() && it->second) {
+            packetPool.release(it->second);
+        }
+        lastBySource[from] = packetPool.allocCopy(mp);
+        // record per-source history for tiny graphs
+        const auto &em = t->variant.environment_metrics;
+        if (em.has_temperature)       pushHist(s_tempHist[from],  em.temperature);
+        if (em.has_relative_humidity) pushHist(s_humHist[from],   em.relative_humidity);
+        if (em.barometric_pressure)   pushHist(s_pressHist[from], em.barometric_pressure);
     }
 
     return false; // Let others look at this message also if they want
@@ -646,6 +887,17 @@ bool EnvironmentTelemetryModule::sendTelemetry(NodeNum dest, bool phoneOnly)
             packetPool.release(lastMeasurementPacket);
 
         lastMeasurementPacket = packetPool.allocCopy(*p);
+        uint32_t self = nodeDB->getNodeNum();
+        auto it = lastBySource.find(self);
+        if (it != lastBySource.end() && it->second) {
+            packetPool.release(it->second);
+        }
+        lastBySource[self] = packetPool.allocCopy(*p);
+        const auto &em = m.variant.environment_metrics;
+        if (em.has_temperature)       pushHist(s_tempHist[self],  em.temperature);
+        if (em.has_relative_humidity) pushHist(s_humHist[self],   em.relative_humidity);
+        if (em.barometric_pressure)   pushHist(s_pressHist[self], em.barometric_pressure);
+        
         if (phoneOnly) {
             LOG_INFO("Send packet to phone");
             service->sendToPhone(p);

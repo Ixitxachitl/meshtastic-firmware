@@ -3,6 +3,8 @@
 #include <OLEDDisplay.h>
 #include <string>
 
+extern OLEDDisplay *display;
+
 namespace graphics
 {
 
@@ -60,4 +62,9 @@ bool isAllowedPunctuation(char c);
 
 std::string sanitizeString(const std::string &input);
 
+bool isMessagesScreenActive();
+
+// Centralized overlay state (menus, pickers, banners)
+void setOverlayActive(bool active);
+bool isOverlayActive();
 } // namespace graphics
