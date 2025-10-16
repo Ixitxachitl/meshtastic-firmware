@@ -23,6 +23,8 @@
 #include <math.h>
 #include <deque>
 #include <map>
+#include <unordered_map>
+#include <cmath>
 #include <algorithm>
 
 OLEDDisplay *display = nullptr;
@@ -84,57 +86,93 @@ static void drawIAQRuler(OLEDDisplay* dpy, int x, int y, int w, int iaqValue, co
     const int nx = valToX(iaq);
     for (int dy = 0; dy <= kNeedleH; ++dy) {
         int half = (int)std::lround((float)kNeedleBaseHalf * ((float)dy / (float)kNeedleH));
-        int yrow = baselineY + dy;                 // rows below baseline
+        int yrow = baselineY + dy - 1;                 // rows below baseline
         dpy->drawLine(nx - half, yrow, nx + half, yrow);
     }
 
     // centered label snug under the triangle base
     const int lw = dpy->getStringWidth(label);
     const int lx = x + (w - lw) / 2;
-    dpy->drawString(lx, baselineY + kNeedleH + kLabelGap, label);
+    dpy->drawString(lx, baselineY + kNeedleH - 1 + kLabelGap, label);
 }
 
 // keep last N samples per source
 static constexpr int    kSparkW  = 120;         // pixels wide
 static constexpr int    kSparkH  = 10;         // pixels tall
-static constexpr size_t kHistLen = size_t(kSparkW);         // ~ last 24 updates
+static constexpr size_t kHistLen = size_t(kSparkW); // kept for clarity; equals spark width
 
-static std::map<uint32_t, std::deque<float>> s_tempHist;
-static std::map<uint32_t, std::deque<float>> s_humHist;
-static std::map<uint32_t, std::deque<float>> s_pressHist;
+// Fixed-capacity ring buffer (oldest→newest iteration)
+template <size_t N>
+struct RingF {
+    uint16_t len  = 0;   // 0..N
+    uint16_t head = 0;   // index of oldest element
+    float    v[N];
+    inline void push(float x) {
+        if (std::isnan(x)) return;
+        if (len < N) {
+            v[(head + len) % N] = x;
+            ++len;
+        } else {
+            v[head] = x;
+            head = (head + 1) % N;
+        }
+    }
+    inline float at(size_t i) const { return v[(head + i) % N]; } // 0..len-1
+};
 
-static void pushHist(std::deque<float> &q, float v) {
-    if (std::isnan(v)) return;
-    if (q.size() >= kHistLen) q.pop_front();
-    q.push_back(v);
-}
+template <size_t N>
+struct NodeHist {
+    RingF<N> temp, hum, press;
+};
+
+// One record per node; no per-sample heap churn
+static std::unordered_map<uint32_t, NodeHist<kSparkW>> s_hist;
+// (Optional) pre-size if you have a typical node count:
+// static bool s_histReserved = (s_hist.reserve(64), true);
 
 // Boxed + aligned tiny sparkline (fits in a defined box)
 static constexpr int kSparkYOffset = 1;
 static constexpr int kSparkXOffset = -4;  // move 4px left
 
 // Helper: apply both offsets centrally
+// Overload for fixed-capacity ring
+template <size_t N>
 static void drawMiniSparkBoxed(OLEDDisplay *dpy, int x, int y, int w, int h,
-                               const std::deque<float> &hist) {
+                               const RingF<N> &hist) {
     const int x0 = x + kSparkXOffset;   // << left shift
     const int y0 = y + kSparkYOffset;   // you already added this
 
     dpy->drawRect(x0, y0, w, h);
 
-    if (hist.size() < 2) return;
+    if (hist.len < 2) return;
 
-    auto mm = std::minmax_element(hist.begin(), hist.end());
-    float lo = *mm.first, hi = *mm.second, span = hi - lo;
-    if (span < 1e-6f) span = 1.0f;
+    // Find min/max
+    float lo = hist.at(0), hi = hist.at(0);
+    for (uint16_t i = 1; i < hist.len; ++i) {
+        float v = hist.at(i);
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+    }
+    float span = hi - lo;
+    if (span < 1e-6f) {
+      // Center a flat line instead of pinning to bottom
+      lo -= 0.5f;
+      hi += 0.5f;
+      span = hi - lo;   // now 1.0f
+    }
 
     const int ix = x0 + 1, iy = y0 + 1, iw = w - 2, ih = h - 2;
-    const float step = float(iw) / float(hist.size() - 1);
+    const int midY = iy + ih / 2;
+    const float step = float(iw) / float(hist.len - 1);
 
-    for (size_t i = 1; i < hist.size(); ++i) {
-        int x1 = ix + int(std::lround(step * (i - 1)));
-        int x2 = ix + int(std::lround(step * i));
-        int y1 = iy + ih - int(std::lround(((hist[i - 1] - lo) / span) * ih));
-        int y2 = iy + ih - int(std::lround(((hist[i]     - lo) / span) * ih));
+    for (uint16_t i = 1; i < hist.len; ++i) {
+        const int x1 = ix + int(std::lround(step * (i - 1)));
+        const int x2 = ix + int(std::lround(step * i));
+        // Special case the first segment so it starts from center
+        const int y1 = (i == 1)
+                       ? midY
+                       : (iy + ih - int(std::lround(((hist.at(i - 1) - lo) / span) * ih)));
+        const int y2 =  iy + ih - int(std::lround(((hist.at(i)     - lo) / span) * ih));
         dpy->drawLine(x1, y1, x2, y2);
     }
 }
@@ -597,47 +635,37 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     display->drawString(x, currentY, leftStr);
     currentY += rowHeight;
 
-    // look up per-source history for sparklines
+    // look up per-source history for sparklines (fixed-capacity rings)
     uint32_t from = packetToShow->from;
-    auto &th = s_tempHist[from];
-    auto &hh = s_humHist[from];
-    auto &ph = s_pressHist[from];
+    auto &nh = s_hist[from]; // default-constructs empty rings for new nodes
 
     // Where to draw all graphs (aligned)
     const int graphX = SCREEN_WIDTH - (kSparkW + 2);
 
-    // Utility: seed a history with the current value so we draw at least a flat line
-    auto seedIfEmpty = [](std::deque<float>& q, float v) {
-        if (q.empty() && !isnan(v)) { q.push_back(v); q.push_back(v); }
-    };
-
     // === Temperature row (Tmp) ===
     if (m.has_temperature) {
-        seedIfEmpty(th, m.temperature);
         String tStr = moduleConfig.telemetry.environment_display_fahrenheit
                       ? String(UnitConversions::CelsiusToFahrenheit(m.temperature), 1) + "°F"
                       : String(m.temperature, 1) + "°C";
         display->drawString(x, currentY, "Tmp: " + tStr);  // abbreviation kept from original code :contentReference[oaicite:1]{index=1}
         // Box height = roughly rowHeight - 2 so it sits nicely on the text baseline
-        drawMiniSparkBoxed(display, graphX, currentY, kSparkW, rowHeight - 2, th);
+        drawMiniSparkBoxed(display, graphX, currentY, kSparkW, rowHeight - 2, nh.temp);
         currentY += rowHeight;
     }
 
     // === Humidity row (Hum) ===
     if (m.has_relative_humidity) {
-        seedIfEmpty(hh, m.relative_humidity);
         String hStr = String(m.relative_humidity, 0) + "%";
         display->drawString(x, currentY, "Hum: " + hStr);  // abbreviation kept from original code :contentReference[oaicite:2]{index=2}
-        drawMiniSparkBoxed(display, graphX, currentY, kSparkW, rowHeight - 2, hh);
+        drawMiniSparkBoxed(display, graphX, currentY, kSparkW, rowHeight - 2, nh.hum);
         currentY += rowHeight;
     }
 
     // === Pressure row (Prss) ===
     if (m.barometric_pressure != 0) {
-        seedIfEmpty(ph, m.barometric_pressure);
         String pStr = String(m.barometric_pressure, 0) + " hPa";
         display->drawString(x, currentY, "Prss: " + pStr); // abbreviation kept from original code :contentReference[oaicite:3]{index=3}
-        drawMiniSparkBoxed(display, graphX, currentY, kSparkW, rowHeight - 2, ph);
+        drawMiniSparkBoxed(display, graphX, currentY, kSparkW, rowHeight - 2, nh.press);
         currentY += rowHeight;
     }
 
@@ -777,9 +805,10 @@ bool EnvironmentTelemetryModule::handleReceivedProtobuf(const meshtastic_MeshPac
         lastBySource[from] = packetPool.allocCopy(mp);
         // record per-source history for tiny graphs
         const auto &em = t->variant.environment_metrics;
-        if (em.has_temperature)       pushHist(s_tempHist[from],  em.temperature);
-        if (em.has_relative_humidity) pushHist(s_humHist[from],   em.relative_humidity);
-        if (em.barometric_pressure)   pushHist(s_pressHist[from], em.barometric_pressure);
+        auto &nh2 = s_hist[from];
+        if (em.has_temperature)       nh2.temp.push(em.temperature);
+        if (em.has_relative_humidity) nh2.hum.push(em.relative_humidity);
+        if (em.barometric_pressure)   nh2.press.push(em.barometric_pressure);
     }
 
     return false; // Let others look at this message also if they want
@@ -894,9 +923,10 @@ bool EnvironmentTelemetryModule::sendTelemetry(NodeNum dest, bool phoneOnly)
         }
         lastBySource[self] = packetPool.allocCopy(*p);
         const auto &em = m.variant.environment_metrics;
-        if (em.has_temperature)       pushHist(s_tempHist[self],  em.temperature);
-        if (em.has_relative_humidity) pushHist(s_humHist[self],   em.relative_humidity);
-        if (em.barometric_pressure)   pushHist(s_pressHist[self], em.barometric_pressure);
+        auto &selfHist = s_hist[self];
+        if (em.has_temperature)       selfHist.temp.push(em.temperature);
+        if (em.has_relative_humidity) selfHist.hum.push(em.relative_humidity);
+        if (em.barometric_pressure)   selfHist.press.push(em.barometric_pressure);
         
         if (phoneOnly) {
             LOG_INFO("Send packet to phone");

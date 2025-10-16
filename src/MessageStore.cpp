@@ -258,9 +258,8 @@ void MessageStore::saveToFlash()
 
 void MessageStore::loadFromFlash()
 {
-    // Reset RAM state
     std::deque<StoredMessage>().swap(liveMessages);
-    resetMessagePool();
+    resetMessagePool(); // reset pool when loading
 
 #ifdef FSCom
     concurrency::LockGuard guard(spiLock);
@@ -273,18 +272,15 @@ void MessageStore::loadFromFlash()
         return;
 
     uint8_t count = 0;
-    if (f.readBytes(reinterpret_cast<char *>(&count), 1) != 1) {
-        f.close();
-        return;
-    }
+    f.readBytes(reinterpret_cast<char *>(&count), 1);
     if (count > MAX_MESSAGES_SAVED)
         count = MAX_MESSAGES_SAVED;
 
     for (uint8_t i = 0; i < count; ++i) {
         StoredMessage m;
         if (!readMessageRecord(f, m))
-            break;                    // truncated/corrupt file: stop cleanly
-        liveMessages.push_back(m);     // only push to liveMessages
+            break;
+        liveMessages.push_back(m);
     }
 
     f.close();

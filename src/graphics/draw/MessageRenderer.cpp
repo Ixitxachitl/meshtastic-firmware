@@ -15,7 +15,6 @@
 #include "graphics/emotes.h"
 #include "main.h"
 #include "meshUtils.h"
-#include "buzz/buzz.h"
 #include <string>
 #include <vector>
 
@@ -72,31 +71,6 @@ std::string normalizeEmoji(const std::string &s)
         i += len;
     }
     return out;
-}
-  
-// Prefer long_name when width allows (or short on some targets), else hex node id.
-static inline const char* bestNodeName(uint32_t nodeId, int screenW) {
-    static char buf[16]; // "FFFFFFFF\0"
-    const meshtastic_NodeInfoLite* node = nodeDB->getMeshNode(nodeId);
-    if (node && node->has_user) {
-        const char* ln = node->user.long_name;
-        const char* sn = node->user.short_name;
-    #if defined(M5STACK_UNITC6L)
-        // UnitC6L special-case: short first
-        if (sn && sn[0]) return sn;
-        if (ln && ln[0]) return ln;
-    #else
-        if (screenW >= 200) {            // <-- keep the 200px guard
-            if (ln && ln[0]) return ln;
-            if (sn && sn[0]) return sn;
-        } else {
-            if (sn && sn[0]) return sn;
-            if (ln && ln[0]) return ln;
-        }
-    #endif
-    }
-    snprintf(buf, sizeof(buf), "%08x", (unsigned)nodeId);
-    return buf;
 }
 
 void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string &line, const Emote *emotes, int emoteCount)
@@ -224,12 +198,10 @@ uint32_t scrollStartDelay = 0;
 uint32_t pauseStart = 0;
 bool waitingToReset = false;
 bool scrollStarted = false;
-static bool didReset = false; // <-- add here
-static bool manualScrollActive = false; // when true, auto-scroll is paused:contentReference[oaicite:2]{index=2}
+static bool manualScrollActive = false; // manual override pauses auto-scroll
 static uint32_t lastManualMs = 0;
-static constexpr uint32_t MANUAL_SCROLL_TIMEOUT_MS = 5000;
-// Cache the last computed usable scroll height from drawTextMessageFrame()
 static int lastUsableScrollHeight = 0;
+static bool didReset = false; // <-- add here
 
 // Reset scroll state when new messages arrive
 void resetScrollState()
@@ -238,7 +210,9 @@ void resetScrollState()
     scrollStarted = false;
     waitingToReset = false;
     scrollStartDelay = millis();
+    manualScrollActive = false;
     lastTime = millis();
+
     didReset = false;
 }
 
@@ -248,9 +222,13 @@ void clearMessageCache()
     std::vector<std::string>().swap(cachedLines);
     std::vector<int>().swap(cachedHeights);
 
+    // Pre-reserve typical capacities to avoid repeat heap churn on rebuilds.
+    // Tune these to your screen height / expected line counts.
+    if (cachedLines.capacity() < 256)   cachedLines.reserve(256);
+    if (cachedHeights.capacity() < 256) cachedHeights.reserve(256);
+
     // Reset scroll so we rebuild cleanly next time we enter the screen
     resetScrollState();
-    manualScrollActive = false; // clear manual override on new content/thread
 }
 
 // Current thread state
@@ -388,33 +366,6 @@ static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &
 
 void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-    if (!display) return; 
-    const int screenW = display->getWidth();
-    const int screenH = display->getHeight();
-    // Freeze any background motion while a menu/banner is visible.
-    if (graphics::isOverlayActive()) {
-        // Don’t advance scroll timers; render the current static frame.
-        lastTime = millis();
-    }
-
-    if (manualScrollActive && (millis() - lastManualMs) < 200) {
-        // Ensure the very next frame uses the new scrollY without startup delays.
-        scrollStarted    = true;
-        scrollStartDelay = millis();
-        waitingToReset   = false;
-        pauseStart       = 0;
-        // lastTime is already refreshed above when overlay is active; refresh here too:
-        lastTime = millis();
-    }
-
-    // If user hasn’t touched the keys recently, allow auto-scroll to resume.
-    // Do NOT count overlay time as "idle".
-    if (!graphics::isOverlayActive() &&
-        manualScrollActive &&
-        (millis() - lastManualMs) > MANUAL_SCROLL_TIMEOUT_MS) {
-        manualScrollActive = false;
-    }
-
     // Ensure any boot-relative timestamps are upgraded if RTC is valid
     messageStore.upgradeBootRelativeTimestamps();
 
@@ -454,7 +405,6 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     const int scrollBottom = SCREEN_HEIGHT - navHeight;
     const int usableHeight = scrollBottom;
     const int textWidth = SCREEN_WIDTH;
-#endif
 
     // Title string depending on mode
     static char titleBuf[32];
@@ -475,11 +425,10 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     }
     case ThreadMode::DIRECT: {
         meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(currentPeer);
-        const char *sn = (node && node->has_user) ? node->user.short_name : nullptr;
-        if (sn && sn[0]) {
-            snprintf(titleBuf, sizeof(titleBuf), "DM: %s", sn);
+        if (node && node->has_user) {
+            snprintf(titleBuf, sizeof(titleBuf), "@%s", node->user.short_name);
         } else {
-            snprintf(titleBuf, sizeof(titleBuf), "DM: %08x", currentPeer);
+            snprintf(titleBuf, sizeof(titleBuf), "@%08x", currentPeer);
         }
         titleStr = titleBuf;
         break;
@@ -498,7 +447,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         graphics::drawCommonHeader(display, x, y, titleStr);
         didReset = false;
         const char *messageString = "No messages";
-        int center_text = (screenW / 2) - (display->getStringWidth(messageString) / 2);
+        int center_text = (SCREEN_WIDTH / 2) - (display->getStringWidth(messageString) / 2);
         display->drawString(center_text, getTextPositions(display)[2], messageString);
         return;
     }
@@ -512,7 +461,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     for (auto it = filtered.begin(); it != filtered.end(); ++it) {
         const auto &m = *it;
 
-        // Channel / destination label only in ALL mode
+        // Channel / destination labeling
         char chanType[32] = "";
         if (currentMode == ThreadMode::ALL) {
             if (m.dest == NODENUM_BROADCAST) {
@@ -522,30 +471,33 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             }
         }
 
-        // Time delta (no “ago”)
+        // Calculate how long ago
         uint32_t nowSecs = getValidTime(RTCQuality::RTCQualityDevice, true);
         uint32_t seconds = 0;
         bool invalidTime = true;
+
         if (m.timestamp > 0 && nowSecs > 0) {
             if (nowSecs >= m.timestamp) {
                 seconds = nowSecs - m.timestamp;
                 invalidTime = (seconds > 315360000); // >10 years
             } else {
                 uint32_t ahead = m.timestamp - nowSecs;
-                if (ahead <= 600) {
+                if (ahead <= 600) { // allow small skew
                     seconds = 0;
                     invalidTime = false;
                 }
             }
         } else if (m.timestamp > 0 && nowSecs == 0) {
+            // RTC not valid: only trust boot-relative if same boot
             uint32_t bootNow = millis() / 1000;
             if (m.isBootRelative && m.timestamp <= bootNow) {
                 seconds = bootNow - m.timestamp;
                 invalidTime = false;
             } else {
-                invalidTime = true;
+                invalidTime = true; // old persisted boot-relative, ignore until healed
             }
         }
+
         char timeBuf[16];
         if (invalidTime) {
             snprintf(timeBuf, sizeof(timeBuf), "???");
@@ -567,11 +519,8 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             strncpy(senderBuf, node->user.long_name, sizeof(senderBuf) - 1);
             senderBuf[sizeof(senderBuf) - 1] = '\0';
         }
-        // --- Sender (null-safe; prefers name, falls back to hex id) ---
-        const char* senderC = bestNodeName(m.sender, screenW);
-        std::string senderStrSafe = senderC;
 
-        // If this is our own message, override sender to "Me"
+        // If this is *our own* message, override sender to "Me"
         bool mine = (m.sender == nodeDB->getNodeNum());
         if (mine) {
             strcpy(senderBuf, "Me");
@@ -591,45 +540,17 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         if (display->getStringWidth(senderBuf) > availWidth && strlen(senderBuf) >= 3) {
             size_t len = strlen(senderBuf);
             strcpy(&senderBuf[len - 3], "...");
-            senderStrSafe = "Me";
         }
 
-        // --- Pixel-width truncation so header fits on one line ---
-        senderC = senderStrSafe.c_str();
-        int required =  display->getStringWidth(senderC)
-                      + display->getStringWidth(" @")
-                      + display->getStringWidth(timeBuf)
-                      + display->getStringWidth(chanType)
-                      + display->getStringWidth("... ")
-                      - 10; // small slack
-
-        if (required > SCREEN_WIDTH) {
-            int availWidth = SCREEN_WIDTH
-                           - display->getStringWidth(" @")
-                           - display->getStringWidth(timeBuf)
-                           - display->getStringWidth(chanType)
-                           - display->getStringWidth("... ")
-                           - 10;
-
-            // If your display API doesn't have getStringWidth(char*,len), fall back to shrinking string
-            int len = static_cast<int>(senderStrSafe.size());
-            while (len > 0 && display->getStringWidth(senderStrSafe.substr(0, len).c_str()) > availWidth) {
-                --len;
-            }
-            if (len < static_cast<int>(senderStrSafe.size())) {
-                senderStrSafe = senderStrSafe.substr(0, std::max(0, len)) + "...";
-                senderC = senderStrSafe.c_str();
-            }
-        }
-
-        // --- Final header line ---
+        // Final header line
         char headerStr[96];
         if (mine) {
             snprintf(headerStr, sizeof(headerStr), "%s %s", timeBuf, chanType);
         } else {
-            snprintf(headerStr, sizeof(headerStr), "%s @%s %s", timeBuf, senderC, chanType);
+            snprintf(headerStr, sizeof(headerStr), "%s @%s %s", timeBuf, sender, chanType);
         }
 
+        // Push header line
         allLines.push_back(std::string(headerStr));
         isMine.push_back(mine);
         isHeader.push_back(true);
@@ -646,143 +567,115 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         }
     }
 
-// Cache lines and heights
-cachedLines = allLines;
-cachedHeights = calculateLineHeights(cachedLines, emotes, isHeader);
+    // Cache lines and heights
+    cachedLines = allLines;
+    cachedHeights = calculateLineHeights(cachedLines, emotes, isHeader);
 
-// Add breathing room under each message header
-int kHeaderExtraLeading = 8;
-for (size_t i = 0; i < cachedHeights.size() && i < isHeader.size(); ++i) {
-    if (isHeader[i]) {
-        cachedHeights[i] += kHeaderExtraLeading;
-    }
-}
-
-// Extra pixel gap AFTER each message body (or header if no body)
-int kAfterBodyExtraPx = 8; 
-for (size_t i = 0; i < cachedHeights.size(); ++i) {
-    bool thisIsHeader = isHeader[i];
-    bool nextIsHeader = (i + 1 >= isHeader.size()) ? true : isHeader[i + 1];
-
-    // A "message end" is the last non-header before next header,
-    // or (if there's no body) the header itself right before next header.
-    bool isEndOfMessageBody =
-        (!thisIsHeader && (i + 1 == isHeader.size() || nextIsHeader));
-
-    bool isHeaderOnlyMessageEnd =
-        (thisIsHeader && (i + 1 == isHeader.size() || nextIsHeader));
-
-    if (isEndOfMessageBody || isHeaderOnlyMessageEnd) {
-        cachedHeights[i] += kAfterBodyExtraPx;
-    }
-}
-
-// --- Reverse auto-scroll logic (from second block), de-duped 'now' ---
-// Total content height
-int totalHeight = 0;
-for (size_t i = 0; i < cachedHeights.size(); ++i)
-    totalHeight += cachedHeights[i];
-
-const int usableScrollHeight = usableHeight;
-
-// One text row pad at the bottom. Use your body text row height here.
-// If you're unsure, FONT_HEIGHT_SMALL is a reasonable choice.
-int kBottomPadPx = FONT_HEIGHT_SMALL;
-
-// Bottom alignment offset *one row above the bottom*.
-// (May be negative when content < viewport — that's fine, it bottom-aligns.)
-const int bottomOffsetOneRow = totalHeight - usableScrollHeight + kBottomPadPx;
-
-// Initial snap: newest message sits one row above bottom
-if (!manualScrollActive && !scrollStarted) {
-    scrollY = bottomOffsetOneRow;
-}
+    // Scrolling logic (reverse auto-scroll + manual override)
+    // Newest-at-bottom is enforced by building lines via filtered.rbegin()->rend()
+    int totalHeight = 0;
+    for (size_t i = 0; i < cachedHeights.size(); ++i)
+        totalHeight += cachedHeights[i];
+        int usableScrollHeight = usableHeight;
 
 #ifndef USE_EINK
-uint32_t now = millis();
-float delta = (now - lastTime) / 400.0f;
-lastTime = now;
-const float scrollSpeed = 2.0f;
+    uint32_t now = millis();
+    float delta = (now - lastTime) / 400.0f;
+    lastTime = now;
+    const float scrollSpeed = 2.0f;
 
-if (scrollStartDelay == 0) scrollStartDelay = now;
-if (!scrollStarted && now - scrollStartDelay > 2000) scrollStarted = true;
+    if (scrollStartDelay == 0)
+        scrollStartDelay = now;
+    if (!scrollStarted && now - scrollStartDelay > 2000)
+        scrollStarted = true;
 
-#if defined(M5STACK_UNITC6L)
-lastUsableScrollHeight = windowHeight;
-#else
-lastUsableScrollHeight = usableHeight;
-#endif
+    // remember last usable height for manual scroll math
+    lastUsableScrollHeight = usableScrollHeight;
 
-if (!graphics::isOverlayActive() && totalHeight > usableScrollHeight) {
-    if (!manualScrollActive && scrollStarted) {
-        if (!waitingToReset) {
-            scrollY -= delta * scrollSpeed;
-            if (scrollY <= 0) {
-                scrollY = 0;
-                waitingToReset = true;
-                pauseStart = lastTime;
-            }
-        } else if (lastTime - pauseStart > 3000) {
-            // When jumping back to bottom, keep the 1-row pad
-            scrollY = bottomOffsetOneRow;
-            waitingToReset = false;
-            scrollStarted = false;
-            scrollStartDelay = lastTime;
-        }
+    // bottom alignment (one text row above bottom)
+    int kBottomPadPx = FONT_HEIGHT_SMALL;
+    int bottomOffsetOneRow = totalHeight - usableScrollHeight + kBottomPadPx;
+    if (bottomOffsetOneRow < 0) bottomOffsetOneRow = 0; // guard small lists
+
+    // snap to bottom pad when first entering (unless user is manually scrolling)
+    if (!manualScrollActive && !scrollStarted) {
+        scrollY = bottomOffsetOneRow;
     }
-} else {
-    // Content fits: still bottom-align with the 1-row pad
-    scrollY = bottomOffsetOneRow;
-}
-#else
-scrollY = 0.0f;
-waitingToReset = false;
-scrollStarted = false;
-lastTime = millis();
-#endif
 
-int scrollOffset = static_cast<int>(scrollY);
-int yOffset = -scrollOffset + getTextPositions(display)[1];
-
-// Render visible lines (kept rendering semantics; use first-block alignment for mine)
-for (size_t i = 0; i < cachedLines.size(); ++i) {
-    int lineY = yOffset;
-    for (size_t j = 0; j < i; ++j)
-        lineY += cachedHeights[j];
-
-    const int bottomClip = scrollBottom + FONT_HEIGHT_SMALL;
-
-    if ((lineY + cachedHeights[i]) > 0 && lineY < bottomClip) {
-        if (isHeader[i]) {
-            // Render header
-            int w = display->getStringWidth(cachedLines[i].c_str());
-            int headerX = isMine[i] ? (screenW - w - 2) : x;
-            display->drawString(headerX, lineY, cachedLines[i].c_str());
-
-            // Draw ACK/NACK mark for our own messages
-            if (isMine[i]) {
-                int markX = headerX - 10;
-                int markY = lineY;
-                if (ackForLine[i] == AckStatus::ACKED) {
-                    drawCheckMark(display, markX, markY, 8);
-                } else if (ackForLine[i] == AckStatus::NACKED || ackForLine[i] == AckStatus::TIMEOUT) {
-                    drawXMark(display, markX, markY, 8);
-                } else if (ackForLine[i] == AckStatus::RELAYED) {
-                    drawRelayMark(display, markX, markY, 8);
+    if (totalHeight > usableScrollHeight) {
+        // freeze autoscroll briefly after manual input
+        if (manualScrollActive && (now - lastManualMs) < 200) {
+            lastTime = now; // keep timebase fresh
+        } else {
+            if (manualScrollActive) manualScrollActive = false;
+            if (scrollStarted) {
+                if (!waitingToReset) {
+                    // reverse (bottom->top) sweep
+                    scrollY -= delta * scrollSpeed;
+                    if (scrollY <= 0) {
+                        scrollY = 0;
+                        waitingToReset = true;
+                        pauseStart = lastTime;
+                    }
+                } else if (lastTime - pauseStart > 3000) {
+                    // jump back near bottom and restart
+                    scrollY = bottomOffsetOneRow;
+                    waitingToReset = false;
+                    scrollStarted = false;
+                    scrollStartDelay = lastTime;
                 }
             }
+        }
+    } else {
+        // content fits: bottom-align with one-row pad
+        scrollY = bottomOffsetOneRow;
+    }
+#else
+    // E-Ink: disable autoscroll
+    scrollY = 0.0f;
+    waitingToReset = false;
+    scrollStarted = false;
+    lastTime = millis(); // keep timebase sane
+#endif
 
-            // Draw underline just under header text
-            int underlineY = lineY + FONT_HEIGHT_SMALL + 1;
-            if (underlineY >= 0 && underlineY < bottomClip) {
-                for (int px = 0; px < w; ++px) display->setPixel(headerX + px, underlineY);
-            }
-        } else {
-            // Render message line
-            if (isMine[i]) {
-                display->setTextAlignment(TEXT_ALIGN_RIGHT);
-                drawStringWithEmotes(display, screenW, lineY, cachedLines[i], emotes, numEmotes);
-                display->setTextAlignment(TEXT_ALIGN_LEFT);
+    int scrollOffset = static_cast<int>(scrollY);
+    int yOffset = -scrollOffset + getTextPositions(display)[1];
+
+    // Render visible lines
+    for (size_t i = 0; i < cachedLines.size(); ++i) {
+        int lineY = yOffset;
+        for (size_t j = 0; j < i; ++j)
+            lineY += cachedHeights[j];
+
+        if (lineY > -cachedHeights[i] && lineY < scrollBottom) {
+            if (isHeader[i]) {
+                // Render header
+                int w = display->getStringWidth(cachedLines[i].c_str());
+                int headerX = isMine[i] ? (SCREEN_WIDTH - w - 2) : x;
+                display->drawString(headerX, lineY, cachedLines[i].c_str());
+
+                // Draw ACK/NACK mark for our own messages
+                if (isMine[i]) {
+                    int markX = headerX - 10;
+                    int markY = lineY;
+                    if (ackForLine[i] == AckStatus::ACKED) {
+                        // Destination ACK
+                        drawCheckMark(display, markX, markY, 8);
+                    } else if (ackForLine[i] == AckStatus::NACKED || ackForLine[i] == AckStatus::TIMEOUT) {
+                        // Failure or timeout
+                        drawXMark(display, markX, markY, 8);
+                    } else if (ackForLine[i] == AckStatus::RELAYED) {
+                        // Relay ACK
+                        drawRelayMark(display, markX, markY, 8);
+                    }
+                    // AckStatus::NONE → show nothing
+                }
+
+                // Draw underline just under header text
+                int underlineY = lineY + FONT_HEIGHT_SMALL;
+                for (int px = 0; px < w; ++px) {
+                    display->setPixel(headerX + px, underlineY);
+                }
             } else {
                 // Render message line
                 if (isMine[i]) {
@@ -796,8 +689,8 @@ for (size_t i = 0; i < cachedLines.size(); ++i) {
             }
         }
     }
-}
-graphics::drawCommonHeader(display, x, y, titleStr);
+
+    graphics::drawCommonHeader(display, x, y, titleStr);
 }
 
 std::vector<std::string> generateLines(OLEDDisplay *display, const char *headerStr, const char *messageBuf, int textWidth)
@@ -931,8 +824,7 @@ void renderMessageContent(OLEDDisplay *display, const std::vector<std::string> &
         int lineY = yOffset;
         for (size_t j = 0; j < i; ++j)
             lineY += rowHeights[j];
-        const int bottomClip = scrollBottom + FONT_HEIGHT_SMALL;
-        if (lineY > -rowHeights[i] && lineY < bottomClip) {
+        if (lineY > -rowHeights[i] && lineY < scrollBottom) {
             if (i == 0 && isInverted) {
                 display->drawString(x, lineY, lines[i].c_str());
                 if (isBold)
@@ -996,7 +888,7 @@ void handleNewMessage(const StoredMessage &sm, const meshtastic_MeshPacket &pack
                 strcpy(banner, "New Message");
         }
 
-        // Append context (which channel or DM)
+        // Append context (which channel or DM) so the banner shows where the message arrived
         {
             char contextBuf[64] = "";
             if (sm.type == MessageType::BROADCAST) {
@@ -1006,7 +898,14 @@ void handleNewMessage(const StoredMessage &sm, const meshtastic_MeshPacket &pack
                 else
                     snprintf(contextBuf, sizeof(contextBuf), "in Ch%d", sm.channelIndex);
             } else if (sm.type == MessageType::DM_TO_US) {
-                // (Intentionally omitted extra DM labeling to keep banner short)
+                /* Commenting out to better understand if we need this info in the banner
+                uint32_t peer = (packet.from == 0) ? sm.dest : sm.sender;
+                const meshtastic_NodeInfoLite *peerNode = nodeDB->getMeshNode(peer);
+                if (peerNode && peerNode->has_user && peerNode->user.short_name)
+                    snprintf(contextBuf, sizeof(contextBuf), "Direct: @%s", peerNode->user.short_name);
+                else
+                    snprintf(contextBuf, sizeof(contextBuf), "Direct Message");
+                */
             }
 
             if (contextBuf[0]) {
@@ -1022,30 +921,24 @@ void handleNewMessage(const StoredMessage &sm, const meshtastic_MeshPacket &pack
             }
         }
 
-        const bool inThreadView = (getThreadMode() != ThreadMode::ALL);
+        // Shorter banner if already in a conversation (Channel or Direct)
+        bool inThread = (getThreadMode() != ThreadMode::ALL);
+
         if (shouldWakeOnReceivedMessage()) {
             screen->setOn(true);
         }
-        screen->showSimpleBanner(banner, inThreadView ? 1000 : 3000);
+
+        screen->showSimpleBanner(banner, inThread ? 1000 : 3000);
     }
 
-    // NEW BEHAVIOR:
-    // Do NOT auto-switch threads. Only reset scroll if the new message belongs to the thread we are already viewing.
-    const bool isSameChannel =
-        (getThreadMode() == ThreadMode::CHANNEL) &&
-        (sm.type == MessageType::BROADCAST) &&
-        (getThreadChannel() == (int)sm.channelIndex);
-
-    const bool isSameDM =
-        (getThreadMode() == ThreadMode::DIRECT) &&
-        (sm.type == MessageType::DM_TO_US) &&
-        (getThreadPeer() != 0) &&
-        (getThreadPeer() == sm.sender || getThreadPeer() == sm.dest);
-
-    if (isSameChannel || isSameDM) {
-        resetScrollState(); // clean refresh only for the open conversation
+    // Always focus into the correct conversation thread when a message with real text arrives
+    const char *msgText = MessageStore::getText(sm);
+    if (msgText && msgText[0] != '\0') {
+        setThreadFor(sm, packet);
     }
-    // If we’re in ALL view or a different thread, we leave the UI where it is.
+
+    // Reset scroll for a clean start
+    resetScrollState();
 }
 
 void setThreadFor(const StoredMessage &sm, const meshtastic_MeshPacket &packet)
@@ -1065,58 +958,35 @@ static int computeMaxScroll()
 {
     int totalHeight = 0;
     for (int h : cachedHeights) totalHeight += h;
-    // Use height computed in drawTextMessageFrame(); if not set yet, fall back
-    int usableScrollHeight = (lastUsableScrollHeight > 0) ? lastUsableScrollHeight
-                                                         : (FONT_HEIGHT_SMALL * 6); // conservative fallback
+    int usableScrollHeight = (lastUsableScrollHeight > 0) ? lastUsableScrollHeight : (FONT_HEIGHT_SMALL * 6);
     if (cachedHeights.empty()) return 0;
-    return std::max(0, totalHeight - usableScrollHeight + cachedHeights.back());
+    // bottom-aligned offset so newest sits one row above bottom
+    int kBottomPadPx = FONT_HEIGHT_SMALL;
+    int bottomOffsetOneRow = totalHeight - usableScrollHeight + kBottomPadPx;
+    return std::max(0, bottomOffsetOneRow);
 }
 
 void scrollUp()
 {
     manualScrollActive = true;
     lastManualMs = millis();
-
-    // NEW: ensure no auto-pause state bleeds into manual inputs
-    waitingToReset = false;
-    pauseStart = 0;
-    scrollStarted = true;        // avoid any auto 'start delay' affecting the next frame
-
-    scrollY -= FONT_HEIGHT_SMALL;   // immediate step
-    if (scrollY < 0) scrollY = 0;   // clamp (no wrap)
-
-    // Keep auto timing fresh so there’s no stall on the next frame
+    waitingToReset = false; pauseStart = 0; scrollStarted = true;
+    scrollY -= FONT_HEIGHT_SMALL;
+    if (scrollY < 0) scrollY = 0;
     lastTime = millis();
-
-    powerFSM.trigger(EVENT_PRESS);
-    screen->forceDisplay(true);
-    playChirp();
 }
 
 void scrollDown()
 {
     manualScrollActive = true;
     lastManualMs = millis();
-
-    // NEW: ensure no auto-pause state bleeds into manual inputs
-    waitingToReset = false;
-    pauseStart = 0;
-    scrollStarted = true;        // avoid any auto 'start delay' affecting the next frame
-
-    scrollY += FONT_HEIGHT_SMALL;   // immediate step
+    waitingToReset = false; pauseStart = 0; scrollStarted = true;
+    scrollY += FONT_HEIGHT_SMALL;
     int maxScroll = computeMaxScroll();
-    if (maxScroll >= 0 && scrollY > maxScroll) {
-        scrollY = maxScroll;        // clamp (no wrap)
-    }
-
-    // Keep auto timing fresh so there’s no stall on the next frame
+    if (scrollY > maxScroll) scrollY = maxScroll;
     lastTime = millis();
-
-    powerFSM.trigger(EVENT_PRESS);
-    screen->forceDisplay(true);
-    playChirp();
 }
-
 
 } // namespace MessageRenderer
 } // namespace graphics
+#endif
