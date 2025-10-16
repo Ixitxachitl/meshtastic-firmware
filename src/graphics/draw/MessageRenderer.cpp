@@ -604,7 +604,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 
     if (totalHeight > usableScrollHeight) {
         // freeze autoscroll briefly after manual input
-        if (manualScrollActive && (now - lastManualMs) < 3000) {
+        if (manualScrollActive && (now - lastManualMs) < 5000) {
             lastTime = now; // keep timebase fresh
         } else {
             if (manualScrollActive) manualScrollActive = false;
@@ -647,7 +647,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         for (size_t j = 0; j < i; ++j)
             lineY += cachedHeights[j];
 
-        if (lineY > -cachedHeights[i] && lineY < scrollBottom) {
+        if (lineY > -cachedHeights[i] && lineY < (scrollBottom + cachedHeights[i])) {
             if (isHeader[i]) {
                 // Render header
                 int w = display->getStringWidth(cachedLines[i].c_str());
@@ -824,7 +824,7 @@ void renderMessageContent(OLEDDisplay *display, const std::vector<std::string> &
         int lineY = yOffset;
         for (size_t j = 0; j < i; ++j)
             lineY += rowHeights[j];
-        if (lineY > -rowHeights[i] && lineY < scrollBottom) {
+        if (lineY > -rowHeights[i] && lineY < (scrollBottom + rowHeights[i])) {
             if (i == 0 && isInverted) {
                 display->drawString(x, lineY, lines[i].c_str());
                 if (isBold)
