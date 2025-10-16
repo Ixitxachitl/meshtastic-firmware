@@ -15,6 +15,7 @@
 #include "graphics/emotes.h"
 #include "main.h"
 #include "meshUtils.h"
+#include "buzz/buzz.h"
 #include <string>
 #include <vector>
 
@@ -603,7 +604,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 
     if (totalHeight > usableScrollHeight) {
         // freeze autoscroll briefly after manual input
-        if (manualScrollActive && (now - lastManualMs) < 200) {
+        if (manualScrollActive && (now - lastManualMs) < 3000) {
             lastTime = now; // keep timebase fresh
         } else {
             if (manualScrollActive) manualScrollActive = false;
@@ -973,6 +974,9 @@ void scrollUp()
     scrollY -= FONT_HEIGHT_SMALL;
     if (scrollY < 0) scrollY = 0;
     lastTime = millis();
+    powerFSM.trigger(EVENT_PRESS);
+    screen->forceDisplay(true);
+    playChirp();
 }
 
 void scrollDown()
@@ -984,6 +988,9 @@ void scrollDown()
     int maxScroll = computeMaxScroll();
     if (scrollY > maxScroll) scrollY = maxScroll;
     lastTime = millis();
+    powerFSM.trigger(EVENT_PRESS);
+    screen->forceDisplay(true);
+    playChirp();
 }
 
 } // namespace MessageRenderer

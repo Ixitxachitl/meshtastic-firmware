@@ -191,6 +191,12 @@ volatile static const char slipstreamTZString[] = {USERPREFS_TZ_STRING};
 // We always create a screen object, but we only init it if we find the hardware
 graphics::Screen *screen = nullptr;
 
+// After boot melody completes, speak "meshtastic" once
+#ifdef HAS_I2S
+enum class BootTTSState : uint8_t { Idle, WaitMelodyStart, WaitMelodyEnd };
+static BootTTSState bootTTS = BootTTSState::Idle;
+#endif
+
 // Global power status
 meshtastic::PowerStatus *powerStatus = new meshtastic::PowerStatus();
 
@@ -828,6 +834,11 @@ void setup()
         LOG_DEBUG("Tracker/Sensor: Skip start melody");
     else
         playStartMelody();
+
+#ifdef HAS_I2S
+    // Arm: wait until we detect the melody actually starts playing
+    bootTTS = BootTTSState::WaitMelodyStart;
+#endif
 
     // fixed screen override?
     if (config.display.oled != meshtastic_Config_DisplayConfig_OledType_OLED_AUTO)
@@ -1675,6 +1686,24 @@ void loop()
                 buzzOnAudioThreadReady();           // starts queued boot RTTTL
                 bootMelodyFlushed = true;
             }
+        }
+    }
+    // Speak "meshtastic" only AFTER we observed the melody start and then end
+    if (audioThread) {
+        switch (bootTTS) {
+            case BootTTSState::WaitMelodyStart:
+                if (audioThread->isPlaying()) {
+                    // Melody has begun; now wait for it to finish
+                    bootTTS = BootTTSState::WaitMelodyEnd;
+                }
+                break;
+            case BootTTSState::WaitMelodyEnd:
+                if (!audioThread->isPlaying()) {
+                    audioThread->readAloud("meshtastic");
+                    bootTTS = BootTTSState::Idle;
+                }
+                break;
+            default: break;
         }
     }
 }
