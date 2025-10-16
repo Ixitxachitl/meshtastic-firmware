@@ -1187,6 +1187,7 @@ void Screen::setFrames(FrameFocus focus)
 
     // Store the info about this frameset, for future setFrames calls
     this->framesetInfo = fsi;
+    graphics::setMessagesFrameIndex(fsi.positions.textMessage);
 
     setFastFramerate(); // Draw ASAP
 }

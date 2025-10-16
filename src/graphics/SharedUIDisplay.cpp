@@ -53,7 +53,13 @@ bool isOverlayActive() { return s_overlayActive; }
 // We only need to know "is this the Messages screen?" for keyboard arrows.
 static volatile bool s_isMessagesScreenActive = false;
 
+static int s_messagesFrameIndex = -1;
+
 bool isMessagesScreenActive() { return s_isMessagesScreenActive; }
+void setMessagesScreenActive(bool active) { s_isMessagesScreenActive = active; }
+
+void setMessagesFrameIndex(int idx) { s_messagesFrameIndex = idx; }
+int  getMessagesFrameIndex()       { return s_messagesFrameIndex; }
 
 
 // === Internal State ===
@@ -84,22 +90,6 @@ void drawRoundedHighlight(OLEDDisplay *display, int16_t x, int16_t y, int16_t w,
 // *************************
 void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *titleStr, bool force_no_invert, bool show_date)
 {
-    // --- Centralize: classify "Messages screen" by its title. ---
-    // MessageRenderer sets titleStr to one of:
-    //   "Messages" (all), "#<channel>" or "Ch%d" (channel), "DM: <name|id>" (direct)
-    // This lets us toggle the flag without touching every renderer.
-    if (titleStr) {
-        const char* t = titleStr;
-        bool isMsg =
-            (strcmp(t, "Messages") == 0) ||
-            (t[0] == '#' /* #channel */) ||
-            (strncmp(t, "Ch", 2) == 0) ||
-            (strncmp(t, "DM:", 3) == 0);
-        s_isMessagesScreenActive = isMsg;
-    } else {
-        s_isMessagesScreenActive = false;
-    }
-
     constexpr int HEADER_OFFSET_Y = 1;
     y += HEADER_OFFSET_Y;
 

@@ -1261,6 +1261,10 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
     if (currentFrame != lastFrameIndex) {
         lastFrameIndex = currentFrame;
         lastFrameChangeTime = millis();
+        
+        // Flip the Messages-active flag based on the active frame index
+        const int msgIdx = graphics::getMessagesFrameIndex();
+        graphics::setMessagesScreenActive(state->currentFrame == msgIdx);
     }
 
     const int iconSize = isHighResolution ? 16 : 8;
