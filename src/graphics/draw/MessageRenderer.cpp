@@ -527,7 +527,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         for (auto it = filtered.begin(); it != filtered.end(); ++it) {
             const auto &m = *it;
 
-            // Channel / destination labeling
+            // Channel / destination labeling (single declaration)
             char chanType[32] = "";
             if (currentMode == ThreadMode::ALL) {
                 if (m.type == MessageType::BROADCAST) {
@@ -540,77 +540,44 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             // We render time live; just reserve a conservative slot width (e.g., "999d")
             const int timeSlotPx = display->getStringWidth("999d");
 
-            // Build header line for this message
-            meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(m.sender);
-  
-            // Sender label (from feat/m5stack-cardputer-adv)
-            char senderBuf[48] = "???";
-            if (node && node->has_user && node->user.long_name && node->user.long_name[0] != '\0') {
-                // Use snprintf for consistent bounds checking
-                std::snprintf(senderBuf, sizeof(senderBuf), "%s", node->user.long_name);
-            }
-
-            // Channel / destination labeling (from develop)
-            char chanType[32] = "";
-            if (currentMode == ThreadMode::ALL) {
-                if (m.dest == NODENUM_BROADCAST) {
-                    std::snprintf(chanType, sizeof(chanType), "#%s", channels.getName(m.channelIndex));
-                } else {
-                    std::snprintf(chanType, sizeof(chanType), "(DM)");
-                }
-            }
-
-            // If this is *our own* message, override sender to "Me"
-            bool mine = (m.sender == nodeDB->getNodeNum());
-            if (mine) {
-                strcpy(senderBuf, "Me");
-            }
-
-            int availWidth = SCREEN_WIDTH - timeSlotPx - display->getStringWidth(chanType) -
-                             display->getStringWidth(" @...") - 10;
-            if (availWidth < 0)
-                availWidth = 0;
-  
-            // Build header line for this message
+            // Sender lookups (single set of declarations)
             meshtastic_NodeInfoLite* node           = nodeDB->getMeshNode(m.sender);
             meshtastic_NodeInfoLite* node_recipient = nodeDB->getMeshNode(m.dest);
 
-            // Sender name (start unknown)
             char senderBuf[48] = "???";
             if (node && node->has_user && node->user.long_name && node->user.long_name[0] != '\0') {
                 std::snprintf(senderBuf, sizeof(senderBuf), "%s", node->user.long_name);
             }
-
-            // If this is *our own* message, override sender to the recipient's name (as in develop)
             bool mine = (m.sender == nodeDB->getNodeNum());
             if (mine && node_recipient && node_recipient->has_user &&
                 node_recipient->user.long_name && node_recipient->user.long_name[0] != '\0') {
                 std::snprintf(senderBuf, sizeof(senderBuf), "%s", node_recipient->user.long_name);
             }
 
-            // Compute how much room the sender label has
+            // Compute how much room the sender label has (use timeSlotPx, NOT timeBuf)
             int availWidth = SCREEN_WIDTH
-                           - display->getStringWidth(timeBuf)
+                           - timeSlotPx
                            - display->getStringWidth(chanType)
                            - display->getStringWidth(" @...")
                            - 10;
             if (availWidth < 0) availWidth = 0;
 
             // Fit sender to available width (from feat/m5stack-cardputer-adv)
+            size_t origLen = std::strlen(senderBuf);
             while (senderBuf[0] && display->getStringWidth(senderBuf) > availWidth) {
                 senderBuf[std::strlen(senderBuf) - 1] = '\0';
             }
 
             // If we actually truncated, append "..."
-            if (strlen(senderBuf) < origLen) {
+            if (std::strlen(senderBuf) < origLen) {
                 strcat(senderBuf, "...");
             }
 
-            // Final header line
-            char headerStr[96];
-            // DO NOT cache time text; we’ll draw it live. Keep the rest of the header.
-            if (mine) snprintf(headerStr, sizeof(headerStr), "%s", chanType);
-            else      snprintf(headerStr, sizeof(headerStr), "@%s %s", senderBuf, chanType);
+            // Final header line (no time here; time is drawn live during render)
+            char headerStr[96] = "";
+            if (mine) std::snprintf(headerStr, sizeof(headerStr), "%s", chanType);
+            else      std::snprintf(headerStr, sizeof(headerStr), "@%s %s", senderBuf, chanType);
+
 
             // Header line (guard memory)
             if (!retry_on_oom([&]{
@@ -623,41 +590,6 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 isBootRel.push_back(m.isBootRelative);
             })) {
                 break; // couldn't grow even after shedding
-            }
-
-            // Final header line (from develop) + push as header row
-            char headerStr[96] = "";
-            if (mine) {
-                if (currentMode == ThreadMode::ALL) {
-                    if (std::strcmp(chanType, "(DM)") == 0) {
-                        std::snprintf(headerStr, sizeof(headerStr), "%s to %s", timeBuf, senderBuf);
-                    } else {
-                        std::snprintf(headerStr, sizeof(headerStr), "%s to %s", timeBuf, chanType);
-                    }
-                } else {
-                    std::snprintf(headerStr, sizeof(headerStr), "%s", timeBuf);
-                }
-            } else {
-                if (chanType[0] != '\0') {
-                    std::snprintf(headerStr, sizeof(headerStr), "%s @%s %s", timeBuf, senderBuf, chanType);
-                } else {
-                    // Fallback if chanType is empty
-                    std::snprintf(headerStr, sizeof(headerStr), "%s @%s", timeBuf, senderBuf);
-                }
-            }
-
-            // Push header as its own line
-            if (!retry_on_oom([&]{
-                allLines.emplace_back(headerStr);
-                isMine.push_back(mine);
-                isHeader.push_back(true);
-                ackForLine.push_back(AckStatus::NONE);
-                // keep vectors aligned; header has no separate body timestamp in this block
-                msgTs.push_back(0);
-                isBootRel.push_back(false);
-            })) {
-                // Couldn’t even queue header; skip adding body lines for this message
-                // (adjust control flow to your surrounding loop/return style if needed)
             }
 
             // Body lines (from feat/m5stack-cardputer-adv)
@@ -1016,7 +948,7 @@ void renderMessageContent(OLEDDisplay *display, const std::vector<std::string> &
     }
 }
 
-void handleNewMessage(const StoredMessage &sm, const meshtastic_MeshPacket &packet)
+void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const meshtastic_MeshPacket &packet)
 {
     if (packet.from != 0) {
         hasUnreadMessage = true;
