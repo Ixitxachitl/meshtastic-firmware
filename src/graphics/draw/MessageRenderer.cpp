@@ -597,12 +597,14 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             if (node && node->has_user && node->user.long_name && node->user.long_name[0] != '\0') {
                 std::snprintf(senderBuf, sizeof(senderBuf), "%s", node->user.long_name);
             }
+          
+            // If this is *our own* message, override senderBuf to the recipient's name
             bool mine = (m.sender == nodeDB->getNodeNum());
             if (mine && node_recipient && node_recipient->has_user &&
                 node_recipient->user.long_name && node_recipient->user.long_name[0] != '\0') {
                 std::snprintf(senderBuf, sizeof(senderBuf), "%s", node_recipient->user.long_name);
             }
-
+          
             // Compute how much room the sender label has (use timeSlotPx, NOT timeBuf)
             int availWidth = SCREEN_WIDTH
                            - timeSlotPx
