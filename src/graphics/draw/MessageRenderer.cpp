@@ -446,7 +446,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 include = true;
             break;
         case ThreadMode::DIRECT:
-            if (m.type == MessageType::DM_TO_US && (m.sender == currentPeer || m.dest == currentPeer))
+            if (m.dest != NODENUM_BROADCAST && (m.sender == currentPeer || m.dest == currentPeer))
                 include = true;
             break;
         }
@@ -542,11 +542,22 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 
             // Build header line for this message
             meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(m.sender);
-
+  
+            // Sender label (from feat/m5stack-cardputer-adv)
             char senderBuf[48] = "???";
-            if (node && node->has_user) {
-                strncpy(senderBuf, node->user.long_name, sizeof(senderBuf) - 1);
-                senderBuf[sizeof(senderBuf) - 1] = '\0';
+            if (node && node->has_user && node->user.long_name && node->user.long_name[0] != '\0') {
+                // Use snprintf for consistent bounds checking
+                std::snprintf(senderBuf, sizeof(senderBuf), "%s", node->user.long_name);
+            }
+
+            // Channel / destination labeling (from develop)
+            char chanType[32] = "";
+            if (currentMode == ThreadMode::ALL) {
+                if (m.dest == NODENUM_BROADCAST) {
+                    std::snprintf(chanType, sizeof(chanType), "#%s", channels.getName(m.channelIndex));
+                } else {
+                    std::snprintf(chanType, sizeof(chanType), "(DM)");
+                }
             }
 
             // If this is *our own* message, override sender to "Me"
@@ -559,10 +570,35 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                              display->getStringWidth(" @...") - 10;
             if (availWidth < 0)
                 availWidth = 0;
+  
+            // Build header line for this message
+            meshtastic_NodeInfoLite* node           = nodeDB->getMeshNode(m.sender);
+            meshtastic_NodeInfoLite* node_recipient = nodeDB->getMeshNode(m.dest);
 
-            size_t origLen = strlen(senderBuf);
+            // Sender name (start unknown)
+            char senderBuf[48] = "???";
+            if (node && node->has_user && node->user.long_name && node->user.long_name[0] != '\0') {
+                std::snprintf(senderBuf, sizeof(senderBuf), "%s", node->user.long_name);
+            }
+
+            // If this is *our own* message, override sender to the recipient's name (as in develop)
+            bool mine = (m.sender == nodeDB->getNodeNum());
+            if (mine && node_recipient && node_recipient->has_user &&
+                node_recipient->user.long_name && node_recipient->user.long_name[0] != '\0') {
+                std::snprintf(senderBuf, sizeof(senderBuf), "%s", node_recipient->user.long_name);
+            }
+
+            // Compute how much room the sender label has
+            int availWidth = SCREEN_WIDTH
+                           - display->getStringWidth(timeBuf)
+                           - display->getStringWidth(chanType)
+                           - display->getStringWidth(" @...")
+                           - 10;
+            if (availWidth < 0) availWidth = 0;
+
+            // Fit sender to available width (from feat/m5stack-cardputer-adv)
             while (senderBuf[0] && display->getStringWidth(senderBuf) > availWidth) {
-                senderBuf[strlen(senderBuf) - 1] = '\0';
+                senderBuf[std::strlen(senderBuf) - 1] = '\0';
             }
 
             // If we actually truncated, append "..."
@@ -589,22 +625,59 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 break; // couldn't grow even after shedding
             }
 
-            const char *msgText = MessageStore::getText(m);
+            // Final header line (from develop) + push as header row
+            char headerStr[96] = "";
+            if (mine) {
+                if (currentMode == ThreadMode::ALL) {
+                    if (std::strcmp(chanType, "(DM)") == 0) {
+                        std::snprintf(headerStr, sizeof(headerStr), "%s to %s", timeBuf, senderBuf);
+                    } else {
+                        std::snprintf(headerStr, sizeof(headerStr), "%s to %s", timeBuf, chanType);
+                    }
+                } else {
+                    std::snprintf(headerStr, sizeof(headerStr), "%s", timeBuf);
+                }
+            } else {
+                if (chanType[0] != '\0') {
+                    std::snprintf(headerStr, sizeof(headerStr), "%s @%s %s", timeBuf, senderBuf, chanType);
+                } else {
+                    // Fallback if chanType is empty
+                    std::snprintf(headerStr, sizeof(headerStr), "%s @%s", timeBuf, senderBuf);
+                }
+            }
+
+            // Push header as its own line
+            if (!retry_on_oom([&]{
+                allLines.emplace_back(headerStr);
+                isMine.push_back(mine);
+                isHeader.push_back(true);
+                ackForLine.push_back(AckStatus::NONE);
+                // keep vectors aligned; header has no separate body timestamp in this block
+                msgTs.push_back(0);
+                isBootRel.push_back(false);
+            })) {
+                // Couldn’t even queue header; skip adding body lines for this message
+                // (adjust control flow to your surrounding loop/return style if needed)
+            }
+
+            // Body lines (from feat/m5stack-cardputer-adv)
+            const char* msgText = MessageStore::getText(m);
 
             std::vector<std::string> wrapped = generateLines(display, "", msgText, textWidth);
-            for (auto &ln : wrapped) {
+            for (auto& ln : wrapped) {
                 if (!retry_on_oom([&]{
                     allLines.push_back(std::move(ln));
                     isMine.push_back(mine);
                     isHeader.push_back(false);
                     ackForLine.push_back(AckStatus::NONE);
-                    // keep vectors aligned (no time for body rows)
+                    // keep vectors aligned (no per-body time in this section)
                     msgTs.push_back(0);
                     isBootRel.push_back(false);
                 })) {
                     break; // stop adding more for this message
                 }
             }
+
         }
 
         // Heights can also OOM — compute with retry and then swap all caches
@@ -958,7 +1031,22 @@ void handleNewMessage(const StoredMessage &sm, const meshtastic_MeshPacket &pack
 
         // Banner logic
         const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(packet.from);
-        const char *longName = (node && node->has_user) ? node->user.long_name : nullptr;
+        char longName[48] = "???";
+        if (node && node->user.long_name) {
+            strncpy(longName, node->user.long_name, sizeof(longName) - 1);
+            longName[sizeof(longName) - 1] = '\0';
+        }
+        int availWidth = display->getWidth() - (isHighResolution ? 40 : 20);
+        if (availWidth < 0)
+            availWidth = 0;
+
+        size_t origLen = strlen(longName);
+        while (longName[0] && display->getStringWidth(longName) > availWidth) {
+            longName[strlen(longName) - 1] = '\0';
+        }
+        if (strlen(longName) < origLen) {
+            strcat(longName, "...");
+        }
         const char *msgRaw = reinterpret_cast<const char *>(packet.decoded.payload.bytes);
 
         char banner[256];
@@ -1004,15 +1092,6 @@ void handleNewMessage(const StoredMessage &sm, const meshtastic_MeshPacket &pack
                     snprintf(contextBuf, sizeof(contextBuf), "in #%s", cname);
                 else
                     snprintf(contextBuf, sizeof(contextBuf), "in Ch%d", sm.channelIndex);
-            } else if (sm.type == MessageType::DM_TO_US) {
-                /* Commenting out to better understand if we need this info in the banner
-                uint32_t peer = (packet.from == 0) ? sm.dest : sm.sender;
-                const meshtastic_NodeInfoLite *peerNode = nodeDB->getMeshNode(peer);
-                if (peerNode && peerNode->has_user && peerNode->user.short_name)
-                    snprintf(contextBuf, sizeof(contextBuf), "Direct: @%s", peerNode->user.short_name);
-                else
-                    snprintf(contextBuf, sizeof(contextBuf), "Direct Message");
-                */
             }
 
             if (contextBuf[0]) {
@@ -1051,13 +1130,12 @@ void handleNewMessage(const StoredMessage &sm, const meshtastic_MeshPacket &pack
 
 void setThreadFor(const StoredMessage &sm, const meshtastic_MeshPacket &packet)
 {
-    if (sm.dest == NODENUM_BROADCAST || sm.type == MessageType::BROADCAST) {
-        // Broadcast
+    if (packet.to == 0 || packet.to == NODENUM_BROADCAST) {
         setThreadMode(ThreadMode::CHANNEL, sm.channelIndex);
         markDirty();
     } else {
-        // Direct message
-        uint32_t peer = (packet.from != 0) ? sm.sender : sm.dest;
+        uint32_t localNode = nodeDB->getNodeNum();
+        uint32_t peer = (sm.sender == localNode) ? packet.to : sm.sender;
         setThreadMode(ThreadMode::DIRECT, -1, peer);
         markDirty();
     }

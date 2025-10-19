@@ -603,6 +603,7 @@ bool EnvironmentTelemetryModule::wantUIFrame()
     return moduleConfig.telemetry.environment_screen_enabled;
 }
 
+#if HAS_SCREEN
 
 std::vector<uint32_t> EnvironmentTelemetryModule::getSourcesWithTelemetry() const {
     std::vector<uint32_t> out;
@@ -814,6 +815,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         }
     }
 }
+#endif
 
 bool EnvironmentTelemetryModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshtastic_Telemetry *t)
 {
