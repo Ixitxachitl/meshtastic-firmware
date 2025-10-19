@@ -130,51 +130,99 @@ static std::unordered_map<uint32_t, NodeHist<kSparkW>> s_hist;
 // (Optional) pre-size if you have a typical node count:
 // static bool s_histReserved = (s_hist.reserve(64), true);
 
-// Boxed + aligned tiny sparkline (fits in a defined box)
-static constexpr int kSparkYOffset = 1;
-static constexpr int kSparkXOffset = -4;  // move 4px left
-
 // Helper: apply both offsets centrally
 // Overload for fixed-capacity ring
+
+// Sparkline placement offsets (tweak to taste)
+static constexpr int kSparkXOffset = -4;  // shift left
+static constexpr int kSparkYOffset =  1;  // shift down
+
 template <size_t N>
 static void drawMiniSparkBoxed(OLEDDisplay *dpy, int x, int y, int w, int h,
                                const RingF<N> &hist) {
-    const int x0 = x + kSparkXOffset;   // << left shift
-    const int y0 = y + kSparkYOffset;   // you already added this
+  const int x0 = x + kSparkXOffset;
+  const int y0 = y + kSparkYOffset;
 
-    dpy->drawRect(x0, y0, w, h);
+  dpy->drawRect(x0, y0, w, h);
+  if (hist.len < 2) return;
 
-    if (hist.len < 2) return;
+  // Tuning knobs
+  constexpr float kHeadroomFrac     = 0.10f; // 10% visual headroom
+  constexpr float kWinsorLowerFrac  = 0.02f; // clamp bottom 2% (set 0 to disable)
+  constexpr float kWinsorUpperFrac  = 0.02f; // clamp top   2% (set 0 to disable)
+  constexpr float kSmoothAlpha      = 0.0f;  // 0=no smoothing; try 0.2–0.4 if noisy
 
-    // Find min/max
-    float lo = hist.at(0), hi = hist.at(0);
-    for (uint16_t i = 1; i < hist.len; ++i) {
-        float v = hist.at(i);
-        if (v < lo) lo = v;
-        if (v > hi) hi = v;
-    }
-    float span = hi - lo;
-    if (span < 1e-6f) {
-      // Center a flat line instead of pinning to bottom
-      lo -= 0.5f;
-      hi += 0.5f;
-      span = hi - lo;   // now 1.0f
-    }
+  // Geometry
+  const int ix = x0 + 1, iy = y0 + 1;
+  const int iw = w - 2, ih = h - 2;
+  const uint16_t L = hist.len;
+  const float step = (L > 1) ? (float(iw) / float(L - 1)) : 0.0f;
 
-    const int ix = x0 + 1, iy = y0 + 1, iw = w - 2, ih = h - 2;
-    const int midY = iy + ih / 2;
-    const float step = float(iw) / float(hist.len - 1);
+  // First pass: raw extrema
+  float lo = hist.at(0), hi = hist.at(0);
+  for (uint16_t i = 1; i < L; ++i) {
+    const float v = hist.at(i);
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+  }
+  float span0 = hi - lo;
+  if (span0 < 1e-6f) { lo -= 0.5f; hi += 0.5f; span0 = hi - lo; }
 
-    for (uint16_t i = 1; i < hist.len; ++i) {
-        const int x1 = ix + int(std::lround(step * (i - 1)));
-        const int x2 = ix + int(std::lround(step * i));
-        // Special case the first segment so it starts from center
-        const int y1 = (i == 1)
-                       ? midY
-                       : (iy + ih - int(std::lround(((hist.at(i - 1) - lo) / span) * ih)));
-        const int y2 =  iy + ih - int(std::lround(((hist.at(i)     - lo) / span) * ih));
-        dpy->drawLine(x1, y1, x2, y2);
-    }
+  // Winsorization bounds
+  const float loClamp = lo + span0 * kWinsorLowerFrac;
+  const float hiClamp = hi - span0 * kWinsorUpperFrac;
+
+  auto clampTo = [&](float v) {
+    if (kWinsorLowerFrac > 0.f && v < loClamp) v = loClamp;
+    if (kWinsorUpperFrac > 0.f && v > hiClamp) v = hiClamp;
+    return v;
+  };
+
+  // Second pass: extrema after clamp (+ optional smoothing)
+  float sPrev = clampTo(hist.at(0));
+  float lo2 = sPrev, hi2 = sPrev;
+  for (uint16_t i = 1; i < L; ++i) {
+    float v = clampTo(hist.at(i));
+    float s = (kSmoothAlpha > 0.f && kSmoothAlpha < 1.f)
+                ? (kSmoothAlpha * v + (1.0f - kSmoothAlpha) * sPrev)
+                : v;
+    if (s < lo2) lo2 = s;
+    if (s > hi2) hi2 = s;
+    sPrev = s;
+  }
+
+  // Headroom + final span
+  float loS = lo2, hiS = hi2;
+  float span = hiS - loS;
+  if (span < 1e-6f) { loS -= 0.5f; hiS += 0.5f; span = hiS - loS; }
+  const float pad = span * kHeadroomFrac;
+  loS -= pad; hiS += pad; span = hiS - loS;
+
+  auto valToY = [&](float v) -> int {
+    const float t = (v - loS) / span;
+    int yy = iy + ih - int(std::lround(t * ih));
+    if (yy < iy) yy = iy;
+    if (yy > iy + ih) yy = iy + ih;
+    return yy;
+  };
+
+  // Draw polyline (start from real first sample)
+  sPrev = clampTo(hist.at(0));
+  int xPrev = ix;
+  int yPrev = valToY(sPrev);
+
+  for (uint16_t i = 1; i < L; ++i) {
+    const int xCur = ix + int(std::lround(step * i));
+    float v = clampTo(hist.at(i));
+    float s = (kSmoothAlpha > 0.f && kSmoothAlpha < 1.f)
+                ? (kSmoothAlpha * v + (1.0f - kSmoothAlpha) * sPrev)
+                : v;
+    const int yCur = valToY(s);
+    dpy->drawLine(xPrev, yPrev, xCur, yCur);
+    xPrev = xCur;
+    yPrev = yCur;
+    sPrev = s;
+  }
 }
 
 // Prefer long_name when available (and width allows), else short_name, else hex id.
@@ -654,7 +702,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     }
 
     // === Humidity row (Hum) ===
-    if (m.has_relative_humidity) {
+    if (m.has_relative_humidity && m.relative_humidity > 0.0f) {
         String hStr = String(m.relative_humidity, 0) + "%";
         display->drawString(x, currentY, "Hum: " + hStr);  // abbreviation kept from original code :contentReference[oaicite:2]{index=2}
         drawMiniSparkBoxed(display, graphX, currentY, kSparkW, rowHeight - 2, nh.hum);
@@ -673,7 +721,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     std::vector<String> entries;
 
     // Dew (same as your original, just push as its own entry)
-    if (m.has_temperature && m.has_relative_humidity) {
+    if (m.has_temperature && m.has_relative_humidity && m.relative_humidity > 0.0f) {
       const float dpC = dewPointC(m.temperature, m.relative_humidity); // existing helper
       if (!isnan(dpC)) {
         if (moduleConfig.telemetry.environment_display_fahrenheit) {
@@ -686,7 +734,11 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     }
 
     // Gas (separate entry, as before)
-    if (m.has_gas_resistance || m.gas_resistance != 0) {
+    // Heuristic: ignore obviously bogus readings
+    constexpr float kMinGasKOhm = 0.5f;
+    constexpr float kMaxGasKOhm = 1000.0f;
+    if ((m.has_gas_resistance || m.gas_resistance != 0) &&
+        (m.gas_resistance >= kMinGasKOhm && m.gas_resistance <= kMaxGasKOhm)) {
       entries.push_back("Gas: " + String(m.gas_resistance, 2) + " kOhm");
     }
 
@@ -707,12 +759,8 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
 
     // === Draw remaining entries in 2-column format (left and right) ===
     for (size_t i = 0; i < entries.size(); i += 2) {
-        // Left column, truncated to avoid overlapping the right column
-        if (leftMaxW > 10) {
-            display->drawStringMaxWidth(x, currentY, leftMaxW, entries[i]);
-        } else {
-            display->drawString(x, currentY, entries[i]);
-        }
+        // Left column
+        display->drawString(x, currentY, entries[i]);
 
         // Right column starts at the new split, so it’s wider
         if (i + 1 < entries.size()) {

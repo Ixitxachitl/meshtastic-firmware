@@ -36,6 +36,57 @@ namespace MessageRenderer
 static std::vector<std::string> cachedLines;
 static std::vector<int> cachedHeights;
 
+// Rebuild control
+static bool s_dirty = true;          // true = caches must be rebuilt
+static inline void markDirty() { s_dirty = true; }
+
+static std::vector<bool>        cachedIsHeader;
+static std::vector<bool>        cachedIsMine;
+static std::vector<AckStatus>   cachedAckForLine;
+
+// Time metadata for live label (index-aligned with cachedLines)
+static std::vector<uint32_t>    cachedMsgTimestamp;   // original message timestamp
+static std::vector<bool>        cachedIsBootRelative; // true if timestamp is boot-relative
+
+// C++11-friendly helpers (no generic-lambda params)
+template<typename T>
+static inline void trim_vec_front(std::vector<T>& v, size_t n)
+{
+    if (v.empty()) return;
+    size_t k = std::min(n, v.size());
+    v.erase(v.begin(), v.begin() + k);
+}
+
+static bool shedOldest(size_t n)
+{
+    const size_t before = cachedLines.size();
+    if (!before) return false;
+
+    trim_vec_front(cachedLines,     n);
+    trim_vec_front(cachedHeights,   n);
+    trim_vec_front(cachedIsHeader,  n);
+    trim_vec_front(cachedIsMine,    n);
+    trim_vec_front(cachedAckForLine,n);
+
+    // request a clean rebuild/relayout; draw code clamps scroll position
+    markDirty();
+    return cachedLines.size() < before;
+}
+
+template<typename F>
+static bool retry_on_oom(F &&fn, size_t shedCount = 16, int maxRetries = 3)
+{
+    for (int attempt = 0; attempt < maxRetries; ++attempt) {
+        try {
+            fn();
+            return true;
+        } catch (const std::bad_alloc&) {
+            if (!shedOldest(shedCount)) return false;
+        }
+    }
+    return false;
+}
+
 // UTF-8 skip helper
 static inline size_t utf8CharLen(uint8_t c)
 {
@@ -118,7 +169,6 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
     int lineHeight = std::max(fontHeight, maxIconHeight);
     int baselineOffset = (lineHeight - fontHeight) / 2;
     int fontY = y + baselineOffset;
-    int fontMidline = fontY + fontHeight / 2;
 
     // Step 3: Render line in segments
     size_t i = 0;
@@ -230,6 +280,7 @@ void clearMessageCache()
 
     // Reset scroll so we rebuild cleanly next time we enter the screen
     resetScrollState();
+    markDirty();
 }
 
 // Current thread state
@@ -254,7 +305,11 @@ void setThreadMode(ThreadMode mode, int channel /* = -1 */, uint32_t peer /* = 0
     currentMode = mode;
     currentChannel = channel;
     currentPeer = peer;
-    didReset = false; // force reset when mode changes
+    // Immediately refresh the view after a mode change
+    resetScrollState();   // clears scroll & prepares for a fresh layout
+    markDirty();          // forces cache rebuild on next draw
+    didReset = false;     // keep existing contract (we reset above)
+
 
     // Track channels we’ve seen
     if (mode == ThreadMode::CHANNEL && channel >= 0) {
@@ -441,6 +496,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         if (currentMode != ThreadMode::ALL) {
             setThreadMode(ThreadMode::ALL);
             resetScrollState();
+            markDirty();
             return; // Next draw will rerun in ALL mode
         }
 
@@ -452,131 +508,133 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         display->drawString(center_text, getTextPositions(display)[2], messageString);
         return;
     }
+    if (s_dirty) {
+        // Build lines for filtered messages (newest first)
+        std::vector<std::string> allLines;
+        std::vector<bool>        isMine;     // track alignment
+        std::vector<bool>        isHeader;   // track header lines
+        std::vector<AckStatus>   ackForLine; // per-header ACK badge
 
-    // Build lines for filtered messages (newest first)
-    std::vector<std::string> allLines;
-    std::vector<bool> isMine;   // track alignment
-    std::vector<bool> isHeader; // track header lines
-    std::vector<AckStatus> ackForLine;
+        // reuse capacity to reduce growth spurts
+        allLines.reserve(cachedLines.capacity() ? cachedLines.capacity() : 256);
+        isMine.reserve(allLines.capacity());
+        isHeader.reserve(allLines.capacity());
+        ackForLine.reserve(allLines.capacity());
+        
+        std::vector<uint32_t> msgTs;          msgTs.reserve(allLines.capacity());
+        std::vector<bool>     isBootRel;      isBootRel.reserve(allLines.capacity());
+    
+        for (auto it = filtered.begin(); it != filtered.end(); ++it) {
+            const auto &m = *it;
 
-    for (auto it = filtered.begin(); it != filtered.end(); ++it) {
-        const auto &m = *it;
-
-        // Channel / destination labeling
-        char chanType[32] = "";
-        if (currentMode == ThreadMode::ALL) {
-            if (m.dest == NODENUM_BROADCAST) {
-                snprintf(chanType, sizeof(chanType), "(Ch%d)", m.channelIndex);
-            } else {
-                snprintf(chanType, sizeof(chanType), "(DM)");
-            }
-        }
-
-        // Calculate how long ago
-        uint32_t nowSecs = getValidTime(RTCQuality::RTCQualityDevice, true);
-        uint32_t seconds = 0;
-        bool invalidTime = true;
-
-        if (m.timestamp > 0 && nowSecs > 0) {
-            if (nowSecs >= m.timestamp) {
-                seconds = nowSecs - m.timestamp;
-                invalidTime = (seconds > 315360000); // >10 years
-            } else {
-                uint32_t ahead = m.timestamp - nowSecs;
-                if (ahead <= 600) { // allow small skew
-                    seconds = 0;
-                    invalidTime = false;
+            // Channel / destination labeling
+            char chanType[32] = "";
+            if (currentMode == ThreadMode::ALL) {
+                if (m.type == MessageType::BROADCAST) {
+                    snprintf(chanType, sizeof(chanType), "(Ch%d)", m.channelIndex);
+                } else {
+                    snprintf(chanType, sizeof(chanType), "(DM)");
                 }
             }
-        } else if (m.timestamp > 0 && nowSecs == 0) {
-            // RTC not valid: only trust boot-relative if same boot
-            uint32_t bootNow = millis() / 1000;
-            if (m.isBootRelative && m.timestamp <= bootNow) {
-                seconds = bootNow - m.timestamp;
-                invalidTime = false;
-            } else {
-                invalidTime = true; // old persisted boot-relative, ignore until healed
+
+            // We render time live; just reserve a conservative slot width (e.g., "999d")
+            const int timeSlotPx = display->getStringWidth("999d");
+
+            // Build header line for this message
+            meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(m.sender);
+
+            char senderBuf[48] = "???";
+            if (node && node->has_user) {
+                strncpy(senderBuf, node->user.long_name, sizeof(senderBuf) - 1);
+                senderBuf[sizeof(senderBuf) - 1] = '\0';
+            }
+
+            // If this is *our own* message, override sender to "Me"
+            bool mine = (m.sender == nodeDB->getNodeNum());
+            if (mine) {
+                strcpy(senderBuf, "Me");
+            }
+
+            int availWidth = SCREEN_WIDTH - timeSlotPx - display->getStringWidth(chanType) -
+                             display->getStringWidth(" @...") - 10;
+            if (availWidth < 0)
+                availWidth = 0;
+
+            size_t origLen = strlen(senderBuf);
+            while (senderBuf[0] && display->getStringWidth(senderBuf) > availWidth) {
+                senderBuf[strlen(senderBuf) - 1] = '\0';
+            }
+
+            // If we actually truncated, append "..."
+            if (strlen(senderBuf) < origLen) {
+                strcat(senderBuf, "...");
+            }
+
+            // Final header line
+            char headerStr[96];
+            // DO NOT cache time text; we’ll draw it live. Keep the rest of the header.
+            if (mine) snprintf(headerStr, sizeof(headerStr), "%s", chanType);
+            else      snprintf(headerStr, sizeof(headerStr), "@%s %s", senderBuf, chanType);
+
+            // Header line (guard memory)
+            if (!retry_on_oom([&]{
+                allLines.push_back(std::string(headerStr));
+                isMine.push_back(mine);
+                isHeader.push_back(true);
+                ackForLine.push_back(m.ackStatus);
+                // time metadata aligned with this header line
+                msgTs.push_back(m.timestamp);
+                isBootRel.push_back(m.isBootRelative);
+            })) {
+                break; // couldn't grow even after shedding
+            }
+
+            const char *msgText = MessageStore::getText(m);
+
+            std::vector<std::string> wrapped = generateLines(display, "", msgText, textWidth);
+            for (auto &ln : wrapped) {
+                if (!retry_on_oom([&]{
+                    allLines.push_back(std::move(ln));
+                    isMine.push_back(mine);
+                    isHeader.push_back(false);
+                    ackForLine.push_back(AckStatus::NONE);
+                    // keep vectors aligned (no time for body rows)
+                    msgTs.push_back(0);
+                    isBootRel.push_back(false);
+                })) {
+                    break; // stop adding more for this message
+                }
             }
         }
 
-        char timeBuf[16];
-        if (invalidTime) {
-            snprintf(timeBuf, sizeof(timeBuf), "???");
-        } else if (seconds < 60) {
-            snprintf(timeBuf, sizeof(timeBuf), "%us", seconds);
-        } else if (seconds < 3600) {
-            snprintf(timeBuf, sizeof(timeBuf), "%um", seconds / 60);
-        } else if (seconds < 86400) {
-            snprintf(timeBuf, sizeof(timeBuf), "%uh", seconds / 3600);
-        } else {
-            snprintf(timeBuf, sizeof(timeBuf), "%ud", seconds / 86400);
+        // Heights can also OOM — compute with retry and then swap all caches
+        std::vector<int> newHeights;
+        if (!retry_on_oom([&]{
+            newHeights = calculateLineHeights(allLines, emotes, isHeader);
+        })) {
+            // keep existing caches; try again next time we become dirty
+            s_dirty = false;
+            return;
         }
-
-        // Build header line for this message
-        meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(m.sender);
-
-        char senderBuf[48] = "???";
-        if (node && node->has_user) {
-            strncpy(senderBuf, node->user.long_name, sizeof(senderBuf) - 1);
-            senderBuf[sizeof(senderBuf) - 1] = '\0';
-        }
-
-        // If this is *our own* message, override sender to "Me"
-        bool mine = (m.sender == nodeDB->getNodeNum());
-        if (mine) {
-            strcpy(senderBuf, "Me");
-        }
-
-        int availWidth = SCREEN_WIDTH - display->getStringWidth(timeBuf) - display->getStringWidth(chanType) -
-                         display->getStringWidth(" @...") - 10;
-        if (availWidth < 0)
-            availWidth = 0;
-
-        size_t origLen = strlen(senderBuf);
-        while (senderBuf[0] && display->getStringWidth(senderBuf) > availWidth) {
-            senderBuf[strlen(senderBuf) - 1] = '\0';
-        }
-
-        // If we actually truncated, append "..."
-        if (strlen(senderBuf) < origLen) {
-            strcat(senderBuf, "...");
-        }
-
-        // Final header line
-        char headerStr[96];
-        if (mine) {
-            snprintf(headerStr, sizeof(headerStr), "%s %s", timeBuf, chanType);
-        } else {
-            snprintf(headerStr, sizeof(headerStr), "%s @%s %s", timeBuf, senderBuf, chanType);
-        }
-
-        // Push header line
-        allLines.push_back(std::string(headerStr));
-        isMine.push_back(mine);
-        isHeader.push_back(true);
-        ackForLine.push_back(m.ackStatus);
-
-        const char *msgText = MessageStore::getText(m);
-
-        std::vector<std::string> wrapped = generateLines(display, "", msgText, textWidth);
-        for (auto &ln : wrapped) {
-            allLines.push_back(ln);
-            isMine.push_back(mine);
-            isHeader.push_back(false);
-            ackForLine.push_back(AckStatus::NONE);
-        }
+    
+        // swap into persistent caches (fast, avoids realloc)
+        cachedLines.clear();           cachedLines.swap(allLines);
+        cachedHeights.clear();         cachedHeights.swap(newHeights);
+        cachedIsHeader.clear();        cachedIsHeader.swap(isHeader);
+        cachedIsMine.clear();          cachedIsMine.swap(isMine);
+        cachedAckForLine.clear();      cachedAckForLine.swap(ackForLine);
+        cachedMsgTimestamp.clear();    cachedMsgTimestamp.swap(msgTs);
+        cachedIsBootRelative.clear();  cachedIsBootRelative.swap(isBootRel);
+        s_dirty = false;
     }
-
-    // Cache lines and heights
-    cachedLines = allLines;
-    cachedHeights = calculateLineHeights(cachedLines, emotes, isHeader);
 
     // Scrolling logic (reverse auto-scroll + manual override)
     // Newest-at-bottom is enforced by building lines via filtered.rbegin()->rend()
     int totalHeight = 0;
-    for (size_t i = 0; i < cachedHeights.size(); ++i)
+    for (size_t i = 0; i < cachedHeights.size(); ++i){
         totalHeight += cachedHeights[i];
-        int usableScrollHeight = usableHeight;
+    }
+    int usableScrollHeight = usableHeight;
 
 #ifndef USE_EINK
     uint32_t now = millis();
@@ -641,44 +699,93 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     int scrollOffset = static_cast<int>(scrollY);
     int yOffset = -scrollOffset + getTextPositions(display)[1];
 
-    // Render visible lines
-    for (size_t i = 0; i < cachedLines.size(); ++i) {
+    // Render visible lines (clamp counts defensively)
+    const size_t N = std::min({ cachedLines.size(),
+                                cachedHeights.size(),
+                                cachedIsHeader.size(),
+                                cachedIsMine.size(),
+                                cachedAckForLine.size() });
+    for (size_t i = 0; i < N; ++i) {
         int lineY = yOffset;
         for (size_t j = 0; j < i; ++j)
             lineY += cachedHeights[j];
 
         if (lineY > -cachedHeights[i] && lineY < (scrollBottom + cachedHeights[i])) {
-            if (isHeader[i]) {
-                // Render header
-                int w = display->getStringWidth(cachedLines[i].c_str());
-                int headerX = isMine[i] ? (SCREEN_WIDTH - w - 2) : x;
-                display->drawString(headerX, lineY, cachedLines[i].c_str());
+            if (cachedIsHeader[i]) {
+                // ---- LIVE time computation (same logic as before) ----
+                uint32_t ts = (i < cachedMsgTimestamp.size())    ? cachedMsgTimestamp[i]   : 0;
+                bool isBootRel = (i < cachedIsBootRelative.size())? cachedIsBootRelative[i] : false;
 
-                // Draw ACK/NACK mark for our own messages
-                if (isMine[i]) {
-                    int markX = headerX - 10;
-                    int markY = lineY;
-                    if (ackForLine[i] == AckStatus::ACKED) {
-                        // Destination ACK
-                        drawCheckMark(display, markX, markY, 8);
-                    } else if (ackForLine[i] == AckStatus::NACKED || ackForLine[i] == AckStatus::TIMEOUT) {
-                        // Failure or timeout
-                        drawXMark(display, markX, markY, 8);
-                    } else if (ackForLine[i] == AckStatus::RELAYED) {
-                        // Relay ACK
-                        drawRelayMark(display, markX, markY, 8);
+                uint32_t nowSecs = getValidTime(RTCQuality::RTCQualityDevice, true);
+                uint32_t seconds = 0;
+                bool invalidTime = true;
+
+                if (ts > 0 && nowSecs > 0) {
+                    if (nowSecs >= ts) {
+                        seconds = nowSecs - ts;
+                        invalidTime = (seconds > 315360000); // >10 years
+                    } else {
+                        uint32_t ahead = ts - nowSecs;
+                        if (ahead <= 600) { // allow small skew
+                            seconds = 0;
+                            invalidTime = false;
+                        }
                     }
-                    // AckStatus::NONE → show nothing
+                } else if (ts > 0 && nowSecs == 0) {
+                    // RTC not valid: only trust boot-relative if same boot
+                    uint32_t bootNow = millis() / 1000;
+                    if (isBootRel && ts <= bootNow) {
+                        seconds = bootNow - ts;
+                        invalidTime = false;
+                    } else {
+                        invalidTime = true;
+                    }
                 }
 
+                char tbuf[16];
+                if (invalidTime) {
+                    snprintf(tbuf, sizeof(tbuf), "???");
+                } else if (seconds < 60) {
+                    snprintf(tbuf, sizeof(tbuf), "%us", seconds);
+                } else if (seconds < 3600) {
+                    snprintf(tbuf, sizeof(tbuf), "%um", seconds / 60);
+                } else if (seconds < 86400) {
+                    snprintf(tbuf, sizeof(tbuf), "%uh", seconds / 3600);
+                } else {
+                    snprintf(tbuf, sizeof(tbuf), "%ud", seconds / 86400);
+                }
+
+                // Compose full header inline: "<time> " + cached header (which holds @sender + chan)
+                std::string fullHeader;
+                fullHeader.reserve(strlen(tbuf) + 1 + cachedLines[i].size());
+                fullHeader.append(tbuf).push_back(' ');
+                fullHeader.append(cachedLines[i]);
+
+                // Render header (measure/draw/underline using the full string)
+                int w = display->getStringWidth(fullHeader.c_str());
+                int headerX = cachedIsMine[i] ? (SCREEN_WIDTH - w - 2) : x;
+                display->drawString(headerX, lineY, fullHeader.c_str());
+
+                // Draw ACK/NACK mark for our own messages
+                if (cachedIsMine[i]) {
+                    int markX = headerX - 10;
+                    int markY = lineY;
+                    if (cachedAckForLine[i] == AckStatus::ACKED)        { drawCheckMark(display, markX, markY, 8); }
+                    else if (cachedAckForLine[i] == AckStatus::NACKED
+                          || cachedAckForLine[i] == AckStatus::TIMEOUT) { drawXMark(display, markX, markY, 8); }
+                    else if (cachedAckForLine[i] == AckStatus::RELAYED) { drawRelayMark(display, markX, markY, 8); }
+                    // AckStatus::NONE → show nothing
+                }
+                
                 // Draw underline just under header text
                 int underlineY = lineY + FONT_HEIGHT_SMALL;
                 for (int px = 0; px < w; ++px) {
                     display->setPixel(headerX + px, underlineY);
                 }
+
             } else {
                 // Render message line
-                if (isMine[i]) {
+                if (cachedIsMine[i]) {
                     // Calculate actual rendered width including emotes
                     int renderedWidth = getRenderedLineWidth(display, cachedLines[i], emotes, numEmotes);
                     int rightX = SCREEN_WIDTH - renderedWidth - 2; // -2 for slight padding from the edge
@@ -939,6 +1046,7 @@ void handleNewMessage(const StoredMessage &sm, const meshtastic_MeshPacket &pack
 
     // Reset scroll for a clean start
     resetScrollState();
+    markDirty();
 }
 
 void setThreadFor(const StoredMessage &sm, const meshtastic_MeshPacket &packet)
@@ -946,10 +1054,12 @@ void setThreadFor(const StoredMessage &sm, const meshtastic_MeshPacket &packet)
     if (sm.dest == NODENUM_BROADCAST || sm.type == MessageType::BROADCAST) {
         // Broadcast
         setThreadMode(ThreadMode::CHANNEL, sm.channelIndex);
+        markDirty();
     } else {
         // Direct message
         uint32_t peer = (packet.from != 0) ? sm.sender : sm.dest;
         setThreadMode(ThreadMode::DIRECT, -1, peer);
+        markDirty();
     }
 }
 
