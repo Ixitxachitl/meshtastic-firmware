@@ -9,7 +9,7 @@
 #include "PowerMon.h"
 #include "ReliableRouter.h"
 #include "airtime.h"
-#include "buzz.h"
+#include "buzz.h"   // if you have this
 
 #include "FSCommon.h"
 #include "Led.h"
@@ -136,6 +136,27 @@ AccelerometerThread *accelerometerThread = nullptr;
 AudioThread *audioThread = nullptr;
 #endif
 
+#ifdef ARDUINO_ARCH_ESP32
+#ifdef HAS_I2S
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
+extern AudioThread* audioThread;  // already declared
+
+static void AudioTaskShim(void* pv) {
+  auto* th = static_cast<concurrency::OSThread*>(pv);
+  for (;;) {
+    const int32_t delayMs = th->_rtosRunOnceShim();
+    if (delayMs <= 0) {
+      taskYIELD();
+    } else {
+      vTaskDelay(pdMS_TO_TICKS(delayMs));
+    }
+  }
+}
+#endif
+#endif
+
 #ifdef USE_XL9555
 #include "ExtensionIOXL9555.hpp"
 ExtensionIOXL9555 io;
@@ -169,6 +190,12 @@ volatile static const char slipstreamTZString[] = {USERPREFS_TZ_STRING};
 
 // We always create a screen object, but we only init it if we find the hardware
 graphics::Screen *screen = nullptr;
+
+// After boot melody completes, speak "meshtastic" once
+#ifdef HAS_I2S
+enum class BootTTSState : uint8_t { Idle, WaitMelodyStart, WaitMelodyEnd };
+static BootTTSState bootTTS = BootTTSState::Idle;
+#endif
 
 // Global power status
 meshtastic::PowerStatus *powerStatus = new meshtastic::PowerStatus();
@@ -521,20 +548,42 @@ void setup()
 #else
     ledPeriodic = new Periodic("Blink", ledBlinker);
 #endif
+#endif
 
     fsInit();
 
-#if !MESHTASTIC_EXCLUDE_I2C
-#if defined(I2C_SDA1) && defined(ARCH_RP2040)
-    Wire1.setSDA(I2C_SDA1);
-    Wire1.setSCL(I2C_SCL1);
-    Wire1.begin();
-#elif defined(I2C_SDA1) && !defined(ARCH_RP2040)
-    Wire1.begin(I2C_SDA1, I2C_SCL1);
-#elif WIRE_INTERFACES_COUNT == 2
-    Wire1.begin();
-#endif
+    // Tracks if we actually enabled the 2nd I2C bus
+    bool wire1Active = false;
 
+#if !MESHTASTIC_EXCLUDE_I2C
+    // --- Secondary I2C (Wire1) on CAP/Grove pins (G2=SDA, G1=SCL) ---
+#if WIRE_INTERFACES_COUNT == 2
+    const bool wantExternalI2COnCap = true;
+    if (wantExternalI2COnCap) {
+    #if defined(ARCH_RP2040)
+        Wire1.setSDA(G2);
+        Wire1.setSCL(G1);
+        Wire1.begin();
+    #else
+        Wire1.begin(G2 /*SDA*/, G1 /*SCL*/);
+    #endif
+        Wire1.setClock(100000);  // start at 100kHz for reliability
+        LOG_INFO("Wire1 CAP bus enabled: SDA=%d SCL=%d @100k", G2, G1);
+        wire1Active = true;
+
+        // Optional: quick probe for BME688 default addresses
+        for (uint8_t addr = 0x76; addr <= 0x77; ++addr) {
+            Wire1.beginTransmission(addr);
+            if (Wire1.endTransmission() == 0) {
+                LOG_INFO("Wire1 device found at 0x%02X", addr);
+            }
+        }
+    } else {
+        LOG_INFO("CAP bus (Wire1) disabled by config.");
+    }
+#endif // WIRE_INTERFACES_COUNT == 2
+
+    // --- Primary I2C (Wire) ---
 #if defined(I2C_SDA) && defined(ARCH_RP2040)
     Wire.setSDA(I2C_SDA);
     Wire.setSCL(I2C_SCL);
@@ -550,7 +599,6 @@ void setup()
     }
 #elif HAS_WIRE
     Wire.begin();
-#endif
 #endif
 
 #if defined(M5STACK_UNITC6L)
@@ -582,28 +630,29 @@ void setup()
     power->setup(); // Must be after status handler is installed, so that handler gets notified of the initial configuration
 
 #if !MESHTASTIC_EXCLUDE_I2C
-    // We need to scan here to decide if we have a screen for nodeDB.init() and because power has been applied to
-    // accessories
+    // We need to scan here to decide if we have a screen for nodeDB.init()
+    // and because power has been applied to accessories
     auto i2cScanner = std::unique_ptr<ScanI2CTwoWire>(new ScanI2CTwoWire());
+
 #if HAS_WIRE
-    LOG_INFO("Scan for i2c devices");
+    LOG_INFO("Scan for I2C devices (starting)...");
 #endif
 
-#if defined(I2C_SDA1) || (defined(NRF52840_XXAA) && (WIRE_INTERFACES_COUNT == 2))
-    i2cScanner->scanPort(ScanI2C::I2CPort::WIRE1);
-#endif
-
-#if defined(I2C_SDA)
-    i2cScanner->scanPort(ScanI2C::I2CPort::WIRE);
-#elif defined(ARCH_PORTDUINO)
-    if (portduino_config.i2cdev != "") {
-        LOG_INFO("Scan for i2c devices");
-        i2cScanner->scanPort(ScanI2C::I2CPort::WIRE);
+    // Scan CAP/Grove bus first if enabled
+    if (wire1Active) {
+        LOG_INFO("Scanning CAP bus (Wire1)...");
+        i2cScanner->scanPort(ScanI2C::I2CPort::WIRE1);
+    } else {
+        LOG_INFO("CAP bus (Wire1) is disabled; skipping.");
     }
-#elif HAS_WIRE
+
+    // Always scan the internal/default bus
+#if defined(I2C_SDA) || HAS_WIRE
+    LOG_INFO("Scanning internal bus (Wire)...");
     i2cScanner->scanPort(ScanI2C::I2CPort::WIRE);
 #endif
 
+    // Summary
     auto i2cCount = i2cScanner->countDevices();
     if (i2cCount == 0) {
         LOG_INFO("No I2C devices found");
@@ -613,6 +662,7 @@ void setup()
         sensor_detected = true;
 #endif
     }
+#endif // !MESHTASTIC_EXCLUDE_I2C
 
 #ifdef ARCH_ESP32
     // Don't init display if we don't have one or we are waking headless due to a timer event
@@ -785,6 +835,11 @@ void setup()
     else
         playStartMelody();
 
+#ifdef HAS_I2S
+    // Arm: wait until we detect the melody actually starts playing
+    bootTTS = BootTTSState::WaitMelodyStart;
+#endif
+
     // fixed screen override?
     if (config.display.oled != meshtastic_Config_DisplayConfig_OledType_OLED_AUTO)
         screen_model = config.display.oled;
@@ -860,7 +915,6 @@ void setup()
     LOG_DEBUG("SPI.begin(SCK=%d, MISO=%d, MOSI=%d, NSS=%d)", LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
     SPI.setFrequency(4000000);
 #endif
-#endif
 
     // Initialize the screen first so we can show the logo while we start up everything else.
 #if HAS_SCREEN
@@ -926,8 +980,30 @@ void setup()
     nodeStatus->observe(&nodeDB->newStatus);
 
 #ifdef HAS_I2S
-    LOG_DEBUG("Start audio thread");
-    audioThread = new AudioThread();
+  audioThread = new AudioThread();
+
+  // Keep the public API untouched; just stop the cooperative scheduler
+  audioThread->disable();   // prevents the ThreadController from running it
+
+  // Run audio on a dedicated RTOS task (ESP32 only)
+  #ifdef ARDUINO_ARCH_ESP32
+    TaskHandle_t h = nullptr;
+    const uint32_t stackWords = 4096 / sizeof(StackType_t);   // adjust if needed
+    const UBaseType_t prio = tskIDLE_PRIORITY + 2;            // slightly above normal
+    xTaskCreatePinnedToCore(
+      AudioTaskShim,
+      "Audio",
+      stackWords,
+      audioThread,
+      prio,
+      &h,
+      #if CONFIG_FREERTOS_UNICORE
+        tskNO_AFFINITY
+      #else
+        1   // APP CPU; change if your I2S ISR is on the other core
+      #endif
+    );
+  #endif
 #endif
 
 #ifdef HAS_UDP_MULTICAST
@@ -1589,10 +1665,58 @@ void loop()
 #endif
 
     service->loop();
+    long delayMsec = mainController.runOrDelay();
 #if !MESHTASTIC_EXCLUDE_INPUTBROKER && defined(HAS_FREE_RTOS)
     if (inputBroker)
         inputBroker->processInputEventQueue();
 #endif
+
+    // --- FLUSH PENDING BOOT MELODY ONCE THE SCHEDULER IS RUNNING ---
+#ifdef HAS_I2S
+{
+    static bool bootMelodyFlushed = false;
+    static uint32_t flushStartMs = 0;
+
+    if (!bootMelodyFlushed) {
+        // Record when we first see a valid audioThread
+        extern AudioThread* audioThread;
+        if (audioThread) {
+            if (flushStartMs == 0) flushStartMs = millis();
+
+            const bool warmedUp =
+                (audioThread->pumpTicks() >= 20);   // be conservative; 20 is enough
+
+            const bool timeFallback =
+                (millis() - flushStartMs) >= 800;   // hard fallback after ~0.8s
+
+            if (warmedUp || timeFallback) {
+                buzzOnAudioThreadReady();           // starts queued boot RTTTL
+                bootMelodyFlushed = true;
+            }
+        }
+    }
+    // Speak "meshtastic" only AFTER we observed the melody start and then end
+    if (audioThread) {
+        switch (bootTTS) {
+            case BootTTSState::WaitMelodyStart:
+                if (audioThread->isPlaying()) {
+                    // Melody has begun; now wait for it to finish
+                    bootTTS = BootTTSState::WaitMelodyEnd;
+                }
+                break;
+            case BootTTSState::WaitMelodyEnd:
+                if (!audioThread->isPlaying()) {
+                    audioThread->readAloud("meshtastic");
+                    bootTTS = BootTTSState::Idle;
+                }
+                break;
+            default: break;
+        }
+    }
+}
+#endif
+    // --- END FLUSH ---
+
 #if ARCH_PORTDUINO && HAS_TFT
     if (screen && portduino_config.displayPanel == x11 &&
         config.display.displaymode != meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
@@ -1601,8 +1725,6 @@ void loop()
             static_cast<TFTDisplay *>(dispdev)->sdlLoop();
     }
 #endif
-    long delayMsec = mainController.runOrDelay();
-
     // We want to sleep as long as possible here - because it saves power
     if (!runASAP && loopCanSleep()) {
 #ifdef DEBUG_LOOP_TIMING
