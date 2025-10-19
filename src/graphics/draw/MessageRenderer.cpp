@@ -381,7 +381,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 include = true;
             break;
         case ThreadMode::DIRECT:
-            if (m.type == MessageType::DM_TO_US && (m.sender == currentPeer || m.dest == currentPeer))
+            if (m.dest != NODENUM_BROADCAST && (m.sender == currentPeer || m.dest == currentPeer))
                 include = true;
             break;
         }
@@ -456,7 +456,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         char chanType[32] = "";
         if (currentMode == ThreadMode::ALL) {
             if (m.dest == NODENUM_BROADCAST) {
-                snprintf(chanType, sizeof(chanType), "(Ch%d)", m.channelIndex);
+                snprintf(chanType, sizeof(chanType), "#%s", channels.getName(m.channelIndex));
             } else {
                 snprintf(chanType, sizeof(chanType), "(DM)");
             }
@@ -504,6 +504,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 
         // Build header line for this message
         meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(m.sender);
+        meshtastic_NodeInfoLite *node_recipient = nodeDB->getMeshNode(m.dest);
 
         char senderBuf[48] = "???";
         if (node && node->has_user) {
@@ -514,31 +515,39 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         // If this is *our own* message, override sender to "Me"
         bool mine = (m.sender == nodeDB->getNodeNum());
         if (mine) {
-            strcpy(senderBuf, "Me");
+            strcpy(senderBuf, node_recipient->user.long_name);
         }
 
-        const char *sender = senderBuf;
-
-        // If sender width too wide → truncate manually
+        // Shrink Sender name if needed
         int availWidth = SCREEN_WIDTH - display->getStringWidth(timeBuf) - display->getStringWidth(chanType) -
-                         display->getStringWidth(" @") - display->getStringWidth("... ") - 10;
+                         display->getStringWidth(" @...") - 10;
+        if (availWidth < 0)
+            availWidth = 0;
 
-        while (strlen(senderBuf) > 0 && display->getStringWidth(senderBuf) > availWidth) {
+        size_t origLen = strlen(senderBuf);
+        while (senderBuf[0] && display->getStringWidth(senderBuf) > availWidth) {
             senderBuf[strlen(senderBuf) - 1] = '\0';
         }
 
-        // Add ellipsis if needed
-        if (display->getStringWidth(senderBuf) > availWidth && strlen(senderBuf) >= 3) {
-            size_t len = strlen(senderBuf);
-            strcpy(&senderBuf[len - 3], "...");
+        // If we actually truncated, append "..."
+        if (strlen(senderBuf) < origLen) {
+            strcat(senderBuf, "...");
         }
 
         // Final header line
         char headerStr[96];
         if (mine) {
-            snprintf(headerStr, sizeof(headerStr), "%s %s", timeBuf, chanType);
+            if (currentMode == ThreadMode::ALL) {
+                if (strcmp(chanType, "(DM)") == 0) {
+                    snprintf(headerStr, sizeof(headerStr), "%s to %s", timeBuf, senderBuf);
+                } else {
+                    snprintf(headerStr, sizeof(headerStr), "%s to %s", timeBuf, chanType);
+                }
+            } else {
+                snprintf(headerStr, sizeof(headerStr), "%s", timeBuf);
+            }
         } else {
-            snprintf(headerStr, sizeof(headerStr), "%s @%s %s", timeBuf, sender, chanType);
+            snprintf(headerStr, sizeof(headerStr), "%s @%s %s", timeBuf, senderBuf, chanType);
         }
 
         // Push header line
@@ -786,26 +795,7 @@ std::vector<int> calculateLineHeights(const std::vector<std::string> &lines, con
     return rowHeights;
 }
 
-void renderMessageContent(OLEDDisplay *display, const std::vector<std::string> &lines, const std::vector<int> &rowHeights, int x,
-                          int yOffset, int scrollBottom, const Emote *emotes, int numEmotes, bool isInverted, bool isBold)
-{
-    for (size_t i = 0; i < lines.size(); ++i) {
-        int lineY = yOffset;
-        for (size_t j = 0; j < i; ++j)
-            lineY += rowHeights[j];
-        if (lineY > -rowHeights[i] && lineY < scrollBottom) {
-            if (i == 0 && isInverted) {
-                display->drawString(x, lineY, lines[i].c_str());
-                if (isBold)
-                    display->drawString(x, lineY, lines[i].c_str());
-            } else {
-                drawStringWithEmotes(display, x, lineY, lines[i], emotes, numEmotes);
-            }
-        }
-    }
-}
-
-void handleNewMessage(const StoredMessage &sm, const meshtastic_MeshPacket &packet)
+void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const meshtastic_MeshPacket &packet)
 {
     if (packet.from != 0) {
         hasUnreadMessage = true;
@@ -820,7 +810,22 @@ void handleNewMessage(const StoredMessage &sm, const meshtastic_MeshPacket &pack
 
         // Banner logic
         const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(packet.from);
-        const char *longName = (node && node->has_user) ? node->user.long_name : nullptr;
+        char longName[48] = "???";
+        if (node && node->user.long_name) {
+            strncpy(longName, node->user.long_name, sizeof(longName) - 1);
+            longName[sizeof(longName) - 1] = '\0';
+        }
+        int availWidth = display->getWidth() - (isHighResolution ? 40 : 20);
+        if (availWidth < 0)
+            availWidth = 0;
+
+        size_t origLen = strlen(longName);
+        while (longName[0] && display->getStringWidth(longName) > availWidth) {
+            longName[strlen(longName) - 1] = '\0';
+        }
+        if (strlen(longName) < origLen) {
+            strcat(longName, "...");
+        }
         const char *msgRaw = reinterpret_cast<const char *>(packet.decoded.payload.bytes);
 
         char banner[256];
@@ -866,15 +871,6 @@ void handleNewMessage(const StoredMessage &sm, const meshtastic_MeshPacket &pack
                     snprintf(contextBuf, sizeof(contextBuf), "in #%s", cname);
                 else
                     snprintf(contextBuf, sizeof(contextBuf), "in Ch%d", sm.channelIndex);
-            } else if (sm.type == MessageType::DM_TO_US) {
-                /* Commenting out to better understand if we need this info in the banner
-                uint32_t peer = (packet.from == 0) ? sm.dest : sm.sender;
-                const meshtastic_NodeInfoLite *peerNode = nodeDB->getMeshNode(peer);
-                if (peerNode && peerNode->has_user && peerNode->user.short_name)
-                    snprintf(contextBuf, sizeof(contextBuf), "Direct: @%s", peerNode->user.short_name);
-                else
-                    snprintf(contextBuf, sizeof(contextBuf), "Direct Message");
-                */
             }
 
             if (contextBuf[0]) {
@@ -912,12 +908,11 @@ void handleNewMessage(const StoredMessage &sm, const meshtastic_MeshPacket &pack
 
 void setThreadFor(const StoredMessage &sm, const meshtastic_MeshPacket &packet)
 {
-    if (sm.dest == NODENUM_BROADCAST || sm.type == MessageType::BROADCAST) {
-        // Broadcast
+    if (packet.to == 0 || packet.to == NODENUM_BROADCAST) {
         setThreadMode(ThreadMode::CHANNEL, sm.channelIndex);
     } else {
-        // Direct message
-        uint32_t peer = (packet.from != 0) ? sm.sender : sm.dest;
+        uint32_t localNode = nodeDB->getNodeNum();
+        uint32_t peer = (sm.sender == localNode) ? packet.to : sm.sender;
         setThreadMode(ThreadMode::DIRECT, -1, peer);
     }
 }

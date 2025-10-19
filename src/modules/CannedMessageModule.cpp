@@ -284,8 +284,6 @@ void CannedMessageModule::drawHeader(OLEDDisplay *display, int16_t x, int16_t y,
 
 void CannedMessageModule::resetSearch()
 {
-    LOG_INFO("Resetting search, restoring full destination list");
-
     int previousDestIndex = destIndex;
 
     searchQuery = "";
@@ -329,7 +327,7 @@ void CannedMessageModule::updateDestinationSelectionList()
 
     for (size_t i = 0; i < numMeshNodes; ++i) {
         meshtastic_NodeInfoLite *node = nodeDB->getMeshNodeByIndex(i);
-        if (!node || node->num == myNodeNum)
+        if (!node || node->num == myNodeNum || !node->has_user || node->user.public_key.size != 32)
             continue;
 
         const String &nodeName = node->user.long_name;
@@ -347,6 +345,10 @@ void CannedMessageModule::updateDestinationSelectionList()
         }
     }
 
+    meshtastic_MeshPacket *p = allocDataPacket();
+    p->pki_encrypted = true;
+    p->channel = 0;
+
     // Populate active channels
     std::vector<String> seenChannels;
     seenChannels.reserve(channels.getNumChannels());
@@ -357,15 +359,6 @@ void CannedMessageModule::updateDestinationSelectionList()
             seenChannels.push_back(name);
         }
     }
-
-    /* As the nodeDB is sorted, can skip this step
-    // Sort by favorite, then last heard
-    std::sort(this->filteredNodes.begin(), this->filteredNodes.end(), [](const NodeEntry &a, const NodeEntry &b) {
-        if (a.node->is_favorite != b.node->is_favorite)
-            return a.node->is_favorite > b.node->is_favorite;
-        return a.lastHeard < b.lastHeard;
-    });
-    */
 
     scrollIndex = 0; // Show first result at the top
     destIndex = 0;   // Highlight the first entry
@@ -1022,6 +1015,23 @@ void CannedMessageModule::sendText(NodeNum dest, ChannelIndex channel, const cha
     this->lastSentNode = dest;
     this->incoming = dest;
 
+    // Manually find the node by number to check PKI capability
+    meshtastic_NodeInfoLite *node = nullptr;
+    size_t numMeshNodes = nodeDB->getNumMeshNodes();
+    for (size_t i = 0; i < numMeshNodes; ++i) {
+        meshtastic_NodeInfoLite *n = nodeDB->getMeshNodeByIndex(i);
+        if (n && n->num == dest) {
+            node = n;
+            break;
+        }
+    }
+
+    NodeNum myNodeNum = nodeDB->getNodeNum();
+    if (node && node->num != myNodeNum && node->has_user && node->user.public_key.size == 32) {
+        p->pki_encrypted = true;
+        p->channel = 0; // force PKI
+    }
+
     // Track this packet’s request ID for matching ACKs
     this->lastRequestId = p->id;
 
@@ -1036,7 +1046,7 @@ void CannedMessageModule::sendText(NodeNum dest, ChannelIndex channel, const cha
 
     this->waitingForAck = true;
 
-    // Send to mesh
+    // Send to mesh (PKI-encrypted if conditions above matched)
     service->sendToMesh(p, RX_SRC_LOCAL, true);
 
     // Show banner immediately
@@ -1052,13 +1062,8 @@ void CannedMessageModule::sendText(NodeNum dest, ChannelIndex channel, const cha
 
     // Always use our local time, consistent with other paths
     uint32_t nowSecs = getValidTime(RTCQuality::RTCQualityDevice, true);
-    if (nowSecs > 0) {
-        sm.timestamp = nowSecs;
-        sm.isBootRelative = false;
-    } else {
-        sm.timestamp = millis() / 1000;
-        sm.isBootRelative = true; // mark for later upgrade
-    }
+    sm.timestamp = (nowSecs > 0) ? nowSecs : millis() / 1000;
+    sm.isBootRelative = (nowSecs == 0);
 
     sm.sender = nodeDB->getNodeNum(); // us
     sm.channelIndex = channel;
@@ -1087,8 +1092,6 @@ void CannedMessageModule::sendText(NodeNum dest, ChannelIndex channel, const cha
 
     playComboTune();
 
-    // Important
-    // Instead of INACTIVE here, use SENDING_ACTIVE so runOnce() does the cleanup.
     this->runState = CANNED_MESSAGE_RUN_STATE_SENDING_ACTIVE;
     this->payload = wantReplies ? 1 : 0;
     requestFocus();
@@ -1097,11 +1100,6 @@ void CannedMessageModule::sendText(NodeNum dest, ChannelIndex channel, const cha
     UIFrameEvent e;
     e.action = UIFrameEvent::Action::SWITCH_TO_TEXTMESSAGE;
     notifyObservers(&e);
-
-    // Now mark ourselves as sending
-    this->runState = CANNED_MESSAGE_RUN_STATE_SENDING_ACTIVE;
-    this->payload = wantReplies ? 1 : 0;
-    requestFocus(); // focus only after event is dispatched
 }
 
 int32_t CannedMessageModule::runOnce()
@@ -1289,7 +1287,6 @@ int32_t CannedMessageModule::runOnce()
             this->freetext = "";
             this->cursor = 0;
             this->runState = CANNED_MESSAGE_RUN_STATE_ACTIVE;
-            LOG_DEBUG("MOVE UP (%d):%s", this->currentMessageIndex, this->getCurrentMessage());
         }
     } else if (this->runState == CANNED_MESSAGE_RUN_STATE_ACTION_DOWN) {
         if (this->messagesCount > 0) {
@@ -1297,7 +1294,6 @@ int32_t CannedMessageModule::runOnce()
             this->freetext = "";
             this->cursor = 0;
             this->runState = CANNED_MESSAGE_RUN_STATE_ACTIVE;
-            LOG_DEBUG("MOVE DOWN (%d):%s", this->currentMessageIndex, this->getCurrentMessage());
         }
     } else if (this->runState == CANNED_MESSAGE_RUN_STATE_FREETEXT || this->runState == CANNED_MESSAGE_RUN_STATE_ACTIVE) {
         switch (this->payload) {
@@ -2203,11 +2199,27 @@ ProcessMessage CannedMessageModule::handleReceived(const meshtastic_MeshPacket &
 
             // Show overlay banner
             if (screen) {
+                auto *display = screen->getDisplayDevice();
                 graphics::BannerOverlayOptions opts;
                 static char buf[128];
 
                 const char *channelName = channels.getName(this->channel);
-                const char *nodeName = getNodeName(this->incoming);
+                const char *src = getNodeName(this->incoming);
+                char nodeName[48];
+                strncpy(nodeName, src, sizeof(nodeName) - 1);
+                nodeName[sizeof(nodeName) - 1] = '\0';
+
+                int availWidth = display->getWidth() - (graphics::isHighResolution ? 60 : 30);
+                if (availWidth < 0)
+                    availWidth = 0;
+
+                size_t origLen = strlen(nodeName);
+                while (nodeName[0] && display->getStringWidth(nodeName) > availWidth) {
+                    nodeName[strlen(nodeName) - 1] = '\0';
+                }
+                if (strlen(nodeName) < origLen) {
+                    strcat(nodeName, "...");
+                }
 
                 // Calculate signal quality and bars based on preset, SNR, and RSSI
                 float snrLimit = getSnrLimit(config.lora.modem_preset);
