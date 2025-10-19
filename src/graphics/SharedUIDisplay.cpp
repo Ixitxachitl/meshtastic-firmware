@@ -47,6 +47,23 @@ bool hasUnreadMessage = false;
 bool isMuted = false;
 bool isHighResolution = false;
 
+static volatile bool s_overlayActive = false;
+void setOverlayActive(bool active) { s_overlayActive = active; }
+bool isOverlayActive() { return s_overlayActive; }
+
+// === Active screen classification (coarse) ===
+// We only need to know "is this the Messages screen?" for keyboard arrows.
+static volatile bool s_isMessagesScreenActive = false;
+
+static int s_messagesFrameIndex = -1;
+
+bool isMessagesScreenActive() { return s_isMessagesScreenActive; }
+void setMessagesScreenActive(bool active) { s_isMessagesScreenActive = active; }
+
+void setMessagesFrameIndex(int idx) { s_messagesFrameIndex = idx; }
+int  getMessagesFrameIndex()       { return s_messagesFrameIndex; }
+
+
 // === Internal State ===
 bool isBoltVisibleShared = true;
 uint32_t lastBlinkShared = 0;

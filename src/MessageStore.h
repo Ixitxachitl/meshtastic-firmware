@@ -117,8 +117,11 @@ class MessageStore
     // Allocate text into pool (used by sender-side code)
     static uint16_t storeText(const char *src, size_t len);
 
-    // Used when loading from flash to rebuild the text pool
-    static uint16_t rebuildTextFromFlash(const char *src, size_t len);
+    // Iterate newest -> oldest without allocating
+    template <typename F>
+    void forEachNewestFirst(F&& fn) const {
+        for (auto it = liveMessages.rbegin(); it != liveMessages.rend(); ++it) fn(*it);
+    }
 
   private:
     std::deque<StoredMessage> liveMessages; // Single in-RAM message buffer (also used for persistence)

@@ -60,6 +60,11 @@ class OSThread : public Thread
      */
     void setIntervalFromNow(unsigned long _interval);
 
+#if defined(ARDUINO_ARCH_ESP32)
+    // Minimal, test-only shim to let an external RTOS task loop the thread.
+    inline int32_t _rtosRunOnceShim() { return runOnce(); }
+#endif
+
   protected:
     /**
      * The method that will be called each time our thread gets a chance to run

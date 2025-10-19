@@ -5,6 +5,16 @@ const ScanI2C::FoundDevice ScanI2C::DEVICE_NONE = ScanI2C::FoundDevice(ScanI2C::
 
 ScanI2C::ScanI2C() = default;
 
+bool ScanI2C::s_hasMagOnPort[3] = {false, false, false};
+
+void ScanI2C::setMagOnPort(I2CPort port, bool value) {
+  s_hasMagOnPort[port] = value;
+}
+
+bool ScanI2C::hasMagnetometer() {
+  return s_hasMagOnPort[I2CPort::WIRE] || s_hasMagOnPort[I2CPort::WIRE1];
+}
+
 void ScanI2C::scanPort(ScanI2C::I2CPort port) {}
 void ScanI2C::scanPort(ScanI2C::I2CPort port, uint8_t *address, uint8_t asize) {}
 
@@ -37,8 +47,10 @@ ScanI2C::FoundDevice ScanI2C::firstKeyboard() const
 
 ScanI2C::FoundDevice ScanI2C::firstAccelerometer() const
 {
-    ScanI2C::DeviceType types[] = {MPU6050, LIS3DH, BMA423, LSM6DS3, BMX160, STK8BAXX, ICM20948, QMA6100P, BMM150};
-    return firstOfOrNONE(9, types);
+    ScanI2C::DeviceType types[] = {
+        BMI270, MPU6050, LIS3DH, BMA423, LSM6DS3, BMX160, STK8BAXX, ICM20948, QMA6100P, BMM150
+    };
+    return firstOfOrNONE(10, types);
 }
 
 ScanI2C::FoundDevice ScanI2C::firstAQI() const

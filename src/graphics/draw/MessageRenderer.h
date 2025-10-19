@@ -50,6 +50,10 @@ std::vector<int> calculateLineHeights(const std::vector<std::string> &lines, con
 // Reset scroll state when new messages arrive
 void resetScrollState();
 
+// Manual scroll controls (used by keyboard to override auto-scroll)
+void scrollUp();
+void scrollDown();
+
 // Helper to auto-select the correct thread mode from a message
 void setThreadFor(const StoredMessage &sm, const meshtastic_MeshPacket &packet);
 
