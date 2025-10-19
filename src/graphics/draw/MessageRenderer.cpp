@@ -87,6 +87,27 @@ static bool retry_on_oom(F &&fn, size_t shedCount = 16, int maxRetries = 3)
     return false;
 }
 
+// ---- Low-RAM guards for line buffers ----
+// Absolute caps; tune per device.
+static constexpr size_t kMaxTotalLines       = 512;
+static constexpr size_t kMaxLinesPerMessage  = 32;
+static constexpr size_t kShedBatch           = 64;
+
+// Reserve for the lines vector with clamping and exception safety.
+static bool try_reserve_lines(std::vector<std::string>& v, size_t want)
+{
+    if (want > kMaxTotalLines) want = kMaxTotalLines;
+    try {
+        // Never request less than current size() to avoid shrink reallocation.
+        if (want < v.size()) want = v.size();
+        v.reserve(want);
+        return true;
+    } catch (const std::bad_alloc&) {
+        // Caller decides whether to shed caches or continue without reserve.
+        return false;
+    }
+}
+
 // UTF-8 skip helper
 static inline size_t utf8CharLen(uint8_t c)
 {
@@ -267,18 +288,32 @@ void resetScrollState()
     didReset = false;
 }
 
-// Fully free cached message data from heap
+// Fully free cached message data from heap (no eager re-reserve)
 void clearMessageCache()
 {
-    std::vector<std::string>().swap(cachedLines);
-    std::vector<int>().swap(cachedHeights);
+    // Drop contents and capacity for all aligned caches
+    cachedLines.clear();
+    cachedLines.shrink_to_fit();
 
-    // Pre-reserve typical capacities to avoid repeat heap churn on rebuilds.
-    // Tune these to your screen height / expected line counts.
-    if (cachedLines.capacity() < 256)   cachedLines.reserve(256);
-    if (cachedHeights.capacity() < 256) cachedHeights.reserve(256);
+    cachedHeights.clear();
+    cachedHeights.shrink_to_fit();
 
-    // Reset scroll so we rebuild cleanly next time we enter the screen
+    cachedIsHeader.clear();
+    cachedIsHeader.shrink_to_fit();
+
+    cachedIsMine.clear();
+    cachedIsMine.shrink_to_fit();
+
+    cachedAckForLine.clear();
+    cachedAckForLine.shrink_to_fit();
+
+    cachedMsgTimestamp.clear();
+    cachedMsgTimestamp.shrink_to_fit();
+
+    cachedIsBootRelative.clear();
+    cachedIsBootRelative.shrink_to_fit();
+
+    // Rebuild from scratch on next draw
     resetScrollState();
     markDirty();
 }
@@ -515,14 +550,28 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         std::vector<bool>        isHeader;   // track header lines
         std::vector<AckStatus>   ackForLine; // per-header ACK badge
 
-        // reuse capacity to reduce growth spurts
-        allLines.reserve(cachedLines.capacity() ? cachedLines.capacity() : 256);
-        isMine.reserve(allLines.capacity());
-        isHeader.reserve(allLines.capacity());
-        ackForLine.reserve(allLines.capacity());
-        
-        std::vector<uint32_t> msgTs;          msgTs.reserve(allLines.capacity());
-        std::vector<bool>     isBootRel;      isBootRel.reserve(allLines.capacity());
+        // Reuse capacity but avoid giant reserves on tiny heaps.
+        // Start with a modest estimate; clamp and tolerate failure.
+        {
+            size_t baseCap   = cachedLines.capacity() ? cachedLines.capacity() : 256;
+            size_t estimate  = std::min(baseCap, kMaxTotalLines);
+            (void)try_reserve_lines(allLines, estimate);
+
+            // Match side vectors to whatever capacity we actually ended up with.
+            size_t cap = allLines.capacity();
+            try { isMine.reserve(cap); }   catch (...) {}
+            try { isHeader.reserve(cap); } catch (...) {}
+            try { ackForLine.reserve(cap);}catch (...) {}
+        }
+
+        std::vector<uint32_t> msgTs;
+        std::vector<bool>     isBootRel;
+        // Side buffers reserve best-effort (don’t throw if they can’t).
+        try {
+            size_t cap = allLines.capacity();
+            msgTs.reserve(cap);
+            isBootRel.reserve(cap);
+        } catch (...) {}
     
         for (auto it = filtered.begin(); it != filtered.end(); ++it) {
             const auto &m = *it;
@@ -596,6 +645,16 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             const char* msgText = MessageStore::getText(m);
 
             std::vector<std::string> wrapped = generateLines(display, "", msgText, textWidth);
+
+            // Cap per-message wrapped lines so one long message can't explode memory.
+            if (wrapped.size() > kMaxLinesPerMessage) {
+                // keep as many as possible, add ellipsis to last
+                wrapped.resize(kMaxLinesPerMessage);
+                if (!wrapped.empty()) {
+                    // Avoid huge reallocation by appending a tiny suffix
+                    wrapped.back() += " \xE2\x80\xA6"; // UTF-8 ellipsis
+                }
+            }
             for (auto& ln : wrapped) {
                 if (!retry_on_oom([&]{
                     allLines.push_back(std::move(ln));
@@ -607,6 +666,14 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                     isBootRel.push_back(false);
                 })) {
                     break; // stop adding more for this message
+                }
+                // If we are nearing the hard cap, try to expand a little, else keep going.
+                if (allLines.size() + 8 >= allLines.capacity()) {
+                    (void)try_reserve_lines(allLines, allLines.size() + 32);
+                }
+                // If reserve still can’t grow and we’re truly huge, stop early.
+                if (allLines.size() >= kMaxTotalLines) {
+                    break;
                 }
             }
 
