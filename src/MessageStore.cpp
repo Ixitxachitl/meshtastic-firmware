@@ -8,6 +8,8 @@
 #include "gps/RTC.h"
 #include "graphics/draw/MessageRenderer.h"
 #include <cstring> // memcpy
+#include <cstdint>
+#include <algorithm>
 
 #ifndef MESSAGE_TEXT_POOL_SIZE
 #define MESSAGE_TEXT_POOL_SIZE (MAX_MESSAGES_SAVED * MAX_MESSAGE_SIZE)
@@ -16,6 +18,41 @@
 // Global message text pool and state
 static char *g_messagePool = nullptr;
 static size_t g_poolWritePos = 0;
+
+static inline const char *getTextFromPool(uint16_t offset);
+
+static volatile bool g_persistDirty = false;
+
+bool MessageStore::isPersistDirty() { return g_persistDirty; }
+void MessageStore::markPersistDirty() { g_persistDirty = true; }
+void MessageStore::markPersistClean() { g_persistDirty = false; }
+
+void MessageStore::compactPoolLossless()
+{
+    // Allocate a fresh pool; if this fails, leave the old pool intact.
+    char* newPool = static_cast<char*>(std::malloc(MESSAGE_TEXT_POOL_SIZE));
+    if (!newPool) return;
+
+    size_t wp = 0;
+    for (auto& m : liveMessages) {
+        const char* txt = getTextFromPool(m.textOffset);
+        if (!txt) { continue; }
+        size_t len = std::min<size_t>(m.textLength, /*safety cap*/ 0xFFFF);
+        // In case lengths drifted, re-derive from '\0' up to previous cap:
+        size_t safeLen = std::min(len, std::strlen(txt));
+        if (wp + safeLen + 1 > MESSAGE_TEXT_POOL_SIZE) break; // should not happen
+        std::memcpy(&newPool[wp], txt, safeLen);
+        newPool[wp + safeLen] = '\0';
+        m.textOffset = static_cast<uint16_t>(wp);
+        m.textLength = static_cast<uint16_t>(safeLen);
+        wp += safeLen + 1;
+    }
+
+    // Swap pools (free old after successful copy)
+    if (g_messagePool) std::free(g_messagePool);
+    g_messagePool  = newPool;
+    g_poolWritePos = wp;
+}
 
 // Reset pool (called on boot or clear)
 static inline void resetMessagePool()
@@ -47,6 +84,7 @@ static inline uint16_t storeTextInPool(const char *src, size_t len)
     memcpy(&g_messagePool[g_poolWritePos], src, len);
     g_messagePool[g_poolWritePos + len] = '\0';
     g_poolWritePos += (len + 1);
+    MessageStore::markPersistDirty();
     return offset;
 }
 
@@ -96,10 +134,12 @@ MessageStore::MessageStore(const std::string &label)
 void MessageStore::addLiveMessage(StoredMessage &&msg)
 {
     pushWithLimit(liveMessages, std::move(msg));
+    MessageStore::markPersistDirty();
 }
 void MessageStore::addLiveMessage(const StoredMessage &msg)
 {
     pushWithLimit(liveMessages, msg);
+    MessageStore::markPersistDirty();
 }
 
 // Add from incoming/outgoing packet
@@ -238,6 +278,7 @@ void MessageStore::saveToFlash()
     spiLock->unlock();
 
     f.close();
+    MessageStore::markPersistClean();
 #endif
 }
 
@@ -270,6 +311,7 @@ void MessageStore::loadFromFlash()
 
     f.close();
 #endif
+    MessageStore::markPersistClean();
 }
 
 #else
@@ -283,6 +325,7 @@ void MessageStore::clearAllMessages()
 {
     std::deque<StoredMessage>().swap(liveMessages);
     resetMessagePool();
+    MessageStore::markPersistClean();
 
 #ifdef FSCom
     SafeFile f(filename.c_str(), false);

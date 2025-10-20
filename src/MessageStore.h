@@ -77,6 +77,18 @@ class MessageStore
 {
   public:
     explicit MessageStore(const std::string &label);
+    
+    // Returns true if there are changes in RAM that should be saved to flash.
+    static bool isPersistDirty();
+    // Mark RAM state as needing persistence (call on any mutation).
+    static void markPersistDirty();
+    // Mark RAM state as clean after a successful save.
+    static void markPersistClean();
+    
+    // NEW: Lossless compaction of the text pool.
+    // Re-packs message texts into a fresh pool, updates offsets, and swaps pools.
+    // Use only after you've persisted (or when you’re sure you won't power-cycle mid-op).
+    void compactPoolLossless();
 
     // Live RAM methods (always current, used by UI and runtime)
     void addLiveMessage(StoredMessage &&msg);
