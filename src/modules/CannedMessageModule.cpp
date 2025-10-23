@@ -1771,19 +1771,36 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
             int nodeIndex = itemIndex - numActiveChannels;
             if (nodeIndex >= 0 && nodeIndex < static_cast<int>(this->filteredNodes.size())) {
                 meshtastic_NodeInfoLite *node = this->filteredNodes[nodeIndex].node;
+                if (node && node->user.long_name) {
+                    strncpy(entryText, node->user.long_name, sizeof(entryText) - 1);
+                    entryText[sizeof(entryText) - 1] = '\0';
+                }
+                int availWidth =
+                    display->getWidth() - (graphics::isHighResolution ? 40 : 20) - ((node && node->is_favorite) ? 10 : 0);
+                if (availWidth < 0)
+                    availWidth = 0;
+
+                size_t origLen = strlen(entryText);
+                while (entryText[0] && display->getStringWidth(entryText) > availWidth) {
+                    entryText[strlen(entryText) - 1] = '\0';
+                }
+                if (strlen(entryText) < origLen) {
+                    strcat(entryText, "...");
+                }
+
+                // Prepend "* " if this is a favorite
+                if (node && node->is_favorite) {
+                    size_t len = strlen(entryText);
+                    if (len + 2 < sizeof(entryText)) {
+                        memmove(entryText + 2, entryText, len + 1);
+                        entryText[0] = '*';
+                        entryText[1] = ' ';
+                    }
+                }
                 if (node) {
-                    if (node->is_favorite) {
-#if defined(M5STACK_UNITC6L)
-                        snprintf(entryText, sizeof(entryText), "* %s", node->user.short_name);
-                    } else {
+                    if (display->getWidth() <= 64) {
                         snprintf(entryText, sizeof(entryText), "%s", node->user.short_name);
                     }
-#else
-                        snprintf(entryText, sizeof(entryText), "* %s", node->user.long_name);
-                    } else {
-                        snprintf(entryText, sizeof(entryText), "%s", node->user.long_name);
-                    }
-#endif
                 }
             }
         }
@@ -1803,6 +1820,7 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
         display->setColor(WHITE);
 
         // Draw key icon (after highlight)
+        /*
         if (itemIndex >= numActiveChannels) {
             int nodeIndex = itemIndex - numActiveChannels;
             if (nodeIndex >= 0 && nodeIndex < static_cast<int>(this->filteredNodes.size())) {
@@ -1820,6 +1838,7 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
                 }
             }
         }
+        */
     }
 
     // Scrollbar
