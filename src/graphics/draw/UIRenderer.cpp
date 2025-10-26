@@ -5,10 +5,10 @@
 #include "NodeDB.h"
 #include "NodeListRenderer.h"
 #include "UIRenderer.h"
-#include "graphics/draw/Math3D.h"
 #include "airtime.h"
 #include "gps/GeoCoord.h"
 #include "graphics/SharedUIDisplay.h"
+#include "graphics/draw/Math3D.h"
 #include "graphics/images.h"
 #include "main.h"
 #include "target_specific.h"
@@ -19,6 +19,8 @@
 // External variables
 extern graphics::Screen *screen;
 extern "C" Quat GetAttitudeForRenderer();
+extern "C" uint32_t GetStepCountForRenderer();
+extern "C" bool HasStepCounterForRenderer();
 #if defined(M5STACK_UNITC6L)
 static uint32_t lastSwitchTime = 0;
 #endif
@@ -35,6 +37,17 @@ static inline void drawSatelliteIcon(OLEDDisplay *display, int16_t x, int16_t y)
     } else {
         display->drawXbm(x + 1, y + yOffset, imgSatellite_width, imgSatellite_height, imgSatellite);
     }
+}
+
+// Footprint icon bitmap (16x16)
+static const unsigned char footprint[] PROGMEM = {0x00, 0x00, 0x00, 0x00, 0x30, 0x00, 0x78, 0x00, 0x78, 0x0C, 0x78,
+                                                  0x1E, 0x78, 0x1E, 0x78, 0x1E, 0x00, 0x1E, 0x78, 0x1E, 0x78, 0x00,
+                                                  0x30, 0x1E, 0x00, 0x1E, 0x00, 0x0C, 0x00, 0x00, 0x00, 0x00};
+
+static inline void drawFootprintIcon(OLEDDisplay *display, int16_t x, int16_t y)
+{
+    // Draw the 16x16 footprint bitmap
+    display->drawXbm(x, y, 16, 16, footprint);
 }
 
 void graphics::UIRenderer::rebuildFavoritedNodes()
@@ -495,8 +508,8 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
                 GeoCoord::latLongToMeter(DegD(p.latitude_i), DegD(p.longitude_i), DegD(op.latitude_i), DegD(op.longitude_i));
             */
             // Absolute world bearing (do NOT subtract heading here; the 3D renderer already does -heading)
-            float bearingWorld = GeoCoord::bearing(DegD(op.latitude_i), DegD(op.longitude_i),
-                                                   DegD(p.latitude_i),  DegD(p.longitude_i));
+            float bearingWorld =
+                GeoCoord::bearing(DegD(op.latitude_i), DegD(op.longitude_i), DegD(p.latitude_i), DegD(p.longitude_i));
             // If you still draw any legacy 2D bits, you can keep this relative bearing:
             float bearingRel = bearingWorld;
             if (uiconfig.compass_mode != meshtastic_CompassMode_FREEZE_HEADING)
@@ -504,18 +517,18 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
 
             // Elevation (radians)
             int32_t myAltM = ourNode ? ourNode->position.altitude : 0;
-            if (myAltM == 0) myAltM = geoCoord.getAltitude();
+            if (myAltM == 0)
+                myAltM = geoCoord.getAltitude();
             int32_t tgtAltM = p.altitude;
-            float groundM = GeoCoord::latLongToMeter(DegD(p.latitude_i), DegD(p.longitude_i),
-                                                     DegD(op.latitude_i), DegD(op.longitude_i));
+            float groundM =
+                GeoCoord::latLongToMeter(DegD(p.latitude_i), DegD(p.longitude_i), DegD(op.latitude_i), DegD(op.longitude_i));
             float dzM = float(tgtAltM - myAltM);
             float elevRad = (fabsf(groundM) > 0.5f) ? atanf(dzM / groundM) : 0.0f;
 
             // 3D spherical compass + 3D-aware rim chevron toward favorite node
             const Quat att = GetAttitudeForRenderer();
             graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, bearingRel);
-            graphics::CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius,
-                att, bearingWorld, elevRad);
+            graphics::CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, bearingWorld, elevRad);
         }
         // else show nothing
     } else {
@@ -556,14 +569,14 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
                 myHeading = screen->hasHeading() ? screen->getHeading() * PI / 180
                                                  : screen->estimatedHeading(DegD(op.latitude_i), DegD(op.longitude_i));
             }
-                
+
             const auto &p = node->position;
             /* unused
             float d =
                 GeoCoord::latLongToMeter(DegD(p.latitude_i), DegD(p.longitude_i), DegD(op.latitude_i), DegD(op.longitude_i));
             */
-            float bearingWorld = GeoCoord::bearing(DegD(op.latitude_i), DegD(op.longitude_i),
-                                                   DegD(p.latitude_i),  DegD(p.longitude_i));
+            float bearingWorld =
+                GeoCoord::bearing(DegD(op.latitude_i), DegD(op.longitude_i), DegD(p.latitude_i), DegD(p.longitude_i));
             float bearingRel = bearingWorld;
             if (uiconfig.compass_mode != meshtastic_CompassMode_FREEZE_HEADING)
                 bearingRel -= myHeading;
@@ -577,16 +590,15 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
             // Target altitude:
             int32_t tgtAltM = p.altitude;
             // Ground range in meters:
-            float groundM = GeoCoord::latLongToMeter(DegD(p.latitude_i), DegD(p.longitude_i),
-                                                     DegD(op.latitude_i), DegD(op.longitude_i));
+            float groundM =
+                GeoCoord::latLongToMeter(DegD(p.latitude_i), DegD(p.longitude_i), DegD(op.latitude_i), DegD(op.longitude_i));
             // Elevation angle: +up = positive
             float dzM = float(tgtAltM - myAltM);
             float elevRad = (fabsf(groundM) > 0.5f) ? atanf(dzM / groundM) : 0.0f;
-            
+
             const Quat att = GetAttitudeForRenderer();
             graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, bearingRel);
-            graphics::CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius,
-                att, bearingWorld, elevRad);
+            graphics::CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, bearingWorld, elevRad);
         }
         // else show nothing
     }
@@ -1142,6 +1154,36 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
             // Center vertically and nudge down slightly to keep "N" clear of header
             const int16_t compassY = topY + (usableHeight / 2) + ((FONT_HEIGHT_SMALL - 1) / 2) + 2;
 
+            // Add step count display above compass (top right area)
+            uint32_t stepCount = GetStepCountForRenderer();
+            if (HasStepCounterForRenderer()) { // Show if step counter hardware exists
+                display->setTextAlignment(TEXT_ALIGN_RIGHT);
+                display->setFont(FONT_SMALL);
+
+                // Position step display in top right, below header
+                const int16_t stepX = SCREEN_WIDTH - 2;
+                const int16_t stepY = topY - 2;
+
+                // Format step count (show as K if > 1000)
+                char stepText[16];
+                if (stepCount >= 10000) {
+                    snprintf(stepText, sizeof(stepText), "%.1fK", stepCount / 1000.0f);
+                } else if (stepCount >= 1000) {
+                    snprintf(stepText, sizeof(stepText), "%.2fK", stepCount / 1000.0f);
+                } else {
+                    snprintf(stepText, sizeof(stepText), "%u", stepCount);
+                }
+
+                // Calculate text width to position footprints to the left of the digits
+                int16_t textWidth = display->getStringWidth(stepText);
+
+                // Draw footprint icon to the left of the text with some spacing
+                drawFootprintIcon(display, stepX - textWidth - 15, stepY + 2);
+
+                display->drawString(stepX, stepY, stepText);
+                display->setTextAlignment(TEXT_ALIGN_LEFT); // Reset alignment
+            }
+
             // Spherical compass replaces flat ring + north marker
             CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, -heading);
 
@@ -1249,7 +1291,7 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
     if (currentFrame != lastFrameIndex) {
         lastFrameIndex = currentFrame;
         lastFrameChangeTime = millis();
-        
+
         // Flip the Messages-active flag based on the active frame index
         const int msgIdx = graphics::getMessagesFrameIndex();
         graphics::setMessagesScreenActive(state->currentFrame == msgIdx);

@@ -1,31 +1,92 @@
 #include "configuration.h"
 #if HAS_SCREEN
 #include "CompassRenderer.h"
+#include "Math3D.h"
 #include "NodeDB.h"
 #include "UIRenderer.h"
 #include "configuration.h"
 #include "gps/GeoCoord.h"
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
+#include "motion/BMI270Sensor.h" // to fetch attitude quaternion
+#include <Arduino.h>             // for millis()
 #include <cmath>
-#include "Math3D.h"
-#include "motion/BMI270Sensor.h"    // to fetch attitude quaternion
-extern "C" Quat GetAttitudeForRenderer();  // accessor provided by BMI270Sensor.cpp (see patch 2)
+extern "C" Quat GetAttitudeForRenderer(); // accessor provided by BMI270Sensor.cpp (see patch 2)
 extern "C" Vec3 GetGravityForRenderer();
 extern "C" float GetHeadingRadiansForRenderer();
 
-namespace {
+namespace
+{
+// Cached sphere geometry to avoid repeated trigonometric calculations
+struct SphereGeometry {
+    static constexpr int MAX_MERIDIANS = 12;
+    static constexpr int MAX_PARALLELS = 8;
+    static constexpr int MAX_SEGMENTS = 32; // Reduced from 48 for better performance
+
+    Vec3 meridians[MAX_MERIDIANS][MAX_SEGMENTS + 1];
+    Vec3 parallels[MAX_PARALLELS][MAX_SEGMENTS + 1];
+    Vec3 equator[MAX_SEGMENTS + 1];
+    bool initialized = false;
+
+    void initialize(float radius)
+    {
+        if (initialized)
+            return;
+
+        // Pre-compute meridians
+        for (int m = 0; m < MAX_MERIDIANS; ++m) {
+            float phi = (2.0f * (float)M_PI * m) / MAX_MERIDIANS;
+            float cos_phi = std::cos(phi);
+            float sin_phi = std::sin(phi);
+
+            for (int i = 0; i <= MAX_SEGMENTS; ++i) {
+                float t = ((float)i / MAX_SEGMENTS) * (float)M_PI - (float)M_PI / 2.0f;
+                float cos_t = std::cos(t);
+                float sin_t = std::sin(t);
+                meridians[m][i] = Vec3(cos_t * cos_phi, sin_t, -cos_t * sin_phi) * radius;
+            }
+        }
+
+        // Pre-compute parallels
+        for (int n = 0; n < MAX_PARALLELS; ++n) {
+            float theta = ((float)(n + 1) / (MAX_PARALLELS + 1)) * (float)M_PI - (float)M_PI / 2.0f;
+            float sin_theta = std::sin(theta);
+            float cos_theta = std::cos(theta);
+
+            for (int i = 0; i <= MAX_SEGMENTS; ++i) {
+                float a = (2.0f * (float)M_PI * i) / MAX_SEGMENTS;
+                float cos_a = std::cos(a);
+                float sin_a = std::sin(a);
+                parallels[n][i] = Vec3(cos_theta * cos_a, sin_theta, -cos_theta * sin_a) * radius;
+            }
+        }
+
+        // Pre-compute equator
+        for (int i = 0; i <= MAX_SEGMENTS; ++i) {
+            float a = (2.0f * (float)M_PI * i) / MAX_SEGMENTS;
+            equator[i] = Vec3(std::cos(a), 0.0f, -std::sin(a)) * radius;
+        }
+
+        initialized = true;
+    }
+};
+
+static SphereGeometry g_sphereCache;
+
 // rotate unit vector a onto unit vector b
-static inline Quat quatBetweenUnit(const Vec3& a, const Vec3& b) {
+static inline Quat quatBetweenUnit(const Vec3 &a, const Vec3 &b)
+{
     float d = a.dot(b);
-    Vec3  v = a.cross(b);
+    Vec3 v = a.cross(b);
     float w = 1.0f + d;
     if (w < 1e-6f) { // 180°
-        Vec3 axis = (fabsf(a.x) < 0.5f) ? Vec3(1,0,0) : Vec3(0,1,0);
+        Vec3 axis = (fabsf(a.x) < 0.5f) ? Vec3(1, 0, 0) : Vec3(0, 1, 0);
         v = a.cross(axis).normalized();
         return Quat(0, v.x, v.y, v.z);
     }
-    Quat q(w, v.x, v.y, v.z); q.normalize(); return q;
+    Quat q(w, v.x, v.y, v.z);
+    q.normalize();
+    return q;
 }
 
 // Project with ORTHO and keep depth so we can cull/clamp to the front hemisphere.
@@ -34,27 +95,32 @@ struct ProjPt {
     float z;
     bool ok;
 };
-static inline ProjPt projectOrtho(const Quat& q, const Vec3& p, int cx, int cy) {
+static inline ProjPt projectOrtho(const Quat &q, const Vec3 &p, int cx, int cy)
+{
     Vec3 pc = q.rotate(p);
     ProjPt r;
     r.x = cx + (int)std::lround(pc.x);
     r.y = cy + (int)std::lround(pc.y);
-    r.z = pc.z;  // view dir = -Z; front = z <= 0
+    r.z = pc.z; // view dir = -Z; front = z <= 0
     r.ok = true;
     return r;
 }
 
 // ---------- Startup-stable render transform (shared by sphere & labels) ----------
-static inline float wrapPi(float a) {
-    while (a >  M_PI) a -= 2.0f*M_PI;
-    while (a <= -M_PI) a += 2.0f*M_PI;
+static inline float wrapPi(float a)
+{
+    while (a > M_PI)
+        a -= 2.0f * M_PI;
+    while (a <= -M_PI)
+        a += 2.0f * M_PI;
     return a;
 }
 
 // Build a stable render quaternion for a "world view" compass.
 // - Tilt is based ONLY on gravity, keeping the globe level with the world.
 // - Yaw is based ONLY on the magnetic heading.
-static Quat buildSmoothedRenderQuat(const Quat& /* attitude unused */) {
+static Quat buildSmoothedRenderQuat(const Quat & /* attitude unused */)
+{
     static bool init = false;
     static Quat qRenderFilt(1, 0, 0, 0);
 
@@ -73,7 +139,7 @@ static Quat buildSmoothedRenderQuat(const Quat& /* attitude unused */) {
     // 3. Combine them: First orient to gravity, then rotate to North.
     Quat qRender = qTilt * qYaw;
 
-    // 4. Apply smoothing to the final quaternion
+    // 4. Apply simple smoothing to the final quaternion
     const float alpha = init ? 0.25f : 1.0f;
 
     // NLERP for smooth animation
@@ -84,75 +150,104 @@ static Quat buildSmoothedRenderQuat(const Quat& /* attitude unused */) {
         qRenderFilt.y = -qRenderFilt.y;
         qRenderFilt.z = -qRenderFilt.z;
     }
-    Quat qBlend(
-        (1.0f - alpha) * qRenderFilt.w + alpha * qRender.w,
-        (1.0f - alpha) * qRenderFilt.x + alpha * qRender.x,
-        (1.0f - alpha) * qRenderFilt.y + alpha * qRender.y,
-        (1.0f - alpha) * qRenderFilt.z + alpha * qRender.z
-    );
+    Quat qBlend((1.0f - alpha) * qRenderFilt.w + alpha * qRender.w, (1.0f - alpha) * qRenderFilt.x + alpha * qRender.x,
+                (1.0f - alpha) * qRenderFilt.y + alpha * qRender.y, (1.0f - alpha) * qRenderFilt.z + alpha * qRender.z);
     qBlend.normalize();
     qRenderFilt = qBlend;
-
     init = true;
+
     return qRenderFilt;
 }
 
-// Draw a ring but only the parts on the FRONT hemisphere.
-// If a segment crosses the rim (z==0), we clip to the rim for a clean edge.
-static inline void drawPolylineFront(OLEDDisplay* d, const Quat& q,
-                                     int cx, int cy, const Vec3* pts, int count,
-                                     bool drawDots /*filled verts on front*/)
+// Fast front hemisphere check using dot product with view direction
+static inline bool isFrontFacing(const Vec3 &rotated_pt)
 {
-    if (count < 2) return;
-    ProjPt prev = projectOrtho(q, pts[0], cx, cy);
-    bool prevFront = prev.ok && (prev.z <= 0.0f);
+    return rotated_pt.z <= 0.0f; // View direction is -Z
+}
 
-    // Optional vertex dot for first point
-    if (drawDots && prevFront) d->fillCircle(prev.x, prev.y, 1);
+// Optimized polyline drawing with bulk front/back testing
+static inline void drawPolylineFront(OLEDDisplay *d, const Quat &q, int cx, int cy, const Vec3 *pts, int count, bool drawDots)
+{
+    if (count < 2)
+        return;
 
-    for (int i = 1; i < count; ++i) {
-        ProjPt curr = projectOrtho(q, pts[i], cx, cy);
-        bool currFront = curr.ok && (curr.z <= 0.0f);
+    // Pre-transform all points and test front-facing in batches
+    ProjPt projPts[64]; // Stack buffer for moderate polylines
+    bool *isFront = nullptr;
+    bool frontFlags[64];
+
+    if (count <= 64) {
+        isFront = frontFlags;
+    } else {
+        // For very large polylines, use simplified approach
+        // Just draw segments that are likely visible
+        for (int i = 0; i < count - 1; i += 4) { // Skip every 4th for performance
+            ProjPt p1 = projectOrtho(q, pts[i], cx, cy);
+            ProjPt p2 = projectOrtho(q, pts[i + 1], cx, cy);
+
+            if (p1.ok && p2.ok && p1.z <= 0.0f && p2.z <= 0.0f) {
+                d->drawLine(p1.x, p1.y, p2.x, p2.y);
+            }
+        }
+        return;
+    }
+
+    // Transform all points once
+    for (int i = 0; i < count; ++i) {
+        projPts[i] = projectOrtho(q, pts[i], cx, cy);
+        isFront[i] = projPts[i].ok && projPts[i].z <= 0.0f;
+    }
+
+    // Draw dots for front-facing vertices
+    if (drawDots) {
+        for (int i = 0; i < count; ++i) {
+            if (isFront[i]) {
+                d->fillCircle(projPts[i].x, projPts[i].y, 1);
+            }
+        }
+    }
+
+    // Draw line segments
+    for (int i = 0; i < count - 1; ++i) {
+        bool prevFront = isFront[i];
+        bool currFront = isFront[i + 1];
 
         if (prevFront && currFront) {
-            d->drawLine(prev.x, prev.y, curr.x, curr.y);
+            // Both points visible - draw full segment
+            d->drawLine(projPts[i].x, projPts[i].y, projPts[i + 1].x, projPts[i + 1].y);
         } else if (prevFront != currFront) {
-            // Clip to z=0 in MODEL space (linear on segment), then project once.
-            const Vec3& A = pts[i-1];
-            const Vec3& B = pts[i];
-            // Solve for t where z crosses 0 after rotation:
-            // We approximate by interpolating in model space and projecting.
-            // Find t using depths we already computed (prev.z, curr.z).
-            float denom = (prev.z - curr.z);
-            float t = (fabsf(denom) > 1e-6f) ? (prev.z / denom) : 0.0f;
-            if (t < 0.0f) t = 0.0f; else if (t > 1.0f) t = 1.0f;
-            Vec3 M = Vec3(A.x + t*(B.x - A.x),
-                          A.y + t*(B.y - A.y),
-                          A.z + t*(B.z - A.z));
-            ProjPt clip = projectOrtho(q, M, cx, cy);
+            // Crossing front/back boundary - clip to horizon
+            float denom = projPts[i].z - projPts[i + 1].z;
+            if (fabsf(denom) > 1e-6f) {
+                float t = projPts[i].z / denom;
+                t = (t < 0.0f) ? 0.0f : (t > 1.0f) ? 1.0f : t;
 
-            if (prevFront) d->drawLine(prev.x, prev.y, clip.x, clip.y);
-            else           d->drawLine(clip.x, clip.y, curr.x, curr.y);
+                // Interpolate clip point in screen space for efficiency
+                int clipX = (int)(projPts[i].x + t * (projPts[i + 1].x - projPts[i].x));
+                int clipY = (int)(projPts[i].y + t * (projPts[i + 1].y - projPts[i].y));
+
+                if (prevFront) {
+                    d->drawLine(projPts[i].x, projPts[i].y, clipX, clipY);
+                } else {
+                    d->drawLine(clipX, clipY, projPts[i + 1].x, projPts[i + 1].y);
+                }
+            }
         }
-
-        if (drawDots && currFront) d->fillCircle(curr.x, curr.y, 1);
-
-        prev = curr;
-        prevFront = currFront;
+        // Skip segments where both points are behind
     }
 }
 
 } // namespace
-    
+
 namespace graphics
 {
 namespace CompassRenderer
 {
 
-namespace {
+namespace
+{
 // Rotate + project (ORTHOGRAPHIC): ignore depth, no foreshortening
-inline bool projectPoint(const Quat& qAtt, const Vec3& pModel,
-                         int cx, int cy, int& outX, int& outY)
+inline bool projectPoint(const Quat &qAtt, const Vec3 &pModel, int cx, int cy, int &outX, int &outY)
 {
     Vec3 pc = qAtt.rotate(pModel); // Y up in model -> Y increases downward on screen
     outX = cx + (int)std::lround(pc.x);
@@ -161,87 +256,97 @@ inline bool projectPoint(const Quat& qAtt, const Vec3& pModel,
 }
 
 // Draw one closed polyline (front-hemisphere only; simple reject if behind)
-inline void drawPolylineProjected(OLEDDisplay* d, const Quat& qAtt,
-                                  int cx, int cy,
-                                  const Vec3* pts, int count)
+inline void drawPolylineProjected(OLEDDisplay *d, const Quat &qAtt, int cx, int cy, const Vec3 *pts, int count)
 {
-    int px=0, py=0; bool hasPrev=false;
-    for (int i=0; i<count; ++i) {
+    int px = 0, py = 0;
+    bool hasPrev = false;
+    for (int i = 0; i < count; ++i) {
         int sx, sy;
         if (projectPoint(qAtt, pts[i], cx, cy, sx, sy)) {
-            if (hasPrev) d->drawLine(px, py, sx, sy);
-            px=sx; py=sy; hasPrev=true;
+            if (hasPrev)
+                d->drawLine(px, py, sx, sy);
+            px = sx;
+            py = sy;
+            hasPrev = true;
         } else {
-            hasPrev=false;
+            hasPrev = false;
         }
     }
 }
-} // anon
+} // namespace
 
-void drawCenterNeedle3D(OLEDDisplay* display, int16_t cx, int16_t cy, uint16_t radius,
-                        const Quat& attitude, float bearingRad, float elevRad)
+void drawCenterNeedle3D(OLEDDisplay *display, int16_t cx, int16_t cy, uint16_t radius, const Quat &attitude, float bearingRad,
+                        float elevRad)
 {
-    const uint16_t rDraw   = (uint16_t)std::max<int>(1, (int)radius);
-    const int16_t  cxShift = (int16_t)(cx - (int)(rDraw * 0.14f)); // same left shift
+    const uint16_t rDraw = (uint16_t)std::max<int>(1, (int)radius);
+    const int16_t cxShift = (int16_t)(cx - (int)(rDraw * 0.14f)); // same left shift
 
     // Build the shared render transform, then CANCEL yaw so the needle is ring-locked
-    const Quat  qFull     = buildSmoothedRenderQuat(attitude);     // (tilt * yaw(-heading))
-    const float heading   = GetHeadingRadiansForRenderer();        // 0 = North, +CW
-    const Quat  qYawInv   = Quat::fromAxisAngle(Vec3(0,1,0), +heading);
-    const Quat  qTiltOnly = qFull * qYawInv;                       // remove yaw
+    const Quat qFull = buildSmoothedRenderQuat(attitude); // (tilt * yaw(-heading))
+    const float heading = GetHeadingRadiansForRenderer(); // 0 = North, +CW
+    const Quat qYawInv = Quat::fromAxisAngle(Vec3(0, 1, 0), +heading);
+    const Quat qTiltOnly = qFull * qYawInv; // remove yaw
 
     // Relative bearing (same convention as the little compass): (bearing - heading), wrapped
     float rel = bearingRad - heading;
-    while (rel >  M_PI) rel -= 2.0f * M_PI;
-    while (rel <= -M_PI) rel += 2.0f * M_PI;
+    while (rel > M_PI)
+        rel -= 2.0f * M_PI;
+    while (rel <= -M_PI)
+        rel += 2.0f * M_PI;
 
     // Target vector in COMPASS frame (X=East, Y=Up, Z=North-on-compass).
     // With camera forward = -Z, use -cos(rel)*cos(elev) for Z.
     const float ca = std::cos(rel), sa = std::sin(rel);
     const float ce = std::cos(elevRad), se = std::sin(elevRad);
-    Vec3 vComp(sa*ce, se, +ca*ce);
+    Vec3 vComp(sa * ce, se, +ca * ce);
 
     // Camera-space forward unit vector (tilt only)
     Vec3 vCam = qTiltOnly.rotate(vComp);
-    float n3 = std::sqrt(vCam.x*vCam.x + vCam.y*vCam.y + vCam.z*vCam.z);
-    if (n3 < 1e-6f) return;
-    vCam.x/=n3; vCam.y/=n3; vCam.z/=n3;
+    float n3 = std::sqrt(vCam.x * vCam.x + vCam.y * vCam.y + vCam.z * vCam.z);
+    if (n3 < 1e-6f)
+        return;
+    vCam.x /= n3;
+    vCam.y /= n3;
+    vCam.z /= n3;
 
     // Compass-locked left/right axis: Up × Forward (with pole fallback), then tilt to screen
     Vec3 upC(0.f, 1.f, 0.f);
     Vec3 pComp = upC.cross(vComp);
-    float pn = std::sqrt(pComp.x*pComp.x + pComp.y*pComp.y + pComp.z*pComp.z);
+    float pn = std::sqrt(pComp.x * pComp.x + pComp.y * pComp.y + pComp.z * pComp.z);
     if (pn < 1e-6f) {
-        pComp = Vec3(1.f,0.f,0.f).cross(vComp);
-        pn = std::sqrt(pComp.x*pComp.x + pComp.y*pComp.y + pComp.z*pComp.z);
-        if (pn < 1e-6f) return;
+        pComp = Vec3(1.f, 0.f, 0.f).cross(vComp);
+        pn = std::sqrt(pComp.x * pComp.x + pComp.y * pComp.y + pComp.z * pComp.z);
+        if (pn < 1e-6f)
+            return;
     }
-    pComp.x/=pn; pComp.y/=pn; pComp.z/=pn;
+    pComp.x /= pn;
+    pComp.y /= pn;
+    pComp.z /= pn;
 
     Vec3 pCam = qTiltOnly.rotate(pComp);
-    float lenP = std::sqrt(pCam.x*pCam.x + pCam.y*pCam.y);
-    const float px = (lenP > 1e-6f) ? (pCam.x/lenP) : 1.f;
-    const float py = (lenP > 1e-6f) ? (pCam.y/lenP) : 0.f;
+    float lenP = std::sqrt(pCam.x * pCam.x + pCam.y * pCam.y);
+    const float px = (lenP > 1e-6f) ? (pCam.x / lenP) : 1.f;
+    const float py = (lenP > 1e-6f) ? (pCam.y / lenP) : 0.f;
 
-    // ---------------- geometry (unchanged) ----------------
+    // Original needle geometry with containment fix
     const float frontInsetFrac = 0.015f;
-    const float edgeBackFrac   = 0.75f;
+    const float edgeBackFrac = 0.65f; // Reduced from 0.75f to keep tail inside
     const float backSurfaceInsetFrac = 0.015f;
 
     const float rFrontEdge = rDraw * (1.f - frontInsetFrac);
-    const float rBackEdge  = rDraw * edgeBackFrac;
-    const float rBackSurf  = rDraw * (1.f - backSurfaceInsetFrac);
+    const float rBackEdge = rDraw * edgeBackFrac;
+    const float rBackSurf = rDraw * (1.f - backSurfaceInsetFrac);
 
     const int16_t xEfront = cxShift + (int16_t)std::lround(+rFrontEdge * vCam.x);
-    const int16_t yEfront = cy      + (int16_t)std::lround(+rFrontEdge * vCam.y);
-    const int16_t xEback  = cxShift + (int16_t)std::lround(-rBackEdge  * vCam.x);
-    const int16_t yEback  = cy      + (int16_t)std::lround(-rBackEdge  * vCam.y);
+    const int16_t yEfront = cy + (int16_t)std::lround(+rFrontEdge * vCam.y);
+    const int16_t xEback = cxShift + (int16_t)std::lround(-rBackEdge * vCam.x);
+    const int16_t yEback = cy + (int16_t)std::lround(-rBackEdge * vCam.y);
 
     const float backSpread = rDraw * 0.38f;
     const int16_t xBL = cxShift + (int16_t)std::lround(-rBackSurf * vCam.x - backSpread * px);
-    const int16_t yBL = cy      + (int16_t)std::lround(-rBackSurf * vCam.y - backSpread * py);
+    const int16_t yBL = cy + (int16_t)std::lround(-rBackSurf * vCam.y - backSpread * py);
     const int16_t xBR = cxShift + (int16_t)std::lround(-rBackSurf * vCam.x + backSpread * px);
-    const int16_t yBR = cy      + (int16_t)std::lround(-rBackSurf * vCam.y + backSpread * py);
+    const int16_t yBR = cy + (int16_t)std::lround(-rBackSurf * vCam.y + backSpread * py);
 
     display->drawTriangle(xEfront, yEfront, xEback, yEback, xBL, yBL);
 #ifdef USE_EINK
@@ -251,62 +356,34 @@ void drawCenterNeedle3D(OLEDDisplay* display, int16_t cx, int16_t cy, uint16_t r
 #endif
 }
 
-
-void drawCompassSphere(OLEDDisplay* d, int16_t cx, int16_t cy,
-                       uint16_t radius, const Quat& attitude)
+void drawCompassSphere(OLEDDisplay *d, int16_t cx, int16_t cy, uint16_t radius, const Quat &attitude)
 {
-    // size & position (keep in sync with drawNodeHeading)
-    const uint16_t rDraw   = (uint16_t)std::max<int>(1, (int)(radius)); 
-    const int16_t  cxShift = (int16_t)(cx - (int)(rDraw * 0.14f));              // a bit left
-    const int      LONGS = 12, LATS = 8, SEG = 48;
+    const uint16_t rDraw = (uint16_t)std::max<int>(1, (int)(radius));
+    const int16_t cxShift = (int16_t)(cx - (int)(rDraw * 0.14f));
 
-    // Use the shared, smoothed render transform (tilt-only + yaw(-heading))
+    // Initialize cached geometry if needed
+    g_sphereCache.initialize((float)rDraw);
+
+    // Use the shared, smoothed render transform
     Quat qRender = buildSmoothedRenderQuat(attitude);
 
-    // -------- ORTHOGRAPHIC helpers already in your file --------
-    // projectPoint(qAtt, pModel, cx, cy, outX, outY)
-    // drawPolylineProjected(d, qAtt, cx, cy, pts, count)
-
-    // --- Always-on border around the sphere (draw last so it sits on top) ---
+    // Always-on border around the sphere
     d->drawCircle(cxShift, cy, rDraw);
 
-    // Meridians
-    for (int m = 0; m < LONGS; ++m) {
-        float phi = (2.0f * (float)M_PI * m) / LONGS;
-        Vec3 ring[SEG + 1];
-        for (int i = 0; i <= SEG; ++i) {
-            float t = ((float)i / SEG) * (float)M_PI - (float)M_PI/2.0f;
-            float c = std::cos(t), s = std::sin(t);
-            ring[i] = Vec3(c*std::cos(phi), s, -c*std::sin(phi)) * (float)rDraw;
-        }
-        drawPolylineFront(d, qRender, cxShift, cy, ring, SEG + 1, /*drawDots=*/false);
+    // Draw meridians using cached geometry
+    for (int m = 0; m < g_sphereCache.MAX_MERIDIANS; ++m) {
+        drawPolylineFront(d, qRender, cxShift, cy, g_sphereCache.meridians[m], g_sphereCache.MAX_SEGMENTS + 1, false);
     }
 
-    // Parallels
-    for (int n = 1; n <= LATS; ++n) {
-        float theta = ((float)n / (LATS + 1)) * (float)M_PI - (float)M_PI/2.0f;
-        float s = std::sin(theta), c = std::cos(theta);
-        Vec3 ring[SEG + 1];
-        for (int i = 0; i <= SEG; ++i) {
-            float a = (2.0f * (float)M_PI * i) / SEG;
-            ring[i] = Vec3(c*std::cos(a), s, -c*std::sin(a)) * (float)rDraw;
-        }
-        drawPolylineFront(d, qRender, cxShift, cy, ring, SEG + 1, /*drawDots=*/false);
+    // Draw parallels using cached geometry
+    for (int n = 0; n < g_sphereCache.MAX_PARALLELS; ++n) {
+        drawPolylineFront(d, qRender, cxShift, cy, g_sphereCache.parallels[n], g_sphereCache.MAX_SEGMENTS + 1, false);
     }
 
-    // Equator (slightly thicker: draw twice; add vertex dots if desired)
-    {
-        Vec3 ring[SEG + 1];
-        for (int i = 0; i <= SEG; ++i) {
-            float a = (2.0f * (float)M_PI * i) / SEG;
-            ring[i] = Vec3(std::cos(a), 0.0f, -std::sin(a)) * (float)rDraw;
-        }
-        drawPolylineFront(d, qRender, cxShift, cy, ring, SEG + 1, /*drawDots=*/true);
-        drawPolylineFront(d, qRender, cxShift, cy, ring, SEG + 1, /*drawDots=*/false); // overdraw = thicker
-    }
+    // Equator (draw twice for thickness)
+    drawPolylineFront(d, qRender, cxShift, cy, g_sphereCache.equator, g_sphereCache.MAX_SEGMENTS + 1, true);
+    drawPolylineFront(d, qRender, cxShift, cy, g_sphereCache.equator, g_sphereCache.MAX_SEGMENTS + 1, false); // Thicker
 }
-
-
 
 // Point helper class for compass calculations
 struct Point {
@@ -362,8 +439,8 @@ void drawCompassNorth(OLEDDisplay *display, int16_t compassX, int16_t compassY, 
     display->drawString(north.x, north.y - 3, "N");
 }
 
-void drawNodeHeading(OLEDDisplay *display, int16_t compassX, int16_t compassY,
-                     uint16_t compassDiam, float /*headingRadian unused*/)
+void drawNodeHeading(OLEDDisplay *display, int16_t compassX, int16_t compassY, uint16_t compassDiam,
+                     float /*headingRadian unused*/)
 {
     const Quat attitude = GetAttitudeForRenderer();
     const uint16_t radius = compassDiam / 2;
@@ -372,25 +449,30 @@ void drawNodeHeading(OLEDDisplay *display, int16_t compassX, int16_t compassY,
     drawCompassSphere(display, compassX, compassY, radius, attitude);
 
     // same geometry constants used by the globe
-    const uint16_t rDraw   = (uint16_t)std::max<int>(1, (int)(radius));
-    const int16_t  cxShift = (int16_t)(compassX - (int)(rDraw * 0.14f));
-    const int16_t  cy      = compassY;
-    const float    rLabel  = rDraw * 1.06f;  // just outside equator
+    const uint16_t rDraw = (uint16_t)std::max<int>(1, (int)(radius));
+    const int16_t cxShift = (int16_t)(compassX - (int)(rDraw * 0.14f));
+    const int16_t cy = compassY;
+    const float rLabel = rDraw * 1.06f; // just outside equator
 
     // Same smoothed transform as the sphere so labels stay locked to the equator
     const Quat qLabel = buildSmoothedRenderQuat(attitude);
 
     // Choose your basis (forward = −Z). If your build uses +Z forward, flip signs as discussed.
-    struct Mark { const char* t; Vec3 p; };
+    struct Mark {
+        const char *t;
+        Vec3 p;
+    };
     Mark marks[] = {
-        {"N", Vec3( 0, 0, 1)}, {"E", Vec3( 1, 0, 0)},
-        {"S", Vec3( 0, 0,-1)}, {"W", Vec3(-1, 0, 0)},
+        {"N", Vec3(0, 0, 1)},
+        {"E", Vec3(1, 0, 0)},
+        {"S", Vec3(0, 0, -1)},
+        {"W", Vec3(-1, 0, 0)},
     };
 
     display->setFont(FONT_SMALL);
     display->setTextAlignment(TEXT_ALIGN_CENTER);
 
-    for (auto& m : marks) {
+    for (auto &m : marks) {
         int x, y;
         if (projectPoint(qLabel, m.p * (float)rLabel, cxShift, cy, x, y)) {
             display->drawString(x, y - (FONT_HEIGHT_SMALL / 2), m.t);
