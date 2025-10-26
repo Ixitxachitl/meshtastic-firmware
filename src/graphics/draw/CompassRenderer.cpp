@@ -1,6 +1,13 @@
 #include "configuration.h"
 #if HAS_SCREEN
 #include "CompassRenderer.h"
+
+// Memory optimization: Use smaller cache on memory-constrained devices
+#if defined(ARCH_RP2040) || defined(ARCH_NRF52)
+#define COMPASS_MEMORY_OPTIMIZED 1
+#else
+#define COMPASS_MEMORY_OPTIMIZED 0
+#endif
 #include "Math3D.h"
 #include "NodeDB.h"
 #include "UIRenderer.h"
@@ -19,19 +26,27 @@ namespace
 {
 // Cached sphere geometry to avoid repeated trigonometric calculations
 struct SphereGeometry {
-    static constexpr int MAX_MERIDIANS = 12;
-    static constexpr int MAX_PARALLELS = 8;
-    static constexpr int MAX_SEGMENTS = 32; // Reduced from 48 for better performance
+#if COMPASS_MEMORY_OPTIMIZED
+    static constexpr int MAX_MERIDIANS = 6; // Ultra-low memory: 6 meridians
+    static constexpr int MAX_PARALLELS = 4; // Ultra-low memory: 4 parallels
+    static constexpr int MAX_SEGMENTS = 16; // Ultra-low memory: 16 segments
+#else
+    static constexpr int MAX_MERIDIANS = 8; // Reduced from 12 (-33% memory)
+    static constexpr int MAX_PARALLELS = 6; // Reduced from 8 (-25% memory)
+    static constexpr int MAX_SEGMENTS = 24; // Reduced from 32 (-25% memory)
+#endif
 
     Vec3 meridians[MAX_MERIDIANS][MAX_SEGMENTS + 1];
     Vec3 parallels[MAX_PARALLELS][MAX_SEGMENTS + 1];
-    Vec3 equator[MAX_SEGMENTS + 1];
     bool initialized = false;
+    float cached_radius = 0.0f; // Track radius to avoid unnecessary recomputation
 
     void initialize(float radius)
     {
-        if (initialized)
-            return;
+        if (initialized && fabsf(cached_radius - radius) < 0.1f)
+            return; // Skip if already initialized with same radius
+
+        cached_radius = radius;
 
         // Pre-compute meridians
         for (int m = 0; m < MAX_MERIDIANS; ++m) {
@@ -47,9 +62,27 @@ struct SphereGeometry {
             }
         }
 
-        // Pre-compute parallels
+        // Pre-compute parallels with equator included in even spacing
         for (int n = 0; n < MAX_PARALLELS; ++n) {
-            float theta = ((float)(n + 1) / (MAX_PARALLELS + 1)) * (float)M_PI - (float)M_PI / 2.0f;
+            float theta;
+
+            if (MAX_PARALLELS == 1) {
+                theta = 0.0f; // Single parallel is equator
+            } else if (MAX_PARALLELS % 2 == 1) {
+                // Odd number: center parallel is exactly equator (theta = 0)
+                int center = MAX_PARALLELS / 2;
+                theta = ((float)(n - center) / center) * (float)M_PI / 3.0f; // ±60° range
+            } else {
+                // Even number: create symmetric spacing around equator, force one to be equator
+                if (n == MAX_PARALLELS / 2) {
+                    theta = 0.0f; // Force this one to be equator
+                } else {
+                    // Space others evenly around it
+                    int offset = (n < MAX_PARALLELS / 2) ? (n - MAX_PARALLELS / 2) : (n - MAX_PARALLELS / 2);
+                    theta = ((float)offset / (MAX_PARALLELS / 2)) * (float)M_PI / 3.0f;
+                }
+            }
+
             float sin_theta = std::sin(theta);
             float cos_theta = std::cos(theta);
 
@@ -59,12 +92,6 @@ struct SphereGeometry {
                 float sin_a = std::sin(a);
                 parallels[n][i] = Vec3(cos_theta * cos_a, sin_theta, -cos_theta * sin_a) * radius;
             }
-        }
-
-        // Pre-compute equator
-        for (int i = 0; i <= MAX_SEGMENTS; ++i) {
-            float a = (2.0f * (float)M_PI * i) / MAX_SEGMENTS;
-            equator[i] = Vec3(std::cos(a), 0.0f, -std::sin(a)) * radius;
         }
 
         initialized = true;
@@ -388,14 +415,42 @@ void drawCompassSphere(OLEDDisplay *d, int16_t cx, int16_t cy, uint16_t radius, 
         drawPolylineFront(d, qRender, cxShift, cy, g_sphereCache.meridians[m], g_sphereCache.MAX_SEGMENTS + 1, false);
     }
 
-    // Draw parallels using cached geometry
+    // Draw parallels using cached geometry (includes equator)
     for (int n = 0; n < g_sphereCache.MAX_PARALLELS; ++n) {
-        drawPolylineFront(d, qRender, cxShift, cy, g_sphereCache.parallels[n], g_sphereCache.MAX_SEGMENTS + 1, false);
-    }
+        // Check if this is the equator - simple and explicit
+        bool isEquator = false;
+        if (g_sphereCache.MAX_PARALLELS == 1) {
+            isEquator = (n == 0); // Single parallel is equator
+        } else if (g_sphereCache.MAX_PARALLELS % 2 == 1) {
+            isEquator = (n == g_sphereCache.MAX_PARALLELS / 2); // Center parallel for odd count
+        } else {
+            isEquator = (n == g_sphereCache.MAX_PARALLELS / 2); // Forced equator for even count
+        }
 
-    // Equator (draw twice for thickness)
-    drawPolylineFront(d, qRender, cxShift, cy, g_sphereCache.equator, g_sphereCache.MAX_SEGMENTS + 1, true);
-    drawPolylineFront(d, qRender, cxShift, cy, g_sphereCache.equator, g_sphereCache.MAX_SEGMENTS + 1, false); // Thicker
+        if (isEquator) {
+            // Draw complete equator circle - NO culling, always show entire circle
+            for (int i = 0; i < g_sphereCache.MAX_SEGMENTS; ++i) {
+                ProjPt p1 = projectOrtho(qRender, g_sphereCache.parallels[n][i], cxShift, cy);
+                ProjPt p2 = projectOrtho(qRender, g_sphereCache.parallels[n][i + 1], cxShift, cy);
+
+                if (p1.ok && p2.ok) { // Only check screen bounds, ignore z-depth completely
+                    d->drawLine(p1.x, p1.y, p2.x, p2.y);
+                }
+            }
+            // Draw equator twice for emphasis (thicker line)
+            for (int i = 0; i < g_sphereCache.MAX_SEGMENTS; ++i) {
+                ProjPt p1 = projectOrtho(qRender, g_sphereCache.parallels[n][i], cxShift, cy);
+                ProjPt p2 = projectOrtho(qRender, g_sphereCache.parallels[n][i + 1], cxShift, cy);
+
+                if (p1.ok && p2.ok) {
+                    d->drawLine(p1.x, p1.y, p2.x, p2.y);
+                }
+            }
+        } else {
+            // Draw other parallels with normal front-face culling
+            drawPolylineFront(d, qRender, cxShift, cy, g_sphereCache.parallels[n], g_sphereCache.MAX_SEGMENTS + 1, false);
+        }
+    }
 }
 
 // Point helper class for compass calculations
