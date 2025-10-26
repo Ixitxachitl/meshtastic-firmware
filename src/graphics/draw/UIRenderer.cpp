@@ -1187,6 +1187,10 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
             // Spherical compass replaces flat ring + north marker
             CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, -heading);
 
+            // Add forward-pointing needle on Position screen (points forward in device frame, level with gravity)
+            const Quat att = GetAttitudeForRenderer();
+            CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, heading, 0.0f);
+
         } else {
             // Portrait or square: put compass at the bottom and centered, scaled to fit available space
             // For E-Ink screens, account for navigation bar at the bottom!
@@ -1213,6 +1217,10 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
 
             // Spherical compass replaces flat ring + north marker
             CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, -heading);
+
+            // Add forward-pointing needle on Position screen (points forward in device frame, level with gravity)
+            const Quat att = GetAttitudeForRenderer();
+            CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, heading, 0.0f);
         }
     }
 #endif

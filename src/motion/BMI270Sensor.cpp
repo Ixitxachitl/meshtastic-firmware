@@ -31,7 +31,7 @@ struct BMI270Impl {
     TwoWire *wire = &Wire; // default bus
 };
 
-// I2C helpers
+// Simplified I2C helper for device detection
 static bool i2cRead1(TwoWire &w, uint8_t addr, uint8_t reg, uint8_t &val)
 {
     w.beginTransmission(addr);
@@ -44,34 +44,30 @@ static bool i2cRead1(TwoWire &w, uint8_t addr, uint8_t reg, uint8_t &val)
     return true;
 }
 
-// Bosch callbacks
+// Bosch BMI2 API callbacks - required by library
 static BMI2_INTF_RETURN_TYPE boschI2CRead(uint8_t reg, uint8_t *buf, uint32_t len, void *intf_ptr)
 {
     auto *impl = static_cast<BMI270Impl *>(intf_ptr);
-    TwoWire &w = *(impl->wire);
-    w.beginTransmission(impl->addr);
-    w.write(reg);
-    if (w.endTransmission(false) != 0)
+    impl->wire->beginTransmission(impl->addr);
+    impl->wire->write(reg);
+    if (impl->wire->endTransmission(false) != 0)
         return BMI2_E_COM_FAIL;
-    uint32_t n = w.requestFrom(impl->addr, (uint8_t)len);
-    if (n != len)
+    if (impl->wire->requestFrom(impl->addr, (uint8_t)len) != len)
         return BMI2_E_COM_FAIL;
     for (uint32_t i = 0; i < len; ++i)
-        buf[i] = w.read();
+        buf[i] = impl->wire->read();
     return BMI2_OK;
 }
+
 static BMI2_INTF_RETURN_TYPE boschI2CWrite(uint8_t reg, const uint8_t *buf, uint32_t len, void *intf_ptr)
 {
     auto *impl = static_cast<BMI270Impl *>(intf_ptr);
-    TwoWire &w = *(impl->wire);
-    w.beginTransmission(impl->addr);
-    w.write(reg);
-    for (uint32_t i = 0; i < len; ++i)
-        w.write(buf[i]);
-    if (w.endTransmission() != 0)
-        return BMI2_E_COM_FAIL;
-    return BMI2_OK;
+    impl->wire->beginTransmission(impl->addr);
+    impl->wire->write(reg);
+    impl->wire->write(buf, len);
+    return (impl->wire->endTransmission() == 0) ? BMI2_OK : BMI2_E_COM_FAIL;
 }
+
 static void boschDelayUs(uint32_t us, void *)
 {
     delayMicroseconds(us);
@@ -109,23 +105,12 @@ constexpr float STILL_THR_DPS = 0.5f;     // consider still if |g| sum < this
 
 // Persistent state across runOnce() (removed software motion detection variables)
 
-// Fake compass state
-float s_yawDeg = 0.0f;     // integrated yaw
-float s_yawZeroDeg = 0.0f; // user “north” anchor
-float s_gyroBiasZ = 0.0f;  // bias from calibration
-uint32_t s_lastMicros = 0;
-
-// Bias calibration accumulators
-bool s_doingBiasCal = false;
-uint32_t s_biasCalEndMs = 0;
-double s_biasSumZ = 0.0;
-uint32_t s_biasCount = 0;
-
-// Calibration UI guard: only open/close the alert once per session
-bool s_showingCalUI = false;
-
-// Request to anchor "north" on next IMU sample (no countdown UI)
-static bool s_anchorRequested = false;
+// Compass state
+float s_yawDeg = 0.0f;          // integrated yaw angle
+float s_yawZeroDeg = 0.0f;      // user-defined "north" reference
+uint32_t s_lastMicros = 0;      // timestamp for integration
+bool s_showingCalUI = false;    // UI state guard
+bool s_anchorRequested = false; // instant calibration flag
 } // namespace
 
 #endif // HAS_BMI270_TINYU
@@ -156,13 +141,19 @@ extern "C" bool HasStepCounterForRenderer()
 // Return the current (unit) gravity vector in BODY frame from the LPF accel
 extern "C" Vec3 GetGravityForRenderer()
 {
+#if HAS_BMI270_TINYU
     Vec3 g(s_gxLP, s_gyLP, s_gzLP);
     float n = g.norm();
-    if (n > 1e-3f)
+    if (n > 1e-3f) {
         g = g * (1.0f / n);
-    else
-        g = Vec3(0, 1, 0);
+    } else {
+        // Fallback to default gravity down
+        g = Vec3(0, 0, 1);
+    }
     return g;
+#else
+    return Vec3(0, 0, 1); // Default gravity vector pointing down
+#endif
 }
 
 extern "C" void GetGravityXYZ(float *gx, float *gy, float *gz)
@@ -208,49 +199,31 @@ bool BMI270Sensor::setupMotionDetection()
     if (!impl)
         return false;
 
-    // Enable any-motion and step counter features
+    // Enable motion detection features
     uint8_t sens_list[] = {BMI2_ANY_MOTION, BMI2_STEP_COUNTER};
-    int8_t result = bmi270_sensor_enable(sens_list, 2, &impl->dev);
-    if (result != BMI2_OK) {
-        LOG_WARN("BMI270: Failed to enable any-motion feature (%d)", result);
+    if (bmi270_sensor_enable(sens_list, 2, &impl->dev) != BMI2_OK) {
+        LOG_WARN("BMI270: Failed to enable motion features");
         return false;
     }
 
-    // Configure any-motion parameters
-    struct bmi2_sens_config config[1];
-    config[0].type = BMI2_ANY_MOTION;
-    result = bmi270_get_sensor_config(config, 1, &impl->dev);
-    if (result == BMI2_OK) {
-        config[0].cfg.any_motion.threshold = 200; // Low sensitivity (0-1023, higher = less sensitive)
-        config[0].cfg.any_motion.duration = 4;    // Duration in 20ms units (4 = 80ms)
-        config[0].cfg.any_motion.select_x = 1;    // Enable X-axis
-        config[0].cfg.any_motion.select_y = 1;    // Enable Y-axis
-        config[0].cfg.any_motion.select_z = 1;    // Enable Z-axis
+    // Configure any-motion with optimized settings
+    bmi2_sens_config config;
+    config.type = BMI2_ANY_MOTION;
+    config.cfg.any_motion.threshold = 200; // Low sensitivity (0-1023, higher = less sensitive)
+    config.cfg.any_motion.duration = 4;    // 80ms duration (4 * 20ms)
+    config.cfg.any_motion.select_x = 1;    // Enable X-axis
+    config.cfg.any_motion.select_y = 1;    // Enable Y-axis
+    config.cfg.any_motion.select_z = 1;    // Enable Z-axis
 
-        result = bmi270_set_sensor_config(config, 1, &impl->dev);
-        if (result != BMI2_OK) {
-            LOG_WARN("BMI270: Failed to configure any-motion parameters (%d)", result);
-        } else {
-            LOG_INFO("BMI270: Motion detection configured (threshold=%d, duration=%dms)", config[0].cfg.any_motion.threshold,
-                     config[0].cfg.any_motion.duration * 20);
-        }
+    if (bmi270_set_sensor_config(&config, 1, &impl->dev) == BMI2_OK) {
+        LOG_INFO("BMI270: Motion detection configured (threshold=200, duration=80ms)");
     }
 
-    // Map any-motion and step counter features to INT1 (required for status bits to work)
-    result = bmi2_map_feat_int(BMI2_ANY_MOTION, BMI2_INT1, &impl->dev);
-    if (result != BMI2_OK) {
-        LOG_WARN("BMI270: Failed to map any-motion to interrupt pin (%d)", result);
-    } else {
-        LOG_INFO("BMI270: Any-motion mapped to INT1 pin");
-    }
+    // Map features to INT1 for interrupt-driven operation
+    bmi2_map_feat_int(BMI2_ANY_MOTION, BMI2_INT1, &impl->dev);
+    bmi2_map_feat_int(BMI2_STEP_COUNTER, BMI2_INT1, &impl->dev);
 
-    result = bmi2_map_feat_int(BMI2_STEP_COUNTER, BMI2_INT1, &impl->dev);
-    if (result != BMI2_OK) {
-        LOG_WARN("BMI270: Failed to map step counter to interrupt pin (%d)", result);
-    } else {
-        LOG_INFO("BMI270: Step counter mapped to INT1 pin");
-    }
-
+    LOG_INFO("BMI270: Motion features mapped to INT1");
     return true;
 #else
     return false;
@@ -290,44 +263,39 @@ bool BMI270Sensor::init()
     if (!impl)
         return false;
 
-    // Use same bus as the rest of your firmware (logs show Wire). If you need Wire1, set impl->wire = &Wire1.
     impl->wire = &Wire;
 
-    // Soft reset both addrs, then select
+    // Device detection and soft reset
     uint8_t SOFT_RESET = 0xB6;
-    (void)boschI2CWrite(0x7E, &SOFT_RESET, 1, impl);
-    delay(10);
-    (void)boschI2CWrite(0x7E, &SOFT_RESET, 1, impl);
+    boschI2CWrite(0x7E, &SOFT_RESET, 1, impl);
     delay(10);
 
     if (!selectAddress(*impl)) {
-        LOG_DEBUG("BMI270: WHOAMI 0x24 not found at 0x69/0x68");
+        LOG_DEBUG("BMI270: Device not found (WHOAMI 0x24 not at 0x69/0x68)");
         delete impl;
         return false;
     }
 
-    // Hook bosch device
+    // Initialize BMI2 device structure
     impl->dev.intf = BMI2_I2C_INTF;
-    impl->dev.read = &boschI2CRead;
-    impl->dev.write = &boschI2CWrite;
-    impl->dev.delay_us = &boschDelayUs;
+    impl->dev.read = boschI2CRead;
+    impl->dev.write = boschI2CWrite;
+    impl->dev.delay_us = boschDelayUs;
     impl->dev.intf_ptr = impl;
     impl->dev.read_write_len = 16;
     impl->dev.config_file_ptr = NULL;
 
-    (void)bmi2_soft_reset(&impl->dev);
-    delay(10);
-
+    // Initialize BMI270 with retry
     int8_t err = bmi270_init(&impl->dev);
     if (err != BMI2_OK) {
-        (void)bmi2_soft_reset(&impl->dev);
+        bmi2_soft_reset(&impl->dev);
         delay(10);
         err = bmi270_init(&impl->dev);
-    }
-    if (err != BMI2_OK) {
-        LOG_DEBUG("BMI270: bmi270_init failed (%d) addr 0x%02X", err, impl->addr);
-        delete impl;
-        return false;
+        if (err != BMI2_OK) {
+            LOG_DEBUG("BMI270: Init failed (%d) at 0x%02X", err, impl->addr);
+            delete impl;
+            return false;
+        }
     }
 
     // Enable accel + gyro
@@ -339,41 +307,43 @@ bool BMI270Sensor::init()
         return false;
     }
 
-    // Configure ODR / range / BW
-    bmi2_sens_config cfgs[2];
-    cfgs[0].type = BMI2_ACCEL;
-    cfgs[1].type = BMI2_GYRO;
-    if (bmi270_get_sensor_config(cfgs, 2, &impl->dev) != BMI2_OK) {
-        delete impl;
-        return false;
-    }
-
-    cfgs[0].cfg.acc.odr = BMI2_ACC_ODR_100HZ;
-    cfgs[0].cfg.acc.bwp = BMI2_ACC_NORMAL_AVG4;
-    cfgs[0].cfg.acc.range = BMI2_ACC_RANGE_4G;
-
-    cfgs[1].cfg.gyr.odr = BMI2_GYR_ODR_100HZ;
-    cfgs[1].cfg.gyr.bwp = BMI2_GYR_NORMAL_MODE;
-    cfgs[1].cfg.gyr.range = BMI2_GYR_RANGE_2000;
+    // Configure sensors with optimal settings for motion tracking
+    bmi2_sens_config cfgs[2] = {
+        {.type = BMI2_ACCEL, .cfg = {.acc = {BMI2_ACC_ODR_100HZ, BMI2_ACC_RANGE_4G, BMI2_ACC_NORMAL_AVG4}}},
+        {.type = BMI2_GYRO, .cfg = {.gyr = {BMI2_GYR_ODR_100HZ, BMI2_GYR_RANGE_2000, BMI2_GYR_NORMAL_MODE}}}};
 
     if (bmi270_set_sensor_config(cfgs, 2, &impl->dev) != BMI2_OK) {
         delete impl;
         return false;
     }
 
-    // Reset fake compass state (removed software motion detection variables)
+    // Allow sensors to settle
+    delay(50);
 
+    // Initialize compass state and gravity vector
     s_yawDeg = 0.0f;
     s_yawZeroDeg = 0.0f;
-    s_gyroBiasZ = 0.0f;
     s_lastMicros = 0;
-
-    s_doingBiasCal = false;
-    s_biasCalEndMs = 0;
-    s_biasSumZ = 0.0;
-    s_biasCount = 0;
-
     s_showingCalUI = false;
+    s_anchorRequested = false;
+
+    // Initialize gravity vector by taking an immediate reading
+    bmi2_sens_data initial_data{};
+    if (bmi2_get_sensor_data(&initial_data, &impl->dev) == BMI2_OK) {
+        const float aScale = 4.0f / 32768.0f; // ±4 g
+        const float ax = -initial_data.acc.x * aScale;
+        const float ay = initial_data.acc.y * aScale;
+        const float az = initial_data.acc.z * aScale;
+
+        // Initialize gravity LPF with current accelerometer reading
+        float aMag = sqrtf(ax * ax + ay * ay + az * az);
+        if (aMag > 0.1f) { // Valid acceleration reading
+            s_gxLP = ax / aMag;
+            s_gyLP = ay / aMag;
+            s_gzLP = az / aMag;
+            LOG_DEBUG("BMI270: Initialized gravity vector (%.3f, %.3f, %.3f)", s_gxLP, s_gyLP, s_gzLP);
+        }
+    }
 
     impl_ = impl;
     inited_ = true;
@@ -463,22 +433,14 @@ int32_t BMI270Sensor::runOnce()
                 s_biasY = gy;
                 s_biasZ = gz;
 
-                // 2) Snap the gravity LPF to the current accel direction (kills LPF lag)
-                float n = sqrtf(ax * ax + ay * ay + az * az);
-                if (n > 1e-3f) {
-                    s_gxLP = ax / n;
-                    s_gyLP = ay / n;
-                    s_gzLP = az / n;
-                }
-
-                // 3) Make “north” *immediately* equal to what we’re facing now
+                // 2) Make "north" *immediately* equal to what we're facing now
                 s_yawZeroDeg = s_yawDeg;
                 s_yawDeg = s_yawZeroDeg; // ensures rel = 0 this frame (instant snap)
 
-                // 4) Guard against a big first dt after anchoring
+                // 3) Guard against a big first dt after anchoring
                 s_lastMicros = micros();
 
-                // 5) Clear request and close any lingering UI
+                // 4) Clear request and close any lingering UI
                 s_anchorRequested = false;
 #if !defined(MESHTASTIC_EXCLUDE_SCREEN) && HAS_SCREEN
                 if (screen && !ScanI2C::hasMagnetometer()) {
@@ -500,21 +462,20 @@ int32_t BMI270Sensor::runOnce()
             float dt = (nowUs - s_lastMicros) * 1e-6f;
             s_lastMicros = nowUs;
 
-            // 1) Update gravity estimate when accel looks like gravity (not linear motion)
+            // 1) Always update gravity estimate with low-pass filter (like before)
             float aMag = sqrtf(ax * ax + ay * ay + az * az); // g
             bool aLooksLikeGravity = fabsf(aMag - 1.0f) < G_VALID_TOL_G;
-            if (aLooksLikeGravity) {
-                // simple first-order LPF
-                s_gxLP = s_gxLP + G_LPF_ALPHA * (ax - s_gxLP);
-                s_gyLP = s_gyLP + G_LPF_ALPHA * (ay - s_gyLP);
-                s_gzLP = s_gzLP + G_LPF_ALPHA * (az - s_gzLP);
-                // normalize to unit
-                float gn = sqrtf(s_gxLP * s_gxLP + s_gyLP * s_gyLP + s_gzLP * s_gzLP);
-                if (gn > 1e-3f) {
-                    s_gxLP /= gn;
-                    s_gyLP /= gn;
-                    s_gzLP /= gn;
-                }
+
+            // Always update gravity vector (not tied to calibration)
+            s_gxLP = s_gxLP + G_LPF_ALPHA * (ax - s_gxLP);
+            s_gyLP = s_gyLP + G_LPF_ALPHA * (ay - s_gyLP);
+            s_gzLP = s_gzLP + G_LPF_ALPHA * (az - s_gzLP);
+            // normalize to unit
+            float gn = sqrtf(s_gxLP * s_gxLP + s_gyLP * s_gyLP + s_gzLP * s_gzLP);
+            if (gn > 1e-3f) {
+                s_gxLP /= gn;
+                s_gyLP /= gn;
+                s_gzLP /= gn;
             }
 
             // 2) Project gyro onto gravity to get world-yaw rate
@@ -602,7 +563,7 @@ extern "C" bool HasStepCounterForRenderer()
 
 extern "C" Vec3 GetGravityForRenderer()
 {
-    return Vec3(0, 0, -1); // Default gravity vector pointing down
+    return Vec3(0, 0, 1); // Default gravity vector pointing down
 }
 
 extern "C" void GetGravityXYZ(float *gx, float *gy, float *gz)
@@ -612,7 +573,7 @@ extern "C" void GetGravityXYZ(float *gx, float *gy, float *gz)
     if (gy)
         *gy = 0.0f;
     if (gz)
-        *gz = -1.0f; // Default gravity vector pointing down
+        *gz = 1.0f; // Default gravity vector pointing down
 }
 
 extern "C" float GetHeadingRadiansForRenderer()
