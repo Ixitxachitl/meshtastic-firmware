@@ -2,7 +2,7 @@
 #include "detect/ScanI2C.h"
 #include "graphics/draw/Math3D.h"
 
-#if !defined(ARCH_STM32WL) && !MESHTASTIC_EXCLUDE_I2C
+#if !defined(ARCH_STM32WL) && !MESHTASTIC_EXCLUDE_I2C && __has_include(<bmi2.h>)
 
 // Use tinyu-zhao BMI270 library exclusively
 #include <Arduino.h>
@@ -570,7 +570,45 @@ void BMI270Sensor::calibrate(uint16_t /*forSeconds*/)
 #endif
 }
 
-#endif // build guard
+#endif // !defined(ARCH_STM32WL) && !MESHTASTIC_EXCLUDE_I2C && __has_include(<bmi2.h>)
+
+// Fallback implementations when BMI270 is not available
+#if !__has_include(<bmi2.h>) || defined(ARCH_STM32WL) || defined(MESHTASTIC_EXCLUDE_I2C)
+extern "C" Quat GetAttitudeForRenderer()
+{
+    return Quat::identity();
+}
+
+extern "C" uint32_t GetStepCountForRenderer()
+{
+    return 0;
+}
+
+extern "C" bool HasStepCounterForRenderer()
+{
+    return false;
+}
+
+extern "C" Vec3 GetGravityForRenderer()
+{
+    return Vec3(0, 0, -1); // Default gravity vector pointing down
+}
+
+extern "C" void GetGravityXYZ(float *gx, float *gy, float *gz)
+{
+    if (gx)
+        *gx = 0.0f;
+    if (gy)
+        *gy = 0.0f;
+    if (gz)
+        *gz = -1.0f; // Default gravity vector pointing down
+}
+
+extern "C" float GetHeadingRadiansForRenderer()
+{
+    return 0.0f; // Default heading (north)
+}
+#endif
 
 // ------------------------------ 3D attitude export ------------------------------
 // Build a quaternion from the current low-pass gravity vector (tilt) and the integrated
