@@ -2,6 +2,12 @@
 #include "detect/ScanI2C.h"
 #include "graphics/draw/Math3D.h"
 
+// Global variables for magnetometer heading (shared with BMM150Sensor and other mag sensors)
+extern "C" {
+extern volatile bool g_hasMagHeading;
+extern volatile float g_magHeadingRad; // radians, 0 = North, +CW
+}
+
 #if !defined(ARCH_STM32WL) && !MESHTASTIC_EXCLUDE_I2C && __has_include(<bmi2.h>)
 
 // Use tinyu-zhao BMI270 library exclusively
@@ -170,12 +176,17 @@ extern "C" void GetGravityXYZ(float *gx, float *gy, float *gz)
         *gz = g.z;
 }
 
-// Return the current (fake-gyro) heading in radians, same convention as screen heading.
+// Return the current heading in radians, preferring magnetometer data if available.
 // Heading increases clockwise, '0' = North at top.
 extern "C" float GetHeadingRadiansForRenderer()
 {
+    // Prefer real magnetometer data if available from BMM150 or other mag sensors
+    if (g_hasMagHeading) {
+        return g_magHeadingRad;
+    }
+
 #if HAS_BMI270_TINYU
-    // Reuse the same math you use just before screen->setHeading(heading)
+    // Fall back to gyro-based fake compass when no magnetometer is available
     float rel = s_yawDeg - s_yawZeroDeg;
     while (rel < 0.0f)
         rel += 360.0f;
@@ -606,6 +617,10 @@ extern "C" void GetGravityXYZ(float *gx, float *gy, float *gz)
 
 extern "C" float GetHeadingRadiansForRenderer()
 {
+    // Prefer real magnetometer data if available from BMM150 or other mag sensors
+    if (g_hasMagHeading) {
+        return g_magHeadingRad;
+    }
     return 0.0f; // Default heading (north)
 }
 #endif
