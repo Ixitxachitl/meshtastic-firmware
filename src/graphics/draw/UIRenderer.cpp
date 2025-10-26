@@ -1066,18 +1066,36 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
 
     // === Determine Compass Heading ===
     float heading = 0;
+    static float frozenHeading = 0; // Store the heading when freeze mode was activated
+    static bool hasStoredFrozenHeading = false;
+    static meshtastic_CompassMode lastCompassMode = (meshtastic_CompassMode)-1; // Force initial detection
     bool validHeading = false;
-    if (uiconfig.compass_mode == meshtastic_CompassMode_FREEZE_HEADING) {
+
+    // Always get current heading for compass ring rotation
+    if (screen->hasHeading()) {
+        heading = radians(screen->getHeading());
         validHeading = true;
     } else {
-        if (screen->hasHeading()) {
-            heading = radians(screen->getHeading());
-            validHeading = true;
-        } else {
-            heading = screen->estimatedHeading(geoCoord.getLatitude() * 1e-7, geoCoord.getLongitude() * 1e-7);
-            validHeading = !isnan(heading);
+        heading = screen->estimatedHeading(geoCoord.getLatitude() * 1e-7, geoCoord.getLongitude() * 1e-7);
+        validHeading = !isnan(heading);
+    }
+
+    // Handle freeze heading mode - capture current heading when mode is first activated
+    if (uiconfig.compass_mode != lastCompassMode) {
+        // Mode changed, reset frozen heading state
+        hasStoredFrozenHeading = false;
+        lastCompassMode = uiconfig.compass_mode;
+    }
+
+    if (uiconfig.compass_mode == meshtastic_CompassMode_FREEZE_HEADING) {
+        if (!hasStoredFrozenHeading && validHeading) {
+            frozenHeading = heading; // Capture current heading
+            hasStoredFrozenHeading = true;
         }
     }
+
+    // Determine needle heading based on mode
+    float needleHeading = (uiconfig.compass_mode == meshtastic_CompassMode_FREEZE_HEADING) ? frozenHeading : heading;
 
     // If GPS is off, no need to display these parts
     if (strcmp(displayLine, "GPS off") != 0 && strcmp(displayLine, "No GPS") != 0) {
@@ -1184,12 +1202,36 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
                 display->setTextAlignment(TEXT_ALIGN_LEFT); // Reset alignment
             }
 
-            // Spherical compass replaces flat ring + north marker
-            CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, -heading);
-
-            // Add forward-pointing needle on Position screen (points forward in device frame, level with gravity)
+            // Compass with mode-specific behavior
             const Quat att = GetAttitudeForRenderer();
-            CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, heading, 0.0f);
+
+            // Render compass sphere with mode-specific attitude
+            if (uiconfig.compass_mode == meshtastic_CompassMode_FIXED_RING) {
+                // FIXED_RING: Render 3D compass from top-down view (ignoring gravity)
+                CompassRenderer::setTopDownView(true);
+                CompassRenderer::drawCompassSphere(display, compassX, compassY, compassRadius, Quat::identity());
+
+                // Draw fixed cardinal direction labels
+                const uint16_t rDraw = (uint16_t)std::max<int>(1, (int)(compassRadius));
+                const int16_t cxShift = (int16_t)(compassX - (int)(rDraw * 0.14f));
+                const int16_t cy = compassY;
+                const float rLabel = rDraw * 1.06f;
+
+                display->setFont(FONT_SMALL);
+                display->setTextAlignment(TEXT_ALIGN_CENTER);
+                display->drawString(cxShift, cy - (int)rLabel - (FONT_HEIGHT_SMALL / 2), "N");
+                display->drawString(cxShift + (int)rLabel, cy - (FONT_HEIGHT_SMALL / 2), "E");
+                display->drawString(cxShift, cy + (int)rLabel - (FONT_HEIGHT_SMALL / 2), "S");
+                display->drawString(cxShift - (int)rLabel, cy - (FONT_HEIGHT_SMALL / 2), "W");
+
+                CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, Quat::identity(), needleHeading,
+                                                    0.0f);
+                CompassRenderer::setTopDownView(false);
+            } else {
+                // DYNAMIC/FREEZE_HEADING: Normal 3D compass with gravity
+                CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, -heading);
+                CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, needleHeading, 0.0f);
+            }
 
         } else {
             // Portrait or square: put compass at the bottom and centered, scaled to fit available space
@@ -1215,12 +1257,36 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
             int compassX = x + SCREEN_WIDTH / 2;
             int compassY = yBelowContent + availableHeight / 2;
 
-            // Spherical compass replaces flat ring + north marker
-            CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, -heading);
-
-            // Add forward-pointing needle on Position screen (points forward in device frame, level with gravity)
+            // Compass with mode-specific behavior
             const Quat att = GetAttitudeForRenderer();
-            CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, heading, 0.0f);
+
+            // Render compass sphere with mode-specific attitude
+            if (uiconfig.compass_mode == meshtastic_CompassMode_FIXED_RING) {
+                // FIXED_RING: Render 3D compass from top-down view (ignoring gravity)
+                CompassRenderer::setTopDownView(true);
+                CompassRenderer::drawCompassSphere(display, compassX, compassY, compassRadius, Quat::identity());
+
+                // Draw fixed cardinal direction labels
+                const uint16_t rDraw = (uint16_t)std::max<int>(1, (int)(compassRadius));
+                const int16_t cxShift = (int16_t)(compassX - (int)(rDraw * 0.14f));
+                const int16_t cy = compassY;
+                const float rLabel = rDraw * 1.06f;
+
+                display->setFont(FONT_SMALL);
+                display->setTextAlignment(TEXT_ALIGN_CENTER);
+                display->drawString(cxShift, cy - (int)rLabel - (FONT_HEIGHT_SMALL / 2), "N");
+                display->drawString(cxShift + (int)rLabel, cy - (FONT_HEIGHT_SMALL / 2), "E");
+                display->drawString(cxShift, cy + (int)rLabel - (FONT_HEIGHT_SMALL / 2), "S");
+                display->drawString(cxShift - (int)rLabel, cy - (FONT_HEIGHT_SMALL / 2), "W");
+
+                CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, Quat::identity(), needleHeading,
+                                                    0.0f);
+                CompassRenderer::setTopDownView(false);
+            } else {
+                // DYNAMIC/FREEZE_HEADING: Normal 3D compass with gravity
+                CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, -heading);
+                CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, needleHeading, 0.0f);
+            }
         }
     }
 #endif

@@ -116,28 +116,41 @@ static inline float wrapPi(float a)
     return a;
 }
 
+// Global flag to force top-down view for FIXED_RING mode
+static bool g_forceTopDownView = false;
+
 // Build a stable render quaternion for a "world view" compass.
 // - Tilt is based ONLY on gravity, keeping the globe level with the world.
 // - Yaw is based ONLY on the magnetic heading.
-static Quat buildSmoothedRenderQuat(const Quat & /* attitude unused */)
+// - If g_forceTopDownView is true, ignore gravity and use top-down view
+static Quat buildSmoothedRenderQuat(const Quat &attitude)
 {
     static bool init = false;
     static Quat qRenderFilt(1, 0, 0, 0);
 
-    // 1. Calculate Tilt based on Gravity
-    // We want the globe's North Pole (+Y) to point opposite to gravity.
-    // The screen's "up" is -Y, so we align the screen's up with anti-gravity.
-    Vec3 g_body = GetGravityForRenderer();
-    Vec3 anti_g = g_body * -1.0f;
-    Quat qTilt = quatBetweenUnit(Vec3(0, -1, 0), anti_g.normalized());
+    Quat qRender;
 
-    // 2. Calculate Yaw based on Heading
-    // We rotate the globe around its pole axis (now Y) by the heading.
-    float heading_rad = GetHeadingRadiansForRenderer();
-    Quat qYaw = Quat::fromAxisAngle(Vec3(0, 1, 0), -heading_rad); // -rad for clockwise heading
+    if (g_forceTopDownView) {
+        // For FIXED_RING mode: create top-down view looking down from above
+        // Rotate 90 degrees around X-axis to look down at the compass from above
+        // DO NOT apply heading rotation - keep the ring fixed, let needle rotate instead
+        qRender = Quat::fromAxisAngle(Vec3(1, 0, 0), M_PI / 2.0f);
+    } else {
+        // Normal mode: Calculate Tilt based on Gravity
+        // We want the globe's North Pole (+Y) to point opposite to gravity.
+        // The screen's "up" is -Y, so we align the screen's up with anti-gravity.
+        Vec3 g_body = GetGravityForRenderer();
+        Vec3 anti_g = g_body * -1.0f;
+        Quat qTilt = quatBetweenUnit(Vec3(0, -1, 0), anti_g.normalized());
 
-    // 3. Combine them: First orient to gravity, then rotate to North.
-    Quat qRender = qTilt * qYaw;
+        // Calculate Yaw based on Heading
+        // We rotate the globe around its pole axis (now Y) by the heading.
+        float heading_rad = GetHeadingRadiansForRenderer();
+        Quat qYaw = Quat::fromAxisAngle(Vec3(0, 1, 0), -heading_rad); // -rad for clockwise heading
+
+        // Combine them: First orient to gravity, then rotate to North.
+        qRender = qTilt * qYaw;
+    }
 
     // 4. Apply simple smoothing to the final quaternion
     const float alpha = init ? 0.25f : 1.0f;
@@ -523,6 +536,11 @@ uint16_t getCompassDiam(uint32_t displayWidth, uint32_t displayHeight)
         maxDiam = 64;
 
     return maxDiam;
+}
+
+void setTopDownView(bool enable)
+{
+    g_forceTopDownView = enable;
 }
 
 } // namespace CompassRenderer
