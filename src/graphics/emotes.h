@@ -42,6 +42,10 @@ extern const unsigned char Winking_Face[] PROGMEM;
 #define Grinning_Smiling_Eyes_width 30
 extern const unsigned char Grinning_Smiling_Eyes[] PROGMEM;
 
+#define heart_smile_height 30
+#define heart_smile_width 30
+extern const unsigned char heart_smile[] PROGMEM;
+
 #define question_height 25
 #define question_width 25
 extern const unsigned char question[] PROGMEM;
@@ -109,6 +113,14 @@ extern const unsigned char poo[] PROGMEM;
 #define bell_icon_width 30
 #define bell_icon_height 30
 extern const unsigned char bell_icon[] PROGMEM;
+
+#define cookie_width 30
+#define cookie_height 30
+extern const unsigned char cookie[] PROGMEM;
+
+#define peace_sign_width 30
+#define peace_sign_height 30
+extern const unsigned char peace_sign[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
 } // namespace graphics
