@@ -7,9 +7,9 @@
 #include "SafeFile.h"
 #include "gps/RTC.h"
 #include "graphics/draw/MessageRenderer.h"
-#include <cstring> // memcpy
-#include <cstdint>
 #include <algorithm>
+#include <cstdint>
+#include <cstring> // memcpy
 
 #ifndef MESSAGE_TEXT_POOL_SIZE
 #define MESSAGE_TEXT_POOL_SIZE (MAX_MESSAGES_SAVED * MAX_MESSAGE_SIZE)
@@ -21,26 +21,58 @@ static size_t g_poolWritePos = 0;
 
 static inline const char *getTextFromPool(uint16_t offset);
 
+// Debug helper: Log current pool utilization
+static inline void logPoolUtilization(const char *context)
+{
+    if (!g_messagePool)
+        return;
+
+    float utilization = (float)g_poolWritePos / MESSAGE_TEXT_POOL_SIZE * 100.0f;
+    LOG_DEBUG("MessageStore: Pool utilization at %s: %zu/%d bytes (%.1f%%)", context, g_poolWritePos, MESSAGE_TEXT_POOL_SIZE,
+              utilization);
+
+    if (utilization > 90.0f) {
+        LOG_WARN("MessageStore: Pool utilization high (%.1f%%) - consider compaction", utilization);
+    }
+}
+
 static volatile bool g_persistDirty = false;
 
-bool MessageStore::isPersistDirty() { return g_persistDirty; }
-void MessageStore::markPersistDirty() { g_persistDirty = true; }
-void MessageStore::markPersistClean() { g_persistDirty = false; }
+bool MessageStore::isPersistDirty()
+{
+    return g_persistDirty;
+}
+void MessageStore::markPersistDirty()
+{
+    g_persistDirty = true;
+}
+void MessageStore::markPersistClean()
+{
+    g_persistDirty = false;
+}
 
 void MessageStore::compactPoolLossless()
 {
+    logPoolUtilization("before compaction");
+
     // Allocate a fresh pool; if this fails, leave the old pool intact.
-    char* newPool = static_cast<char*>(std::malloc(MESSAGE_TEXT_POOL_SIZE));
-    if (!newPool) return;
+    char *newPool = static_cast<char *>(std::malloc(MESSAGE_TEXT_POOL_SIZE));
+    if (!newPool) {
+        LOG_ERROR("MessageStore: Failed to allocate memory for pool compaction");
+        return;
+    }
 
     size_t wp = 0;
-    for (auto& m : liveMessages) {
-        const char* txt = getTextFromPool(m.textOffset);
-        if (!txt) { continue; }
+    for (auto &m : liveMessages) {
+        const char *txt = getTextFromPool(m.textOffset);
+        if (!txt) {
+            continue;
+        }
         size_t len = std::min<size_t>(m.textLength, /*safety cap*/ 0xFFFF);
         // In case lengths drifted, re-derive from '\0' up to previous cap:
         size_t safeLen = std::min(len, std::strlen(txt));
-        if (wp + safeLen + 1 > MESSAGE_TEXT_POOL_SIZE) break; // should not happen
+        if (wp + safeLen + 1 > MESSAGE_TEXT_POOL_SIZE)
+            break; // should not happen
         std::memcpy(&newPool[wp], txt, safeLen);
         newPool[wp + safeLen] = '\0';
         m.textOffset = static_cast<uint16_t>(wp);
@@ -49,9 +81,13 @@ void MessageStore::compactPoolLossless()
     }
 
     // Swap pools (free old after successful copy)
-    if (g_messagePool) std::free(g_messagePool);
-    g_messagePool  = newPool;
+    if (g_messagePool)
+        std::free(g_messagePool);
+    g_messagePool = newPool;
     g_poolWritePos = wp;
+
+    logPoolUtilization("after compaction");
+    LOG_INFO("MessageStore: Pool compaction completed, reclaimed %zu bytes", MESSAGE_TEXT_POOL_SIZE - wp);
 }
 
 // Reset pool (called on boot or clear)
@@ -69,15 +105,23 @@ static inline void resetMessagePool()
 }
 
 // Allocate text in pool and return offset
-// If not enough space remains, wrap around (ring buffer style)
+// If not enough space remains, compact pool to reclaim space
 static inline uint16_t storeTextInPool(const char *src, size_t len)
 {
     if (len >= MAX_MESSAGE_SIZE)
         len = MAX_MESSAGE_SIZE - 1;
 
-    // Wrap pool if out of space
+    // If not enough space remains, try compacting first
     if (g_poolWritePos + len + 1 >= MESSAGE_TEXT_POOL_SIZE) {
-        g_poolWritePos = 0;
+        LOG_DEBUG("MessageStore: Pool nearly full (%zu/%d), attempting compaction", g_poolWritePos, MESSAGE_TEXT_POOL_SIZE);
+        messageStore.compactPoolLossless();
+
+        // After compaction, if still no space, we have a real problem
+        if (g_poolWritePos + len + 1 >= MESSAGE_TEXT_POOL_SIZE) {
+            LOG_WARN("MessageStore: Pool full even after compaction (%zu/%d), forcibly wrapping", g_poolWritePos,
+                     MESSAGE_TEXT_POOL_SIZE);
+            g_poolWritePos = 0; // Last resort - this may corrupt old messages
+        }
     }
 
     uint16_t offset = g_poolWritePos;
@@ -85,14 +129,25 @@ static inline uint16_t storeTextInPool(const char *src, size_t len)
     g_messagePool[g_poolWritePos + len] = '\0';
     g_poolWritePos += (len + 1);
     MessageStore::markPersistDirty();
+
+    // Log utilization periodically for debugging
+    static uint32_t lastLogTime = 0;
+    uint32_t now = millis();
+    if (now - lastLogTime > 30000) { // Log every 30 seconds max
+        logPoolUtilization("new message stored");
+        lastLogTime = now;
+    }
+
     return offset;
 }
 
 // Retrieve a const pointer to message text by offset
 static inline const char *getTextFromPool(uint16_t offset)
 {
-    if (!g_messagePool || offset >= MESSAGE_TEXT_POOL_SIZE)
+    if (!g_messagePool || offset >= MESSAGE_TEXT_POOL_SIZE) {
+        LOG_WARN("MessageStore: Invalid text offset %u (pool size %d)", offset, MESSAGE_TEXT_POOL_SIZE);
         return "";
+    }
     return &g_messagePool[offset];
 }
 
@@ -112,16 +167,32 @@ static inline void assignTimestamp(StoredMessage &sm)
 // Generic push with cap (used by live + persisted queues)
 template <typename T> static inline void pushWithLimit(std::deque<T> &queue, const T &msg)
 {
-    if (queue.size() >= MAX_MESSAGES_SAVED)
+    bool removedMessage = false;
+    if (queue.size() >= MAX_MESSAGES_SAVED) {
         queue.pop_front();
+        removedMessage = true;
+    }
     queue.push_back(msg);
+
+    // Compact pool periodically when messages are removed to reclaim space
+    if (removedMessage && queue.size() % 5 == 0) { // Compact every 5th removal
+        messageStore.compactPoolLossless();
+    }
 }
 
 template <typename T> static inline void pushWithLimit(std::deque<T> &queue, T &&msg)
 {
-    if (queue.size() >= MAX_MESSAGES_SAVED)
+    bool removedMessage = false;
+    if (queue.size() >= MAX_MESSAGES_SAVED) {
         queue.pop_front();
+        removedMessage = true;
+    }
     queue.emplace_back(std::move(msg));
+
+    // Compact pool periodically when messages are removed to reclaim space
+    if (removedMessage && queue.size() % 5 == 0) { // Compact every 5th removal
+        messageStore.compactPoolLossless();
+    }
 }
 
 MessageStore::MessageStore(const std::string &label)
@@ -233,6 +304,33 @@ static inline void writeMessageRecord(SafeFile &f, const StoredMessage &m)
     f.write(reinterpret_cast<const uint8_t *>(&rec), sizeof(rec));
 }
 
+// Directly allocate text in pool without going through storeTextInPool to avoid double allocation
+static inline uint16_t directAllocateInPool(const char *src, size_t len)
+{
+    if (len >= MAX_MESSAGE_SIZE)
+        len = MAX_MESSAGE_SIZE - 1;
+
+    // Ensure we have space (compact if needed, like in storeTextInPool)
+    if (g_poolWritePos + len + 1 >= MESSAGE_TEXT_POOL_SIZE) {
+        LOG_DEBUG("MessageStore: Pool nearly full during loading (%zu/%d), attempting compaction", g_poolWritePos,
+                  MESSAGE_TEXT_POOL_SIZE);
+        messageStore.compactPoolLossless();
+
+        if (g_poolWritePos + len + 1 >= MESSAGE_TEXT_POOL_SIZE) {
+            LOG_WARN("MessageStore: Pool full even after compaction during loading (%zu/%d), forcibly wrapping", g_poolWritePos,
+                     MESSAGE_TEXT_POOL_SIZE);
+            g_poolWritePos = 0; // Last resort
+        }
+    }
+
+    uint16_t offset = g_poolWritePos;
+    memcpy(&g_messagePool[g_poolWritePos], src, len);
+    g_messagePool[g_poolWritePos + len] = '\0';
+    g_poolWritePos += (len + 1);
+    // Note: Don't mark persist dirty here since we're loading, not modifying
+    return offset;
+}
+
 // Deserialize one StoredMessage from flash; returns false on short read
 static inline bool readMessageRecord(File &f, StoredMessage &m)
 {
@@ -249,9 +347,9 @@ static inline bool readMessageRecord(File &f, StoredMessage &m)
     m.type = static_cast<MessageType>(rec.type);
     m.textLength = rec.textLength;
 
-    // 💡 Re-store text into pool and update offset
+    // Directly allocate in pool to avoid duplicate allocation overhead
     m.textLength = strnlen(rec.text, MAX_MESSAGE_SIZE - 1);
-    m.textOffset = storeTextInPool(rec.text, m.textLength);
+    m.textOffset = directAllocateInPool(rec.text, m.textLength);
 
     return true;
 }
