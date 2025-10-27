@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <stdint.h>
 
+#include "../freertosinc.h"
 #include "Thread.h"
 #include "ThreadController.h"
 #include "concurrency/InterruptableDelay.h"
@@ -14,6 +15,16 @@ extern ThreadController mainController, timerController;
 extern InterruptableDelay mainDelay;
 
 #define RUN_SAME -1
+
+/**
+ * @brief FreeRTOS task configuration for OSThread
+ */
+struct FreeRTOSTaskConfig {
+    uint32_t stackSizeWords = 2048;              // Stack size in words (not bytes)
+    UBaseType_t priority = tskIDLE_PRIORITY + 1; // Task priority
+    BaseType_t coreAffinity = tskNO_AFFINITY;    // Core affinity (ESP32 only)
+    bool enabled = false;                        // Whether to run as FreeRTOS task
+};
 
 /**
  * @brief Base threading
@@ -41,6 +52,20 @@ class OSThread : public Thread
     /// Show debugging info for threads we decide not to run;
     static bool showWaiting;
 
+#ifdef HAS_FREE_RTOS
+    /// FreeRTOS task configuration
+    FreeRTOSTaskConfig rtosConfig;
+
+    /// FreeRTOS task handle
+    TaskHandle_t taskHandle = nullptr;
+
+    /// Static task entry point
+    static void rtosTaskEntryPoint(void *pvParameters);
+
+    /// Instance task loop (called by rtosTaskEntryPoint)
+    void rtosTaskLoop();
+#endif
+
   public:
     /// For debug printing only (might be null)
     static const OSThread *currentThread;
@@ -60,8 +85,32 @@ class OSThread : public Thread
      */
     void setIntervalFromNow(unsigned long _interval);
 
+#ifdef HAS_FREE_RTOS
+    /**
+     * Configure this thread to run as a FreeRTOS task
+     * Must be called before the thread is started
+     */
+    void setFreeRTOSTask(bool enable = true, uint32_t stackSizeWords = 2048, UBaseType_t priority = tskIDLE_PRIORITY + 1,
+                         BaseType_t coreAffinity = tskNO_AFFINITY);
+
+    /**
+     * Start the FreeRTOS task (only call if configured with setFreeRTOSTask)
+     */
+    bool startFreeRTOSTask();
+
+    /**
+     * Stop and delete the FreeRTOS task
+     */
+    void stopFreeRTOSTask();
+
+    /**
+     * Check if this thread is configured to run as a FreeRTOS task
+     */
+    bool isFreeRTOSTask() const { return rtosConfig.enabled; }
+#endif
+
 #if defined(ARDUINO_ARCH_ESP32)
-    // Minimal, test-only shim to let an external RTOS task loop the thread.
+    // Legacy shim for compatibility - deprecated, use proper FreeRTOS task support instead
     inline int32_t _rtosRunOnceShim() { return runOnce(); }
 #endif
 
