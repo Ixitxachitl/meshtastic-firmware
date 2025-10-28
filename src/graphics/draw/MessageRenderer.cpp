@@ -474,15 +474,23 @@ static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &
         }
         if (!matched) {
             size_t charLen = utf8CharLen(static_cast<uint8_t>(normalized[i]));
-            // Avoid creating temporary substring
-            static char charBuffer[8]; // UTF-8 char can be max 4 bytes + null terminator
-            std::memcpy(charBuffer, &normalized[i], charLen);
-            charBuffer[charLen] = '\0';
+
+            // Check if this is likely an emoji (4-byte UTF-8 sequence starting with 0xF0)
+            if (charLen >= 4 && (uint8_t)normalized[i] == 0xF0) {
+                // Unknown emoji: use a reasonable width estimate
+                // Most emojis are about the same width as predefined ones (16px)
+                totalWidth += 16 + 1; // emoji width + spacing
+            } else {
+                // Regular character
+                static char charBuffer[8]; // UTF-8 char can be max 4 bytes + null terminator
+                std::memcpy(charBuffer, &normalized[i], charLen);
+                charBuffer[charLen] = '\0';
 #if defined(OLED_UA) || defined(OLED_RU)
-            totalWidth += display->getStringWidth(charBuffer, charLen, true);
+                totalWidth += display->getStringWidth(charBuffer, charLen, true);
 #else
-            totalWidth += display->getStringWidth(charBuffer);
+                totalWidth += display->getStringWidth(charBuffer);
 #endif
+            }
             i += charLen;
         }
     }
@@ -943,48 +951,95 @@ std::vector<std::string> generateLines(OLEDDisplay *display, const char *headerS
     line.reserve(64);
     word.reserve(32);
 
-    for (int i = 0; messageBuf[i]; ++i) {
-        char ch = messageBuf[i];
-        if ((unsigned char)messageBuf[i] == 0xE2 && (unsigned char)messageBuf[i + 1] == 0x80 &&
+    for (int i = 0; messageBuf[i];) {
+        // Handle UTF-8 characters properly
+        uint8_t firstByte = static_cast<uint8_t>(messageBuf[i]);
+        size_t charLen = utf8CharLen(firstByte);
+
+        // Handle smart quotes replacement
+        if (firstByte == 0xE2 && i + 2 < (int)strlen(messageBuf) && (unsigned char)messageBuf[i + 1] == 0x80 &&
             (unsigned char)messageBuf[i + 2] == 0x99) {
-            ch = '\''; // plain apostrophe
-            i += 2;    // skip over the extra UTF-8 bytes
+            // Replace smart quote with plain apostrophe
+            if (messageBuf[i] == '\n') {
+                if (!word.empty())
+                    line += word;
+                if (!line.empty())
+                    lines.emplace_back(std::move(line));
+                line.clear();
+                word.clear();
+            } else if (messageBuf[i] == ' ') {
+                line += word;
+                line += ' ';
+                word.clear();
+            } else {
+                word += '\'';
+            }
+            i += 3; // skip the 3-byte UTF-8 sequence
+            continue;
         }
-        if (ch == '\n') {
+
+        // Extract the complete UTF-8 character
+        std::string utfChar;
+        utfChar.reserve(charLen);
+        for (size_t j = 0; j < charLen && messageBuf[i + j]; ++j) {
+            utfChar += messageBuf[i + j];
+        }
+
+        // Check if it's a newline or space (should be single byte)
+        if (charLen == 1 && messageBuf[i] == '\n') {
             if (!word.empty())
                 line += word;
             if (!line.empty())
-                lines.emplace_back(std::move(line)); // Use move semantics
+                lines.emplace_back(std::move(line));
             line.clear();
             word.clear();
-        } else if (ch == ' ') {
+        } else if (charLen == 1 && messageBuf[i] == ' ') {
             line += word;
-            line += ' '; // Avoid temporary string creation
+            line += ' ';
             word.clear();
         } else {
-            word += ch;
-            // Avoid creating temporary string for width calculation
+            // Add the complete UTF-8 character to word
+            word += utfChar;
+
+            // Check if this character is likely an emoji (4-byte UTF-8 starting with 0xF0)
+            bool isLikelyEmoji = (charLen >= 4 && firstByte == 0xF0);
+
+            // Check if adding this word would exceed the line width
             static std::string test_buffer;
             test_buffer.clear();
-            // Prevent static buffer from growing indefinitely
             if (test_buffer.capacity() > 256) {
                 test_buffer.shrink_to_fit();
             }
             test_buffer.reserve(line.size() + word.size());
             test_buffer = line;
             test_buffer += word;
-#if defined(OLED_UA) || defined(OLED_RU)
-            uint16_t strWidth = display->getStringWidth(test_buffer.c_str(), test_buffer.length(), true);
-#else
-            uint16_t strWidth = display->getStringWidth(test_buffer.c_str());
-#endif
-            if (strWidth > textWidth) {
-                if (!line.empty())
-                    lines.emplace_back(std::move(line)); // Use move semantics
-                line = std::move(word);                  // Move instead of copy
+
+            // Use the emoji-aware width calculation function
+            uint16_t strWidth = getRenderedLineWidth(display, test_buffer, emotes, numEmotes);
+
+            // Use standard text width - no special emoji width reduction for now
+            int effectiveTextWidth = textWidth;
+
+            if (strWidth > effectiveTextWidth) {
+                if (!line.empty()) {
+                    lines.emplace_back(std::move(line));
+                    line = std::move(word);
+                    word.clear();
+                } else if (isLikelyEmoji) {
+                    // If even a single emoji is too wide, put it on its own line
+                    lines.emplace_back(std::move(word));
+                    word.clear();
+                    line.clear();
+                }
+            } else if (isLikelyEmoji) {
+                // For emojis, allow breaking after each emoji to prevent long sequences
+                // Add current word to line and start a new word
+                line += word;
                 word.clear();
             }
         }
+
+        i += charLen; // Move by the complete character length
     }
 
     if (!word.empty())

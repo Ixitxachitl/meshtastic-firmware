@@ -31,9 +31,9 @@ struct SphereGeometry {
     static constexpr int MAX_PARALLELS = 4; // Ultra-low memory: 4 parallels
     static constexpr int MAX_SEGMENTS = 16; // Ultra-low memory: 16 segments
 #else
-    static constexpr int MAX_MERIDIANS = 8; // Reduced from 12 (-33% memory)
-    static constexpr int MAX_PARALLELS = 6; // Reduced from 8 (-25% memory)
-    static constexpr int MAX_SEGMENTS = 24; // Reduced from 32 (-25% memory)
+    static constexpr int MAX_MERIDIANS = 12; // Reduced from 12 (-33% memory)
+    static constexpr int MAX_PARALLELS = 6;  // Reduced from 8 (-25% memory)
+    static constexpr int MAX_SEGMENTS = 24;  // Reduced from 32 (-25% memory)
 #endif
 
     Vec3 meridians[MAX_MERIDIANS][MAX_SEGMENTS + 1];
