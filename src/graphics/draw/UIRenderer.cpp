@@ -2,6 +2,7 @@
 #if HAS_SCREEN
 #include "CompassRenderer.h"
 #include "GPSStatus.h"
+#include "MessageRenderer.h"
 #include "NodeDB.h"
 #include "NodeListRenderer.h"
 #include "UIRenderer.h"
@@ -9,6 +10,7 @@
 #include "gps/GeoCoord.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/draw/Math3D.h"
+#include "graphics/emotes.h"
 #include "graphics/images.h"
 #include "main.h"
 #include "target_specific.h"
@@ -28,6 +30,10 @@ namespace graphics
 {
 NodeNum UIRenderer::currentFavoriteNodeNum = 0;
 std::vector<meshtastic_NodeInfoLite *> graphics::UIRenderer::favoritedNodes;
+
+using graphics::Emote;
+using graphics::emotes;
+using graphics::numEmotes;
 
 static inline void drawSatelliteIcon(OLEDDisplay *display, int16_t x, int16_t y)
 {
@@ -349,8 +355,9 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
 
     if (username) {
         usernameStr = sanitizeString(username); // Sanitize the incoming long_name just in case
-        // Print node's long name (e.g. "Backpack Node")
-        display->drawString(x, getTextPositions(display)[line++], usernameStr.c_str());
+        // Print node's long name (e.g. "Backpack Node") with emoji support
+        graphics::MessageRenderer::drawStringWithEmotes(display, x, getTextPositions(display)[line++], usernameStr.c_str(),
+                                                        emotes, numEmotes);
     }
 
     // === 2. Signal and Hops (combined on one line, if available) ===

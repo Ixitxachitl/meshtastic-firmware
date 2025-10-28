@@ -3,7 +3,9 @@
 #include "RTC.h"
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
+#include "graphics/draw/MessageRenderer.h"
 #include "graphics/draw/UIRenderer.h"
+#include "graphics/emotes.h"
 #include "main.h"
 #include "meshtastic/config.pb.h"
 #include "power.h"
@@ -12,6 +14,10 @@
 
 namespace graphics
 {
+
+using graphics::Emote;
+using graphics::emotes;
+using graphics::numEmotes;
 
 void determineResolution(int16_t screenheight, int16_t screenwidth)
 {
@@ -48,8 +54,14 @@ bool isMuted = false;
 bool isHighResolution = false;
 
 static volatile bool s_overlayActive = false;
-void setOverlayActive(bool active) { s_overlayActive = active; }
-bool isOverlayActive() { return s_overlayActive; }
+void setOverlayActive(bool active)
+{
+    s_overlayActive = active;
+}
+bool isOverlayActive()
+{
+    return s_overlayActive;
+}
 
 // === Active screen classification (coarse) ===
 // We only need to know "is this the Messages screen?" for keyboard arrows.
@@ -57,12 +69,23 @@ static volatile bool s_isMessagesScreenActive = false;
 
 static int s_messagesFrameIndex = -1;
 
-bool isMessagesScreenActive() { return s_isMessagesScreenActive; }
-void setMessagesScreenActive(bool active) { s_isMessagesScreenActive = active; }
+bool isMessagesScreenActive()
+{
+    return s_isMessagesScreenActive;
+}
+void setMessagesScreenActive(bool active)
+{
+    s_isMessagesScreenActive = active;
+}
 
-void setMessagesFrameIndex(int idx) { s_messagesFrameIndex = idx; }
-int  getMessagesFrameIndex()       { return s_messagesFrameIndex; }
-
+void setMessagesFrameIndex(int idx)
+{
+    s_messagesFrameIndex = idx;
+}
+int getMessagesFrameIndex()
+{
+    return s_messagesFrameIndex;
+}
 
 // === Internal State ===
 bool isBoltVisibleShared = true;
@@ -127,9 +150,9 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
 
         // === Screen Title ===
         display->setTextAlignment(TEXT_ALIGN_CENTER);
-        display->drawString(SCREEN_WIDTH / 2, y, titleStr);
+        graphics::MessageRenderer::drawStringWithEmotes(display, SCREEN_WIDTH / 2, y, titleStr, emotes, numEmotes);
         if (config.display.heading_bold) {
-            display->drawString((SCREEN_WIDTH / 2) + 1, y, titleStr);
+            graphics::MessageRenderer::drawStringWithEmotes(display, (SCREEN_WIDTH / 2) + 1, y, titleStr, emotes, numEmotes);
         }
     }
     display->setTextAlignment(TEXT_ALIGN_LEFT);
