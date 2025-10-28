@@ -459,6 +459,7 @@ static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &
 {
     std::string normalized = normalizeEmoji(line);
     int totalWidth = 0;
+    int emojiCount = 0;
 
     size_t i = 0;
     while (i < normalized.length()) {
@@ -466,7 +467,8 @@ static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &
         for (int e = 0; e < emoteCount; ++e) {
             size_t emojiLen = strlen(emotes[e].label);
             if (normalized.compare(i, emojiLen, emotes[e].label) == 0) {
-                totalWidth += emotes[e].width + 1; // +1 spacing
+                totalWidth += emotes[e].width;
+                emojiCount++;
                 i += emojiLen;
                 matched = true;
                 break;
@@ -475,11 +477,13 @@ static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &
         if (!matched) {
             size_t charLen = utf8CharLen(static_cast<uint8_t>(normalized[i]));
 
-            // Check if this is likely an emoji (4-byte UTF-8 sequence starting with 0xF0)
-            if (charLen >= 4 && (uint8_t)normalized[i] == 0xF0) {
+            // Check if this is likely an emoji (4-byte UTF-8 starting with 0xF0, or 3-byte symbols)
+            if ((charLen >= 4 && (uint8_t)normalized[i] == 0xF0) ||
+                (charLen == 3 && ((uint8_t)normalized[i] == 0xE2 || (uint8_t)normalized[i] == 0xEF))) {
                 // Unknown emoji: use a reasonable width estimate
                 // Most emojis are about the same width as predefined ones (16px)
-                totalWidth += 16 + 1; // emoji width + spacing
+                totalWidth += 16;
+                emojiCount++;
             } else {
                 // Regular character
                 static char charBuffer[8]; // UTF-8 char can be max 4 bytes + null terminator
@@ -494,6 +498,12 @@ static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &
             i += charLen;
         }
     }
+
+    // Add spacing between emojis (but not after the last one)
+    if (emojiCount > 0) {
+        totalWidth += emojiCount; // Add 1px spacing after each emoji (including last)
+    }
+
     return totalWidth;
 }
 
@@ -1004,8 +1014,10 @@ std::vector<std::string> generateLines(OLEDDisplay *display, const char *headerS
             // Add the complete UTF-8 character to word
             word += utfChar;
 
-            // Check if this character is likely an emoji (4-byte UTF-8 starting with 0xF0)
-            bool isLikelyEmoji = (charLen >= 4 && firstByte == 0xF0);
+            // Check if this character is likely an emoji
+            // 4-byte UTF-8 starting with 0xF0, or 3-byte sequences for symbols like hearts
+            bool isLikelyEmoji =
+                (charLen >= 4 && firstByte == 0xF0) || (charLen == 3 && (firstByte == 0xE2 || firstByte == 0xEF));
 
             // Check if adding this word would exceed the line width
             static std::string test_buffer;

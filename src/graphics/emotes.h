@@ -78,28 +78,28 @@ extern const unsigned char wave_icon[] PROGMEM;
 #define cowboy_width 16
 extern const unsigned char cowboy[] PROGMEM;
 
-#define deadmau5_height 30
-#define deadmau5_width 60
+#define deadmau5_height 16
+#define deadmau5_width 16
 extern const unsigned char deadmau5[] PROGMEM;
 
-#define sun_height 30
-#define sun_width 30
+#define sun_height 16
+#define sun_width 16
 extern const unsigned char sun[] PROGMEM;
 
-#define rain_height 30
-#define rain_width 30
+#define rain_height 16
+#define rain_width 16
 extern const unsigned char rain[] PROGMEM;
 
-#define cloud_height 30
-#define cloud_width 30
+#define cloud_height 16
+#define cloud_width 16
 extern const unsigned char cloud[] PROGMEM;
 
-#define fog_height 25
-#define fog_width 25
+#define fog_height 16
+#define fog_width 16
 extern const unsigned char fog[] PROGMEM;
 
-#define devil_height 30
-#define devil_width 30
+#define devil_height 16
+#define devil_width 16
 extern const unsigned char devil[] PROGMEM;
 
 #define heart_height 16
@@ -114,12 +114,12 @@ extern const unsigned char poo[] PROGMEM;
 #define bell_icon_height 16
 extern const unsigned char bell_icon[] PROGMEM;
 
-#define cookie_width 30
-#define cookie_height 30
+#define cookie_width 16
+#define cookie_height 16
 extern const unsigned char cookie[] PROGMEM;
 
-#define peace_sign_width 30
-#define peace_sign_height 30
+#define peace_sign_width 16
+#define peace_sign_height 16
 extern const unsigned char peace_sign[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
