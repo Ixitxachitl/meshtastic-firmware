@@ -58,13 +58,13 @@ const char *getSafeNodeName(meshtastic_NodeInfoLite *node)
     const char *name = NULL;
     static char nodeName[16] = "?";
     if (config.display.use_long_node_name == true) {
-        if (node->has_user && strlen(node->user.long_name) > 0) {
+        if (node->has_user && node->user.long_name && node->user.long_name[0]) {
             name = node->user.long_name;
         } else {
             snprintf(nodeName, sizeof(nodeName), "(%04X)", (uint16_t)(node->num & 0xFFFF));
         }
     } else {
-        if (node->has_user && strlen(node->user.short_name) > 0) {
+        if (node->has_user && node->user.short_name && node->user.short_name[0]) {
             name = node->user.short_name;
         } else {
             snprintf(nodeName, sizeof(nodeName), "(%04X)", (uint16_t)(node->num & 0xFFFF));
@@ -75,8 +75,22 @@ const char *getSafeNodeName(meshtastic_NodeInfoLite *node)
     std::string sanitized_name = sanitizeString(name ? name : "");
 
     if (!sanitized_name.empty()) {
-        strncpy(nodeName, sanitized_name.c_str(), sizeof(nodeName) - 1);
-        nodeName[sizeof(nodeName) - 1] = '\0';
+        // Check if the sanitized name contains only replacement characters (0xbf)
+        bool onlyReplacements = true;
+        for (char c : sanitized_name) {
+            if ((unsigned char)c != 0xbf) {
+                onlyReplacements = false;
+                break;
+            }
+        }
+
+        if (onlyReplacements) {
+            // If the name was entirely emoji/special chars, show upside-down question mark
+            snprintf(nodeName, sizeof(nodeName), "¿");
+        } else {
+            strncpy(nodeName, sanitized_name.c_str(), sizeof(nodeName) - 1);
+            nodeName[sizeof(nodeName) - 1] = '\0';
+        }
     } else {
         snprintf(nodeName, sizeof(nodeName), "(%04X)", (uint16_t)(node->num & 0xFFFF));
     }
