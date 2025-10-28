@@ -459,7 +459,6 @@ static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &
 {
     std::string normalized = normalizeEmoji(line);
     int totalWidth = 0;
-    int emojiCount = 0;
 
     size_t i = 0;
     while (i < normalized.length()) {
@@ -467,8 +466,7 @@ static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &
         for (int e = 0; e < emoteCount; ++e) {
             size_t emojiLen = strlen(emotes[e].label);
             if (normalized.compare(i, emojiLen, emotes[e].label) == 0) {
-                totalWidth += emotes[e].width;
-                emojiCount++;
+                totalWidth += emotes[e].width + 1; // +1 spacing
                 i += emojiLen;
                 matched = true;
                 break;
@@ -481,29 +479,18 @@ static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &
             if ((charLen >= 4 && (uint8_t)normalized[i] == 0xF0) ||
                 (charLen == 3 && ((uint8_t)normalized[i] == 0xE2 || (uint8_t)normalized[i] == 0xEF))) {
                 // Unknown emoji: use a reasonable width estimate
-                // Most emojis are about the same width as predefined ones (16px)
-                totalWidth += 16;
-                emojiCount++;
+                totalWidth += 16 + 1; // Most emojis are 16px + spacing
             } else {
-                // Regular character
-                static char charBuffer[8]; // UTF-8 char can be max 4 bytes + null terminator
-                std::memcpy(charBuffer, &normalized[i], charLen);
-                charBuffer[charLen] = '\0';
+                // Regular character - use substr to avoid temporary string creation issues
 #if defined(OLED_UA) || defined(OLED_RU)
-                totalWidth += display->getStringWidth(charBuffer, charLen, true);
+                totalWidth += display->getStringWidth(normalized.substr(i, charLen).c_str(), charLen, true);
 #else
-                totalWidth += display->getStringWidth(charBuffer);
+                totalWidth += display->getStringWidth(normalized.substr(i, charLen).c_str());
 #endif
             }
             i += charLen;
         }
     }
-
-    // Add spacing between emojis (but not after the last one)
-    if (emojiCount > 0) {
-        totalWidth += emojiCount; // Add 1px spacing after each emoji (including last)
-    }
-
     return totalWidth;
 }
 
@@ -676,16 +663,29 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             if (availWidth < 0)
                 availWidth = 0;
 
-            // Fit sender to available width (from feat/m5stack-cardputer-adv)
-            size_t origLen = std::strlen(senderBuf);
-            while (senderBuf[0] && display->getStringWidth(senderBuf) > availWidth) {
-                senderBuf[std::strlen(senderBuf) - 1] = '\0';
+            // Fit sender to available width with emoji support
+            std::string senderStr(senderBuf);
+            size_t origLen = senderStr.length();
+            while (!senderStr.empty() && getRenderedLineWidth(display, senderStr, emotes, numEmotes) > availWidth) {
+                // Remove last UTF-8 character
+                size_t pos = senderStr.length();
+                while (pos > 0 && (senderStr[pos - 1] & 0xC0) == 0x80) {
+                    pos--; // Skip UTF-8 continuation bytes
+                }
+                if (pos > 0) {
+                    pos--; // Remove the start of the UTF-8 character
+                }
+                senderStr.erase(pos);
             }
 
             // If we actually truncated, append "..."
-            if (std::strlen(senderBuf) < origLen) {
-                strcat(senderBuf, "...");
+            if (senderStr.length() < origLen) {
+                senderStr += "...";
             }
+
+            // Copy back to senderBuf
+            strncpy(senderBuf, senderStr.c_str(), sizeof(senderBuf) - 1);
+            senderBuf[sizeof(senderBuf) - 1] = '\0';
 
             // Final header line (no time here; time is drawn live during render)
             char headerStr[96] = "";
@@ -906,9 +906,9 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 fullHeader.append(cachedLines[i]);
 
                 // Render header (measure/draw/underline using the full string)
-                int w = display->getStringWidth(fullHeader.c_str());
+                int w = getRenderedLineWidth(display, fullHeader, emotes, numEmotes);
                 int headerX = cachedIsMine[i] ? (SCREEN_WIDTH - w - 2) : x;
-                display->drawString(headerX, lineY, fullHeader.c_str());
+                drawStringWithEmotes(display, headerX, lineY, fullHeader, emotes, numEmotes);
 
                 // Draw ACK/NACK mark for our own messages
                 if (cachedIsMine[i]) {
@@ -1020,14 +1020,7 @@ std::vector<std::string> generateLines(OLEDDisplay *display, const char *headerS
                 (charLen >= 4 && firstByte == 0xF0) || (charLen == 3 && (firstByte == 0xE2 || firstByte == 0xEF));
 
             // Check if adding this word would exceed the line width
-            static std::string test_buffer;
-            test_buffer.clear();
-            if (test_buffer.capacity() > 256) {
-                test_buffer.shrink_to_fit();
-            }
-            test_buffer.reserve(line.size() + word.size());
-            test_buffer = line;
-            test_buffer += word;
+            std::string test_buffer = line + word;
 
             // Use the emoji-aware width calculation function
             uint16_t strWidth = getRenderedLineWidth(display, test_buffer, emotes, numEmotes);
