@@ -46,6 +46,10 @@ extern const unsigned char Grinning_Smiling_Eyes[] PROGMEM;
 #define heart_smile_width 16
 extern const unsigned char heart_smile[] PROGMEM;
 
+#define Heart_eyes_height 16
+#define Heart_eyes_width 16
+extern const unsigned char Heart_eyes[] PROGMEM;
+
 #define question_height 16
 #define question_width 16
 extern const unsigned char question[] PROGMEM;
@@ -69,6 +73,10 @@ extern const unsigned char Smiling_Closed_Eyes[] PROGMEM;
 #define Grinning_SmilingEyes2_height 16
 #define Grinning_SmilingEyes2_width 16
 extern const unsigned char Grinning_SmilingEyes2[] PROGMEM;
+
+#define Loudly_Crying_Face_height 16
+#define Loudly_Crying_Face_width 16
+extern const unsigned char Loudly_Crying_Face[] PROGMEM;
 
 #define wave_icon_height 16
 #define wave_icon_width 16
@@ -118,9 +126,37 @@ extern const unsigned char bell_icon[] PROGMEM;
 #define cookie_height 16
 extern const unsigned char cookie[] PROGMEM;
 
+#define Fire_width 16
+#define Fire_height 16
+extern const unsigned char Fire[] PROGMEM;
+
 #define peace_sign_width 16
 #define peace_sign_height 16
 extern const unsigned char peace_sign[] PROGMEM;
+
+#define Praying_width 16
+#define Praying_height 16
+extern const unsigned char Praying[] PROGMEM;
+
+#define Sparkles_width 16
+#define Sparkles_height 16
+extern const unsigned char Sparkles[] PROGMEM;
+
+#define clown_width 16
+#define clown_height 16
+extern const unsigned char clown[] PROGMEM;
+
+#define robo_width 16
+#define robo_height 16
+extern const unsigned char robo[] PROGMEM;
+
+#define hole_width 16
+#define hole_height 16
+extern const unsigned char hole[] PROGMEM;
+
+#define bowling_width 16
+#define bowling_height 16
+extern const unsigned char bowling[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
 } // namespace graphics
