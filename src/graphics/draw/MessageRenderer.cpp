@@ -793,7 +793,10 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         scrollY = bottomOffsetOneRow;
     }
 
-    if (totalHeight > usableScrollHeight) {
+    // Enable scrolling when content is close to fitting, not just when it overflows
+    // This ensures messages scroll away from the top UI bar even with less content
+    int scrollThreshold = usableScrollHeight - (FONT_HEIGHT_SMALL * 2); // Start scrolling 2 lines early
+    if (totalHeight > scrollThreshold) {
         // freeze autoscroll briefly after manual input
         if (manualScrollActive && (now - lastManualMs) < 5000) {
             lastTime = now; // keep timebase fresh
