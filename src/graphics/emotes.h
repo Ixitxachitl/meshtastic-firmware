@@ -157,6 +157,10 @@ extern const unsigned char hole[] PROGMEM;
 #define bowling_width 16
 #define bowling_height 16
 extern const unsigned char bowling[] PROGMEM;
+
+#define vulcan_solute_width 16
+#define vulcan_solute_height 16
+extern const unsigned char vulcan_solute[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
 } // namespace graphics
