@@ -1237,21 +1237,33 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
                 CompassRenderer::setTopDownView(true);
                 CompassRenderer::drawCompassSphere(display, compassX, compassY, compassRadius);
 
-                // Draw fixed cardinal direction labels
-                const uint16_t rDraw = (uint16_t)std::max<int>(1, (int)(compassRadius));
-                const int16_t cxShift = (int16_t)(compassX - (int)(rDraw * 0.14f));
-                const int16_t cy = compassY;
-                const float rLabel = rDraw * 1.06f;
+                if (isHighResolution) {
+                    // High-res: show fixed cardinal labels around the ring
+                    const uint16_t rDraw = (uint16_t)std::max<int>(1, (int)(compassRadius));
+                    const int16_t cxShift = (int16_t)(compassX - (int)(rDraw * 0.14f));
+                    const int16_t cy = compassY;
+                    const float rLabel = rDraw * 1.06f;
 
-                display->setFont(FONT_SMALL);
-                display->setTextAlignment(TEXT_ALIGN_CENTER);
-                display->drawString(cxShift, cy - (int)rLabel - (FONT_HEIGHT_SMALL / 2), "N");
-                display->drawString(cxShift + (int)rLabel, cy - (FONT_HEIGHT_SMALL / 2), "E");
-                display->drawString(cxShift, cy + (int)rLabel - (FONT_HEIGHT_SMALL / 2), "S");
-                display->drawString(cxShift - (int)rLabel, cy - (FONT_HEIGHT_SMALL / 2), "W");
+                    display->setFont(FONT_SMALL);
+                    display->setTextAlignment(TEXT_ALIGN_CENTER);
+                    display->drawString(cxShift, cy - (int)rLabel - (FONT_HEIGHT_SMALL / 2), "N");
+                    display->drawString(cxShift + (int)rLabel, cy - (FONT_HEIGHT_SMALL / 2), "E");
+                    display->drawString(cxShift, cy + (int)rLabel - (FONT_HEIGHT_SMALL / 2), "S");
+                    display->drawString(cxShift - (int)rLabel, cy - (FONT_HEIGHT_SMALL / 2), "W");
 
-                CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, Quat::identity(), needleHeading,
-                                                    0.0f);
+                    CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, Quat::identity(),
+                                                        needleHeading, 0.0f);
+                } else {
+                    // Low-res: match develop visuals — no fixed E/N/S/W labels, static 'N' at top, frozen needle if selected
+                    display->setFont(FONT_SMALL);
+                    display->setTextAlignment(TEXT_ALIGN_CENTER);
+                    int16_t nX = compassX;
+                    int16_t nY = compassY - (compassRadius - 1);
+                    display->drawString(nX, nY - (FONT_HEIGHT_SMALL / 2), "N");
+                    // Use needleHeading so FREEZE_HEADING is respected
+                    CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, -needleHeading);
+                }
+
                 CompassRenderer::setTopDownView(false);
             } else {
                 // DYNAMIC/FREEZE_HEADING
@@ -1264,12 +1276,13 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
                     display->drawCircle(compassX, compassY, compassRadius);
                     display->setFont(FONT_SMALL);
                     display->setTextAlignment(TEXT_ALIGN_CENTER);
-                    // North rotates with heading unless FIXED_RING
+                    // North rotates with live heading unless FIXED_RING; needle may be frozen per mode
                     float northAngle = (uiconfig.compass_mode != meshtastic_CompassMode_FIXED_RING) ? -heading : 0.0f;
                     int16_t nX = compassX + (int16_t)((compassRadius - 1) * sinf(northAngle));
                     int16_t nY = compassY - (int16_t)((compassRadius - 1) * cosf(northAngle));
                     display->drawString(nX, nY - (FONT_HEIGHT_SMALL / 2), "N");
-                    CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, -heading);
+                    // Use needleHeading so FREEZE_HEADING affects the arrow on low-res too
+                    CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, -needleHeading);
                 }
             }
 
@@ -1306,21 +1319,33 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
                 CompassRenderer::setTopDownView(true);
                 CompassRenderer::drawCompassSphere(display, compassX, compassY, compassRadius, Quat::identity());
 
-                // Draw fixed cardinal direction labels
-                const uint16_t rDraw = (uint16_t)std::max<int>(1, (int)(compassRadius));
-                const int16_t cxShift = (int16_t)(compassX - (int)(rDraw * 0.14f));
-                const int16_t cy = compassY;
-                const float rLabel = rDraw * 1.06f;
+                if (isHighResolution) {
+                    // High-res: show fixed cardinal direction labels
+                    const uint16_t rDraw = (uint16_t)std::max<int>(1, (int)(compassRadius));
+                    const int16_t cxShift = (int16_t)(compassX - (int)(rDraw * 0.14f));
+                    const int16_t cy = compassY;
+                    const float rLabel = rDraw * 1.06f;
 
-                display->setFont(FONT_SMALL);
-                display->setTextAlignment(TEXT_ALIGN_CENTER);
-                display->drawString(cxShift, cy - (int)rLabel - (FONT_HEIGHT_SMALL / 2), "N");
-                display->drawString(cxShift + (int)rLabel, cy - (FONT_HEIGHT_SMALL / 2), "E");
-                display->drawString(cxShift, cy + (int)rLabel - (FONT_HEIGHT_SMALL / 2), "S");
-                display->drawString(cxShift - (int)rLabel, cy - (FONT_HEIGHT_SMALL / 2), "W");
+                    display->setFont(FONT_SMALL);
+                    display->setTextAlignment(TEXT_ALIGN_CENTER);
+                    display->drawString(cxShift, cy - (int)rLabel - (FONT_HEIGHT_SMALL / 2), "N");
+                    display->drawString(cxShift + (int)rLabel, cy - (FONT_HEIGHT_SMALL / 2), "E");
+                    display->drawString(cxShift, cy + (int)rLabel - (FONT_HEIGHT_SMALL / 2), "S");
+                    display->drawString(cxShift - (int)rLabel, cy - (FONT_HEIGHT_SMALL / 2), "W");
 
-                CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, Quat::identity(), needleHeading,
-                                                    0.0f);
+                    CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, Quat::identity(),
+                                                        needleHeading, 0.0f);
+                } else {
+                    // Low-res: match develop visuals — no fixed E/N/S/W labels, static 'N', frozen needle if selected
+                    display->setFont(FONT_SMALL);
+                    display->setTextAlignment(TEXT_ALIGN_CENTER);
+                    int16_t nX = compassX;
+                    int16_t nY = compassY - (compassRadius - 1);
+                    display->drawString(nX, nY - (FONT_HEIGHT_SMALL / 2), "N");
+                    // Use needleHeading so FREEZE_HEADING is respected
+                    CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, -needleHeading);
+                }
+
                 CompassRenderer::setTopDownView(false);
             } else {
                 // DYNAMIC/FREEZE_HEADING
@@ -1333,11 +1358,13 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
                     display->drawCircle(compassX, compassY, compassRadius);
                     display->setFont(FONT_SMALL);
                     display->setTextAlignment(TEXT_ALIGN_CENTER);
+                    // North rotates with live heading unless FIXED_RING
                     float northAngle = (uiconfig.compass_mode != meshtastic_CompassMode_FIXED_RING) ? -heading : 0.0f;
                     int16_t nX = compassX + (int16_t)((compassRadius - 1) * sinf(northAngle));
                     int16_t nY = compassY - (int16_t)((compassRadius - 1) * cosf(northAngle));
                     display->drawString(nX, nY - (FONT_HEIGHT_SMALL / 2), "N");
-                    CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, -heading);
+                    // Use needleHeading to honor FREEZE_HEADING on low-res
+                    CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, -needleHeading);
                 }
             }
         }
