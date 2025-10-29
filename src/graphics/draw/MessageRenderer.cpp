@@ -179,32 +179,20 @@ std::string normalizeEmoji(const std::string &s)
 
 void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string &line, const Emote *emotes, int emoteCount)
 {
-    std::string renderLine;
-    for (size_t i = 0; i < line.size();) {
-        uint8_t c = (uint8_t)line[i];
-        size_t len = utf8CharLen(c);
-        if (c == 0xEF && i + 2 < line.size() && (uint8_t)line[i + 1] == 0xB8 && (uint8_t)line[i + 2] == 0x8F) {
-            i += 3;
-            continue;
-        }
-        if (c == 0xF0 && i + 3 < line.size() && (uint8_t)line[i + 1] == 0x9F && (uint8_t)line[i + 2] == 0x8F &&
-            ((uint8_t)line[i + 3] >= 0xBB && (uint8_t)line[i + 3] <= 0xBF)) {
-            i += 4;
-            continue;
-        }
-        renderLine.append(line, i, len);
-        i += len;
-    }
+    // Normalize the incoming line so variation selectors and skin tones don't render as stray glyphs
+    const std::string normLine = normalizeEmoji(line);
     int cursorX = x;
     const int fontHeight = FONT_HEIGHT_SMALL;
 
     // Step 1: Find tallest emote in the line
     int maxIconHeight = fontHeight;
-    for (size_t i = 0; i < line.length();) {
+    for (size_t i = 0; i < normLine.length();) {
         bool matched = false;
         for (int e = 0; e < emoteCount; ++e) {
-            size_t emojiLen = strlen(emotes[e].label);
-            if (line.compare(i, emojiLen, emotes[e].label) == 0) {
+            // Compare against normalized label so FE0F variants also match
+            const std::string labelNorm = normalizeEmoji(std::string(emotes[e].label));
+            const size_t emojiLen = labelNorm.length();
+            if (emojiLen && normLine.compare(i, emojiLen, labelNorm) == 0) {
                 if (emotes[e].height > maxIconHeight)
                     maxIconHeight = emotes[e].height;
                 i += emojiLen;
@@ -213,7 +201,7 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
             }
         }
         if (!matched) {
-            i += utf8CharLen(static_cast<uint8_t>(line[i]));
+            i += utf8CharLen(static_cast<uint8_t>(normLine[i]));
         }
     }
 
@@ -226,9 +214,9 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
     size_t i = 0;
     bool inBold = false;
 
-    while (i < line.length()) {
+    while (i < normLine.length()) {
         // Check for ** start/end for faux bold
-        if (line.compare(i, 2, "**") == 0) {
+        if (normLine.compare(i, 2, "**") == 0) {
             inBold = !inBold;
             i += 2;
             continue;
@@ -240,21 +228,24 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
         size_t emojiLen = 0;
 
         for (int e = 0; e < emoteCount; ++e) {
-            size_t pos = line.find(emotes[e].label, i);
+            const std::string labelNorm = normalizeEmoji(std::string(emotes[e].label));
+            if (labelNorm.empty())
+                continue;
+            size_t pos = normLine.find(labelNorm, i);
             if (pos != std::string::npos && (nextEmotePos == std::string::npos || pos < nextEmotePos)) {
                 nextEmotePos = pos;
                 matchedEmote = &emotes[e];
-                emojiLen = strlen(emotes[e].label);
+                emojiLen = labelNorm.length();
             }
         }
 
         // Render normal text segment up to the emote or bold toggle
-        size_t nextControl = std::min(nextEmotePos, line.find("**", i));
+        size_t nextControl = std::min(nextEmotePos, normLine.find("**", i));
         if (nextControl == std::string::npos)
-            nextControl = line.length();
+            nextControl = normLine.length();
 
         if (nextControl > i) {
-            std::string textChunk = line.substr(i, nextControl - i);
+            std::string textChunk = normLine.substr(i, nextControl - i);
             if (inBold) {
                 // Faux bold: draw twice, offset by 1px
                 display->drawString(cursorX + 1, fontY, textChunk.c_str());
@@ -279,7 +270,7 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
             continue;
         } else {
             // No more emotes — render the rest of the line
-            std::string remaining = line.substr(i);
+            std::string remaining = normLine.substr(i);
             if (inBold) {
                 display->drawString(cursorX + 1, fontY, remaining.c_str());
             }

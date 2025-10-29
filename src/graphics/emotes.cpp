@@ -55,6 +55,8 @@ const Emote emotes[] = {
     {"\U0001F916", robo, robo_width, robo_height},    // 🤖 Robot Face
 
     // --- Hearts (Multiple Unicode Aliases) ---
+    {"\u2665", heart, heart_width, heart_height},       // ♥ Black Heart Suit
+    {"\u2665\uFE0F", heart, heart_width, heart_height}, // ♥️ Black Heart Suit (emoji presentation)
     {"\u2764\uFE0F", heart, heart_width, heart_height}, // ❤️ Red Heart
     {"\U0001F9E1", heart, heart_width, heart_height},   // 🧡 Orange Heart
     {"\U00002763", heart, heart_width, heart_height},   // ❣ Heart Exclamation
