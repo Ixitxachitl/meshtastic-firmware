@@ -24,6 +24,34 @@ extern "C" float GetHeadingRadiansForRenderer();
 
 namespace
 {
+// Simple Point helper class for fallback compass (used on low-resolution displays)
+struct SimplePoint {
+    float x, y;
+    SimplePoint(float x, float y) : x(x), y(y) {}
+
+    void rotate(float angle)
+    {
+        float cos_a = cos(angle);
+        float sin_a = sin(angle);
+        float new_x = x * cos_a - y * sin_a;
+        float new_y = x * sin_a + y * cos_a;
+        x = new_x;
+        y = new_y;
+    }
+
+    void scale(float factor)
+    {
+        x *= factor;
+        y *= factor;
+    }
+
+    void translate(float dx, float dy)
+    {
+        x += dx;
+        y += dy;
+    }
+};
+
 // Cached sphere geometry to avoid repeated trigonometric calculations
 struct SphereGeometry {
 #if COMPASS_MEMORY_OPTIMIZED
@@ -483,14 +511,11 @@ struct Point {
 
 void drawCompassNorth(OLEDDisplay *display, int16_t compassX, int16_t compassY, float myHeading, int16_t radius)
 {
-    // Show the compass heading (not implemented in original)
-    // This could draw a "N" indicator or north arrow
-    // For now, we'll draw a simple north indicator
-    // const float radius = 17.0f;
+    // Simple compass north indicator (works on all display types)
     if (isHighResolution) {
         radius += 4;
     }
-    Point north(0, -radius);
+    SimplePoint north(0, -radius);
     if (uiconfig.compass_mode != meshtastic_CompassMode_FIXED_RING)
         north.rotate(-myHeading);
     north.translate(compassX, compassY);
@@ -507,44 +532,66 @@ void drawCompassNorth(OLEDDisplay *display, int16_t compassX, int16_t compassY, 
     display->drawString(north.x, north.y - 3, "N");
 }
 
-void drawNodeHeading(OLEDDisplay *display, int16_t compassX, int16_t compassY, uint16_t compassDiam,
-                     float /*headingRadian unused*/)
+void drawNodeHeading(OLEDDisplay *display, int16_t compassX, int16_t compassY, uint16_t compassDiam, float headingRadian)
 {
-    const Quat attitude = GetAttitudeForRenderer();
-    const uint16_t radius = compassDiam / 2;
+    if (isHighResolution) {
+        // Use 3D compass for high-resolution displays (OLEDs)
+        const Quat attitude = GetAttitudeForRenderer();
+        const uint16_t radius = compassDiam / 2;
 
-    // draw the globe first
-    drawCompassSphere(display, compassX, compassY, radius, attitude);
+        // draw the globe first
+        drawCompassSphere(display, compassX, compassY, radius, attitude);
 
-    // same geometry constants used by the globe
-    const uint16_t rDraw = (uint16_t)std::max<int>(1, (int)(radius));
-    const int16_t cxShift = (int16_t)(compassX - (int)(rDraw * 0.14f));
-    const int16_t cy = compassY;
-    const float rLabel = rDraw * 1.06f; // just outside equator
+        // same geometry constants used by the globe
+        const uint16_t rDraw = (uint16_t)std::max<int>(1, (int)(radius));
+        const int16_t cxShift = (int16_t)(compassX - (int)(rDraw * 0.14f));
+        const int16_t cy = compassY;
+        const float rLabel = rDraw * 1.06f; // just outside equator
 
-    // Same smoothed transform as the sphere so labels stay locked to the equator
-    const Quat qLabel = buildSmoothedRenderQuat(attitude);
+        // Same smoothed transform as the sphere so labels stay locked to the equator
+        const Quat qLabel = buildSmoothedRenderQuat(attitude);
 
-    // Choose your basis (forward = −Z). If your build uses +Z forward, flip signs as discussed.
-    struct Mark {
-        const char *t;
-        Vec3 p;
-    };
-    Mark marks[] = {
-        {"N", Vec3(0, 0, 1)},
-        {"E", Vec3(1, 0, 0)},
-        {"S", Vec3(0, 0, -1)},
-        {"W", Vec3(-1, 0, 0)},
-    };
+        // Choose your basis (forward = −Z). If your build uses +Z forward, flip signs as discussed.
+        struct Mark {
+            const char *t;
+            Vec3 p;
+        };
+        Mark marks[] = {
+            {"N", Vec3(0, 0, 1)},
+            {"E", Vec3(1, 0, 0)},
+            {"S", Vec3(0, 0, -1)},
+            {"W", Vec3(-1, 0, 0)},
+        };
 
-    display->setFont(FONT_SMALL);
-    display->setTextAlignment(TEXT_ALIGN_CENTER);
+        display->setFont(FONT_SMALL);
+        display->setTextAlignment(TEXT_ALIGN_CENTER);
 
-    for (auto &m : marks) {
-        int x, y;
-        if (projectPoint(qLabel, m.p * (float)rLabel, cxShift, cy, x, y)) {
-            display->drawString(x, y - (FONT_HEIGHT_SMALL / 2), m.t);
+        for (auto &m : marks) {
+            int x, y;
+            if (projectPoint(qLabel, m.p * (float)rLabel, cxShift, cy, x, y)) {
+                display->drawString(x, y - (FONT_HEIGHT_SMALL / 2), m.t);
+            }
         }
+    } else {
+        // Simple compass for low-resolution displays (TFTs)
+        SimplePoint tip(0.0f, -0.5f), tail(0.0f, 0.35f); // pointing up initially
+        float arrowOffsetX = 0.14f, arrowOffsetY = 0.9f;
+        SimplePoint leftArrow(tip.x - arrowOffsetX, tip.y + arrowOffsetY), rightArrow(tip.x + arrowOffsetX, tip.y + arrowOffsetY);
+
+        SimplePoint *arrowPoints[] = {&tip, &tail, &leftArrow, &rightArrow};
+
+        for (int i = 0; i < 4; i++) {
+            arrowPoints[i]->rotate(headingRadian);
+            arrowPoints[i]->scale(compassDiam * 0.6);
+            arrowPoints[i]->translate(compassX, compassY);
+        }
+
+#ifdef USE_EINK
+        display->drawTriangle(tip.x, tip.y, rightArrow.x, rightArrow.y, tail.x, tail.y);
+#else
+        display->fillTriangle(tip.x, tip.y, rightArrow.x, rightArrow.y, tail.x, tail.y);
+#endif
+        display->drawTriangle(tip.x, tip.y, leftArrow.x, leftArrow.y, tail.x, tail.y);
     }
 }
 
@@ -552,10 +599,10 @@ void drawArrowToNode(OLEDDisplay *display, int16_t x, int16_t y, int16_t size, f
 {
     float radians = bearing * DEG_TO_RAD;
 
-    Point tip(0, -size / 2);
-    Point left(-size / 6, size / 4);
-    Point right(size / 6, size / 4);
-    Point tail(0, size / 4.5);
+    SimplePoint tip(0, -size / 2);
+    SimplePoint left(-size / 6, size / 4);
+    SimplePoint right(size / 6, size / 4);
+    SimplePoint tail(0, size / 4.5);
 
     tip.rotate(radians);
     left.rotate(radians);
@@ -596,6 +643,31 @@ uint16_t getCompassDiam(uint32_t displayWidth, uint32_t displayHeight)
 void setTopDownView(bool enable)
 {
     g_forceTopDownView = enable;
+}
+
+// Runtime-detected compass functions (simple overloads)
+void drawCompassSphere(OLEDDisplay *display, int16_t cx, int16_t cy, uint16_t radius)
+{
+    if (isHighResolution) {
+        // Use 3D sphere for high-resolution displays (OLEDs)
+        const Quat attitude = GetAttitudeForRenderer();
+        drawCompassSphere(display, cx, cy, radius, attitude);
+    } else {
+        // Simple circle for low-resolution displays (TFTs)
+        display->drawCircle(cx, cy, radius);
+    }
+}
+
+void drawCenterNeedle3D(OLEDDisplay *display, int16_t cx, int16_t cy, uint16_t radius, float bearingRad, float elevRad)
+{
+    if (isHighResolution) {
+        // Use 3D needle for high-resolution displays (OLEDs)
+        const Quat attitude = GetAttitudeForRenderer();
+        drawCenterNeedle3D(display, cx, cy, radius, attitude, bearingRad, elevRad);
+    } else {
+        // Simple arrow for low-resolution displays (TFTs)
+        drawArrowToNode(display, cx, cy, radius, bearingRad * RAD_TO_DEG);
+    }
 }
 
 } // namespace CompassRenderer

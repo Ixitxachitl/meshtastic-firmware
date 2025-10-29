@@ -1214,9 +1214,9 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
 
             // Render compass sphere with mode-specific attitude
             if (uiconfig.compass_mode == meshtastic_CompassMode_FIXED_RING) {
-                // FIXED_RING: Render 3D compass from top-down view (ignoring gravity)
+                // FIXED_RING: Use runtime-detected compass (3D for OLED, simple for TFT)
                 CompassRenderer::setTopDownView(true);
-                CompassRenderer::drawCompassSphere(display, compassX, compassY, compassRadius, Quat::identity());
+                CompassRenderer::drawCompassSphere(display, compassX, compassY, compassRadius);
 
                 // Draw fixed cardinal direction labels
                 const uint16_t rDraw = (uint16_t)std::max<int>(1, (int)(compassRadius));
