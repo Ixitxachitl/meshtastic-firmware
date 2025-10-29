@@ -337,6 +337,8 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
     // === Draw battery/time/mail header (common across screens) ===
     graphics::drawCommonHeader(display, x, y, titlestr);
 
+    // (Classic small-screen compass is drawn later at the computed compass position)
+
     // ===== DYNAMIC ROW STACKING WITH YOUR MACROS =====
     // 1. Each potential info row has a macro-defined Y position (not regular increments!).
     // 2. Each row is only shown if it has valid data.
@@ -532,10 +534,19 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
             float dzM = float(tgtAltM - myAltM);
             float elevRad = (fabsf(groundM) > 0.5f) ? atanf(dzM / groundM) : 0.0f;
 
-            // 3D spherical compass + 3D-aware rim chevron toward favorite node
-            const Quat att = GetAttitudeForRenderer();
-            graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, bearingRel);
-            graphics::CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, bearingWorld, elevRad);
+            // Render compass based on display resolution
+            if (isHighResolution) {
+                // 3D spherical compass + 3D-aware rim chevron toward favorite node
+                const Quat att = GetAttitudeForRenderer();
+                graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, bearingRel);
+                graphics::CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, bearingWorld,
+                                                              elevRad);
+            } else {
+                // Classic small-screen compass: circle + 'N' + simple arrow
+                display->drawCircle(compassX, compassY, compassRadius);
+                graphics::CompassRenderer::drawCompassNorth(display, compassX, compassY, myHeading, compassRadius);
+                graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, bearingRel);
+            }
         }
         // else show nothing
     } else {
@@ -603,9 +614,17 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
             float dzM = float(tgtAltM - myAltM);
             float elevRad = (fabsf(groundM) > 0.5f) ? atanf(dzM / groundM) : 0.0f;
 
-            const Quat att = GetAttitudeForRenderer();
-            graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, bearingRel);
-            graphics::CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, bearingWorld, elevRad);
+            if (isHighResolution) {
+                const Quat att = GetAttitudeForRenderer();
+                graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, bearingRel);
+                graphics::CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, bearingWorld,
+                                                              elevRad);
+            } else {
+                // Classic small-screen compass
+                display->drawCircle(compassX, compassY, compassRadius);
+                graphics::CompassRenderer::drawCompassNorth(display, compassX, compassY, myHeading, compassRadius);
+                graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, bearingRel);
+            }
         }
         // else show nothing
     }
@@ -1235,9 +1254,23 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
                                                     0.0f);
                 CompassRenderer::setTopDownView(false);
             } else {
-                // DYNAMIC/FREEZE_HEADING: Normal 3D compass with gravity
-                CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, -heading);
-                CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, needleHeading, 0.0f);
+                // DYNAMIC/FREEZE_HEADING
+                if (isHighResolution) {
+                    // Normal 3D compass with gravity
+                    CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, -heading);
+                    CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, needleHeading, 0.0f);
+                } else {
+                    // Classic small-screen compass: circle + 'N' + simple arrow
+                    display->drawCircle(compassX, compassY, compassRadius);
+                    display->setFont(FONT_SMALL);
+                    display->setTextAlignment(TEXT_ALIGN_CENTER);
+                    // North rotates with heading unless FIXED_RING
+                    float northAngle = (uiconfig.compass_mode != meshtastic_CompassMode_FIXED_RING) ? -heading : 0.0f;
+                    int16_t nX = compassX + (int16_t)((compassRadius - 1) * sinf(northAngle));
+                    int16_t nY = compassY - (int16_t)((compassRadius - 1) * cosf(northAngle));
+                    display->drawString(nX, nY - (FONT_HEIGHT_SMALL / 2), "N");
+                    CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, -heading);
+                }
             }
 
         } else {
@@ -1290,9 +1323,22 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
                                                     0.0f);
                 CompassRenderer::setTopDownView(false);
             } else {
-                // DYNAMIC/FREEZE_HEADING: Normal 3D compass with gravity
-                CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, -heading);
-                CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, needleHeading, 0.0f);
+                // DYNAMIC/FREEZE_HEADING
+                if (isHighResolution) {
+                    // Normal 3D compass with gravity
+                    CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, -heading);
+                    CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, needleHeading, 0.0f);
+                } else {
+                    // Classic small-screen compass
+                    display->drawCircle(compassX, compassY, compassRadius);
+                    display->setFont(FONT_SMALL);
+                    display->setTextAlignment(TEXT_ALIGN_CENTER);
+                    float northAngle = (uiconfig.compass_mode != meshtastic_CompassMode_FIXED_RING) ? -heading : 0.0f;
+                    int16_t nX = compassX + (int16_t)((compassRadius - 1) * sinf(northAngle));
+                    int16_t nY = compassY - (int16_t)((compassRadius - 1) * cosf(northAngle));
+                    display->drawString(nX, nY - (FONT_HEIGHT_SMALL / 2), "N");
+                    CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, -heading);
+                }
             }
         }
     }
