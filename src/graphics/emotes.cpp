@@ -37,7 +37,7 @@ const Emote emotes[] = {
     // --- Gestures and People ---
     {"\U0001F44B", wave_icon, wave_icon_width, wave_icon_height},             // 👋 Waving Hand
     {"\u270C\uFE0F", peace_sign, peace_sign_width, peace_sign_height},        // ✌️ Victory Hand
-    {"\U0001F596", vulcan_solute, vulcan_solute_width, vulcan_solute_height}, // 🖖 Vulcan Salute
+    {"\U0001F596", vulcan_salute, vulcan_salute_width, vulcan_salute_height}, // 🖖 Vulcan Salute
     {"\U0001F64F", Praying, Praying_width, Praying_height},                   // 🙏 Praying Hands
     {"\U0001F920", cowboy, cowboy_width, cowboy_height},                      // 🤠 Cowboy Hat Face
     {"\U0001F3A7", deadmau5, deadmau5_width, deadmau5_height},                // 🎧 Headphones
