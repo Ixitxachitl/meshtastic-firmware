@@ -534,15 +534,18 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
             float dzM = float(tgtAltM - myAltM);
             float elevRad = (fabsf(groundM) > 0.5f) ? atanf(dzM / groundM) : 0.0f;
 
-            // Render compass based on display resolution
+            // Render compass based on display resolution and type
+#if !defined(USE_EINK)
             if (isHighResolution) {
                 // 3D spherical compass + 3D-aware rim chevron toward favorite node
                 const Quat att = GetAttitudeForRenderer();
                 graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, bearingRel);
                 graphics::CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, bearingWorld,
                                                               elevRad);
-            } else {
-                // Classic small-screen compass: circle + 'N' + simple arrow
+            } else
+#endif
+            {
+                // Classic small-screen compass: circle + 'N' + simple arrow (for TFTs, low-res OLEDs, and e-ink)
                 display->drawCircle(compassX, compassY, compassRadius);
                 graphics::CompassRenderer::drawCompassNorth(display, compassX, compassY, myHeading, compassRadius);
                 graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, bearingRel);
@@ -614,13 +617,16 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
             float dzM = float(tgtAltM - myAltM);
             float elevRad = (fabsf(groundM) > 0.5f) ? atanf(dzM / groundM) : 0.0f;
 
+#if !defined(USE_EINK)
             if (isHighResolution) {
                 const Quat att = GetAttitudeForRenderer();
                 graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, bearingRel);
                 graphics::CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, bearingWorld,
                                                               elevRad);
-            } else {
-                // Classic small-screen compass
+            } else
+#endif
+            {
+                // Classic small-screen compass (for TFTs, low-res OLEDs, and e-ink)
                 display->drawCircle(compassX, compassY, compassRadius);
                 graphics::CompassRenderer::drawCompassNorth(display, compassX, compassY, myHeading, compassRadius);
                 graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, bearingRel);
