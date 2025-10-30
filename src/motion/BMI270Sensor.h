@@ -31,9 +31,6 @@ class BMI270Sensor : public MotionSensor
     // Implementation owned by the .cpp (holds bmi2_dev, bus, addr…)
     void *impl_ = nullptr;
     bool inited_ = false;
-
-    // Motion detection setup
-    bool setupMotionDetection();
 };
 
 #else

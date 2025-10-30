@@ -31,19 +31,6 @@ struct BMI270Impl {
     TwoWire *wire = &Wire; // default bus
 };
 
-// Simplified I2C helper for device detection
-static bool i2cRead1(TwoWire &w, uint8_t addr, uint8_t reg, uint8_t &val)
-{
-    w.beginTransmission(addr);
-    w.write(reg);
-    if (w.endTransmission(false) != 0)
-        return false;
-    if (w.requestFrom(addr, (uint8_t)1) != 1)
-        return false;
-    val = w.read();
-    return true;
-}
-
 // Bosch BMI2 API callbacks - required by library
 static BMI2_INTF_RETURN_TYPE boschI2CRead(uint8_t reg, uint8_t *buf, uint32_t len, void *intf_ptr)
 {
@@ -73,15 +60,15 @@ static void boschDelayUs(uint32_t us, void *)
     delayMicroseconds(us);
 }
 
-// Probe 0x69 then 0x68 (WHOAMI 0x24)
+// Probe 0x69 then 0x68 using library's read function
 static bool selectAddress(BMI270Impl &impl)
 {
-    uint8_t who = 0;
-    for (uint8_t a : {(uint8_t)0x69, (uint8_t)0x68}) {
-        if (i2cRead1(*(impl.wire), a, 0x00, who)) { // <-- impl.wire (not impl->wire)
-            LOG_DEBUG("BMIx probe: addr 0x%02X WHOAMI 0x%02X", a, who);
-            if (who == 0x24) {
-                impl.addr = a;
+    for (uint8_t addr : {(uint8_t)0x69, (uint8_t)0x68}) {
+        impl.addr = addr;
+        uint8_t chip_id = 0;
+        if (bmi2_get_regs(BMI2_CHIP_ID_ADDR, &chip_id, 1, &impl.dev) == BMI2_OK) {
+            LOG_DEBUG("BMI270: addr 0x%02X chip_id 0x%02X", addr, chip_id);
+            if (chip_id == BMI270_CHIP_ID) {
                 return true;
             }
         }
@@ -192,44 +179,6 @@ extern "C" float GetHeadingRadiansForRenderer()
 #endif
 }
 
-bool BMI270Sensor::setupMotionDetection()
-{
-#if HAS_BMI270_TINYU
-    auto *impl = static_cast<BMI270Impl *>(impl_);
-    if (!impl)
-        return false;
-
-    // Enable motion detection features
-    uint8_t sens_list[] = {BMI2_ANY_MOTION, BMI2_STEP_COUNTER};
-    if (bmi270_sensor_enable(sens_list, 2, &impl->dev) != BMI2_OK) {
-        LOG_WARN("BMI270: Failed to enable motion features");
-        return false;
-    }
-
-    // Configure any-motion with optimized settings
-    bmi2_sens_config config;
-    config.type = BMI2_ANY_MOTION;
-    config.cfg.any_motion.threshold = 200; // Low sensitivity (0-1023, higher = less sensitive)
-    config.cfg.any_motion.duration = 4;    // 80ms duration (4 * 20ms)
-    config.cfg.any_motion.select_x = 1;    // Enable X-axis
-    config.cfg.any_motion.select_y = 1;    // Enable Y-axis
-    config.cfg.any_motion.select_z = 1;    // Enable Z-axis
-
-    if (bmi270_set_sensor_config(&config, 1, &impl->dev) == BMI2_OK) {
-        LOG_INFO("BMI270: Motion detection configured (threshold=200, duration=80ms)");
-    }
-
-    // Map features to INT1 for interrupt-driven operation
-    bmi2_map_feat_int(BMI2_ANY_MOTION, BMI2_INT1, &impl->dev);
-    bmi2_map_feat_int(BMI2_STEP_COUNTER, BMI2_INT1, &impl->dev);
-
-    LOG_INFO("BMI270: Motion features mapped to INT1");
-    return true;
-#else
-    return false;
-#endif
-}
-
 uint32_t BMI270Sensor::getStepCount() const
 {
 #if HAS_BMI270_TINYU
@@ -237,17 +186,8 @@ uint32_t BMI270Sensor::getStepCount() const
     if (!impl)
         return 0;
 
-    // Get step counter data
-    struct bmi2_feat_sensor_data sensor_data;
-    sensor_data.type = BMI2_STEP_COUNTER;
-
-    int8_t result = bmi270_get_feature_data(&sensor_data, 1, &impl->dev);
-    if (result == BMI2_OK) {
-        return sensor_data.sens_data.step_counter_output;
-    } else {
-        LOG_WARN("BMI270: Failed to read step count (%d)", result);
-        return 0;
-    }
+    bmi2_feat_sensor_data sensor_data = {.type = BMI2_STEP_COUNTER};
+    return (bmi270_get_feature_data(&sensor_data, 1, &impl->dev) == BMI2_OK) ? sensor_data.sens_data.step_counter_output : 0;
 #else
     return 0;
 #endif
@@ -265,17 +205,6 @@ bool BMI270Sensor::init()
 
     impl->wire = &Wire;
 
-    // Device detection and soft reset
-    uint8_t SOFT_RESET = 0xB6;
-    boschI2CWrite(0x7E, &SOFT_RESET, 1, impl);
-    delay(10);
-
-    if (!selectAddress(*impl)) {
-        LOG_DEBUG("BMI270: Device not found (WHOAMI 0x24 not at 0x69/0x68)");
-        delete impl;
-        return false;
-    }
-
     // Initialize BMI2 device structure
     impl->dev.intf = BMI2_I2C_INTF;
     impl->dev.read = boschI2CRead;
@@ -285,72 +214,86 @@ bool BMI270Sensor::init()
     impl->dev.read_write_len = 16;
     impl->dev.config_file_ptr = NULL;
 
-    // Initialize BMI270 with retry
+    // Soft reset and device detection
+    bmi2_soft_reset(&impl->dev);
+    impl->dev.delay_us(2000, impl->dev.intf_ptr); // 2ms soft reset delay
+
+    if (!selectAddress(*impl)) {
+        LOG_DEBUG("BMI270: Device not found (chip_id 0x%02X not at 0x69/0x68)", BMI270_CHIP_ID);
+        delete impl;
+        return false;
+    }
+
+    // Initialize BMI270 (uploads config file internally)
     int8_t err = bmi270_init(&impl->dev);
     if (err != BMI2_OK) {
-        bmi2_soft_reset(&impl->dev);
-        delay(10);
-        err = bmi270_init(&impl->dev);
-        if (err != BMI2_OK) {
-            LOG_DEBUG("BMI270: Init failed (%d) at 0x%02X", err, impl->addr);
-            delete impl;
-            return false;
-        }
-    }
-
-    // Enable accel + gyro
-    uint8_t sensors[] = {BMI2_ACCEL, BMI2_GYRO};
-    err = bmi270_sensor_enable(sensors, 2, &impl->dev);
-    if (err != BMI2_OK) {
-        LOG_DEBUG("BMI270: sensor_enable failed (%d)", err);
+        LOG_DEBUG("BMI270: Init failed (%d) at 0x%02X", err, impl->addr);
         delete impl;
         return false;
     }
 
-    // Configure sensors with optimal settings for motion tracking
-    bmi2_sens_config cfgs[2] = {
-        {.type = BMI2_ACCEL, .cfg = {.acc = {BMI2_ACC_ODR_100HZ, BMI2_ACC_RANGE_4G, BMI2_ACC_NORMAL_AVG4}}},
-        {.type = BMI2_GYRO, .cfg = {.gyr = {BMI2_GYR_ODR_100HZ, BMI2_GYR_RANGE_2000, BMI2_GYR_NORMAL_MODE}}}};
-
-    if (bmi270_set_sensor_config(cfgs, 2, &impl->dev) != BMI2_OK) {
+    // Enable accel + gyro + motion features
+    uint8_t sensors[] = {BMI2_ACCEL, BMI2_GYRO, BMI2_ANY_MOTION, BMI2_STEP_COUNTER};
+    if (bmi270_sensor_enable(sensors, 4, &impl->dev) != BMI2_OK) {
+        LOG_DEBUG("BMI270: sensor_enable failed");
         delete impl;
         return false;
     }
 
-    // Allow sensors to settle
-    delay(50);
+    // Configure all sensors in one call
+    bmi2_sens_config cfgs[3] = {};
+    cfgs[0].type = BMI2_ACCEL;
+    cfgs[0].cfg.acc.odr = BMI2_ACC_ODR_100HZ;
+    cfgs[0].cfg.acc.range = BMI2_ACC_RANGE_4G;
+    cfgs[0].cfg.acc.bwp = BMI2_ACC_NORMAL_AVG4;
 
-    // Initialize compass state and gravity vector
-    s_yawDeg = 0.0f;
-    s_yawZeroDeg = 0.0f;
+    cfgs[1].type = BMI2_GYRO;
+    cfgs[1].cfg.gyr.odr = BMI2_GYR_ODR_100HZ;
+    cfgs[1].cfg.gyr.range = BMI2_GYR_RANGE_2000;
+    cfgs[1].cfg.gyr.bwp = BMI2_GYR_NORMAL_MODE;
+
+    cfgs[2].type = BMI2_ANY_MOTION;
+    cfgs[2].cfg.any_motion.threshold = 200;
+    cfgs[2].cfg.any_motion.duration = 4;
+    cfgs[2].cfg.any_motion.select_x = 1;
+    cfgs[2].cfg.any_motion.select_y = 1;
+    cfgs[2].cfg.any_motion.select_z = 1;
+
+    if (bmi270_set_sensor_config(cfgs, 3, &impl->dev) != BMI2_OK) {
+        LOG_DEBUG("BMI270: config failed");
+        delete impl;
+        return false;
+    }
+
+    // Map motion features to INT1
+    bmi2_map_feat_int(BMI2_ANY_MOTION, BMI2_INT1, &impl->dev);
+    bmi2_map_feat_int(BMI2_STEP_COUNTER, BMI2_INT1, &impl->dev);
+
+    impl->dev.delay_us(50000, impl->dev.intf_ptr); // 50ms settle
+
+    // Initialize compass state
+    s_yawDeg = s_yawZeroDeg = 0.0f;
     s_lastMicros = 0;
-    s_showingCalUI = false;
-    s_anchorRequested = false;
+    s_showingCalUI = s_anchorRequested = false;
 
-    // Initialize gravity vector by taking an immediate reading
+    // Initialize gravity vector with first reading
     bmi2_sens_data initial_data{};
     if (bmi2_get_sensor_data(&initial_data, &impl->dev) == BMI2_OK) {
-        const float aScale = 4.0f / 32768.0f; // ±4 g
-        const float ax = -initial_data.acc.x * aScale;
-        const float ay = initial_data.acc.y * aScale;
-        const float az = initial_data.acc.z * aScale;
-
-        // Initialize gravity LPF with current accelerometer reading
+        const float aScale = 4.0f / 32768.0f; // ±4g
+        float ax = -initial_data.acc.x * aScale;
+        float ay = initial_data.acc.y * aScale;
+        float az = initial_data.acc.z * aScale;
         float aMag = sqrtf(ax * ax + ay * ay + az * az);
-        if (aMag > 0.1f) { // Valid acceleration reading
+        if (aMag > 0.1f) {
             s_gxLP = ax / aMag;
             s_gyLP = ay / aMag;
             s_gzLP = az / aMag;
-            LOG_DEBUG("BMI270: Initialized gravity vector (%.3f, %.3f, %.3f)", s_gxLP, s_gyLP, s_gzLP);
         }
     }
 
     impl_ = impl;
     inited_ = true;
-    g_bmi270_instance = this; // allow renderer to fetch attitude
-
-    // Setup motion detection
-    setupMotionDetection();
+    g_bmi270_instance = this;
 
     LOG_DEBUG("BMI270: init ok at 0x%02X", impl->addr);
     return true;
@@ -382,20 +325,12 @@ int32_t BMI270Sensor::runOnce()
 
         auto *impl = static_cast<BMI270Impl *>(impl_);
 
-        // Check BMI270 motion detection and step counter status using the library
+        // Check motion and step interrupts using library
         uint16_t int_status = 0;
-        int8_t status_result = bmi2_get_int_status(&int_status, &impl->dev);
-
-        if (status_result == BMI2_OK) {
-            if (int_status & BMI270_ANY_MOT_STATUS_MASK) {
-                LOG_INFO("BMI270: Motion detected (status=0x%04X)", int_status);
-                wakeScreen();
-                powerFSM.trigger(EVENT_PRESS);
-            }
-
-            if (int_status & BMI270_STEP_CNT_STATUS_MASK) {
-                LOG_INFO("BMI270: Step counter interrupt (status=0x%04X)", int_status);
-            }
+        if (bmi2_get_int_status(&int_status, &impl->dev) == BMI2_OK &&
+            (int_status & (BMI270_ANY_MOT_STATUS_MASK | BMI270_STEP_CNT_STATUS_MASK))) {
+            wakeScreen();
+            powerFSM.trigger(EVENT_PRESS);
         }
 
         // Log each individual step as it happens
