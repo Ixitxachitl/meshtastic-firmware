@@ -512,9 +512,11 @@ struct Point {
 void drawCompassNorth(OLEDDisplay *display, int16_t compassX, int16_t compassY, float myHeading, int16_t radius)
 {
     // Simple compass north indicator (works on all display types)
+#if !defined(USE_EINK)
     if (isHighResolution) {
         radius += 4;
     }
+#endif
     SimplePoint north(0, -radius);
     if (uiconfig.compass_mode != meshtastic_CompassMode_FIXED_RING)
         north.rotate(-myHeading);
@@ -523,9 +525,12 @@ void drawCompassNorth(OLEDDisplay *display, int16_t compassX, int16_t compassY, 
     display->setFont(FONT_SMALL);
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     display->setColor(BLACK);
+#if !defined(USE_EINK)
     if (isHighResolution) {
         display->fillRect(north.x - 8, north.y - 1, display->getStringWidth("N") + 3, FONT_HEIGHT_SMALL - 6);
-    } else {
+    } else
+#endif
+    {
         display->fillRect(north.x - 4, north.y - 1, display->getStringWidth("N") + 2, FONT_HEIGHT_SMALL - 6);
     }
     display->setColor(WHITE);
@@ -534,6 +539,7 @@ void drawCompassNorth(OLEDDisplay *display, int16_t compassX, int16_t compassY, 
 
 void drawNodeHeading(OLEDDisplay *display, int16_t compassX, int16_t compassY, uint16_t compassDiam, float headingRadian)
 {
+#if !defined(USE_EINK)
     if (isHighResolution) {
         // Use 3D compass for high-resolution displays (OLEDs)
         const Quat attitude = GetAttitudeForRenderer();
@@ -593,6 +599,23 @@ void drawNodeHeading(OLEDDisplay *display, int16_t compassX, int16_t compassY, u
 #endif
         display->drawTriangle(tip.x, tip.y, leftArrow.x, leftArrow.y, tail.x, tail.y);
     }
+#else
+    // E-ink displays: use simple compass
+    SimplePoint tip(0.0f, -0.5f), tail(0.0f, 0.35f); // pointing up initially
+    float arrowOffsetX = 0.14f, arrowOffsetY = 0.9f;
+    SimplePoint leftArrow(tip.x - arrowOffsetX, tip.y + arrowOffsetY), rightArrow(tip.x + arrowOffsetX, tip.y + arrowOffsetY);
+
+    SimplePoint *arrowPoints[] = {&tip, &tail, &leftArrow, &rightArrow};
+
+    for (int i = 0; i < 4; i++) {
+        arrowPoints[i]->rotate(headingRadian);
+        arrowPoints[i]->scale(compassDiam * 0.6);
+        arrowPoints[i]->translate(compassX, compassY);
+    }
+
+    display->drawTriangle(tip.x, tip.y, rightArrow.x, rightArrow.y, tail.x, tail.y);
+    display->drawTriangle(tip.x, tip.y, leftArrow.x, leftArrow.y, tail.x, tail.y);
+#endif
 }
 
 void drawArrowToNode(OLEDDisplay *display, int16_t x, int16_t y, int16_t size, float bearing)
@@ -648,24 +671,30 @@ void setTopDownView(bool enable)
 // Runtime-detected compass functions (simple overloads)
 void drawCompassSphere(OLEDDisplay *display, int16_t cx, int16_t cy, uint16_t radius)
 {
+#if !defined(USE_EINK)
     if (isHighResolution) {
         // Use 3D sphere for high-resolution displays (OLEDs)
         const Quat attitude = GetAttitudeForRenderer();
         drawCompassSphere(display, cx, cy, radius, attitude);
-    } else {
-        // Simple circle for low-resolution displays (TFTs)
+    } else
+#endif
+    {
+        // Simple circle for low-resolution displays (TFTs and e-ink)
         display->drawCircle(cx, cy, radius);
     }
 }
 
 void drawCenterNeedle3D(OLEDDisplay *display, int16_t cx, int16_t cy, uint16_t radius, float bearingRad, float elevRad)
 {
+#if !defined(USE_EINK)
     if (isHighResolution) {
         // Use 3D needle for high-resolution displays (OLEDs)
         const Quat attitude = GetAttitudeForRenderer();
         drawCenterNeedle3D(display, cx, cy, radius, attitude, bearingRad, elevRad);
-    } else {
-        // Simple arrow for low-resolution displays (TFTs)
+    } else
+#endif
+    {
+        // Simple arrow for low-resolution displays (TFTs and e-ink)
         drawArrowToNode(display, cx, cy, radius, bearingRad * RAD_TO_DEG);
     }
 }

@@ -1233,12 +1233,13 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
 
             // Render compass sphere with mode-specific attitude
             if (uiconfig.compass_mode == meshtastic_CompassMode_FIXED_RING) {
-                // FIXED_RING: Use runtime-detected compass (3D for OLED, simple for TFT)
+                // FIXED_RING: Use runtime-detected compass (3D for OLED, simple for TFT/e-ink)
                 CompassRenderer::setTopDownView(true);
                 CompassRenderer::drawCompassSphere(display, compassX, compassY, compassRadius);
 
+#if !defined(USE_EINK)
                 if (isHighResolution) {
-                    // High-res: show fixed cardinal labels around the ring
+                    // High-res OLED: show fixed cardinal labels around the ring
                     const uint16_t rDraw = (uint16_t)std::max<int>(1, (int)(compassRadius));
                     const int16_t cxShift = (int16_t)(compassX - (int)(rDraw * 0.14f));
                     const int16_t cy = compassY;
@@ -1253,8 +1254,11 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
 
                     CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, Quat::identity(),
                                                         needleHeading, 0.0f);
-                } else {
-                    // Low-res: match develop visuals — no fixed E/N/S/W labels, static 'N' at top, frozen needle if selected
+                } else
+#endif
+                {
+                    // Low-res/e-ink: match develop visuals — no fixed E/N/S/W labels, static 'N' at top, frozen needle if
+                    // selected
                     display->setFont(FONT_SMALL);
                     display->setTextAlignment(TEXT_ALIGN_CENTER);
                     int16_t nX = compassX;
@@ -1267,12 +1271,15 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
                 CompassRenderer::setTopDownView(false);
             } else {
                 // DYNAMIC/FREEZE_HEADING
+#if !defined(USE_EINK)
                 if (isHighResolution) {
                     // Normal 3D compass with gravity
                     CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, -heading);
                     CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, needleHeading, 0.0f);
-                } else {
-                    // Classic small-screen compass: circle + 'N' + simple arrow
+                } else
+#endif
+                {
+                    // Classic small-screen/e-ink compass: circle + 'N' + simple arrow
                     display->drawCircle(compassX, compassY, compassRadius);
                     display->setFont(FONT_SMALL);
                     display->setTextAlignment(TEXT_ALIGN_CENTER);
@@ -1319,8 +1326,9 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
                 CompassRenderer::setTopDownView(true);
                 CompassRenderer::drawCompassSphere(display, compassX, compassY, compassRadius, Quat::identity());
 
+#if !defined(USE_EINK)
                 if (isHighResolution) {
-                    // High-res: show fixed cardinal direction labels
+                    // High-res OLED: show fixed cardinal direction labels
                     const uint16_t rDraw = (uint16_t)std::max<int>(1, (int)(compassRadius));
                     const int16_t cxShift = (int16_t)(compassX - (int)(rDraw * 0.14f));
                     const int16_t cy = compassY;
@@ -1335,8 +1343,10 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
 
                     CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, Quat::identity(),
                                                         needleHeading, 0.0f);
-                } else {
-                    // Low-res: match develop visuals — no fixed E/N/S/W labels, static 'N', frozen needle if selected
+                } else
+#endif
+                {
+                    // Low-res/e-ink: match develop visuals — no fixed E/N/S/W labels, static 'N', frozen needle if selected
                     display->setFont(FONT_SMALL);
                     display->setTextAlignment(TEXT_ALIGN_CENTER);
                     int16_t nX = compassX;
@@ -1349,12 +1359,15 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
                 CompassRenderer::setTopDownView(false);
             } else {
                 // DYNAMIC/FREEZE_HEADING
+#if !defined(USE_EINK)
                 if (isHighResolution) {
                     // Normal 3D compass with gravity
                     CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, -heading);
                     CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, needleHeading, 0.0f);
-                } else {
-                    // Classic small-screen compass
+                } else
+#endif
+                {
+                    // Classic small-screen/e-ink compass
                     display->drawCircle(compassX, compassY, compassRadius);
                     display->setFont(FONT_SMALL);
                     display->setTextAlignment(TEXT_ALIGN_CENTER);
