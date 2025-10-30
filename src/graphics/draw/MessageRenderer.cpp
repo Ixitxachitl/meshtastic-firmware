@@ -19,6 +19,26 @@
 #include <string>
 #include <vector>
 
+// Exception support varies by platform; avoid try/catch when disabled
+#if defined(__EXCEPTIONS)
+#define MR_HAS_EXCEPTIONS 1
+#else
+#define MR_HAS_EXCEPTIONS 0
+#endif
+
+template <typename T> static inline void reserve_best_effort(std::vector<T> &v, size_t n)
+{
+#if MR_HAS_EXCEPTIONS
+    try {
+        v.reserve(n);
+    } catch (...) {
+        // ignore failures
+    }
+#else
+    (void)n; // skip reserving to avoid abort on OOM with -fno-exceptions
+#endif
+}
+
 // External declarations
 extern bool hasUnreadMessage;
 extern meshtastic_DeviceState devicestate;
@@ -92,6 +112,7 @@ static bool shedOldest(size_t n)
 
 template <typename F> static bool retry_on_oom(F &&fn, size_t shedCount = 16, int maxRetries = 3)
 {
+#if MR_HAS_EXCEPTIONS
     for (int attempt = 0; attempt < maxRetries; ++attempt) {
         try {
             fn();
@@ -102,6 +123,12 @@ template <typename F> static bool retry_on_oom(F &&fn, size_t shedCount = 16, in
         }
     }
     return false;
+#else
+    // Without exceptions: shed once and attempt the operation
+    shedOldest(shedCount);
+    fn();
+    return true;
+#endif
 }
 
 // ---- Low-RAM guards for line buffers ----
@@ -125,6 +152,7 @@ static bool try_reserve_lines(std::vector<std::string> &v, size_t want)
 {
     if (want > kMaxTotalLines)
         want = kMaxTotalLines;
+#if MR_HAS_EXCEPTIONS
     try {
         // Never request less than current size() to avoid shrink reallocation.
         if (want < v.size())
@@ -135,6 +163,12 @@ static bool try_reserve_lines(std::vector<std::string> &v, size_t want)
         // Caller decides whether to shed caches or continue without reserve.
         return false;
     }
+#else
+    // Best-effort: skip pre-reserve; proceed without clamping memory
+    (void)v;
+    (void)want;
+    return true;
+#endif
 }
 
 // UTF-8 skip helper
@@ -148,6 +182,24 @@ static inline size_t utf8CharLen(uint8_t c)
         return 4;
     return 1;
 }
+
+// Custom bitmap for upside-down question mark (¿) - 8x12 pixels
+static const unsigned char upsidedown_qmark[] PROGMEM = {
+    0x00, // 00000000
+    0x18, // 00011000  dot at top
+    0x18, // 00011000  dot
+    0x00, // 00000000  gap
+    0x18, // 00011000  stem
+    0x18, // 00011000  stem
+    0x18, // 00011000  stem
+    0x0C, // 00001100  curve
+    0x06, // 00000110  curve
+    0x66, // 01100110  curve
+    0x7E, // 01111110  curve bottom
+    0x3C  // 00111100  curve bottom
+};
+static const int upsidedown_qmark_width = 8;
+static const int upsidedown_qmark_height = 12;
 
 // Remove variation selectors (FE0F) and skin tone modifiers from emoji so they match your labels
 std::string normalizeEmoji(const std::string &s)
@@ -174,6 +226,48 @@ std::string normalizeEmoji(const std::string &s)
         out.append(s, i, len);
         i += len;
     }
+    return out;
+}
+
+// Replace unknown 4-byte emoji with upside-down question mark
+std::string replaceUnknownEmoji(const std::string &s, const Emote *emotes, int emoteCount)
+{
+    std::string out;
+    out.reserve(s.size());
+
+    for (size_t i = 0; i < s.size();) {
+        uint8_t c = static_cast<uint8_t>(s[i]);
+        size_t charLen = utf8CharLen(c);
+
+        // Check if this matches a known emote
+        bool isKnownEmote = false;
+        for (int e = 0; e < emoteCount; ++e) {
+            const std::string labelNorm = normalizeEmoji(std::string(emotes[e].label));
+            size_t labelLen = labelNorm.length();
+            if (labelLen > 0 && i + labelLen <= s.size() && s.compare(i, labelLen, labelNorm) == 0) {
+                isKnownEmote = true;
+                out.append(s, i, labelLen);
+                i += labelLen;
+                break;
+            }
+        }
+
+        if (isKnownEmote) {
+            continue;
+        }
+
+        // Check if this is a 4-byte emoji (most emoji are 4-byte UTF-8)
+        if (charLen == 4 && c == 0xF0) {
+            // Unknown emoji - replace with upside-down question mark
+            out.append("\xC2\xBF"); // ¿ in UTF-8
+            i += charLen;
+        } else {
+            // Regular character - keep it
+            out.append(s, i, charLen);
+            i += charLen;
+        }
+    }
+
     return out;
 }
 
@@ -246,16 +340,36 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
 
         if (nextControl > i) {
             std::string textChunk = normLine.substr(i, nextControl - i);
-            if (inBold) {
-                // Faux bold: draw twice, offset by 1px
-                display->drawString(cursorX + 1, fontY, textChunk.c_str());
-            }
-            display->drawString(cursorX, fontY, textChunk.c_str());
+
+            // Handle ¿ character specially - render char by char to override width
+            size_t j = 0;
+            while (j < textChunk.length()) {
+                size_t charLen = utf8CharLen(static_cast<uint8_t>(textChunk[j]));
+
+                // Check if this is the ¿ character
+                if (charLen == 2 && (uint8_t)textChunk[j] == 0xC2 && j + 1 < textChunk.length() &&
+                    (uint8_t)textChunk[j + 1] == 0xBF) {
+                    // Render custom upside-down question mark bitmap
+                    int iconY = fontY + (fontHeight - upsidedown_qmark_height) / 2;
+                    display->drawXbm(cursorX, iconY, upsidedown_qmark_width, upsidedown_qmark_height, upsidedown_qmark);
+                    cursorX += upsidedown_qmark_width + 1; // Bitmap width + spacing
+                    j += 2;
+                } else {
+                    // Regular character - render it
+                    std::string singleChar = textChunk.substr(j, charLen);
+                    if (inBold) {
+                        display->drawString(cursorX + 1, fontY, singleChar.c_str());
+                    }
+                    display->drawString(cursorX, fontY, singleChar.c_str());
 #if defined(OLED_UA) || defined(OLED_RU)
-            cursorX += display->getStringWidth(textChunk.c_str(), textChunk.length(), true);
+                    cursorX += display->getStringWidth(singleChar.c_str(), singleChar.length(), true);
 #else
-            cursorX += display->getStringWidth(textChunk.c_str());
+                    cursorX += display->getStringWidth(singleChar.c_str());
 #endif
+                    j += charLen;
+                }
+            }
+
             i = nextControl;
             continue;
         }
@@ -271,15 +385,35 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
         } else {
             // No more emotes — render the rest of the line
             std::string remaining = normLine.substr(i);
-            if (inBold) {
-                display->drawString(cursorX + 1, fontY, remaining.c_str());
-            }
-            display->drawString(cursorX, fontY, remaining.c_str());
+
+            // Handle ¿ character specially - render char by char to override width
+            size_t j = 0;
+            while (j < remaining.length()) {
+                size_t charLen = utf8CharLen(static_cast<uint8_t>(remaining[j]));
+
+                // Check if this is the ¿ character
+                if (charLen == 2 && (uint8_t)remaining[j] == 0xC2 && j + 1 < remaining.length() &&
+                    (uint8_t)remaining[j + 1] == 0xBF) {
+                    // Render custom upside-down question mark bitmap
+                    int iconY = fontY + (fontHeight - upsidedown_qmark_height) / 2;
+                    display->drawXbm(cursorX, iconY, upsidedown_qmark_width, upsidedown_qmark_height, upsidedown_qmark);
+                    cursorX += upsidedown_qmark_width + 1; // Bitmap width + spacing
+                    j += 2;
+                } else {
+                    // Regular character - render it
+                    std::string singleChar = remaining.substr(j, charLen);
+                    if (inBold) {
+                        display->drawString(cursorX + 1, fontY, singleChar.c_str());
+                    }
+                    display->drawString(cursorX, fontY, singleChar.c_str());
 #if defined(OLED_UA) || defined(OLED_RU)
-            cursorX += display->getStringWidth(remaining.c_str(), remaining.length(), true);
+                    cursorX += display->getStringWidth(singleChar.c_str(), singleChar.length(), true);
 #else
-            cursorX += display->getStringWidth(remaining.c_str());
+                    cursorX += display->getStringWidth(singleChar.c_str());
 #endif
+                    j += charLen;
+                }
+            }
             break;
         }
     }
@@ -471,8 +605,12 @@ static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &
                 (charLen == 3 && ((uint8_t)normalized[i] == 0xE2 || (uint8_t)normalized[i] == 0xEF))) {
                 // Unknown emoji: use a reasonable width estimate
                 totalWidth += 16 + 1; // Most emojis are 16px + spacing
+            } else if (charLen == 2 && (uint8_t)normalized[i] == 0xC2 && i + 1 < normalized.length() &&
+                       (uint8_t)normalized[i + 1] == 0xBF) {
+                // ¿ character (our emoji replacement) - use custom bitmap width
+                totalWidth += 8 + 1; // upsidedown_qmark_width + spacing
             } else {
-                // Regular character - use substr to avoid temporary string creation issues
+                // Regular character - use actual font width
 #if defined(OLED_UA) || defined(OLED_RU)
                 totalWidth += display->getStringWidth(normalized.substr(i, charLen).c_str(), charLen, true);
 #else
@@ -592,28 +730,18 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 
             // Match side vectors to whatever capacity we actually ended up with.
             size_t cap = allLines.capacity();
-            try {
-                isMine.reserve(cap);
-            } catch (...) {
-            }
-            try {
-                isHeader.reserve(cap);
-            } catch (...) {
-            }
-            try {
-                ackForLine.reserve(cap);
-            } catch (...) {
-            }
+            reserve_best_effort(isMine, cap);
+            reserve_best_effort(isHeader, cap);
+            reserve_best_effort(ackForLine, cap);
         }
 
         std::vector<uint32_t> msgTs;
         std::vector<bool> isBootRel;
         // Side buffers reserve best-effort (don’t throw if they can’t).
-        try {
+        {
             size_t cap = allLines.capacity();
-            msgTs.reserve(cap);
-            isBootRel.reserve(cap);
-        } catch (...) {
+            reserve_best_effort(msgTs, cap);
+            reserve_best_effort(isBootRel, cap);
         }
 
         for (auto it = filtered.begin(); it != filtered.end(); ++it) {
@@ -701,7 +829,10 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             // Body lines (from feat/m5stack-cardputer-adv)
             const char *msgText = MessageStore::getText(m);
 
-            std::vector<std::string> wrapped = generateLines(display, "", msgText, textWidth);
+            // Replace unknown emoji with ? before processing
+            std::string processedText = replaceUnknownEmoji(std::string(msgText), emotes, numEmotes);
+
+            std::vector<std::string> wrapped = generateLines(display, "", processedText.c_str(), textWidth);
 
             // Cap per-message wrapped lines so one long message can't explode memory.
             if (wrapped.size() > kMaxLinesPerMessage) {
@@ -827,8 +958,12 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         scrollY = bottomOffsetOneRow;
     }
 #else
-    // E-Ink: disable autoscroll
-    scrollY = 0.0f;
+    // E-Ink: disable autoscroll but anchor to bottom
+    int kBottomPadPx = FONT_HEIGHT_SMALL;
+    int bottomOffsetOneRow = totalHeight - usableScrollHeight + kBottomPadPx;
+    if (bottomOffsetOneRow < 0)
+        bottomOffsetOneRow = 0; // guard small lists
+    scrollY = bottomOffsetOneRow;
     waitingToReset = false;
     scrollStarted = false;
     lastTime = millis(); // keep timebase sane
@@ -1002,37 +1137,40 @@ std::vector<std::string> generateLines(OLEDDisplay *display, const char *headerS
             line += ' ';
             word.clear();
         } else {
+            // Check if this is an emoji (before adding to word)
+            // Note: Don't treat ¿ as an emoji - it's a regular character replacement for unknown emoji
+            bool isEmoji = (charLen >= 4 && firstByte == 0xF0) || (charLen == 3 && (firstByte == 0xE2 || firstByte == 0xEF));
+
+            // If current word is not empty and we're about to add an emoji, flush word first
+            if (isEmoji && !word.empty()) {
+                // Flush current word to line
+                line += word;
+                word.clear();
+            }
+
             // Add the complete UTF-8 character to word
             word += utfChar;
 
-            // Check if this character is likely an emoji
-            // 4-byte UTF-8 starting with 0xF0, or 3-byte sequences for symbols like hearts
-            bool isLikelyEmoji =
-                (charLen >= 4 && firstByte == 0xF0) || (charLen == 3 && (firstByte == 0xE2 || firstByte == 0xEF));
-
             // Check if adding this word would exceed the line width
             std::string test_buffer = line + word;
-
-            // Use the emoji-aware width calculation function
             uint16_t strWidth = getRenderedLineWidth(display, test_buffer, emotes, numEmotes);
 
-            // Use standard text width - no special emoji width reduction for now
-            int effectiveTextWidth = textWidth;
-
-            if (strWidth > effectiveTextWidth) {
+            if (strWidth > textWidth) {
                 if (!line.empty()) {
+                    // Line is full, wrap
                     lines.emplace_back(std::move(line));
                     line = std::move(word);
                     word.clear();
-                } else if (isLikelyEmoji) {
-                    // If even a single emoji is too wide, put it on its own line
+                } else {
+                    // Even a single word is too wide, force it to its own line
                     lines.emplace_back(std::move(word));
                     word.clear();
                     line.clear();
                 }
-            } else if (isLikelyEmoji) {
-                // For emojis, allow breaking after each emoji to prevent long sequences
-                // Add current word to line and start a new word
+            }
+
+            // If we just added an emoji, flush it to line so next emoji can wrap independently
+            if (isEmoji) {
                 line += word;
                 word.clear();
             }

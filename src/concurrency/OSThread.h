@@ -17,14 +17,16 @@ extern InterruptableDelay mainDelay;
 #define RUN_SAME -1
 
 /**
- * @brief FreeRTOS task configuration for OSThread
+ * @brief FreeRTOS task configuration for OSThread (ESP32 only)
  */
+#if defined(ARDUINO_ARCH_ESP32)
 struct FreeRTOSTaskConfig {
     uint32_t stackSizeWords = 2048;              // Stack size in words (not bytes)
     UBaseType_t priority = tskIDLE_PRIORITY + 1; // Task priority
     BaseType_t coreAffinity = tskNO_AFFINITY;    // Core affinity (ESP32 only)
     bool enabled = false;                        // Whether to run as FreeRTOS task
 };
+#endif
 
 /**
  * @brief Base threading
@@ -52,7 +54,7 @@ class OSThread : public Thread
     /// Show debugging info for threads we decide not to run;
     static bool showWaiting;
 
-#ifdef HAS_FREE_RTOS
+#if defined(ARDUINO_ARCH_ESP32)
     /// FreeRTOS task configuration
     FreeRTOSTaskConfig rtosConfig;
 
@@ -85,7 +87,7 @@ class OSThread : public Thread
      */
     void setIntervalFromNow(unsigned long _interval);
 
-#ifdef HAS_FREE_RTOS
+#if defined(ARDUINO_ARCH_ESP32)
     /**
      * Configure this thread to run as a FreeRTOS task
      * Must be called before the thread is started

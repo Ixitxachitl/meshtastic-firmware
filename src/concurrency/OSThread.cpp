@@ -33,7 +33,7 @@ OSThread::OSThread(const char *_name, uint32_t period, ThreadController *_contro
 
     ThreadName = _name;
 
-#ifdef HAS_FREE_RTOS
+#if defined(ARDUINO_ARCH_ESP32)
     // Initialize FreeRTOS config with defaults
     rtosConfig.enabled = false;
     rtosConfig.stackSizeWords = 2048;
@@ -50,8 +50,8 @@ OSThread::OSThread(const char *_name, uint32_t period, ThreadController *_contro
 
 OSThread::~OSThread()
 {
-#ifdef HAS_FREE_RTOS
-    // Clean up FreeRTOS task if it exists
+#if defined(ARDUINO_ARCH_ESP32)
+    // Clean up FreeRTOS task if it exists (ESP32 only)
     stopFreeRTOSTask();
 #endif
 
@@ -155,7 +155,7 @@ void assertIsSetup()
     assert(hasBeenSetup);
 }
 
-#ifdef HAS_FREE_RTOS
+#if defined(ARDUINO_ARCH_ESP32)
 
 void OSThread::setFreeRTOSTask(bool enable, uint32_t stackSizeWords, UBaseType_t priority, BaseType_t coreAffinity)
 {
@@ -191,7 +191,6 @@ bool OSThread::startFreeRTOSTask()
         return false;
     }
 
-#if defined(ARDUINO_ARCH_ESP32)
     // ESP32 supports core affinity
     BaseType_t result = xTaskCreatePinnedToCore(rtosTaskEntryPoint,        // Task function
                                                 ThreadName.c_str(),        // Task name
@@ -201,16 +200,6 @@ bool OSThread::startFreeRTOSTask()
                                                 &taskHandle,               // Task handle
                                                 rtosConfig.coreAffinity    // Core affinity
     );
-#else
-    // Other platforms don't support core affinity
-    BaseType_t result = xTaskCreate(rtosTaskEntryPoint,        // Task function
-                                    ThreadName.c_str(),        // Task name
-                                    rtosConfig.stackSizeWords, // Stack size in words
-                                    this,                      // Task parameter (this instance)
-                                    rtosConfig.priority,       // Task priority
-                                    &taskHandle                // Task handle
-    );
-#endif
 
     if (result == pdPASS) {
         LOG_INFO("Thread %s: FreeRTOS task started (stack: %u words, priority: %u)", ThreadName.c_str(),
@@ -265,6 +254,6 @@ void OSThread::rtosTaskLoop()
     }
 }
 
-#endif // HAS_FREE_RTOS
+#endif // ARDUINO_ARCH_ESP32
 
 } // namespace concurrency
