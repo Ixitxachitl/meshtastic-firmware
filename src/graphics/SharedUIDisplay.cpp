@@ -149,10 +149,13 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
         }
 
         // === Screen Title ===
-        display->setTextAlignment(TEXT_ALIGN_CENTER);
-        graphics::MessageRenderer::drawStringWithEmotes(display, SCREEN_WIDTH / 2, y, titleStr, emotes, numEmotes);
+        // Calculate width and manually center since drawStringWithEmotes doesn't respect TEXT_ALIGN_CENTER
+        int titleWidth = graphics::MessageRenderer::getStringWidthWithEmotes(display, titleStr, emotes, numEmotes);
+        int titleX = (SCREEN_WIDTH - titleWidth) / 2;
+
+        graphics::MessageRenderer::drawStringWithEmotes(display, titleX, y, titleStr, emotes, numEmotes);
         if (config.display.heading_bold) {
-            graphics::MessageRenderer::drawStringWithEmotes(display, (SCREEN_WIDTH / 2) + 1, y, titleStr, emotes, numEmotes);
+            graphics::MessageRenderer::drawStringWithEmotes(display, titleX + 1, y, titleStr, emotes, numEmotes);
         }
     }
     display->setTextAlignment(TEXT_ALIGN_LEFT);

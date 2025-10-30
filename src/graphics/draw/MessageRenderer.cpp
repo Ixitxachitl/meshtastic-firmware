@@ -271,6 +271,42 @@ std::string replaceUnknownEmoji(const std::string &s, const Emote *emotes, int e
     return out;
 }
 
+int getStringWidthWithEmotes(OLEDDisplay *display, const std::string &line, const Emote *emotes, int emoteCount)
+{
+    const std::string normLine = normalizeEmoji(line);
+    int totalWidth = 0;
+
+    for (size_t i = 0; i < normLine.length();) {
+        bool matched = false;
+        for (int e = 0; e < emoteCount; ++e) {
+            const std::string labelNorm = normalizeEmoji(std::string(emotes[e].label));
+            const size_t emojiLen = labelNorm.length();
+            if (emojiLen && normLine.compare(i, emojiLen, labelNorm) == 0) {
+                totalWidth += emotes[e].width + 1; // emote width + spacing
+                i += emojiLen;
+                matched = true;
+                break;
+            }
+        }
+        if (!matched) {
+            size_t charLen = utf8CharLen(static_cast<uint8_t>(normLine[i]));
+            // Check for special ¿ character
+            if (charLen == 2 && (uint8_t)normLine[i] == 0xC2 && i + 1 < normLine.length() && (uint8_t)normLine[i + 1] == 0xBF) {
+                totalWidth += upsidedown_qmark_width + 1;
+            } else {
+                std::string singleChar = normLine.substr(i, charLen);
+#if defined(OLED_UA) || defined(OLED_RU)
+                totalWidth += display->getStringWidth(singleChar.c_str(), singleChar.length(), true);
+#else
+                totalWidth += display->getStringWidth(singleChar.c_str());
+#endif
+            }
+            i += charLen;
+        }
+    }
+    return totalWidth;
+}
+
 void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string &line, const Emote *emotes, int emoteCount)
 {
     // Normalize the incoming line so variation selectors and skin tones don't render as stray glyphs

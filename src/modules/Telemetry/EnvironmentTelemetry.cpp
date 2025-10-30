@@ -109,9 +109,9 @@ static void drawIAQRuler(OLEDDisplay *dpy, int x, int y, int w, int iaqValue, co
 }
 
 // keep last N samples per source
-static constexpr int kSparkW = 120;                 // pixels wide
-static constexpr int kSparkH = 10;                  // pixels tall
-static constexpr size_t kHistLen = size_t(kSparkW); // kept for clarity; equals spark width
+// Use larger buffer to accommodate various screen widths, actual display width determined at runtime
+static constexpr size_t kHistLen = 120; // max samples to keep
+static constexpr int kSparkH = 10;      // pixels tall
 
 // Fixed-capacity ring buffer (oldest→newest iteration)
 template <size_t N> struct RingF {
@@ -138,7 +138,7 @@ template <size_t N> struct NodeHist {
 };
 
 // One record per node; no per-sample heap churn
-static std::unordered_map<uint32_t, NodeHist<kSparkW>> s_hist;
+static std::unordered_map<uint32_t, NodeHist<kHistLen>> s_hist;
 // (Optional) pre-size if you have a typical node count:
 // static bool s_histReserved = (s_hist.reserve(64), true);
 
@@ -723,6 +723,11 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     // look up per-source history for sparklines (fixed-capacity rings)
     uint32_t from = packetToShow->from;
     auto &nh = s_hist[from]; // default-constructs empty rings for new nodes
+
+    // Calculate sparkline width based on screen width for better fit on narrow displays
+    // For wider screens (>=240px), use full 120px sparklines
+    // For narrower screens like t-echo (200px), use ~80px sparklines
+    const int kSparkW = (SCREEN_WIDTH >= 240) ? 120 : (SCREEN_WIDTH >= 220) ? 100 : 80;
 
     // Where to draw all graphs (aligned)
     const int graphX = SCREEN_WIDTH - (kSparkW + 2);
