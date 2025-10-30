@@ -14,34 +14,34 @@
 #endif
 
 #if BME68X_VARIANT == 688
-  #ifdef meshtastic_TelemetrySensorType_BME688
-    #define BME68X_TELEM_TYPE meshtastic_TelemetrySensorType_BME688
-  #else
-    #define BME68X_TELEM_TYPE meshtastic_TelemetrySensorType_BME680
-  #endif
-  #define SENSOR_NAME "BME688"
+#ifdef meshtastic_TelemetrySensorType_BME688
+#define BME68X_TELEM_TYPE meshtastic_TelemetrySensorType_BME688
 #else
-  #define BME68X_TELEM_TYPE meshtastic_TelemetrySensorType_BME680
-  #define SENSOR_NAME "BME680"
+#define BME68X_TELEM_TYPE meshtastic_TelemetrySensorType_BME680
+#endif
+#define SENSOR_NAME "BME688"
+#else
+#define BME68X_TELEM_TYPE meshtastic_TelemetrySensorType_BME680
+#define SENSOR_NAME "BME680"
 #endif
 // ================================================
 
 // ===== BSEC2 config blob selection (portable) ====
 #ifndef BSEC_CONFIG_PATH
-  // Try several common layouts inside the BSEC2 Arduino lib:
-  #if   __has_include(<config/generic_33v_3s_4d/bsec_iaq.txt>)
-    #define BSEC_CONFIG_IMPLICIT 1
-    #define BSEC_CONFIG_INCLUDE <config/generic_33v_3s_4d/bsec_iaq.txt>
-  #elif __has_include(<config/generic_33v_3s_28d/bsec_iaq.txt>)
-    #define BSEC_CONFIG_IMPLICIT 1
-    #define BSEC_CONFIG_INCLUDE <config/generic_33v_3s_28d/bsec_iaq.txt>
-  #elif __has_include(<config/bme688/bme688_iaq_33v_3s_4d/bsec_iaq.txt>)
-    #define BSEC_CONFIG_IMPLICIT 1
-    #define BSEC_CONFIG_INCLUDE <config/bme688/bme688_iaq_33v_3s_4d/bsec_iaq.txt>
-  #elif __has_include(<config/bme680/bme680_iaq_33v_3s_4d/bsec_iaq.txt>)
-    #define BSEC_CONFIG_IMPLICIT 1
-    #define BSEC_CONFIG_INCLUDE <config/bme680/bme680_iaq_33v_3s_4d/bsec_iaq.txt>
-  #endif
+// Try several common layouts inside the BSEC2 Arduino lib:
+#if __has_include(<config/generic_33v_3s_4d/bsec_iaq.txt>)
+#define BSEC_CONFIG_IMPLICIT 1
+#define BSEC_CONFIG_INCLUDE <config/generic_33v_3s_4d/bsec_iaq.txt>
+#elif __has_include(<config/generic_33v_3s_28d/bsec_iaq.txt>)
+#define BSEC_CONFIG_IMPLICIT 1
+#define BSEC_CONFIG_INCLUDE <config/generic_33v_3s_28d/bsec_iaq.txt>
+#elif __has_include(<config/bme688/bme688_iaq_33v_3s_4d/bsec_iaq.txt>)
+#define BSEC_CONFIG_IMPLICIT 1
+#define BSEC_CONFIG_INCLUDE <config/bme688/bme688_iaq_33v_3s_4d/bsec_iaq.txt>
+#elif __has_include(<config/bme680/bme680_iaq_33v_3s_4d/bsec_iaq.txt>)
+#define BSEC_CONFIG_IMPLICIT 1
+#define BSEC_CONFIG_INCLUDE <config/bme680/bme680_iaq_33v_3s_4d/bsec_iaq.txt>
+#endif
 #endif
 
 // Helpers to turn a macro path into a string literal for #include
@@ -51,12 +51,12 @@
 // The actual blob. Note the newline before #include (must start a line).
 static const uint8_t bsec_config[] = {
 #ifdef BSEC_CONFIG_IMPLICIT
-# include BSEC_CONFIG_INCLUDE
+#include BSEC_CONFIG_INCLUDE
 #else
-# ifndef BSEC_CONFIG_PATH
-#   error "No BSEC config blob found. Define -DBSEC_CONFIG_PATH=<full/path/inside/BSEC2/src/>"
-# endif
-# include STR(BSEC_CONFIG_PATH)
+#ifndef BSEC_CONFIG_PATH
+#error "No BSEC config blob found. Define -DBSEC_CONFIG_PATH=<full/path/inside/BSEC2/src/>"
+#endif
+#include STR(BSEC_CONFIG_PATH)
 #endif
 };
 // ================================================
@@ -69,18 +69,10 @@ class BME680Sensor : public TelemetrySensor
 
   protected:
     const char *bsecConfigFileName = "/prefs/bsec.dat";
-    uint8_t bsecState[BSEC_MAX_STATE_BLOB_SIZE] = {0};
+    static uint8_t bsecState[BSEC_MAX_STATE_BLOB_SIZE]; // Shared state buffer (saves per-instance RAM)
     uint8_t accuracy = 0;
     uint16_t stateUpdateCounter = 0;
-    bsecSensor sensorList[9] = {BSEC_OUTPUT_IAQ,
-                                BSEC_OUTPUT_RAW_TEMPERATURE,
-                                BSEC_OUTPUT_RAW_PRESSURE,
-                                BSEC_OUTPUT_RAW_HUMIDITY,
-                                BSEC_OUTPUT_RAW_GAS,
-                                BSEC_OUTPUT_STABILIZATION_STATUS,
-                                BSEC_OUTPUT_RUN_IN_STATUS,
-                                BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_TEMPERATURE,
-                                BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_HUMIDITY};
+    static bsecSensor sensorList[9]; // Shared, initialized in .cpp
     static constexpr const char *sensorName = SENSOR_NAME;
     void loadState();
     void updateState();

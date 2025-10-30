@@ -597,9 +597,23 @@ int32_t EnvironmentTelemetryModule::runOnce()
 #endif
 #endif
         }
+
+        // Set when mesh broadcasts should start (after stagger delay)
+        int32_t broadcastDelay = setStartDelay();
+        meshBroadcastStartTime = millis() + broadcastDelay;
+        LOG_DEBUG("Mesh broadcast will start in %dms", broadcastDelay);
+
+        // Initialize screen data immediately if screen is enabled
+        if (moduleConfig.telemetry.environment_screen_enabled) {
+            lastScreenUpdate = 0; // Force immediate screen update on next run
+            LOG_INFO("Screen enabled - will update in 2 seconds, mesh broadcast in %dms", broadcastDelay);
+            // Return 2 seconds to quickly update screen after sensor init
+            return result == UINT32_MAX ? disable() : 2000;
+        }
+
         // it's possible to have this module enabled, only for displaying values on the screen.
         // therefore, we should only enable the sensor loop if measurement is also enabled
-        return result == UINT32_MAX ? disable() : setStartDelay();
+        return result == UINT32_MAX ? disable() : broadcastDelay;
     } else {
         // if we somehow got to a second run of this module with measurement disabled, then just wait forever
         if (!moduleConfig.telemetry.environment_measurement_enabled && !ENVIRONMENTAL_TELEMETRY_MODULE_ENABLE) {
@@ -613,10 +627,73 @@ int32_t EnvironmentTelemetryModule::runOnce()
             }
         }
 
-        if (((lastSentToMesh == 0) ||
+        // Update screen data independently of mesh/phone broadcasts for immediate display
+        if (moduleConfig.telemetry.environment_screen_enabled &&
+            ((lastScreenUpdate == 0) || !Throttle::isWithinTimespanMs(lastScreenUpdate, screenUpdateIntervalMs))) {
+            LOG_DEBUG("Updating screen telemetry data (lastScreenUpdate=%u)", lastScreenUpdate);
+            // Read current sensor data and update display packet
+            meshtastic_Telemetry m = meshtastic_Telemetry_init_zero;
+            m.which_variant = meshtastic_Telemetry_environment_metrics_tag;
+            if (getEnvironmentTelemetry(&m)) {
+                LOG_INFO("Screen telemetry data acquired successfully");
+                meshtastic_MeshPacket tempPacket = meshtastic_MeshPacket_init_zero;
+                tempPacket.from = nodeDB->getNodeNum();
+                tempPacket.to = NODENUM_BROADCAST;
+                tempPacket.which_payload_variant = meshtastic_MeshPacket_decoded_tag;
+                tempPacket.rx_time = getTime(); // Set current time so "ago" display works
+
+                // Release old packet
+                if (lastMeasurementPacket != nullptr)
+                    packetPool.release(lastMeasurementPacket);
+
+                // Encode telemetry data properly
+                tempPacket.decoded.portnum = meshtastic_PortNum_TELEMETRY_APP;
+                size_t encodedSize = pb_encode_to_bytes(tempPacket.decoded.payload.bytes,
+                                                        sizeof(tempPacket.decoded.payload.bytes), &meshtastic_Telemetry_msg, &m);
+                if (encodedSize == 0) {
+                    LOG_ERROR("Failed to encode telemetry for screen display");
+                    lastScreenUpdate = millis() - screenUpdateIntervalMs + 5000; // Retry in 5s
+                } else {
+                    tempPacket.decoded.payload.size = encodedSize;
+
+                    lastMeasurementPacket = packetPool.allocCopy(tempPacket);
+
+                    // Update local history for display
+                    uint32_t self = nodeDB->getNodeNum();
+                    auto it = lastBySource.find(self);
+                    if (it != lastBySource.end() && it->second) {
+                        packetPool.release(it->second);
+                    }
+                    lastBySource[self] = packetPool.allocCopy(tempPacket);
+
+                    const auto &em = m.variant.environment_metrics;
+                    auto &selfHist = s_hist[self];
+                    if (em.has_temperature)
+                        selfHist.temp.push(em.temperature);
+                    if (em.has_relative_humidity)
+                        selfHist.hum.push(em.relative_humidity);
+                    if (em.barometric_pressure)
+                        selfHist.press.push(em.barometric_pressure);
+
+                    lastScreenUpdate = millis();
+                    LOG_DEBUG("lastMeasurementPacket updated for screen, next update in %ums", screenUpdateIntervalMs);
+                }
+            } else {
+                LOG_WARN("getEnvironmentTelemetry returned false - sensors may not be ready yet, will retry in 5s");
+                // Don't update lastScreenUpdate so we'll retry soon, but mark it non-zero to prevent immediate retry
+                lastScreenUpdate = millis() - screenUpdateIntervalMs + 5000; // Retry in 5 seconds
+            }
+        }
+
+        // Check if it's time to broadcast to mesh (respecting initial stagger delay)
+        bool timeForMeshBroadcast =
+            (lastSentToMesh == 0 && millis() >= meshBroadcastStartTime) ||
+            (lastSentToMesh > 0 &&
              !Throttle::isWithinTimespanMs(lastSentToMesh, Default::getConfiguredOrDefaultMsScaled(
                                                                moduleConfig.telemetry.environment_update_interval,
-                                                               default_telemetry_broadcast_interval_secs, numOnlineNodes))) &&
+                                                               default_telemetry_broadcast_interval_secs, numOnlineNodes)));
+
+        if (timeForMeshBroadcast &&
             airTime->isTxAllowedChannelUtil(config.device.role != meshtastic_Config_DeviceConfig_Role_SENSOR) &&
             airTime->isTxAllowedAirUtil()) {
             sendTelemetry();
@@ -629,7 +706,7 @@ int32_t EnvironmentTelemetryModule::runOnce()
             lastSentToPhone = millis();
         }
     }
-    return min(sendToPhoneIntervalMs, result);
+    return min(min(sendToPhoneIntervalMs, screenUpdateIntervalMs), result);
 }
 
 bool EnvironmentTelemetryModule::wantUIFrame()
@@ -668,9 +745,36 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     const int rowHeight = FONT_HEIGHT_SMALL - 4;
     int currentY = graphics::getTextPositions(display)[line++];
 
-    // === Show "No Telemetry" if no data available ===
+    // === Handle no telemetry data case ===
     if (!lastMeasurementPacket) {
-        display->drawString(x, currentY, "No Telemetry");
+        // Check if we have sensors but they're not ready yet
+        bool hasSensors = !sensors.empty() || ina219Sensor.hasSensor() || ina260Sensor.hasSensor() || ina3221Sensor.hasSensor() ||
+                          max17048Sensor.hasSensor();
+
+        if (!hasSensors) {
+            display->drawString(x, currentY, "No sensors detected");
+            return;
+        }
+
+        // We have sensors, show UI with placeholders
+        display->drawString(x, currentY, "Local (--s)");
+        currentY += rowHeight;
+
+        // Show placeholders for detected sensors
+        if (!sensors.empty()) {
+            display->drawString(x, currentY, "Temp: --°C");
+            currentY += rowHeight;
+            display->drawString(x, currentY, "Humidity: --%");
+            currentY += rowHeight;
+            display->drawString(x, currentY, "Pressure: -- hPa");
+            currentY += rowHeight;
+        }
+        if (ina219Sensor.hasSensor() || ina260Sensor.hasSensor() || ina3221Sensor.hasSensor()) {
+            display->drawString(x, currentY, "Voltage: --V");
+            currentY += rowHeight;
+            display->drawString(x, currentY, "Current: -- mA");
+            currentY += rowHeight;
+        }
         return;
     }
 
@@ -693,7 +797,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     const meshtastic_Data &p = packetToShow->decoded;
     meshtastic_Telemetry telemetry;
     if (!pb_decode_from_bytes(p.payload.bytes, p.payload.size, &meshtastic_Telemetry_msg, &telemetry)) {
-        display->drawString(x, currentY, "No Telemetry");
+        display->drawString(x, currentY, "Decode Error");
         return;
     }
 
@@ -705,7 +809,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
                   m.white_lux != 0 || m.weight != 0 || m.distance != 0 || m.radiation != 0;
 
     if (!hasAny) {
-        display->drawString(x, currentY, "No Telemetry");
+        display->drawString(x, currentY, "Empty Data");
         return;
     }
 

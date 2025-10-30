@@ -40,12 +40,15 @@ class EnvironmentTelemetryModule : private concurrency::OSThread,
 #endif
 
     void setEnvDisplaySource(uint32_t nodenum) { selectedSource = nodenum; } // 0 = Auto
-    
-    void clearEnvCache() {
-        for (auto &kv : lastBySource) if (kv.second) packetPool.release(kv.second);
+
+    void clearEnvCache()
+    {
+        for (auto &kv : lastBySource)
+            if (kv.second)
+                packetPool.release(kv.second);
         lastBySource.clear();
     }
-    MeshModule* asMesh() { return this; }
+    MeshModule *asMesh() { return this; }
     std::vector<uint32_t> getSourcesWithTelemetry() const;
 
   protected:
@@ -73,14 +76,17 @@ class EnvironmentTelemetryModule : private concurrency::OSThread,
   private:
     bool firstTime = 1;
     meshtastic_MeshPacket *lastMeasurementPacket;
-    uint32_t sendToPhoneIntervalMs = SECONDS_IN_MINUTE * 1000; // Send to phone every minute
+    uint32_t sendToPhoneIntervalMs = SECONDS_IN_MINUTE * 1000;  // Send to phone every minute
+    uint32_t screenUpdateIntervalMs = SECONDS_IN_MINUTE * 1000; // Update screen data every minute
     uint32_t lastSentToMesh = 0;
     uint32_t lastSentToPhone = 0;
+    uint32_t lastScreenUpdate = 0;
+    uint32_t meshBroadcastStartTime = 0; // When mesh broadcasts should start (after stagger delay)
     uint32_t sensor_read_error_count = 0;
-    std::unordered_map<uint32_t, meshtastic_MeshPacket*> lastBySource;
+    std::unordered_map<uint32_t, meshtastic_MeshPacket *> lastBySource;
     uint32_t selectedSource = 0; // 0 = Auto (most recent), otherwise a nodenum
 };
 
-extern EnvironmentTelemetryModule* environmentTelemetryModule;
+extern EnvironmentTelemetryModule *environmentTelemetryModule;
 
 #endif

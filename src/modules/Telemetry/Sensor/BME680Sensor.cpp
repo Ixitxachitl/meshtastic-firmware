@@ -8,14 +8,26 @@
 #include "SPILock.h"
 #include "TelemetrySensor.h"
 
-BME680Sensor::BME680Sensor()
-  : TelemetrySensor(BME68X_TELEM_TYPE, sensorName) {}
+// Static member definitions (shared across instances to save heap)
+uint8_t BME680Sensor::bsecState[BSEC_MAX_STATE_BLOB_SIZE] = {0};
+bsecSensor BME680Sensor::sensorList[9] = {BSEC_OUTPUT_IAQ,
+                                          BSEC_OUTPUT_RAW_TEMPERATURE,
+                                          BSEC_OUTPUT_RAW_PRESSURE,
+                                          BSEC_OUTPUT_RAW_HUMIDITY,
+                                          BSEC_OUTPUT_RAW_GAS,
+                                          BSEC_OUTPUT_STABILIZATION_STATUS,
+                                          BSEC_OUTPUT_RUN_IN_STATUS,
+                                          BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_TEMPERATURE,
+                                          BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_HUMIDITY};
+
+BME680Sensor::BME680Sensor() : TelemetrySensor(BME68X_TELEM_TYPE, sensorName) {}
 
 int32_t BME680Sensor::runOnce()
 {
     static uint32_t next_due = 0;
     const uint32_t now = millis();
-    if ((int32_t)(now - next_due) < 0) return (int32_t)(next_due - now);
+    if ((int32_t)(now - next_due) < 0)
+        return (int32_t)(next_due - now);
 
     if (!bme680.run()) {
         checkStatus("runTrigger");
@@ -23,14 +35,14 @@ int32_t BME680Sensor::runOnce()
         return 3000;
     }
 
-    #if defined(__has_include)
-      // Most Arduino BSEC2 ports expose a 'gasResistance' field updated by run()
-      #if __has_include(<bsec2.h>)
-        // If your wrapper has a public field:
-        // (If this line fails, try one of the alt code paths below)
-        lastGasOhms = bme680.getData(BSEC_OUTPUT_RAW_GAS).signal;
-      #endif
-    #endif
+#if defined(__has_include)
+// Most Arduino BSEC2 ports expose a 'gasResistance' field updated by run()
+#if __has_include(<bsec2.h>)
+    // If your wrapper has a public field:
+    // (If this line fails, try one of the alt code paths below)
+    lastGasOhms = bme680.getData(BSEC_OUTPUT_RAW_GAS).signal;
+#endif
+#endif
 
     next_due = now + 3000;
     return 3000;
@@ -71,12 +83,12 @@ bool BME680Sensor::getMetrics(meshtastic_Telemetry *measurement)
         return false;
 
     // Pull once (BSEC units: °C, %rH, Pa, Ω, IAQ unitless)
-    const float temp_c   = bme680.getData(BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_TEMPERATURE).signal;
-    const float rh_pct   = bme680.getData(BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_HUMIDITY).signal;
-    const float pres_pa  = bme680.getData(BSEC_OUTPUT_RAW_PRESSURE).signal;
-    const float gas_ohms = bme680.getData(BSEC_OUTPUT_RAW_GAS).signal;     // already in Ω
-    const float gas_kohms = gas_ohms / 1000.0f;                         // kΩ
-    const float iaq      = bme680.getData(BSEC_OUTPUT_IAQ).signal;
+    const float temp_c = bme680.getData(BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_TEMPERATURE).signal;
+    const float rh_pct = bme680.getData(BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_HUMIDITY).signal;
+    const float pres_pa = bme680.getData(BSEC_OUTPUT_RAW_PRESSURE).signal;
+    const float gas_ohms = bme680.getData(BSEC_OUTPUT_RAW_GAS).signal; // already in Ω
+    const float gas_kohms = gas_ohms / 1000.0f;                        // kΩ
+    const float iaq = bme680.getData(BSEC_OUTPUT_IAQ).signal;
 
     // Mark present
     measurement->variant.environment_metrics.has_temperature = true;
@@ -88,8 +100,8 @@ bool BME680Sensor::getMetrics(meshtastic_Telemetry *measurement)
     // Assign
     measurement->variant.environment_metrics.temperature = temp_c;
     measurement->variant.environment_metrics.relative_humidity = rh_pct;
-    measurement->variant.environment_metrics.barometric_pressure = pres_pa;   // Pa
-    measurement->variant.environment_metrics.gas_resistance = gas_kohms;      // kΩ
+    measurement->variant.environment_metrics.barometric_pressure = pres_pa; // Pa
+    measurement->variant.environment_metrics.gas_resistance = gas_kohms;    // kΩ
     measurement->variant.environment_metrics.iaq = iaq;
 
     // Persist BSEC state periodically
