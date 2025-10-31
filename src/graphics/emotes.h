@@ -185,6 +185,26 @@ extern const unsigned char cool[] PROGMEM;
 #define shortcake_width 16
 #define shortcake_height 16
 extern const unsigned char shortcake[] PROGMEM;
+
+#define caution_width 16
+#define caution_height 16
+extern const unsigned char caution[] PROGMEM;
+
+#define clipboard_width 16
+#define clipboard_height 16
+extern const unsigned char clipboard[] PROGMEM;
+
+#define snowflake_width 16
+#define snowflake_height 16
+extern const unsigned char snowflake[] PROGMEM;
+
+#define drop_width 16
+#define drop_height 16
+extern const unsigned char drop[] PROGMEM;
+
+#define thermometer_width 16
+#define thermometer_height 16
+extern const unsigned char thermometer[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
 } // namespace graphics
