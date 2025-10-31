@@ -232,11 +232,14 @@ std::string normalizeEmoji(const std::string &s)
 // Replace unknown 4-byte emoji with upside-down question mark
 std::string replaceUnknownEmoji(const std::string &s, const Emote *emotes, int emoteCount)
 {
-    std::string out;
-    out.reserve(s.size());
+    // Normalize input to strip variation selectors and skin tone modifiers first
+    const std::string normInput = normalizeEmoji(s);
 
-    for (size_t i = 0; i < s.size();) {
-        uint8_t c = static_cast<uint8_t>(s[i]);
+    std::string out;
+    out.reserve(normInput.size());
+
+    for (size_t i = 0; i < normInput.size();) {
+        uint8_t c = static_cast<uint8_t>(normInput[i]);
         size_t charLen = utf8CharLen(c);
 
         // Check if this matches a known emote
@@ -244,9 +247,9 @@ std::string replaceUnknownEmoji(const std::string &s, const Emote *emotes, int e
         for (int e = 0; e < emoteCount; ++e) {
             const std::string labelNorm = normalizeEmoji(std::string(emotes[e].label));
             size_t labelLen = labelNorm.length();
-            if (labelLen > 0 && i + labelLen <= s.size() && s.compare(i, labelLen, labelNorm) == 0) {
+            if (labelLen > 0 && i + labelLen <= normInput.size() && normInput.compare(i, labelLen, labelNorm) == 0) {
                 isKnownEmote = true;
-                out.append(s, i, labelLen);
+                out.append(normInput, i, labelLen);
                 i += labelLen;
                 break;
             }
@@ -263,7 +266,7 @@ std::string replaceUnknownEmoji(const std::string &s, const Emote *emotes, int e
             i += charLen;
         } else {
             // Regular character - keep it
-            out.append(s, i, charLen);
+            out.append(normInput, i, charLen);
             i += charLen;
         }
     }
