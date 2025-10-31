@@ -1408,14 +1408,15 @@ void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const mesht
             }
         }
 
-        // Shorter banner if already in a conversation (Channel or Direct)
-        bool inThread = (getThreadMode() != ThreadMode::ALL);
+        // Show banner for shorter time if currently viewing the messages screen,
+        // longer time if on any other screen (regardless of which thread we were last viewing)
+        bool onMessageScreen = graphics::isMessagesScreenActive();
 
         if (shouldWakeOnReceivedMessage()) {
             screen->setOn(true);
         }
 
-        screen->showSimpleBanner(banner, inThread ? 1000 : 3000);
+        screen->showSimpleBanner(banner, onMessageScreen ? 1000 : 3000);
     }
 
     // Always focus into the correct conversation thread when a message with real text arrives
