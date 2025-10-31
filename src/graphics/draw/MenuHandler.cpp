@@ -445,13 +445,27 @@ void menuHandler::messageResponseMenu()
 
     // 6) Freetext (keyboard only)
     if (kb_found) {
-#if defined(M5STACK_UNITC6L)
-        options.push_back("Respond Freetext");
-#else
-        options.push_back("Respond via Freetext");
-#endif
-        optionIds.push_back(Freetext);
+        optionsArray[options] = "Respond via Freetext";
+        optionsEnumArray[options++] = Freetext;
     }
+
+    optionsArray[options] = "View Chats";
+    optionsEnumArray[options++] = ViewMode;
+
+    // Only show Dismiss All in View All mode
+#if defined(M5STACK_UNITC6L)
+    optionsArray[options] = "Delete All";
+#else
+    optionsArray[options] = "Delete All Chats";
+#endif
+    optionsEnumArray[options++] = DismissAll;
+
+    if (isHighResolution) {
+        optionsArray[options] = "Delete Oldest Message";
+    } else {
+        optionsArray[options] = "Delete Oldest Msg";
+    }
+    optionsEnumArray[options++] = DismissOldest;
 
     // 7) Read Aloud (I2S only)
 #ifdef HAS_I2S
