@@ -173,6 +173,18 @@ extern const unsigned char ghost[] PROGMEM;
 #define skull_width 16
 #define skull_height 16
 extern const unsigned char skull[] PROGMEM;
+
+#define vomiting_width 16
+#define vomiting_height 16
+extern const unsigned char vomiting[] PROGMEM;
+
+#define cool_width 16
+#define cool_height 16
+extern const unsigned char cool[] PROGMEM;
+
+#define shortcake_width 16
+#define shortcake_height 16
+extern const unsigned char shortcake[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
 } // namespace graphics
