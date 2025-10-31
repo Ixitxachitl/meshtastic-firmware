@@ -410,67 +410,57 @@ void menuHandler::messageResponseMenu()
 {
     enum OptionId { Back = 0, ViewMode, DismissAll, DismissOldest, Preset, Freetext, Aloud };
 
-    static std::vector<const char*> options;
-    static std::vector<int> optionIds;
-    options.clear();
-    optionIds.clear();
+    // Build menu dynamically based on context
+    static const char *optionsArray[10]; // Max possible options
+    static int optionsEnumArray[10];
+    int optionCount = 0;
 
     auto mode = graphics::MessageRenderer::getThreadMode();
 
     // 1) Back
-    options.push_back("Back");
-    optionIds.push_back(Back);
+    optionsArray[optionCount] = "Back";
+    optionsEnumArray[optionCount++] = Back;
 
-    // 2) Conversations (view mode switcher)
-    options.push_back("Conversations");
-    optionIds.push_back(ViewMode);
+    // 2) View Chats
+    optionsArray[optionCount] = "View Chats";
+    optionsEnumArray[optionCount++] = ViewMode;
 
     // 3) Dismiss All — only in ALL view
     if (mode == graphics::MessageRenderer::ThreadMode::ALL) {
-        options.push_back("Dismiss All");
-        optionIds.push_back(DismissAll);
+#if defined(M5STACK_UNITC6L)
+        optionsArray[optionCount] = "Delete All";
+#else
+        optionsArray[optionCount] = "Delete All Chats";
+#endif
+        optionsEnumArray[optionCount++] = DismissAll;
     }
 
     // 4) Dismiss Oldest — always available
-    options.push_back("Dismiss Oldest");
-    optionIds.push_back(DismissOldest);
+    if (isHighResolution) {
+        optionsArray[optionCount] = "Delete Oldest Message";
+    } else {
+        optionsArray[optionCount] = "Delete Oldest Msg";
+    }
+    optionsEnumArray[optionCount++] = DismissOldest;
 
     // 5) Preset
 #if defined(M5STACK_UNITC6L)
-    options.push_back("Respond Preset");
+    optionsArray[optionCount] = "Respond Preset";
 #else
-    options.push_back("Respond via Preset");
+    optionsArray[optionCount] = "Respond via Preset";
 #endif
-    optionIds.push_back(Preset);
+    optionsEnumArray[optionCount++] = Preset;
 
     // 6) Freetext (keyboard only)
     if (kb_found) {
-        optionsArray[options] = "Respond via Freetext";
-        optionsEnumArray[options++] = Freetext;
+        optionsArray[optionCount] = "Respond via Freetext";
+        optionsEnumArray[optionCount++] = Freetext;
     }
-
-    optionsArray[options] = "View Chats";
-    optionsEnumArray[options++] = ViewMode;
-
-    // Only show Dismiss All in View All mode
-#if defined(M5STACK_UNITC6L)
-    optionsArray[options] = "Delete All";
-#else
-    optionsArray[options] = "Delete All Chats";
-#endif
-    optionsEnumArray[options++] = DismissAll;
-
-    if (isHighResolution) {
-        optionsArray[options] = "Delete Oldest Message";
-    } else {
-        optionsArray[options] = "Delete Oldest Msg";
-    }
-    optionsEnumArray[options++] = DismissOldest;
 
     // 7) Read Aloud (I2S only)
 #ifdef HAS_I2S
-    options.push_back("Read Aloud");
-    optionIds.push_back(Aloud);
+    optionsArray[optionCount] = "Read Aloud";
+    optionsEnumArray[optionCount++] = Aloud;
 #endif
 
     BannerOverlayOptions bannerOptions;
@@ -479,9 +469,9 @@ void menuHandler::messageResponseMenu()
 #else
     bannerOptions.message = "Message Action";
 #endif
-    bannerOptions.optionsArrayPtr = options.data();
-    bannerOptions.optionsEnumPtr  = optionIds.data();
-    bannerOptions.optionsCount    = static_cast<int>(options.size());
+    bannerOptions.optionsArrayPtr = optionsArray;
+    bannerOptions.optionsEnumPtr = optionsEnumArray;
+    bannerOptions.optionsCount = optionCount;
 
     bannerOptions.bannerCallback = [](int selected) -> void {
         graphics::setOverlayActive(false);
@@ -527,11 +517,10 @@ void menuHandler::messageResponseMenu()
                 LOG_DEBUG("Fallback reply using last rx_text_message");
                 if (devicestate.rx_text_message.to == NODENUM_BROADCAST) {
                     if (selected == Preset)
-                        cannedMessageModule->LaunchWithDestination(
-                            NODENUM_BROADCAST, devicestate.rx_text_message.channel);
+                        cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST, devicestate.rx_text_message.channel);
                     else
-                        cannedMessageModule->LaunchFreetextWithDestination(
-                            NODENUM_BROADCAST, devicestate.rx_text_message.channel);
+                        cannedMessageModule->LaunchFreetextWithDestination(NODENUM_BROADCAST,
+                                                                           devicestate.rx_text_message.channel);
                 } else {
                     if (selected == Preset)
                         cannedMessageModule->LaunchWithDestination(devicestate.rx_text_message.from);
@@ -619,13 +608,11 @@ void menuHandler::messageViewModeMenu()
     std::vector<uint32_t> uniquePeers;
     for (auto &m : dms) {
         uint32_t peer = (m.sender == nodeDB->getNodeNum()) ? m.dest : m.sender;
-        if (peer != nodeDB->getNodeNum() &&
-            std::find(uniquePeers.begin(), uniquePeers.end(), peer) == uniquePeers.end())
+        if (peer != nodeDB->getNodeNum() && std::find(uniquePeers.begin(), uniquePeers.end(), peer) == uniquePeers.end())
             uniquePeers.push_back(peer);
     }
     for (uint32_t peer : graphics::MessageRenderer::getSeenPeers()) {
-        if (peer != nodeDB->getNodeNum() &&
-            std::find(uniquePeers.begin(), uniquePeers.end(), peer) == uniquePeers.end())
+        if (peer != nodeDB->getNodeNum() && std::find(uniquePeers.begin(), uniquePeers.end(), peer) == uniquePeers.end())
             uniquePeers.push_back(peer);
     }
     std::sort(uniquePeers.begin(), uniquePeers.end());
@@ -831,7 +818,8 @@ void menuHandler::systemBaseMenu()
     optionsArray[options] = "Notifications";
     optionsEnumArray[options++] = Notifications;
 #if defined(ST7789_CS) || defined(ST7796_CS) || defined(USE_OLED) || defined(USE_SSD1306) || defined(USE_SH1106) ||              \
-    defined(USE_SH1107) || defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190) || defined(M5STACK_CARDPUTER_ADV) || HAS_TFT
+    defined(USE_SH1107) || defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190) ||                               \
+    defined(M5STACK_CARDPUTER_ADV) || HAS_TFT
     optionsArray[options] = "Screen Options";
     optionsEnumArray[options++] = ScreenOptions;
 #endif
@@ -1256,9 +1244,9 @@ void menuHandler::BrightnessPickerMenu()
     bannerOptions.optionsArrayPtr = optionsArray;
     bannerOptions.optionsCount = 4;
     bannerOptions.bannerCallback = [](int selected) -> void {
-        if (selected == 1) { // Medium
+        if (selected == 1) {                 // Medium
             uiconfig.screen_brightness = 80; // 64 is too low for the ST7789 analog value
-        } else if (selected == 2) { // High
+        } else if (selected == 2) {          // High
             uiconfig.screen_brightness = 128;
         } else if (selected == 3) { // Very High
             uiconfig.screen_brightness = 255;
@@ -1312,7 +1300,8 @@ void menuHandler::TFTColorPickerMenu(OLEDDisplay *display)
     bannerOptions.optionsArrayPtr = optionsArray;
     bannerOptions.optionsCount = 10;
     bannerOptions.bannerCallback = [display](int selected) -> void {
-#if defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190) || defined(T_DECK) || defined(T_LORA_PAGER) || defined(M5STACK_CARDPUTER_ADV) || HAS_TFT
+#if defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190) || defined(T_DECK) || defined(T_LORA_PAGER) ||          \
+    defined(M5STACK_CARDPUTER_ADV) || HAS_TFT
         uint8_t TFT_MESH_r = 0;
         uint8_t TFT_MESH_g = 0;
         uint8_t TFT_MESH_b = 0;
@@ -1447,7 +1436,7 @@ void menuHandler::shutdownMenu()
 
 void menuHandler::addFavoriteMenu()
 {
-    graphics::setOverlayActive(true); 
+    graphics::setOverlayActive(true);
 #if defined(M5STACK_UNITC6L)
     screen->showNodePicker("Node Favorite", 30000, [](uint32_t nodenum) -> void {
 #else
@@ -1603,7 +1592,8 @@ void menuHandler::screenOptionsMenu()
 {
     // Check if brightness is supported
     bool hasSupportBrightness = false;
-#if defined(ST7789_CS) || defined(USE_OLED) || defined(USE_SSD1306) || defined(USE_SH1106) || defined(USE_SH1107) || defined(M5STACK_CARDPUTER_ADV)
+#if defined(ST7789_CS) || defined(USE_OLED) || defined(USE_SSD1306) || defined(USE_SH1106) || defined(USE_SH1107) ||             \
+    defined(M5STACK_CARDPUTER_ADV)
     hasSupportBrightness = true;
 #endif
 
@@ -1629,7 +1619,8 @@ void menuHandler::screenOptionsMenu()
     }
 
     // Only show screen color for TFT displays
-#if defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190) || defined(T_DECK) || defined(T_LORA_PAGER) || defined(M5STACK_CARDPUTER_ADV) || HAS_TFT
+#if defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190) || defined(T_DECK) || defined(T_LORA_PAGER) ||          \
+    defined(M5STACK_CARDPUTER_ADV) || HAS_TFT
     optionsArray[options] = "Screen Color";
     optionsEnumArray[options++] = ScreenColor;
 #endif
@@ -1874,11 +1865,11 @@ void menuHandler::envTelemetryMenu()
     bannerOptions.optionsEnumPtr = optionsEnumArray;
     bannerOptions.bannerCallback = [](int selected) -> void {
         if (selected == PickSource) {
-            menuHandler::menuQueue = menuHandler::env_source_picker;   // route to picker
+            menuHandler::menuQueue = menuHandler::env_source_picker; // route to picker
             screen->runNow();
         } else if (selected == AutoMostRecent) {
             if (environmentTelemetryModule) {
-                environmentTelemetryModule->setEnvDisplaySource(0);     // 0 = Auto (most recent)
+                environmentTelemetryModule->setEnvDisplaySource(0); // 0 = Auto (most recent)
             }
             screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
         } else {
@@ -1901,45 +1892,44 @@ void menuHandler::envTelemetrySourceMenu()
     // If none, say "No Sources" and go back to the top Environment menu
     if (sources.empty()) {
         graphics::BannerOverlayOptions o;
-        o.message          = "No Sources";
-        o.durationMs       = 1200;
+        o.message = "No Sources";
+        o.durationMs = 1200;
         o.notificationType = graphics::notificationTypeEnum::text_banner;
         screen->showOverlayBanner(o);
 
-        // Let SELECT key-up settle so we don't re-enter immediately
-        #if defined(FREERTOS)
-          vTaskDelay(pdMS_TO_TICKS(o.durationMs));
-        #elif defined(ARDUINO)
-          delay(o.durationMs);
-        #else
-          usleep(o.durationMs * 1000);
-        #endif
+// Let SELECT key-up settle so we don't re-enter immediately
+#if defined(FREERTOS)
+        vTaskDelay(pdMS_TO_TICKS(o.durationMs));
+#elif defined(ARDUINO)
+        delay(o.durationMs);
+#else
+        usleep(o.durationMs * 1000);
+#endif
 
-        graphics::setOverlayActive(true);   // keep overlay alive
-        menuHandler::envTelemetryMenu();    // return to top Environment menu
+        graphics::setOverlayActive(true); // keep overlay alive
+        menuHandler::envTelemetryMenu();  // return to top Environment menu
         return;
     }
 
     // Build picker: Back, [nodes...], Exit (Exit goes last)
     static const int kMax = 64;
-    static const char* optionsArray[kMax];
+    static const char *optionsArray[kMax];
     static int optionsEnumArray[kMax];
-    static char labelBuf[kMax][24];   // per-slot stable storage for labels
+    static char labelBuf[kMax][24]; // per-slot stable storage for labels
     int count = 0;
 
     // Back sentinel = -1
-    optionsArray[count]     = "Back";
+    optionsArray[count] = "Back";
     optionsEnumArray[count] = -1;
     count++;
 
     // Node short names (only sources with env telemetry)
     for (uint32_t num : sources) {
-        if (count >= kMax - 1) break; // leave room for Exit
+        if (count >= kMax - 1)
+            break; // leave room for Exit
 
-        const meshtastic_NodeInfoLite* n = nodeDB->getMeshNode(num);
-        const char* shortName = (n && n->has_user && n->user.short_name && n->user.short_name[0])
-                                ? n->user.short_name
-                                : nullptr;
+        const meshtastic_NodeInfoLite *n = nodeDB->getMeshNode(num);
+        const char *shortName = (n && n->has_user && n->user.short_name && n->user.short_name[0]) ? n->user.short_name : nullptr;
 
         if (shortName) {
             snprintf(labelBuf[count], sizeof(labelBuf[count]), "%s", shortName);
@@ -1947,30 +1937,30 @@ void menuHandler::envTelemetrySourceMenu()
             snprintf(labelBuf[count], sizeof(labelBuf[count]), "%08X", num); // hex fallback
         }
 
-        optionsArray[count]     = labelBuf[count];             // stable pointer
-        optionsEnumArray[count] = static_cast<int>(num);       // real nodenum
+        optionsArray[count] = labelBuf[count];           // stable pointer
+        optionsEnumArray[count] = static_cast<int>(num); // real nodenum
         count++;
     }
 
     // Exit sentinel = -2 (always LAST)
-    optionsArray[count]     = "Exit";
+    optionsArray[count] = "Exit";
     optionsEnumArray[count] = -2;
     count++;
 
     graphics::BannerOverlayOptions o;
-    o.message         = "Telemetry Source";
+    o.message = "Telemetry Source";
     o.optionsArrayPtr = optionsArray;
-    o.optionsEnumPtr  = optionsEnumArray;
-    o.optionsCount    = count;
+    o.optionsEnumPtr = optionsEnumArray;
+    o.optionsCount = count;
 
     o.bannerCallback = [](int selected) -> void {
-        if (selected == -1) {                 // Back → return to Environment menu
+        if (selected == -1) { // Back → return to Environment menu
             menuHandler::menuQueue = menuHandler::env_menu;
             screen->runNow();
-        } else if (selected == -2) {          // Exit → close overlay
+        } else if (selected == -2) { // Exit → close overlay
             graphics::setOverlayActive(false);
             screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
-        } else {                               // Nodenum chosen
+        } else { // Nodenum chosen
             if (environmentTelemetryModule)
                 environmentTelemetryModule->setEnvDisplaySource(static_cast<uint32_t>(selected));
             graphics::setOverlayActive(false);
