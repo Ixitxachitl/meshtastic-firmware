@@ -161,6 +161,18 @@ extern const unsigned char bowling[] PROGMEM;
 #define vulcan_salute_width 16
 #define vulcan_salute_height 16
 extern const unsigned char vulcan_salute[] PROGMEM;
+
+#define jack_o_lantern_width 16
+#define jack_o_lantern_height 16
+extern const unsigned char jack_o_lantern[] PROGMEM;
+
+#define ghost_width 16
+#define ghost_height 16
+extern const unsigned char ghost[] PROGMEM;
+
+#define skull_width 16
+#define skull_height 16
+extern const unsigned char skull[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
 } // namespace graphics
