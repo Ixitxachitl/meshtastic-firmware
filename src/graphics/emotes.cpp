@@ -22,8 +22,9 @@ const Emote emotes[] = {
     {"\U0001F970", heart_smile, heart_smile_width, heart_smile_height}, // 🥰 Smiling Face with Hearts
 
     // --- Question/Alert ---
-    {"\u2753", question, question_width, question_height}, // ❓ Question Mark
-    {"\u203C\uFE0F", bang, bang_width, bang_height},       // ‼️ Double Exclamation Mark
+    {"\u2753", question, question_width, question_height},    // ❓ Question Mark
+    {"\u203C\uFE0F", bang, bang_width, bang_height},          // ‼️ Double Exclamation Mark
+    {"\u26A0\uFE0F", caution, caution_width, caution_height}, // ⚠️ Warning Sign
 
     // --- Laughing Faces ---
     {"\U0001F602", haha, haha_width, haha_height}, // 😂 Face with Tears of Joy
@@ -33,6 +34,8 @@ const Emote emotes[] = {
     {"\U0001F604", Grinning_SmilingEyes2, Grinning_SmilingEyes2_width,
      Grinning_SmilingEyes2_height}, // 😄 Grinning Face with Smiling Eyes
     {"\U0001F62D", Loudly_Crying_Face, Loudly_Crying_Face_width, Loudly_Crying_Face_height}, // 😭 Loudly Crying Face
+    {"\U0001F92E", vomiting, vomiting_width, vomiting_height},                               // 🤮 Face Vomiting
+    {"\U0001F60E", cool, cool_width, cool_height},                                           // 😎 Smiling Face with Sunglasses
 
     // --- Gestures and People ---
     {"\U0001F44B", wave_icon, wave_icon_width, wave_icon_height},             // 👋 Waving Hand
@@ -43,11 +46,14 @@ const Emote emotes[] = {
     {"\U0001F3A7", deadmau5, deadmau5_width, deadmau5_height},                // 🎧 Headphones
 
     // --- Weather ---
-    {"\u2600", sun, sun_width, sun_height},              // ☀ Sun (without variation selector)
-    {"\u2600\uFE0F", sun, sun_width, sun_height},        // ☀️ Sun (with variation selector)
-    {"\U0001F327\uFE0F", rain, rain_width, rain_height}, // 🌧️ Cloud with Rain
-    {"\u2601\uFE0F", cloud, cloud_width, cloud_height},  // ☁️ Cloud
-    {"\U0001F32B\uFE0F", fog, fog_width, fog_height},    // 🌫️ Fog
+    {"\u2600", sun, sun_width, sun_height},                                   // ☀ Sun (without variation selector)
+    {"\u2600\uFE0F", sun, sun_width, sun_height},                             // ☀️ Sun (with variation selector)
+    {"\U0001F327\uFE0F", rain, rain_width, rain_height},                      // 🌧️ Cloud with Rain
+    {"\u2601\uFE0F", cloud, cloud_width, cloud_height},                       // ☁️ Cloud
+    {"\U0001F32B\uFE0F", fog, fog_width, fog_height},                         // 🌫️ Fog
+    {"\u2744\uFE0F", snowflake, snowflake_width, snowflake_height},           // ❄️ Snowflake
+    {"\U0001F4A7", drop, drop_width, drop_height},                            // 💧 Droplet
+    {"\U0001F321\uFE0F", thermometer, thermometer_width, thermometer_height}, // 🌡️ Thermometer
 
     // --- Misc Faces ---
     {"\U0001F608", devil, devil_width, devil_height}, // 😈 Smiling Face with Horns
@@ -69,11 +75,18 @@ const Emote emotes[] = {
     // --- Objects ---
     {"\U0001F4A9", poo, poo_width, poo_height},                   // 💩 Pile of Poo
     {"\U0001F514", bell_icon, bell_icon_width, bell_icon_height}, // 🔔 Bell
+    {"\U0001F4CB", clipboard, clipboard_width, clipboard_height}, // 📋 Clipboard
     {"\U0001F36A", cookie, cookie_width, cookie_height},          // 🍪 Cookie
+    {"\U0001F370", shortcake, shortcake_width, shortcake_height}, // 🍰 Shortcake
     {"\U0001F525", Fire, Fire_width, Fire_height},                // 🔥 Fire
     {"\u2728", Sparkles, Sparkles_width, Sparkles_height},        // ✨ Sparkles
     {"\U0001F573\uFE0F", hole, hole_width, hole_height},          // 🕳️ Hole
-    {"\U0001F3B3", bowling, bowling_width, bowling_height}        // 🎳 Bowling
+    {"\U0001F3B3", bowling, bowling_width, bowling_height},       // 🎳 Bowling
+
+    // --- Halloween ---
+    {"\U0001F383", jack_o_lantern, jack_o_lantern_width, jack_o_lantern_height}, // 🎃 Jack-O-Lantern
+    {"\U0001F47B", ghost, ghost_width, ghost_height},                            // 👻 Ghost
+    {"\U0001F480", skull, skull_width, skull_height}                             // 💀 Skull
 #endif
 };
 
@@ -227,6 +240,50 @@ const unsigned char bowling[] PROGMEM = {0x00, 0x38, 0x00, 0x44, 0x00, 0x44, 0x0
 const unsigned char vulcan_salute[] PROGMEM = {0x08, 0x02, 0x16, 0x0D, 0x15, 0x15, 0x15, 0x15, 0xA9, 0x12, 0x4A,
                                                0x0A, 0x02, 0x38, 0x04, 0x48, 0x04, 0x44, 0x04, 0x22, 0x04, 0x22,
                                                0x04, 0x12, 0x08, 0x10, 0x10, 0x08, 0xE0, 0x07, 0x00, 0x00};
+
+const unsigned char jack_o_lantern[] PROGMEM = {0xC0, 0x00, 0x80, 0x01, 0xB8, 0x1D, 0xC4, 0x23, 0x22, 0x44, 0x05,
+                                                0xA0, 0x31, 0x8C, 0x51, 0x8A, 0x61, 0x86, 0x09, 0x90, 0xB9, 0x9D,
+                                                0x49, 0x92, 0xB2, 0x4D, 0x42, 0x42, 0x04, 0x20, 0xF8, 0x1F};
+
+const unsigned char ghost[] PROGMEM = {0xC0, 0x03, 0xF0, 0x0F, 0xF8, 0x1F, 0xDC, 0x3B, 0xBC, 0x3D, 0xDF,
+                                       0xFB, 0xFF, 0xFF, 0x1F, 0xF8, 0x1E, 0x78, 0x1C, 0x38, 0x3C, 0x3C,
+                                       0xFC, 0x3F, 0xFE, 0x7F, 0xFE, 0x7F, 0xFE, 0x7F, 0x8C, 0x31};
+
+const unsigned char skull[] PROGMEM = {0xE0, 0x07, 0xF8, 0x1F, 0xFC, 0x3F, 0xFE, 0x7F, 0xFE, 0x7F, 0xC7,
+                                       0xE3, 0x87, 0xE1, 0x87, 0xE1, 0x8F, 0xF1, 0xFE, 0x7F, 0x7C, 0x3E,
+                                       0xFC, 0x3F, 0xFC, 0x3F, 0xFC, 0x3F, 0xF8, 0x1F, 0xB0, 0x0D};
+
+const unsigned char vomiting[] PROGMEM = {0x00, 0x00, 0xE0, 0x07, 0x18, 0x18, 0x04, 0x20, 0x04, 0x20, 0x22,
+                                          0x44, 0x42, 0x42, 0x22, 0x44, 0x02, 0x40, 0x02, 0x40, 0xC2, 0x43,
+                                          0x64, 0x26, 0x64, 0x26, 0x68, 0x16, 0x50, 0x0A, 0xF8, 0x1F};
+
+const unsigned char cool[] PROGMEM = {0x00, 0x00, 0xE0, 0x07, 0x18, 0x18, 0x04, 0x20, 0xFC, 0x3F, 0xFA,
+                                      0x5F, 0x72, 0x4E, 0x02, 0x40, 0x12, 0x48, 0x12, 0x48, 0x22, 0x44,
+                                      0xC4, 0x23, 0x04, 0x20, 0x18, 0x18, 0xE0, 0x07, 0x00, 0x00};
+
+const unsigned char shortcake[] PROGMEM = {0x00, 0x00, 0x00, 0x0F, 0x80, 0x3F, 0xE0, 0xFC, 0xE0, 0xE1, 0xF0,
+                                           0xB8, 0x10, 0x87, 0xC8, 0x80, 0x3C, 0xE0, 0x06, 0x98, 0x02, 0xC7,
+                                           0xE2, 0x30, 0x1A, 0x0E, 0xC6, 0x01, 0x32, 0x00, 0x0E, 0x00};
+
+const unsigned char caution[] PROGMEM = {0x00, 0x00, 0x80, 0x01, 0xC0, 0x03, 0xC0, 0x03, 0x60, 0x06, 0x60,
+                                         0x06, 0x70, 0x0E, 0x70, 0x0E, 0x78, 0x1E, 0x78, 0x1E, 0x7C, 0x3E,
+                                         0xFC, 0x3F, 0x7E, 0x7E, 0x7E, 0x7E, 0xFC, 0x3F, 0x00, 0x00};
+
+const unsigned char clipboard[] PROGMEM = {0xC0, 0x03, 0x7E, 0x7E, 0xC2, 0x43, 0xFA, 0x5F, 0x0A, 0x5B, 0xFA,
+                                           0x5F, 0x8A, 0x54, 0xFA, 0x5F, 0x4A, 0x58, 0xFA, 0x5F, 0x2A, 0x51,
+                                           0xFA, 0x5F, 0x0A, 0x59, 0xFA, 0x5F, 0x02, 0x40, 0xFE, 0x7F};
+
+const unsigned char snowflake[] PROGMEM = {0x00, 0x00, 0x40, 0x01, 0x88, 0x08, 0x8C, 0x18, 0xD0, 0x05, 0x60,
+                                           0x03, 0x32, 0x26, 0x1C, 0x1C, 0x32, 0x26, 0x60, 0x03, 0xD0, 0x05,
+                                           0x8C, 0x18, 0x88, 0x08, 0x40, 0x01, 0x00, 0x00, 0x00, 0x00};
+
+const unsigned char drop[] PROGMEM = {0x00, 0x00, 0x00, 0x01, 0x80, 0x03, 0xC0, 0x07, 0xE0, 0x0F, 0xE0,
+                                      0x0F, 0xF0, 0x1F, 0xF0, 0x1F, 0xF8, 0x3F, 0xF8, 0x3F, 0xF8, 0x3F,
+                                      0xF8, 0x3F, 0xF0, 0x1F, 0xE0, 0x0F, 0x80, 0x03, 0x00, 0x00};
+
+const unsigned char thermometer[] PROGMEM = {0x00, 0x00, 0x0C, 0x00, 0x16, 0x00, 0x2E, 0x00, 0x5C, 0x00, 0xB8,
+                                             0x00, 0x70, 0x01, 0xE0, 0x02, 0xC0, 0x05, 0x80, 0x3B, 0x00, 0x47,
+                                             0x00, 0xBE, 0x00, 0x9E, 0x00, 0xBE, 0x00, 0x7C, 0x00, 0x38};
 #endif
 
 } // namespace graphics

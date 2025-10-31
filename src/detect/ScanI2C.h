@@ -82,7 +82,8 @@ class ScanI2C
         BHI260AP,
         BMM150,
         TSL2561,
-        DRV2605
+        DRV2605,
+        BMI270
     } DeviceType;
 
     // typedef uint8_t DeviceAddress;
@@ -115,6 +116,8 @@ class ScanI2C
     } FoundDevice;
 
     static const FoundDevice DEVICE_NONE;
+    
+    static bool hasMagnetometer();
 
   public:
     ScanI2C();
@@ -147,7 +150,9 @@ class ScanI2C
 
   protected:
     virtual FoundDevice firstOfOrNONE(size_t, DeviceType[]) const;
+    static void setMagOnPort(I2CPort port, bool value);
 
   private:
     bool shouldSuppressScreen = false;
+    static bool s_hasMagOnPort[3];
 };
