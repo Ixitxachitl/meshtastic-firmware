@@ -39,13 +39,14 @@ extern MessageStore messageStore;
 #endif
 
 #include "graphics/ScreenFonts.h"
-#include <Throttle.h>
 #include "graphics/draw/MenuHandler.h"
+#include <Throttle.h>
 
-namespace {
-  graphics::menuHandler::screenMenus s_prevMenu = graphics::menuHandler::menu_none;
-  bool s_cameFromMenu = false;
-}
+namespace
+{
+graphics::menuHandler::screenMenus s_prevMenu = graphics::menuHandler::menu_none;
+bool s_cameFromMenu = false;
+} // namespace
 
 // Remove Canned message screen if no action is taken for some milliseconds
 #define INACTIVATE_AFTER_MS 20000
@@ -176,8 +177,8 @@ void CannedMessageModule::LaunchWithDestination(NodeNum newDest, uint8_t newChan
     graphics::setOverlayActive(true);
     // remember the menu page we were on (if any)
     if (!s_cameFromMenu) {
-      s_prevMenu = graphics::menuHandler::menuQueue;
-      s_cameFromMenu = (s_prevMenu != graphics::menuHandler::menu_none);
+        s_prevMenu = graphics::menuHandler::menuQueue;
+        s_cameFromMenu = (s_prevMenu != graphics::menuHandler::menu_none);
     }
     UIFrameEvent e;
     e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
@@ -211,8 +212,8 @@ void CannedMessageModule::LaunchFreetextWithDestination(NodeNum newDest, uint8_t
     requestFocus();
     // remember the menu page we were on (if any)
     if (!s_cameFromMenu) {
-      s_prevMenu = graphics::menuHandler::menuQueue;
-      s_cameFromMenu = (s_prevMenu != graphics::menuHandler::menu_none);
+        s_prevMenu = graphics::menuHandler::menuQueue;
+        s_cameFromMenu = (s_prevMenu != graphics::menuHandler::menu_none);
     }
     UIFrameEvent e;
     e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
@@ -452,8 +453,14 @@ int CannedMessageModule::handleInputEvent(const InputEvent *event)
             break;
         }
         // Handle UP/DOWN: activate canned message list!
+        // BUT: Don't intercept UP/DOWN when on messages screen - allow scrolling instead
         if (event->inputEvent == INPUT_BROKER_UP || event->inputEvent == INPUT_BROKER_DOWN ||
             event->inputEvent == INPUT_BROKER_ALT_LONG) {
+            if (graphics::isMessagesScreenActive() && !graphics::isOverlayActive() &&
+                (event->inputEvent == INPUT_BROKER_UP || event->inputEvent == INPUT_BROKER_DOWN)) {
+                // On messages screen with UP/DOWN - let it pass through for scrolling
+                return 0;
+            }
             LaunchWithDestination(NODENUM_BROADCAST);
             return 1;
         }
@@ -461,11 +468,11 @@ int CannedMessageModule::handleInputEvent(const InputEvent *event)
         if (event->kbchar >= 32 && event->kbchar <= 126) {
             runState = CANNED_MESSAGE_RUN_STATE_FREETEXT;
             requestFocus();
-            graphics::setOverlayActive(true); 
+            graphics::setOverlayActive(true);
             // remember the menu page we were on (if any)
             if (!s_cameFromMenu) {
-              s_prevMenu = graphics::menuHandler::menuQueue;
-              s_cameFromMenu = (s_prevMenu != graphics::menuHandler::menu_none);
+                s_prevMenu = graphics::menuHandler::menuQueue;
+                s_cameFromMenu = (s_prevMenu != graphics::menuHandler::menu_none);
             }
             UIFrameEvent e;
             e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
@@ -515,7 +522,7 @@ bool CannedMessageModule::handleTabSwitch(const InputEvent *event)
 
     runState = (runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION) ? CANNED_MESSAGE_RUN_STATE_FREETEXT
                                                                             : CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION;
-                                                                            
+
     graphics::setOverlayActive(true);
 
     destIndex = 0;
@@ -526,8 +533,8 @@ bool CannedMessageModule::handleTabSwitch(const InputEvent *event)
     requestFocus();
     // remember the menu page we were on (if any)
     if (!s_cameFromMenu) {
-      s_prevMenu = graphics::menuHandler::menuQueue;
-      s_cameFromMenu = (s_prevMenu != graphics::menuHandler::menu_none);
+        s_prevMenu = graphics::menuHandler::menuQueue;
+        s_cameFromMenu = (s_prevMenu != graphics::menuHandler::menu_none);
     }
     UIFrameEvent e;
     e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
@@ -578,10 +585,13 @@ int CannedMessageModule::handleDestinationSelectionInput(const InputEvent *event
             needsUpdate = false;
 
             // Make sure the underlying screen (e.g., Messages) remains the focused frame.
-            graphics::setOverlayActive(false);                   
+            graphics::setOverlayActive(false);
             runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
             screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
-            freetext = ""; cursor = 0; payload = 0; currentMessageIndex = -1;
+            freetext = "";
+            cursor = 0;
+            payload = 0;
+            currentMessageIndex = -1;
 
             UIFrameEvent e;
             e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
@@ -649,13 +659,13 @@ int CannedMessageModule::handleDestinationSelectionInput(const InputEvent *event
 
         runState = returnToCannedList ? CANNED_MESSAGE_RUN_STATE_ACTIVE : CANNED_MESSAGE_RUN_STATE_FREETEXT;
         returnToCannedList = false;
-        
+
         if (runState == CANNED_MESSAGE_RUN_STATE_ACTIVE) {
             graphics::setOverlayActive(false);
             runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
             screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
         }
-    
+
         screen->forceDisplay(true);
         return 1;
     }
@@ -666,8 +676,8 @@ int CannedMessageModule::handleDestinationSelectionInput(const InputEvent *event
         returnToCannedList = false;
         searchQuery = "";
 
-        if (runState == CANNED_MESSAGE_RUN_STATE_ACTIVE){
-            graphics::setOverlayActive(false); 
+        if (runState == CANNED_MESSAGE_RUN_STATE_ACTIVE) {
+            graphics::setOverlayActive(false);
             runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
             screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
         }
@@ -742,11 +752,11 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
         // [Exit] returns to the main/inactive screen
         if (strcmp(current, "[Exit]") == 0) {
             // Set runState to inactive so we return to main UI
-            graphics::setOverlayActive(false);   
+            graphics::setOverlayActive(false);
             runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
             currentMessageIndex = -1;
             screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
-            
+
             // Notify UI to regenerate frame set and redraw
             UIFrameEvent e;
             e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
@@ -762,8 +772,8 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
             requestFocus();
             // remember the menu page we were on (if any)
             if (!s_cameFromMenu) {
-              s_prevMenu = graphics::menuHandler::menuQueue;
-              s_cameFromMenu = (s_prevMenu != graphics::menuHandler::menu_none);
+                s_prevMenu = graphics::menuHandler::menuQueue;
+                s_cameFromMenu = (s_prevMenu != graphics::menuHandler::menu_none);
             }
             UIFrameEvent e;
             e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
@@ -862,7 +872,7 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
 #if defined(USE_VIRTUAL_KEYBOARD)
     // Cancel (dismiss freetext screen)
     if (event->inputEvent == INPUT_BROKER_LEFT) {
-        graphics::setOverlayActive(false); 
+        graphics::setOverlayActive(false);
         runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
         screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
         freetext = "";
@@ -986,7 +996,7 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
     // Cancel (dismiss freetext screen)
     if (event->inputEvent == INPUT_BROKER_CANCEL || event->inputEvent == INPUT_BROKER_ALT_LONG ||
         (event->inputEvent == INPUT_BROKER_BACK && this->freetext.length() == 0)) {
-        graphics::setOverlayActive(false); 
+        graphics::setOverlayActive(false);
         runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
         screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
         freetext = "";
@@ -1219,8 +1229,8 @@ int32_t CannedMessageModule::runOnce()
         } else {
             // Empty message, just go inactive
             LOG_INFO("Empty freetext detected in delayed processing, returning to inactive state");
-            graphics::setOverlayActive(false); 
-            this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE; 
+            graphics::setOverlayActive(false);
+            this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
             screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
         }
 
@@ -1238,7 +1248,7 @@ int32_t CannedMessageModule::runOnce()
          this->payload != CANNED_MESSAGE_RUN_STATE_FREETEXT) ||
         (this->runState == CANNED_MESSAGE_RUN_STATE_ACK_NACK_RECEIVED) ||
         (this->runState == CANNED_MESSAGE_RUN_STATE_MESSAGE_SELECTION)) {
-        graphics::setOverlayActive(false); 
+        graphics::setOverlayActive(false);
         this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
         e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
         this->currentMessageIndex = -1;

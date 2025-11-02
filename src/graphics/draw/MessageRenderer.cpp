@@ -386,7 +386,7 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
         if (nextControl > i) {
             std::string textChunk = normLine.substr(i, nextControl - i);
 
-            // Handle ¿ character specially - render char by char to override width
+            // Handle special characters - render char by char to override width
             size_t j = 0;
             while (j < textChunk.length()) {
                 size_t charLen = utf8CharLen(static_cast<uint8_t>(textChunk[j]));
@@ -399,6 +399,22 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
                     display->drawXbm(cursorX, iconY, upsidedown_qmark_width, upsidedown_qmark_height, upsidedown_qmark);
                     cursorX += upsidedown_qmark_width + 1; // Bitmap width + spacing
                     j += 2;
+                    // Check if this is the ° character followed by C or F
+                } else if (charLen == 2 && (uint8_t)textChunk[j] == 0xC2 && j + 1 < textChunk.length() &&
+                           (uint8_t)textChunk[j + 1] == 0xB0 && j + 2 < textChunk.length() &&
+                           (textChunk[j + 2] == 'C' || textChunk[j + 2] == 'F')) {
+                    // Render °C or °F as a single unit to avoid spacing issues
+                    std::string tempUnit = textChunk.substr(j, 3); // °C or °F
+                    if (inBold) {
+                        display->drawString(cursorX + 1, fontY, tempUnit.c_str());
+                    }
+                    display->drawString(cursorX, fontY, tempUnit.c_str());
+#if defined(OLED_UA) || defined(OLED_RU)
+                    cursorX += display->getStringWidth(tempUnit.c_str(), tempUnit.length(), true);
+#else
+                    cursorX += display->getStringWidth(tempUnit.c_str());
+#endif
+                    j += 3;
                 } else {
                     // Regular character - render it
                     std::string singleChar = textChunk.substr(j, charLen);
@@ -431,7 +447,7 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
             // No more emotes — render the rest of the line
             std::string remaining = normLine.substr(i);
 
-            // Handle ¿ character specially - render char by char to override width
+            // Handle special characters - render char by char to override width
             size_t j = 0;
             while (j < remaining.length()) {
                 size_t charLen = utf8CharLen(static_cast<uint8_t>(remaining[j]));
@@ -444,6 +460,22 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
                     display->drawXbm(cursorX, iconY, upsidedown_qmark_width, upsidedown_qmark_height, upsidedown_qmark);
                     cursorX += upsidedown_qmark_width + 1; // Bitmap width + spacing
                     j += 2;
+                    // Check if this is the ° character followed by C or F
+                } else if (charLen == 2 && (uint8_t)remaining[j] == 0xC2 && j + 1 < remaining.length() &&
+                           (uint8_t)remaining[j + 1] == 0xB0 && j + 2 < remaining.length() &&
+                           (remaining[j + 2] == 'C' || remaining[j + 2] == 'F')) {
+                    // Render °C or °F as a single unit to avoid spacing issues
+                    std::string tempUnit = remaining.substr(j, 3); // °C or °F
+                    if (inBold) {
+                        display->drawString(cursorX + 1, fontY, tempUnit.c_str());
+                    }
+                    display->drawString(cursorX, fontY, tempUnit.c_str());
+#if defined(OLED_UA) || defined(OLED_RU)
+                    cursorX += display->getStringWidth(tempUnit.c_str(), tempUnit.length(), true);
+#else
+                    cursorX += display->getStringWidth(tempUnit.c_str());
+#endif
+                    j += 3;
                 } else {
                     // Regular character - render it
                     std::string singleChar = remaining.substr(j, charLen);

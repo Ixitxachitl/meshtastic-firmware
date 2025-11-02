@@ -1,12 +1,12 @@
 #if defined(M5STACK_CARDPUTER_ADV)
 
 #include "CardputerAdvKeyboard.h"
-#include "main.h"
-#include "configuration.h"        // for config.*
-#include "MeshService.h"          // for service->reloadConfig
-#include "graphics/draw/MessageRenderer.h" // scrollUp/Down()
-#include "graphics/SharedUIDisplay.h"      // isMessagesScreenActive()
+#include "MeshService.h" // for service->reloadConfig
 #include "buzz/buzz.h"
+#include "configuration.h"                 // for config.*
+#include "graphics/SharedUIDisplay.h"      // isMessagesScreenActive()
+#include "graphics/draw/MessageRenderer.h" // scrollUp/Down()
+#include "main.h"
 
 #define _TCA8418_COLS 8
 #define _TCA8418_ROWS 7
@@ -23,9 +23,8 @@ constexpr uint8_t modifierFnKey = 3 - 1;
 constexpr uint8_t modifierFn = 0b0010;
 
 constexpr uint8_t modifierCtrlKey = 4 - 1;
-constexpr uint8_t modifierOptKey  = 8 - 1;
-constexpr uint8_t modifierAltKey  = 12 - 1;
-
+constexpr uint8_t modifierOptKey = 8 - 1;
+constexpr uint8_t modifierAltKey = 12 - 1;
 
 // Num chars per key, Modulus for rotating through characters
 // https://m5stack-doc.oss-cn-shenzhen.aliyuncs.com/1178/Sch_M5CardputerAdv_v1.0_2025_06_20_17_19_58_page_02.png
@@ -91,12 +90,7 @@ static unsigned char CardputerAdvTapMap[_TCA8418_NUM_KEYS][3] = {{'`', '~', Key:
                                                                  {' ', ' ', ' '}};          // Space
 
 CardputerAdvKeyboard::CardputerAdvKeyboard()
-    : TCA8418KeyboardBase(_TCA8418_ROWS, _TCA8418_COLS),
-      last_key(-1),
-      next_key(-1),
-      last_tap(0L),
-      char_idx(0),
-      tap_interval(0)
+    : TCA8418KeyboardBase(_TCA8418_ROWS, _TCA8418_COLS), last_key(-1), next_key(-1), last_tap(0L), char_idx(0), tap_interval(0)
 {
     reset();
 }
@@ -130,20 +124,21 @@ void CardputerAdvKeyboard::trigger()
                 // RELEASE
                 int row = (key - 1) / 10;
                 int col = (key - 1) % 10;
-                if (row >= _TCA8418_ROWS || col >= _TCA8418_COLS) continue;
+                if (row >= _TCA8418_ROWS || col >= _TCA8418_COLS)
+                    continue;
                 int idx = row * _TCA8418_COLS + col;
 
                 // if it's a modifier, clear it now and skip released()
                 if (isModifierKey(idx)) {
                     setModifierOff(idx);
-                    state = Idle;        // nothing to emit for modifier release
+                    state = Idle; // nothing to emit for modifier release
                     continue;
                 }
 
                 // Non-modifier release -> go through normal release handling
                 _released_key_raw = key;
                 _released_key_idx = idx;
-                released();              // emit based on current held mods
+                released(); // emit based on current held mods
                 state = Idle;
 
                 // clear carry + stop repeating
@@ -160,11 +155,13 @@ void CardputerAdvKeyboard::trigger()
 
 void CardputerAdvKeyboard::pressed(uint8_t key)
 {
-    if (state == Init || state == Busy) return;
+    if (state == Init || state == Busy)
+        return;
 
     int row = (key - 1) / 10;
     int col = (key - 1) % 10;
-    if (row >= _TCA8418_ROWS || col >= _TCA8418_COLS) return;
+    if (row >= _TCA8418_ROWS || col >= _TCA8418_COLS)
+        return;
 
     uint8_t next_key = row * _TCA8418_COLS + col;
 
@@ -173,7 +170,7 @@ void CardputerAdvKeyboard::pressed(uint8_t key)
 
     // don't treat modifiers as the "last_key" for tap/hold logic
     if (isModifierKey(next_key)) {
-        state = Held;   // still mark as held so subsequent key sees held mod
+        state = Held; // still mark as held so subsequent key sees held mod
         return;
     }
 
@@ -184,29 +181,19 @@ void CardputerAdvKeyboard::pressed(uint8_t key)
         return;
     }
 
-    // NAV KEYS: scroll on PRESS, immediately
-    unsigned char out = resolveOutput(next_key);
-    if (out == Key::UP || out == Key::DOWN) {
-        if (graphics::isMessagesScreenActive() && !graphics::isOverlayActive()) {
-            if (out == Key::UP)   graphics::MessageRenderer::scrollUp();
-            if (out == Key::DOWN) graphics::MessageRenderer::scrollDown();
-        }
-        last_key = next_key;
-        uint32_t now = millis();
-        _repeatIsNav   = graphics::isMessagesScreenActive();
-        _repeatStartMs = now + (_repeatIsNav ? _repeatInitialDelayMsNav : _repeatInitialDelayMs);  // 150 ms
-        _repeatNextMs  = _repeatStartMs;
-        _handledNavOnPress = true;
-        state = Held;
-        return;
-    }
+    // For regular keys (including nav keys), just set state and arm repeat
+    // Let the input event flow handle the actual behavior
 
     state = Held;
 
     uint32_t now = millis();
     tap_interval = now - last_tap;
 
-    if (tap_interval < 0) { last_tap = 0; state = Busy; return; }
+    if (tap_interval < 0) {
+        last_tap = 0;
+        state = Busy;
+        return;
+    }
 
     if (next_key != last_key || tap_interval > _TCA8418_MULTI_TAP_THRESHOLD) {
         char_idx = 0;
@@ -220,7 +207,7 @@ void CardputerAdvKeyboard::pressed(uint8_t key)
     // (Re)arm auto-repeat if this key supports it
     if (keyIsRepeatable(last_key)) {
         _repeatStartMs = now + _repeatInitialDelayMs;
-        _repeatNextMs  = _repeatStartMs;
+        _repeatNextMs = _repeatStartMs;
     } else {
         _repeatStartMs = _repeatNextMs = 0;
     }
@@ -253,15 +240,19 @@ void CardputerAdvKeyboard::released()
     if (out == 0x00 || out == Key::BL_TOGGLE) {
         // No output for unmapped/disabled keys
         // Clear timers if this was the active one
-        if (key_idx == last_key) { _repeatStartMs = _repeatNextMs = 0; }
+        if (key_idx == last_key) {
+            _repeatStartMs = _repeatNextMs = 0;
+        }
         // If we just released the active key, mark idle
-        if (key_idx == last_key) { last_key = -1; state = Idle; }
+        if (key_idx == last_key) {
+            last_key = -1;
+            state = Idle;
+        }
         return;
     }
 
-    if ((graphics::isMessagesScreenActive() && !graphics::isOverlayActive()) && (out == Key::UP || out == Key::DOWN)) return;
-
-    // Not on messages screen (or not an arrow): emit the key normally
+    // Emit all keys normally (including UP/DOWN)
+    // The input system (CannedMessageModule and Screen) will handle the behavior
     queueEvent(out);
 
     // If we just released the active key, stop repeating & go idle.
@@ -273,9 +264,12 @@ void CardputerAdvKeyboard::released()
 }
 
 // Returns true if we handled a FN shortcut on key press and consumed the event.
-bool CardputerAdvKeyboard::handleFnShortcutOnPress(uint8_t key_idx) {
-    if (!fnHeld) return false;
-    if (key_idx >= _TCA8418_NUM_KEYS) return false;
+bool CardputerAdvKeyboard::handleFnShortcutOnPress(uint8_t key_idx)
+{
+    if (!fnHeld)
+        return false;
+    if (key_idx >= _TCA8418_NUM_KEYS)
+        return false;
 
     unsigned char base = CardputerAdvTapMap[key_idx][0];
 
@@ -285,98 +279,112 @@ bool CardputerAdvKeyboard::handleFnShortcutOnPress(uint8_t key_idx) {
         service->reloadConfig(SEGMENT_CONFIG);
         // play the same sounds as the GPS toggle
         if (config.display.wake_on_tap_or_motion) {
-           playGPSEnableBeep();
+            playGPSEnableBeep();
         } else {
-           playGPSDisableBeep();
+            playGPSDisableBeep();
         }
         IF_SCREEN(screen->showSimpleBanner(
-            config.display.wake_on_tap_or_motion ?
-            "Wake on Tap/Motion: ON" : "Wake on Tap/Motion: OFF", 1000));
-        return true;  // consumed
+            config.display.wake_on_tap_or_motion ? "Wake on Tap/Motion: ON" : "Wake on Tap/Motion: OFF", 1000));
+        return true; // consumed
     }
 
     // fn + c  → calibrate compass (30s)
     if (base == 'c' || base == 'C') {
-        if (accelerometerThread) { accelerometerThread->calibrate(30); }
-        return true;  // consumed
+        if (accelerometerThread) {
+            accelerometerThread->calibrate(30);
+        }
+        return true; // consumed
     }
 
     return false;
 }
 
-void CardputerAdvKeyboard::setModifierOn(uint8_t key) {
-    if (key == modifierShiftKey) shiftHeld = true;
-    else if (key == modifierFnKey) fnHeld = true;
+void CardputerAdvKeyboard::setModifierOn(uint8_t key)
+{
+    if (key == modifierShiftKey)
+        shiftHeld = true;
+    else if (key == modifierFnKey)
+        fnHeld = true;
 }
 
-void CardputerAdvKeyboard::setModifierOff(uint8_t key) {
-    if (key == modifierShiftKey) shiftHeld = false;
-    else if (key == modifierFnKey) fnHeld = false;
+void CardputerAdvKeyboard::setModifierOff(uint8_t key)
+{
+    if (key == modifierShiftKey)
+        shiftHeld = false;
+    else if (key == modifierFnKey)
+        fnHeld = false;
 }
 
-bool CardputerAdvKeyboard::isModifierKey(uint8_t key) {
+bool CardputerAdvKeyboard::isModifierKey(uint8_t key)
+{
     return (key == modifierShiftKey || key == modifierFnKey);
 }
 
 // Kept for API compatibility; no longer used for toggling
-void CardputerAdvKeyboard::updateModifierFlag(uint8_t) { /* no-op */ }
+void CardputerAdvKeyboard::updateModifierFlag(uint8_t)
+{ /* no-op */
+}
 
-bool CardputerAdvKeyboard::isNavOrEscKey(uint8_t key) const {
-    if (key >= _TCA8418_NUM_KEYS) return false;
+bool CardputerAdvKeyboard::isNavOrEscKey(uint8_t key) const
+{
+    if (key >= _TCA8418_NUM_KEYS)
+        return false;
     unsigned char alt = CardputerAdvTapMap[key][2];
-    return (alt == Key::LEFT || alt == Key::RIGHT || alt == Key::UP ||
-            alt == Key::DOWN || alt == Key::ESC);
+    return (alt == Key::LEFT || alt == Key::RIGHT || alt == Key::UP || alt == Key::DOWN || alt == Key::ESC);
 }
 
 // --- helpers ---
-unsigned char CardputerAdvKeyboard::resolveOutput(uint8_t key) const {
-    uint8_t idx = modIndex();  // 0=base, 1=shift, 2=fn (based on *current* held flags)
+unsigned char CardputerAdvKeyboard::resolveOutput(uint8_t key) const
+{
+    uint8_t idx = modIndex(); // 0=base, 1=shift, 2=fn (based on *current* held flags)
 
     // Reverse base<->fn for keys whose 3rd entry is nav/ESC
     if (isNavOrEscKey(key)) {
-        if (idx == 0)      idx = 2;
-        else if (idx == 2) idx = 0;
+        if (idx == 0)
+            idx = 2;
+        else if (idx == 2)
+            idx = 0;
     }
 
     uint8_t modCount = CardputerAdvTapMod[key];
-    if (idx >= modCount) idx = 0;
+    if (idx >= modCount)
+        idx = 0;
 
     return CardputerAdvTapMap[key][idx];
 }
 
-bool CardputerAdvKeyboard::keyIsRepeatable(uint8_t key) const {
-    if (key >= _TCA8418_NUM_KEYS) return false;
+bool CardputerAdvKeyboard::keyIsRepeatable(uint8_t key) const
+{
+    if (key >= _TCA8418_NUM_KEYS)
+        return false;
     unsigned char base = CardputerAdvTapMap[key][0];
-    unsigned char alt  = CardputerAdvTapMap[key][2];
+    unsigned char alt = CardputerAdvTapMap[key][2];
     // Repeat printable ASCII & BSP, and also NAV keys (UP/DOWN/LEFT/RIGHT)
     bool printable = (base == Key::BSP) || (base >= 0x20 && base <= 0x7E);
-    bool isNav     = (alt == Key::UP || alt == Key::DOWN || alt == Key::LEFT || alt == Key::RIGHT);
+    bool isNav = (alt == Key::UP || alt == Key::DOWN || alt == Key::LEFT || alt == Key::RIGHT);
     return printable || isNav;
 }
 
-void CardputerAdvKeyboard::maybeAutoRepeat() {
-    if (state != Held) return;
-    if (last_key < 0 || last_key >= _TCA8418_NUM_KEYS) return;
-    if (!keyIsRepeatable(last_key)) return;
+void CardputerAdvKeyboard::maybeAutoRepeat()
+{
+    if (state != Held)
+        return;
+    if (last_key < 0 || last_key >= _TCA8418_NUM_KEYS)
+        return;
+    if (!keyIsRepeatable(last_key))
+        return;
     uint32_t now = millis();
-    if (_repeatStartMs == 0) return;
+    if (_repeatStartMs == 0)
+        return;
 
     if (now >= _repeatNextMs) {
         unsigned char out = resolveOutput(last_key);
-        if (graphics::isMessagesScreenActive() && !graphics::isOverlayActive()) {
-            if (out == Key::UP) {
-                graphics::MessageRenderer::scrollUp();
-            } else if (out == Key::DOWN) {
-                graphics::MessageRenderer::scrollDown();
-            } else if (out != 0x00 && out != Key::BL_TOGGLE) {
-                // normal repeat behavior for other keys
-                queueEvent(out);
-            }
-        } else if (out != 0x00 && out != Key::BL_TOGGLE) {
-            // not in messages: always emit repeats
+        if (out != 0x00 && out != Key::BL_TOGGLE) {
+            // Emit repeat for all repeatable keys
+            // The input system will handle scrolling vs other behaviors
             queueEvent(out);
         }
-        _repeatNextMs = now + (_repeatIsNav ? _repeatRateMsNav : _repeatRateMs);
+        _repeatNextMs = now + _repeatRateMs;
     }
 }
 

@@ -1499,11 +1499,32 @@ int Screen::handleInputEvent(const InputEvent *event)
 
         // If no modules are using the input, move between frames
         if (!inputIntercepted) {
-            if (event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_ALT_PRESS) {
+            // Handle UP/DOWN for scrolling in messages screen (trackball, touchscreen, keyboard)
+            if (event->inputEvent == INPUT_BROKER_UP || event->inputEvent == INPUT_BROKER_DOWN) {
+                if (graphics::isMessagesScreenActive() && !graphics::isOverlayActive()) {
+                    // When on messages screen, UP/DOWN scroll the message list
+                    if (event->inputEvent == INPUT_BROKER_UP) {
+                        graphics::MessageRenderer::scrollUp();
+                    } else {
+                        graphics::MessageRenderer::scrollDown();
+                    }
+                    return 0; // Consume the event
+                }
+                // Not on messages screen - UP/DOWN do nothing (fall through)
+            } else if (event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_ALT_PRESS) {
                 showFrame(FrameDirection::PREVIOUS);
             } else if (event->inputEvent == INPUT_BROKER_RIGHT || event->inputEvent == INPUT_BROKER_USER_PRESS) {
                 showFrame(FrameDirection::NEXT);
             } else if (event->inputEvent == INPUT_BROKER_SELECT) {
+                // Don't open menus with SELECT when actively scrolling on messages screen
+                // (e.g., T-Deck trackball - use SELECT_LONG for menus instead)
+                if (this->ui->getUiState()->currentFrame == framesetInfo.positions.textMessage &&
+                    graphics::isMessagesScreenActive() && !graphics::isOverlayActive()) {
+                    // On messages screen with trackball/scrolling - ignore short SELECT press
+                    // User can use SELECT_LONG or other navigation to access menus
+                    return 0;
+                }
+
                 if (this->ui->getUiState()->currentFrame == framesetInfo.positions.home) {
                     menuHandler::homeBaseMenu();
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.system) {
@@ -1541,6 +1562,19 @@ int Screen::handleInputEvent(const InputEvent *event)
                     menuHandler::nodeListMenu();
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.wifi) {
                     menuHandler::wifiBaseMenu();
+                }
+            } else if (event->inputEvent == INPUT_BROKER_SELECT_LONG) {
+                // Long press on messages screen opens menu (for devices with scrolling like T-Deck)
+                if (this->ui->getUiState()->currentFrame == framesetInfo.positions.textMessage) {
+                    if (!messageStore.getMessages().empty()) {
+                        menuHandler::messageResponseMenu();
+                    } else {
+#if defined(M5STACK_UNITC6L)
+                        menuHandler::textMessageMenu();
+#else
+                        menuHandler::textMessageBaseMenu();
+#endif
+                    }
                 }
             } else if (event->inputEvent == INPUT_BROKER_BACK) {
                 showFrame(FrameDirection::PREVIOUS);
