@@ -226,6 +226,10 @@ extern const unsigned char cloud_with_lightning[] PROGMEM;
 #define cloud_with_lightning_rain_height 16
 extern const unsigned char cloud_with_lightning_rain[] PROGMEM;
 
+#define Wind_Face_width 16
+#define Wind_Face_height 16
+extern const unsigned char Wind_Face[] PROGMEM;
+
 #define new_moon_width 16
 #define new_moon_height 16
 extern const unsigned char new_moon[] PROGMEM;
@@ -257,6 +261,42 @@ extern const unsigned char last_quarter_moon[] PROGMEM;
 #define waning_crescent_moon_width 16
 #define waning_crescent_moon_height 16
 extern const unsigned char waning_crescent_moon[] PROGMEM;
+
+#define peach_width 16
+#define peach_height 16
+extern const unsigned char peach[] PROGMEM;
+
+#define South_West_Arrow_width 16
+#define South_West_Arrow_height 16
+extern const unsigned char South_West_Arrow[] PROGMEM;
+
+#define South_East_Arrow_width 16
+#define South_East_Arrow_height 16
+extern const unsigned char South_East_Arrow[] PROGMEM;
+
+#define North_West_Arrow_width 16
+#define North_West_Arrow_height 16
+extern const unsigned char North_West_Arrow[] PROGMEM;
+
+#define North_East_Arrow_width 16
+#define North_East_Arrow_height 16
+extern const unsigned char North_East_Arrow[] PROGMEM;
+
+#define Downwards_Arrow_width 16
+#define Downwards_Arrow_height 16
+extern const unsigned char Downwards_Arrow[] PROGMEM;
+
+#define Leftwards_Arrow_width 16
+#define Leftwards_Arrow_height 16
+extern const unsigned char Leftwards_Arrow[] PROGMEM;
+
+#define Upwards_Arrow_width 16
+#define Upwards_Arrow_height 16
+extern const unsigned char Upwards_Arrow[] PROGMEM;
+
+#define Rightwards_Arrow_width 16
+#define Rightwards_Arrow_height 16
+extern const unsigned char Rightwards_Arrow[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
 } // namespace graphics

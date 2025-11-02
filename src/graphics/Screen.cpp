@@ -1516,15 +1516,6 @@ int Screen::handleInputEvent(const InputEvent *event)
             } else if (event->inputEvent == INPUT_BROKER_RIGHT || event->inputEvent == INPUT_BROKER_USER_PRESS) {
                 showFrame(FrameDirection::NEXT);
             } else if (event->inputEvent == INPUT_BROKER_SELECT) {
-                // Don't open menus with SELECT when actively scrolling on messages screen
-                // (e.g., T-Deck trackball - use SELECT_LONG for menus instead)
-                if (this->ui->getUiState()->currentFrame == framesetInfo.positions.textMessage &&
-                    graphics::isMessagesScreenActive() && !graphics::isOverlayActive()) {
-                    // On messages screen with trackball/scrolling - ignore short SELECT press
-                    // User can use SELECT_LONG or other navigation to access menus
-                    return 0;
-                }
-
                 if (this->ui->getUiState()->currentFrame == framesetInfo.positions.home) {
                     menuHandler::homeBaseMenu();
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.system) {
