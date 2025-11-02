@@ -71,6 +71,12 @@ static std::vector<AckStatus> cachedAckForLine;
 static std::vector<uint32_t> cachedMsgTimestamp; // original message timestamp
 static std::vector<bool> cachedIsBootRelative;   // true if timestamp is boot-relative
 
+// Cached filtered messages to avoid recreating the deque on every frame
+static std::deque<StoredMessage> cachedFiltered;
+static ThreadMode lastFilterMode = ThreadMode::ALL;
+static int lastFilterChannel = -1;
+static uint32_t lastFilterPeer = 0;
+
 // C++11-friendly helpers (no generic-lambda params)
 template <typename T> static inline void trim_vec_front(std::vector<T> &v, size_t n)
 {
@@ -508,6 +514,9 @@ void clearMessageCache()
     cachedIsBootRelative.clear();
     cachedIsBootRelative.shrink_to_fit();
 
+    cachedFiltered.clear();
+    cachedFiltered.shrink_to_fit();
+
     // Rebuild from scratch on next draw
     resetScrollState();
     markDirty();
@@ -675,26 +684,39 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     // Clear the unread message indicator when viewing the message
     hasUnreadMessage = false;
 
-    // Filter messages based on thread mode
-    std::deque<StoredMessage> filtered;
-    for (const auto &m : messageStore.getLiveMessages()) {
-        bool include = false;
-        switch (currentMode) {
-        case ThreadMode::ALL:
-            include = true;
-            break;
-        case ThreadMode::CHANNEL:
-            if (m.type == MessageType::BROADCAST && (int)m.channelIndex == currentChannel)
+    // Check if we need to rebuild the filtered message list
+    bool filterChanged = (currentMode != lastFilterMode || currentChannel != lastFilterChannel || currentPeer != lastFilterPeer);
+
+    if (filterChanged || s_dirty || cachedFiltered.empty()) {
+        // Filter messages based on thread mode
+        cachedFiltered.clear();
+        for (const auto &m : messageStore.getLiveMessages()) {
+            bool include = false;
+            switch (currentMode) {
+            case ThreadMode::ALL:
                 include = true;
-            break;
-        case ThreadMode::DIRECT:
-            if (m.dest != NODENUM_BROADCAST && (m.sender == currentPeer || m.dest == currentPeer))
-                include = true;
-            break;
+                break;
+            case ThreadMode::CHANNEL:
+                if (m.type == MessageType::BROADCAST && (int)m.channelIndex == currentChannel)
+                    include = true;
+                break;
+            case ThreadMode::DIRECT:
+                if (m.dest != NODENUM_BROADCAST && (m.sender == currentPeer || m.dest == currentPeer))
+                    include = true;
+                break;
+            }
+            if (include)
+                cachedFiltered.push_back(m);
         }
-        if (include)
-            filtered.push_back(m);
+
+        // Remember filter state
+        lastFilterMode = currentMode;
+        lastFilterChannel = currentChannel;
+        lastFilterPeer = currentPeer;
     }
+
+    // Use cached filtered list
+    const std::deque<StoredMessage> &filtered = cachedFiltered;
 
     display->clear();
     display->setTextAlignment(TEXT_ALIGN_LEFT);
