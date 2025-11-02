@@ -773,27 +773,31 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     const int rowHeight = FONT_HEIGHT_SMALL - 4;
     int currentY = graphics::getTextPositions(display)[line++];
 
+    // === Determine which packet to show ===
+    const meshtastic_MeshPacket *packetToShow = nullptr;
+
+    if (selectedSource != 0) {
+        // Show specific source
+        auto it = lastBySource.find(selectedSource);
+        if (it != lastBySource.end())
+            packetToShow = it->second;
+    } else {
+        // Auto mode: show most recent from any source
+        packetToShow = lastMeasurementPacket;
+    }
+
     // === Handle no telemetry data case ===
-    if (!lastMeasurementPacket) {
+    if (!packetToShow) {
         bool hasSensors = !sensors.empty() || ina219Sensor.hasSensor() || ina260Sensor.hasSensor() || ina3221Sensor.hasSensor() ||
                           max17048Sensor.hasSensor();
+        bool hasRemoteData = !lastBySource.empty();
 
-        if (!hasSensors) {
+        if (!hasSensors && !hasRemoteData) {
             display->drawString(x, currentY, "No sensors detected");
         } else {
             display->drawString(x, currentY, "Waiting for telemetry...");
         }
         return;
-    }
-
-    const meshtastic_MeshPacket *packetToShow = nullptr;
-
-    if (selectedSource != 0) {
-        auto it = lastBySource.find(selectedSource);
-        if (it != lastBySource.end())
-            packetToShow = it->second;
-    } else {
-        packetToShow = lastMeasurementPacket;
     }
 
     if (!packetToShow) {
