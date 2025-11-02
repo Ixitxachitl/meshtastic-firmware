@@ -205,6 +205,58 @@ extern const unsigned char drop[] PROGMEM;
 #define thermometer_width 16
 #define thermometer_height 16
 extern const unsigned char thermometer[] PROGMEM;
+
+#define sun_behind_raincloud_width 16
+#define sun_behind_raincloud_height 16
+extern const unsigned char sun_behind_raincloud[] PROGMEM;
+
+#define sun_behind_cloud_width 16
+#define sun_behind_cloud_height 16
+extern const unsigned char sun_behind_cloud[] PROGMEM;
+
+#define cloud_with_snow_width 16
+#define cloud_with_snow_height 16
+extern const unsigned char cloud_with_snow[] PROGMEM;
+
+#define cloud_with_lightning_width 16
+#define cloud_with_lightning_height 16
+extern const unsigned char cloud_with_lightning[] PROGMEM;
+
+#define cloud_with_lightning_rain_width 16
+#define cloud_with_lightning_rain_height 16
+extern const unsigned char cloud_with_lightning_rain[] PROGMEM;
+
+#define new_moon_width 16
+#define new_moon_height 16
+extern const unsigned char new_moon[] PROGMEM;
+
+#define waxing_crescent_moon_width 16
+#define waxing_crescent_moon_height 16
+extern const unsigned char waxing_crescent_moon[] PROGMEM;
+
+#define first_quarter_moon_width 16
+#define first_quarter_moon_height 16
+extern const unsigned char first_quarter_moon[] PROGMEM;
+
+#define waxing_gibbous_moon_width 16
+#define waxing_gibbous_moon_height 16
+extern const unsigned char waxing_gibbous_moon[] PROGMEM;
+
+#define full_moon_width 16
+#define full_moon_height 16
+extern const unsigned char full_moon[] PROGMEM;
+
+#define waning_gibbous_moon_width 16
+#define waning_gibbous_moon_height 16
+extern const unsigned char waning_gibbous_moon[] PROGMEM;
+
+#define last_quarter_moon_width 16
+#define last_quarter_moon_height 16
+extern const unsigned char last_quarter_moon[] PROGMEM;
+
+#define waning_crescent_moon_width 16
+#define waning_crescent_moon_height 16
+extern const unsigned char waning_crescent_moon[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
 } // namespace graphics
