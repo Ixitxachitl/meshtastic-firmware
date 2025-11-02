@@ -53,7 +53,7 @@ static int scrollIndex = 0;
 // Utility Functions
 // =============================
 
-const char *getSafeNodeName(meshtastic_NodeInfoLite *node)
+const char *getSafeNodeName(OLEDDisplay *display, meshtastic_NodeInfoLite *node)
 {
     const char *name = NULL;
     static char nodeName[16] = "?";
@@ -93,6 +93,28 @@ const char *getSafeNodeName(meshtastic_NodeInfoLite *node)
         }
     } else {
         snprintf(nodeName, sizeof(nodeName), "(%04X)", (uint16_t)(node->num & 0xFFFF));
+    }
+
+    if (config.display.use_long_node_name == true) {
+        int availWidth = (SCREEN_WIDTH / 2) - 65;
+        if (availWidth < 0)
+            availWidth = 0;
+
+        size_t origLen = strlen(nodeName);
+        while (nodeName[0] && display->getStringWidth(nodeName) > availWidth) {
+            nodeName[strlen(nodeName) - 1] = '\0';
+        }
+
+        // If we actually truncated, append "..." (ensure space remains in buffer)
+        if (strlen(nodeName) < origLen) {
+            size_t len = strlen(nodeName);
+            size_t maxLen = sizeof(nodeName) - 4; // 3 for "..." and 1 for '\0'
+            if (len > maxLen) {
+                nodeName[maxLen] = '\0';
+                len = maxLen;
+            }
+            strcat(nodeName, "...");
+        }
     }
 
     return nodeName;
@@ -161,7 +183,7 @@ void drawEntryLastHeard(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int
     bool isLeftCol = (x < SCREEN_WIDTH / 2);
     int timeOffset = (isHighResolution) ? (isLeftCol ? 7 : 10) : (isLeftCol ? 3 : 7);
 
-    const char *nodeName = getSafeNodeName(node);
+    const char *nodeName = getSafeNodeName(display, node);
 
     char timeStr[10];
     uint32_t seconds = sinceLastSeen(node);
@@ -206,7 +228,7 @@ void drawEntryHopSignal(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int
 
     int barsXOffset = columnWidth - barsOffset;
 
-    const char *nodeName = getSafeNodeName(node);
+    const char *nodeName = getSafeNodeName(display, node);
 
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
@@ -250,7 +272,7 @@ void drawNodeDistance(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
     bool isLeftCol = (x < SCREEN_WIDTH / 2);
     int nameMaxWidth = columnWidth - (isHighResolution ? (isLeftCol ? 25 : 28) : (isLeftCol ? 20 : 22));
 
-    const char *nodeName = getSafeNodeName(node);
+    const char *nodeName = getSafeNodeName(display, node);
     char distStr[10] = "";
 
     meshtastic_NodeInfoLite *ourNode = nodeDB->getMeshNode(nodeDB->getNodeNum());
@@ -345,7 +367,7 @@ void drawEntryCompass(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
     // Adjust max text width depending on column and screen width
     int nameMaxWidth = columnWidth - (isHighResolution ? (isLeftCol ? 25 : 28) : (isLeftCol ? 20 : 22));
 
-    const char *nodeName = getSafeNodeName(node);
+    const char *nodeName = getSafeNodeName(display, node);
 
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
@@ -380,6 +402,7 @@ void drawCompassArrow(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
     int size = FONT_HEIGHT_SMALL - 5;
     CompassRenderer::drawArrowToNode(display, centerX, centerY, size, relativeBearing);
     /*
+    float angle = relativeBearing * DEG_TO_RAD;
     float halfSize = size / 2.0;
 
     // Point of the arrow
@@ -416,6 +439,12 @@ void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
 {
     const int COMMON_HEADER_HEIGHT = FONT_HEIGHT_SMALL - 1;
     const int rowYOffset = FONT_HEIGHT_SMALL - 3;
+    bool locationScreen = false;
+
+    if (strcmp(title, "Bearings") == 0)
+        locationScreen = true;
+    else if (strcmp(title, "Distance") == 0)
+        locationScreen = true;
 #if defined(M5STACK_UNITC6L)
     int columnWidth = display->getWidth();
 #else
@@ -431,7 +460,7 @@ void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
 
     int totalEntries = nodeDB->getNumMeshNodes();
     int totalRowsAvailable = (display->getHeight() - y) / rowYOffset;
-
+    int numskipped = 0;
     int visibleNodeRows = totalRowsAvailable;
 #if defined(M5STACK_UNITC6L)
     int totalColumns = 1;
@@ -451,6 +480,10 @@ void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
     int rowCount = 0;
 
     for (int i = startIndex; i < endIndex; ++i) {
+        if (locationScreen && !nodeDB->getMeshNodeByIndex(i)->has_position) {
+            numskipped++;
+            continue;
+        }
         int xPos = x + (col * columnWidth);
         int yPos = y + yOffset;
         renderer(display, nodeDB->getMeshNodeByIndex(i), xPos, yPos, columnWidth);
@@ -472,6 +505,9 @@ void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
                 break;
         }
     }
+
+    // This should correct the scrollbar
+    totalEntries -= numskipped;
 
 #if !defined(M5STACK_UNITC6L)
     // Draw column separator
