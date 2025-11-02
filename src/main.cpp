@@ -1697,6 +1697,10 @@ void loop()
             static_cast<TFTDisplay *>(dispdev)->sdlLoop();
     }
 #endif
+
+    // Calculate the delay based on scheduler
+    int32_t delayMsec = mainController.runOrDelay();
+
     // We want to sleep as long as possible here - because it saves power
     if (!runASAP && loopCanSleep()) {
 #ifdef DEBUG_LOOP_TIMING
