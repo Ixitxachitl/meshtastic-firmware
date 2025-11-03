@@ -1409,6 +1409,18 @@ bool TFTDisplay::connect()
 
     tft->init();
 
+    // Apply saved brightness immediately after init to prevent flash at full brightness
+    // This is especially important for devices like T-Deck
+#if defined(ST7789_CS)
+    extern meshtastic_DeviceUIConfig uiconfig;
+    uint8_t initialBrightness = uiconfig.screen_brightness;
+    if (initialBrightness == 0) {
+        initialBrightness = BRIGHTNESS_DEFAULT;
+    }
+    tft->setBrightness(initialBrightness);
+    LOG_INFO("Set initial brightness to: %d", initialBrightness);
+#endif
+
 #if defined(M5STACK)
     tft->setRotation(0);
 #elif defined(RAK14014)
