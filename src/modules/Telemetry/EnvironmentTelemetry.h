@@ -48,6 +48,9 @@ class EnvironmentTelemetryModule : private concurrency::OSThread,
                 packetPool.release(kv.second);
         lastBySource.clear();
     }
+
+    void invalidateDisplayCache(); // Force redraw with new units
+
     MeshModule *asMesh() { return this; }
     std::vector<uint32_t> getSourcesWithTelemetry() const;
 

@@ -761,6 +761,11 @@ std::vector<uint32_t> EnvironmentTelemetryModule::getSourcesWithTelemetry() cons
     return out;
 }
 
+void EnvironmentTelemetryModule::invalidateDisplayCache()
+{
+    s_displayCache.markDirty();
+}
+
 void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     ::display = display;
@@ -844,7 +849,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         // Temperature
         if (m.has_temperature) {
             s_displayCache.tempStr = "Tmp: ";
-            s_displayCache.tempStr += moduleConfig.telemetry.environment_display_fahrenheit
+            s_displayCache.tempStr += (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL)
                                           ? String(UnitConversions::CelsiusToFahrenheit(m.temperature), 1) + "°F"
                                           : String(m.temperature, 1) + "°C";
         } else {
@@ -860,7 +865,12 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
 
         // Pressure
         if (m.barometric_pressure != 0) {
-            s_displayCache.pressStr = "Prss: " + String(m.barometric_pressure, 0) + " hPa";
+            if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
+                s_displayCache.pressStr =
+                    "Prss: " + String(UnitConversions::HectoPascalToInchesOfMercury(m.barometric_pressure), 2) + " inHg";
+            } else {
+                s_displayCache.pressStr = "Prss: " + String(m.barometric_pressure, 0) + " hPa";
+            }
         } else {
             s_displayCache.pressStr = "";
         }
@@ -872,7 +882,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         if (m.has_temperature && m.has_relative_humidity && m.relative_humidity > 0.0f) {
             const float dpC = dewPointC(m.temperature, m.relative_humidity);
             if (!isnan(dpC)) {
-                if (moduleConfig.telemetry.environment_display_fahrenheit) {
+                if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
                     const float dpF = dpC * 9.0f / 5.0f + 32.0f;
                     s_displayCache.entries.push_back("Dew: " + String(dpF, 1) + " °F");
                 } else {
@@ -896,10 +906,20 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
             s_displayCache.entries.push_back("Light: " + String(m.lux, 0) + "lx");
         if (m.white_lux != 0)
             s_displayCache.entries.push_back("White: " + String(m.white_lux, 0) + "lx");
-        if (m.weight != 0)
-            s_displayCache.entries.push_back("Weight: " + String(m.weight, 0) + "kg");
-        if (m.distance != 0)
-            s_displayCache.entries.push_back("Level: " + String(m.distance, 0) + "mm");
+        if (m.weight != 0) {
+            if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
+                s_displayCache.entries.push_back("Weight: " + String(m.weight * 2.20462f, 1) + " lbs");
+            } else {
+                s_displayCache.entries.push_back("Weight: " + String(m.weight, 0) + " kg");
+            }
+        }
+        if (m.distance != 0) {
+            if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
+                s_displayCache.entries.push_back("Level: " + String(m.distance * 0.03937f, 2) + " in");
+            } else {
+                s_displayCache.entries.push_back("Level: " + String(m.distance, 0) + " mm");
+            }
+        }
         if (m.radiation != 0)
             s_displayCache.entries.push_back("Rad: " + String(m.radiation, 2) + " µR/h");
 
@@ -948,7 +968,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         auto &nh = s_hist[from]; // default-constructs empty rings for new nodes
 
         // Calculate sparkline width based on screen width for better fit on narrow displays
-        const int kSparkW = (SCREEN_WIDTH >= 240) ? 120 : (SCREEN_WIDTH >= 220) ? 100 : 80;
+        const int kSparkW = (SCREEN_WIDTH >= 240) ? 115 : (SCREEN_WIDTH >= 220) ? 95 : 75;
         const int graphX = SCREEN_WIDTH - (kSparkW + 2);
 
         // === Temperature row (Tmp) with sparkline ===

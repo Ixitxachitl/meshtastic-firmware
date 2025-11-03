@@ -818,7 +818,8 @@ void menuHandler::systemBaseMenu()
     optionsArray[options] = "Notifications";
     optionsEnumArray[options++] = Notifications;
 #if defined(ST7789_CS) || defined(ST7796_CS) || defined(USE_OLED) || defined(USE_SSD1306) || defined(USE_SH1106) ||              \
-    defined(USE_SH1107) || defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190) || HAS_TFT
+    defined(USE_SH1107) || defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190) ||                               \
+    defined(M5STACK_CARDPUTER_ADV) || HAS_TFT
     optionsArray[options] = "Display Options";
     optionsEnumArray[options++] = ScreenOptions;
 #endif
@@ -1875,9 +1876,17 @@ void menuHandler::DisplayUnits_menu()
         if (selected == MetricUnits) {
             config.display.units = meshtastic_Config_DisplayConfig_DisplayUnits_METRIC;
             service->reloadConfig(SEGMENT_CONFIG);
+#if HAS_TELEMETRY && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
+            if (environmentTelemetryModule)
+                environmentTelemetryModule->invalidateDisplayCache();
+#endif
         } else if (selected == ImperialUnits) {
             config.display.units = meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL;
             service->reloadConfig(SEGMENT_CONFIG);
+#if HAS_TELEMETRY && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
+            if (environmentTelemetryModule)
+                environmentTelemetryModule->invalidateDisplayCache();
+#endif
         } else {
             menuHandler::menuQueue = menuHandler::screen_options_menu;
             screen->runNow();
