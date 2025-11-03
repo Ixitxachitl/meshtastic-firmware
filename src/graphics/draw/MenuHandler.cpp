@@ -1898,14 +1898,14 @@ void menuHandler::DisplayUnits_menu()
 // === Environment page menus ===
 void menuHandler::envTelemetryMenu()
 {
-    enum optionsNumbers { ExitOpt, PickSource, AutoMostRecent };
-    static const char *optionsArray[] = {"Back", "Pick Source", "Auto (Most Recent)"};
-    static int optionsEnumArray[] = {ExitOpt, PickSource, AutoMostRecent};
+    enum optionsNumbers { ExitOpt, PickSource, AutoMostRecent, DisplayUnits };
+    static const char *optionsArray[] = {"Back", "Pick Source", "Auto (Most Recent)", "Display Units"};
+    static int optionsEnumArray[] = {ExitOpt, PickSource, AutoMostRecent, DisplayUnits};
 
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = "Environment";
     bannerOptions.optionsArrayPtr = optionsArray;
-    bannerOptions.optionsCount = 3;
+    bannerOptions.optionsCount = 4;
     bannerOptions.optionsEnumPtr = optionsEnumArray;
     bannerOptions.bannerCallback = [](int selected) -> void {
         if (selected == PickSource) {
@@ -1916,6 +1916,9 @@ void menuHandler::envTelemetryMenu()
                 environmentTelemetryModule->setEnvDisplaySource(0); // 0 = Auto (most recent)
             }
             screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
+        } else if (selected == DisplayUnits) {
+            menuHandler::menuQueue = menuHandler::DisplayUnits;
+            screen->runNow();
         } else {
             graphics::setOverlayActive(false);
             screen->runNow();
