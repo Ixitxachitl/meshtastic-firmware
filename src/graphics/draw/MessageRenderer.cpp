@@ -138,11 +138,24 @@ template <typename F> static bool retry_on_oom(F &&fn, size_t shedCount = 16, in
 }
 
 // ---- Low-RAM guards for line buffers ----
-// Absolute caps; tune per device.
-static constexpr size_t kMaxTotalLines = 512;
-static constexpr size_t kMaxLinesPerMessage = 32;
-static constexpr size_t kShedBatch = 64;
-static constexpr size_t kHighWaterMark = 384; // Start shedding when we hit this many lines
+// Absolute caps; tune per device via build flags
+#ifndef MR_MAX_TOTAL_LINES
+#define MR_MAX_TOTAL_LINES 512
+#endif
+#ifndef MR_MAX_LINES_PER_MESSAGE
+#define MR_MAX_LINES_PER_MESSAGE 32
+#endif
+#ifndef MR_SHED_BATCH
+#define MR_SHED_BATCH 64
+#endif
+#ifndef MR_HIGH_WATER_MARK
+#define MR_HIGH_WATER_MARK 384
+#endif
+
+static constexpr size_t kMaxTotalLines = MR_MAX_TOTAL_LINES;
+static constexpr size_t kMaxLinesPerMessage = MR_MAX_LINES_PER_MESSAGE;
+static constexpr size_t kShedBatch = MR_SHED_BATCH;
+static constexpr size_t kHighWaterMark = MR_HIGH_WATER_MARK; // Start shedding when we hit this many lines
 
 // Check if we should proactively shed cache to prevent memory issues
 static inline void checkMemoryPressure()
