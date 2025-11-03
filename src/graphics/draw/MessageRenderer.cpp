@@ -682,8 +682,9 @@ static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &
     while (i < normalized.length()) {
         bool matched = false;
         for (int e = 0; e < emoteCount; ++e) {
-            size_t emojiLen = strlen(emotes[e].label);
-            if (normalized.compare(i, emojiLen, emotes[e].label) == 0) {
+            const std::string labelNorm = normalizeEmoji(std::string(emotes[e].label));
+            size_t emojiLen = labelNorm.length();
+            if (emojiLen > 0 && normalized.compare(i, emojiLen, labelNorm) == 0) {
                 totalWidth += emotes[e].width + 1; // +1 spacing
                 i += emojiLen;
                 matched = true;
