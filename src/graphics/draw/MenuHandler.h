@@ -47,7 +47,9 @@ class menuHandler
         message_viewmode_menu,
         node_name_length_menu,
         FrameToggles,
-        DisplayUnits
+        DisplayUnits,
+        env_menu,
+        env_source_picker
     };
     static screenMenus menuQueue;
 
@@ -94,6 +96,8 @@ class menuHandler
     static void FrameToggles_menu();
     static void DisplayUnits_menu();
     static void textMessageMenu();
+    static void envTelemetryMenu();
+    static void envTelemetrySourceMenu();
 
   private:
     static void saveUIConfig();
