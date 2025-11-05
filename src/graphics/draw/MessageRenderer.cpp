@@ -278,16 +278,22 @@ std::string replaceUnknownEmoji(const std::string &s, const Emote *emotes, int e
             continue;
         }
 
-        // Check if this is a 3-byte emoji (U+2000-U+3FFF range, includes symbols like ⚡☀️❤️)
-        // or a 4-byte emoji (most modern emoji are 4-byte UTF-8)
+        // Check if this is a 3-byte emoji or a 4-byte emoji (most modern emoji are 4-byte UTF-8)
         bool isUnknownEmoji = false;
         if (charLen == 4 && c == 0xF0) {
             // 4-byte emoji starting with 0xF0 (U+10000 and above)
             isUnknownEmoji = true;
-        } else if (charLen == 3 && c == 0xE2) {
-            // 3-byte emoji starting with 0xE2 (U+2000-U+2FFF range)
-            // Includes Miscellaneous Symbols (⚡), Dingbats, etc.
-            isUnknownEmoji = true;
+        } else if (charLen == 3 && c == 0xE2 && i + 1 < normInput.size()) {
+            // 3-byte sequences starting with 0xE2 - need to check second byte
+            uint8_t b2 = static_cast<uint8_t>(normInput[i + 1]);
+            // E2 80 XX = General Punctuation (U+2000-U+206F) - NOT emoji (includes ', ", –, —, etc.)
+            // E2 81 XX = Subscripts/Superscripts (U+2070-U+209F) - NOT emoji
+            // E2 86-97 XX = Arrows, Math, Technical (U+2190-U+27BF) - treat as emoji
+            // E2 98-9B XX = Miscellaneous Symbols (U+2600-U+26FF) - includes ⚡☀️❤️ - emoji!
+            // E2 9C-9F XX = Dingbats (U+2700-U+27BF) - emoji!
+            if (b2 >= 0x86 && b2 <= 0x9F) {
+                isUnknownEmoji = true; // Arrows, symbols, dingbats
+            }
         } else if (charLen == 3 && c == 0xE3) {
             // 3-byte emoji starting with 0xE3 (U+3000-U+3FFF range)
             // Includes CJK Symbols and some emoji-like characters
