@@ -19,12 +19,15 @@ bool in_array(uint8_t *array, int size, uint8_t lookfor)
     return false;
 }
 
-static bool detectBMI270(TwoWire* w, uint8_t addr) {
+static bool detectBMI270(TwoWire *w, uint8_t addr)
+{
     // BMI270 chip ID register 0x00 should read 0x24
     w->beginTransmission(addr);
-    w->write(0x00);
-    if (w->endTransmission(false) != 0) return false;
-    if (w->requestFrom((int)addr, 1) != 1) return false;
+    w->write((uint8_t)0x00);
+    if (w->endTransmission(false) != 0)
+        return false;
+    if (w->requestFrom((int)addr, 1) != 1)
+        return false;
     uint8_t id = w->read();
     return id == 0x24;
 }
@@ -98,8 +101,8 @@ uint16_t ScanI2CTwoWire::getRegisterValue(const ScanI2CTwoWire::RegisterLocation
     i2cBus->write(registerLocation.registerAddress);
     if (zeropad) {
         // Lark Commands need the argument list length in 2 bytes.
-        i2cBus->write((int)0);
-        i2cBus->write((int)0);
+        i2cBus->write((uint8_t)0);
+        i2cBus->write((uint8_t)0);
     }
     i2cBus->endTransmission();
     delay(20);
@@ -448,7 +451,7 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
                     logFoundDevice("QMI8658", (uint8_t)addr.address);
                 }
                 break;
-                
+
             case QMC5883L_ADDR: {
                 logFoundDevice("QMC5883L", (uint8_t)addr.address);
                 type = QMC5883L;
@@ -519,7 +522,7 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
                 } else {
                     // Test BH1750 - send power on command
                     i2cBus->beginTransmission(addr.address);
-                    i2cBus->write(0x01); // Power On command
+                    i2cBus->write((uint8_t)0x01); // Power On command
                     uint8_t bh1750_error = i2cBus->endTransmission();
                     if (bh1750_error == 0) {
                         type = BH1750;
@@ -535,7 +538,7 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
             case BMM150_ADDR: {
                 logFoundDevice("BMM150", (uint8_t)addr.address);
                 type = BMM150;
-                ScanI2C::setMagOnPort(port, true);   // <-- now runs
+                ScanI2C::setMagOnPort(port, true); // <-- now runs
                 break;
             }
 #ifdef HAS_TPS65233
@@ -565,7 +568,7 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
                 // First try explicit ID reads in a robust order:
                 uint16_t id = getRegisterValue(ScanI2CTwoWire::RegisterLocation(addr, 0x00), 1);
 
-                if (id == 0xEA) {                         // ICM-20948 ID
+                if (id == 0xEA) { // ICM-20948 ID
                     type = ICM20948;
                     logFoundDevice("ICM20948", (uint8_t)addr.address);
                     ScanI2C::setMagOnPort(port, true);

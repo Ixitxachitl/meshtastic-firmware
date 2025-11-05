@@ -278,8 +278,23 @@ std::string replaceUnknownEmoji(const std::string &s, const Emote *emotes, int e
             continue;
         }
 
-        // Check if this is a 4-byte emoji (most emoji are 4-byte UTF-8)
+        // Check if this is a 3-byte emoji (U+2000-U+3FFF range, includes symbols like ⚡☀️❤️)
+        // or a 4-byte emoji (most modern emoji are 4-byte UTF-8)
+        bool isUnknownEmoji = false;
         if (charLen == 4 && c == 0xF0) {
+            // 4-byte emoji starting with 0xF0 (U+10000 and above)
+            isUnknownEmoji = true;
+        } else if (charLen == 3 && c == 0xE2) {
+            // 3-byte emoji starting with 0xE2 (U+2000-U+2FFF range)
+            // Includes Miscellaneous Symbols (⚡), Dingbats, etc.
+            isUnknownEmoji = true;
+        } else if (charLen == 3 && c == 0xE3) {
+            // 3-byte emoji starting with 0xE3 (U+3000-U+3FFF range)
+            // Includes CJK Symbols and some emoji-like characters
+            isUnknownEmoji = true;
+        }
+
+        if (isUnknownEmoji) {
             // Unknown emoji - replace with upside-down question mark
             out.append("\xC2\xBF"); // ¿ in UTF-8
             i += charLen;
