@@ -84,6 +84,7 @@ class ScanI2C
         TSL2561,
         DRV2605,
         BH1750,
+        DA217,
         BMI270
     } DeviceType;
 
