@@ -9,6 +9,22 @@
 #include <Arduino.h>
 #include <Throttle.h>
 
+#ifdef ARCH_PORTDUINO
+// strlcpy is not available in glibc, provide a simple implementation
+#ifndef strlcpy
+static inline size_t strlcpy(char *dst, const char *src, size_t size)
+{
+    size_t srclen = strlen(src);
+    if (size > 0) {
+        size_t copylen = (srclen < size - 1) ? srclen : size - 1;
+        memcpy(dst, src, copylen);
+        dst[copylen] = '\0';
+    }
+    return srclen;
+}
+#endif
+#endif
+
 /*
     SerialModule
         A simple interface to send messages over the mesh network by sending strings

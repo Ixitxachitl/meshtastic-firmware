@@ -1115,9 +1115,9 @@ TFTDisplay::TFTDisplay(uint8_t address, int sda, int scl, OLEDDISPLAY_GEOMETRY g
 
 #if ARCH_PORTDUINO
     if (portduino_config.displayRotate) {
-        setGeometry(GEOMETRY_RAWMODE, portduino_config.displayWidth, portduino_config.displayWidth);
+        setGeometry(GEOMETRY_RAWMODE, portduino_config.displayHeight, portduino_config.displayWidth);
     } else {
-        setGeometry(GEOMETRY_RAWMODE, portduino_config.displayHeight, portduino_config.displayHeight);
+        setGeometry(GEOMETRY_RAWMODE, portduino_config.displayWidth, portduino_config.displayHeight);
     }
 
 #elif defined(SCREEN_ROTATE)
@@ -1246,6 +1246,34 @@ void TFTDisplay::sdlLoop()
             InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_SHUTDOWN, .kbchar = 0, .touchX = 0, .touchY = 0};
             inputBroker->injectInputEvent(&event);
         }
+
+        // Check for text input (keyboard characters)
+        while (sdl_panel_->hasTextInput()) {
+            char c = sdl_panel_->getTextInput();
+            // Handle special keys
+            if (c == '\b' || c == 0x08) {
+                // Backspace -> INPUT_BROKER_BACK
+                InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_BACK, .kbchar = 0, .touchX = 0, .touchY = 0};
+                inputBroker->injectInputEvent(&event);
+            } else if (c == '\t' || c == 0x09) {
+                // Tab -> INPUT_BROKER_MSG_TAB for switching destinations (like Cardputer)
+                InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_ANYKEY,
+                                    .kbchar = INPUT_BROKER_MSG_TAB,
+                                    .touchX = 0,
+                                    .touchY = 0};
+                inputBroker->injectInputEvent(&event);
+            } else if (c == '\x1b' || c == 0x1B) {
+                // Escape -> INPUT_BROKER_CANCEL for exit/cancel (like Cardputer)
+                InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_CANCEL, .kbchar = 0, .touchX = 0, .touchY = 0};
+                inputBroker->injectInputEvent(&event);
+            } else {
+                // Regular character input
+                InputEvent event = {
+                    .inputEvent = (input_broker_event)INPUT_BROKER_ANYKEY, .kbchar = (unsigned char)c, .touchX = 0, .touchY = 0};
+                inputBroker->injectInputEvent(&event);
+            }
+        }
+
         // debounce
         if (lastPressed != 0 && !sdl_panel_->gpio_in(lastPressed))
             return;
