@@ -743,9 +743,11 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     // Ensure any boot-relative timestamps are upgraded if RTC is valid
     messageStore.upgradeBootRelativeTimestamps();
 
+    bool needsInitialBottomSnap = false;
     if (!didReset) {
         resetScrollState();
         didReset = true;
+        needsInitialBottomSnap = true; // Remember we need to snap to bottom after calculating layout
     }
 
     // Clear the unread message indicator when viewing the message
@@ -1049,7 +1051,8 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         bottomOffsetOneRow = 0; // guard small lists
 
     // snap to bottom pad when first entering (unless user is manually scrolling)
-    if (!manualScrollActive && !scrollStarted) {
+    // needsInitialBottomSnap overrides scrollStarted to ensure we always start at bottom
+    if (needsInitialBottomSnap || (!manualScrollActive && !scrollStarted)) {
         scrollY = bottomOffsetOneRow;
     }
 
