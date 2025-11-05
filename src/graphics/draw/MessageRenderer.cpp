@@ -212,7 +212,7 @@ static const unsigned char upsidedown_qmark[] PROGMEM = {
     0x18, // 00011000  stem
     0x18, // 00011000  stem
     0x0C, // 00001100  curve
-    0x06, // 00000110  curve
+    0x06, // 00110000  curve
     0x66, // 01100110  curve
     0x7E, // 01111110  curve bottom
     0x3C  // 00111100  curve bottom
@@ -1045,7 +1045,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     lastUsableScrollHeight = usableScrollHeight;
 
     // bottom alignment (one text row above bottom)
-    int kBottomPadPx = FONT_HEIGHT_SMALL;
+    int kBottomPadPx = FONT_HEIGHT_SMALL * 2; // Two lines of spacing from bottom
     int bottomOffsetOneRow = totalHeight - usableScrollHeight + kBottomPadPx;
     if (bottomOffsetOneRow < 0)
         bottomOffsetOneRow = 0; // guard small lists
@@ -1090,7 +1090,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     }
 #else
     // E-Ink: disable autoscroll but anchor to bottom
-    int kBottomPadPx = FONT_HEIGHT_SMALL;
+    int kBottomPadPx = FONT_HEIGHT_SMALL * 2; // Two lines of spacing from bottom
     int bottomOffsetOneRow = totalHeight - usableScrollHeight + kBottomPadPx;
     if (bottomOffsetOneRow < 0)
         bottomOffsetOneRow = 0; // guard small lists
