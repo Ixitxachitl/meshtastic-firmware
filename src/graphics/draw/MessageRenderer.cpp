@@ -286,18 +286,34 @@ std::string replaceUnknownEmoji(const std::string &s, const Emote *emotes, int e
         } else if (charLen == 3 && c == 0xE2 && i + 1 < normInput.size()) {
             // 3-byte sequences starting with 0xE2 - need to check second byte
             uint8_t b2 = static_cast<uint8_t>(normInput[i + 1]);
-            // E2 80 XX = General Punctuation (U+2000-U+206F) - NOT emoji (includes ', ", –, —, etc.)
+            // E2 80 XX = General Punctuation (U+2000-U+206F)
+            if (b2 == 0x80 && i + 2 < normInput.size()) {
+                uint8_t b3 = static_cast<uint8_t>(normInput[i + 2]);
+                // E2 80 8D = Zero Width Joiner (U+200D) - part of composite emoji
+                if (b3 == 0x8D) {
+                    isUnknownEmoji = true;
+                }
+                // Other E2 80 XX are punctuation (', ", –, —) - keep as-is
+            }
             // E2 81 XX = Subscripts/Superscripts (U+2070-U+209F) - NOT emoji
             // E2 86-97 XX = Arrows, Math, Technical (U+2190-U+27BF) - treat as emoji
             // E2 98-9B XX = Miscellaneous Symbols (U+2600-U+26FF) - includes ⚡☀️❤️ - emoji!
             // E2 9C-9F XX = Dingbats (U+2700-U+27BF) - emoji!
-            if (b2 >= 0x86 && b2 <= 0x9F) {
+            else if (b2 >= 0x86 && b2 <= 0x9F) {
                 isUnknownEmoji = true; // Arrows, symbols, dingbats
             }
         } else if (charLen == 3 && c == 0xE3) {
             // 3-byte emoji starting with 0xE3 (U+3000-U+3FFF range)
             // Includes CJK Symbols and some emoji-like characters
             isUnknownEmoji = true;
+        } else if (charLen == 3 && c == 0xEF && i + 1 < normInput.size()) {
+            // 3-byte sequences starting with 0xEF - check for variation selectors
+            uint8_t b2 = static_cast<uint8_t>(normInput[i + 1]);
+            uint8_t b3 = static_cast<uint8_t>(normInput[i + 2]);
+            // EF B8 8F = Variation Selector-16 (U+FE0F) - emoji presentation
+            if (b2 == 0xB8 && b3 == 0x8F) {
+                isUnknownEmoji = true;
+            }
         }
 
         if (isUnknownEmoji) {
@@ -815,7 +831,9 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     case ThreadMode::DIRECT: {
         meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(currentPeer);
         if (node && node->has_user) {
-            snprintf(titleBuf, sizeof(titleBuf), "@%s", node->user.short_name);
+            // Apply emoji replacement to direct message title
+            std::string processedName = replaceUnknownEmoji(std::string(node->user.short_name), emotes, numEmotes);
+            snprintf(titleBuf, sizeof(titleBuf), "@%s", processedName.c_str());
         } else {
             snprintf(titleBuf, sizeof(titleBuf), "@%08x", currentPeer);
         }
@@ -896,14 +914,18 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 
             char senderBuf[48] = "???";
             if (node && node->has_user && node->user.long_name && node->user.long_name[0] != '\0') {
-                std::snprintf(senderBuf, sizeof(senderBuf), "%s", node->user.long_name);
+                // Apply emoji replacement to sender name
+                std::string processedName = replaceUnknownEmoji(std::string(node->user.long_name), emotes, numEmotes);
+                std::snprintf(senderBuf, sizeof(senderBuf), "%s", processedName.c_str());
             }
 
             // If this is *our own* message, override senderBuf to the recipient's name
             bool mine = (m.sender == nodeDB->getNodeNum());
             if (mine && node_recipient && node_recipient->has_user && node_recipient->user.long_name &&
                 node_recipient->user.long_name[0] != '\0') {
-                std::snprintf(senderBuf, sizeof(senderBuf), "%s", node_recipient->user.long_name);
+                // Apply emoji replacement to recipient name
+                std::string processedName = replaceUnknownEmoji(std::string(node_recipient->user.long_name), emotes, numEmotes);
+                std::snprintf(senderBuf, sizeof(senderBuf), "%s", processedName.c_str());
             }
 
             // Compute how much room the sender label has (use timeSlotPx, NOT timeBuf)
@@ -1426,7 +1448,9 @@ void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const mesht
         const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(packet.from);
         char longName[48] = "???";
         if (node && node->user.long_name) {
-            strncpy(longName, node->user.long_name, sizeof(longName) - 1);
+            // Apply emoji replacement to banner name
+            std::string processedName = replaceUnknownEmoji(std::string(node->user.long_name), emotes, numEmotes);
+            strncpy(longName, processedName.c_str(), sizeof(longName) - 1);
             longName[sizeof(longName) - 1] = '\0';
         }
         int availWidth = display->getWidth() - (isHighResolution ? 40 : 20);
