@@ -2,10 +2,12 @@
 
 #if HAS_SCREEN
 #include "DisplayFormatters.h"
+#include "MessageRenderer.h"
 #include "NodeDB.h"
 #include "NotificationRenderer.h"
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
+#include "graphics/emotes.h"
 #include "graphics/images.h"
 #include "input/RotaryEncoderInterruptImpl1.h"
 #include "input/UpDownInterruptImpl1.h"
@@ -25,6 +27,9 @@
 #endif
 
 using namespace meshtastic;
+using graphics::Emote;
+using graphics::emotes;
+using graphics::numEmotes;
 
 #if HAS_BUTTON
 // Global button thread pointer defined in main.cpp
@@ -594,7 +599,8 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
             display->fillRect(boxLeft, boxTop + 1, boxWidth, effectiveLineHeight - background_yOffset);
             display->setColor(BLACK);
             int yOffset = 3;
-            display->drawString(textX, lineY - yOffset, lineBuffer);
+            graphics::MessageRenderer::drawStringWithEmotes(display, textX, lineY - yOffset, std::string(lineBuffer), emotes,
+                                                            numEmotes);
             display->setColor(WHITE);
             lineY += (effectiveLineHeight - 2 - background_yOffset);
         } else {
@@ -613,7 +619,8 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
                 int totalWidth = textWidth + barsWidth;
                 int groupStartX = boxLeft + (boxWidth - totalWidth) / 2;
 
-                display->drawString(groupStartX, lineY, lineBuffer);
+                graphics::MessageRenderer::drawStringWithEmotes(display, groupStartX, lineY, std::string(lineBuffer), emotes,
+                                                                numEmotes);
 
                 int baseX = groupStartX + textWidth + gap;
                 int baseY = lineY + effectiveLineHeight - 1;
@@ -629,7 +636,8 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
                     }
                 }
             } else {
-                display->drawString(textX, lineY, lineBuffer);
+                graphics::MessageRenderer::drawStringWithEmotes(display, textX, lineY, std::string(lineBuffer), emotes,
+                                                                numEmotes);
             }
             lineY += (effectiveLineHeight);
         }

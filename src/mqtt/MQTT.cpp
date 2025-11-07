@@ -10,6 +10,22 @@
 #include "mesh/generated/meshtastic/mqtt.pb.h"
 #include "mesh/generated/meshtastic/telemetry.pb.h"
 #include "modules/RoutingModule.h"
+
+#ifdef ARCH_PORTDUINO
+// strlcpy is not available in glibc, provide a simple implementation
+#ifndef strlcpy
+static inline size_t strlcpy(char *dst, const char *src, size_t size)
+{
+    size_t srclen = strlen(src);
+    if (size > 0) {
+        size_t copylen = (srclen < size - 1) ? srclen : size - 1;
+        memcpy(dst, src, copylen);
+        dst[copylen] = '\0';
+    }
+    return srclen;
+}
+#endif
+#endif
 #if defined(ARCH_ESP32)
 #include "../mesh/generated/meshtastic/paxcount.pb.h"
 #endif
