@@ -1093,6 +1093,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
             inBanner = false;
         }
     }
+    graphics::drawCommonFooter(display, x, y);
 }
 #endif
 
