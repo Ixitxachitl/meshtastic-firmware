@@ -262,6 +262,10 @@ extern const unsigned char last_quarter_moon[] PROGMEM;
 #define waning_crescent_moon_height 16
 extern const unsigned char waning_crescent_moon[] PROGMEM;
 
+#define first_quarter_moon_face_width 16
+#define first_quarter_moon_face_height 16
+extern const unsigned char first_quarter_moon_face[] PROGMEM;
+
 #define peach_width 16
 #define peach_height 16
 extern const unsigned char peach[] PROGMEM;
