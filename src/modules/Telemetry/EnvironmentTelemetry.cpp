@@ -956,6 +956,14 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
                                        : String(agoSecs) + "s";
     String displayStr = s_displayCache.leftStr + " (" + agoStr + ")";
 
+    // Clear stale IAQ data if reading is too old (> 1 hour)
+    // Note: We don't check m.iaq == 0 here because that could mean:
+    // 1. IAQ sensor still calibrating (should show "IAQ: 0 (Excellent)" as feedback)
+    // 2. No IAQ sensor (iaqStr will already be empty from cache rebuild)
+    if (agoSecs > 3600) {
+        s_displayCache.iaqStr = "";
+    }
+
     // === Now render ===
     // Use advanced display with sparklines only on high-resolution screens
     if (graphics::isHighResolution) {
@@ -1047,7 +1055,8 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     }
 
     // === IAQ display ===
-    if (s_displayCache.iaqStr.length() != 0) {
+    // Only show IAQ if both the cache has a string AND the current packet has IAQ data
+    if (s_displayCache.iaqStr.length() != 0 && m.iaq != 0) {
         const char *bannerMsg = nullptr;
         if (m.iaq > 200 && m.iaq <= 300)
             bannerMsg = "Very Unhealthy IAQ";
@@ -1083,7 +1092,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         static bool inBanner = false;
         uint32_t now = millis();
         bool isCooldownOver = (now - lastAlertTime > 60000);
-        bool isOwnTelemetry = lastMeasurementPacket->from == nodeDB->getNodeNum();
+        bool isOwnTelemetry = packetToShow->from == nodeDB->getNodeNum();
         if (!inBanner && isOwnTelemetry && bannerMsg && isCooldownOver) {
             inBanner = true;
             lastAlertTime = now;

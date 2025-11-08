@@ -1898,17 +1898,30 @@ void menuHandler::DisplayUnits_menu()
 // === Environment page menus ===
 void menuHandler::envTelemetryMenu()
 {
-    enum optionsNumbers { ExitOpt, PickSource, AutoMostRecent, DisplayUnits };
-    static const char *optionsArray[] = {"Back", "Pick Source", "Auto (Most Recent)", "Display Units"};
-    static int optionsEnumArray[] = {ExitOpt, PickSource, AutoMostRecent, DisplayUnits};
+    enum optionsNumbers { ExitOpt, SendTelemetry, PickSource, AutoMostRecent, DisplayUnits };
+    static const char *optionsArray[] = {"Back", "Send Telemetry", "Pick Source", "Auto (Most Recent)", "Display Units"};
+    static int optionsEnumArray[] = {ExitOpt, SendTelemetry, PickSource, AutoMostRecent, DisplayUnits};
 
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = "Environment";
     bannerOptions.optionsArrayPtr = optionsArray;
-    bannerOptions.optionsCount = 4;
+    bannerOptions.optionsCount = 5;
     bannerOptions.optionsEnumPtr = optionsEnumArray;
     bannerOptions.bannerCallback = [](int selected) -> void {
-        if (selected == PickSource) {
+        if (selected == SendTelemetry) {
+            if (environmentTelemetryModule) {
+                bool sent = environmentTelemetryModule->sendTelemetry(NODENUM_BROADCAST, false);
+                graphics::setOverlayActive(false);
+                if (sent) {
+                    screen->showSimpleBanner("Telemetry Sent", 1500);
+                } else {
+                    screen->showSimpleBanner("No Sensors Available", 2000);
+                }
+            } else {
+                graphics::setOverlayActive(false);
+                screen->showSimpleBanner("Module Not Available", 2000);
+            }
+        } else if (selected == PickSource) {
             menuHandler::menuQueue = menuHandler::env_source_picker; // route to picker
             screen->runNow();
         } else if (selected == AutoMostRecent) {
