@@ -1911,15 +1911,12 @@ void menuHandler::envTelemetryMenu()
         if (selected == SendTelemetry) {
             if (environmentTelemetryModule) {
                 bool sent = environmentTelemetryModule->sendTelemetry(NODENUM_BROADCAST, false);
-                graphics::setOverlayActive(false);
-                if (sent) {
-                    screen->showSimpleBanner("Telemetry Sent", 1500);
-                } else {
-                    screen->showSimpleBanner("No Sensors Available", 2000);
-                }
+                // Queue banner to show after menu closes and screen updates
+                menuHandler::menuQueue = sent ? menuHandler::telemetry_sent_banner : menuHandler::telemetry_no_sensors_banner;
+                screen->runNow();
             } else {
-                graphics::setOverlayActive(false);
-                screen->showSimpleBanner("Module Not Available", 2000);
+                menuHandler::menuQueue = menuHandler::telemetry_unavailable_banner;
+                screen->runNow();
             }
         } else if (selected == PickSource) {
             menuHandler::menuQueue = menuHandler::env_source_picker; // route to picker
@@ -2150,6 +2147,15 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
         break;
     case throttle_message:
         screen->showSimpleBanner("Too Many Attempts\nTry again in 60 seconds.", 5000);
+        break;
+    case telemetry_sent_banner:
+        screen->showSimpleBanner("Telemetry Sent", 2000);
+        break;
+    case telemetry_no_sensors_banner:
+        screen->showSimpleBanner("No Sensors", 2000);
+        break;
+    case telemetry_unavailable_banner:
+        screen->showSimpleBanner("Module Not Available", 2000);
         break;
     case message_response_menu:
         messageResponseMenu();

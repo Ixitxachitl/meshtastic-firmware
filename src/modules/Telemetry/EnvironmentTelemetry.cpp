@@ -1276,6 +1276,9 @@ bool EnvironmentTelemetryModule::sendTelemetry(NodeNum dest, bool phoneOnly)
         if (em.barometric_pressure)
             selfHist.press.push(em.barometric_pressure);
 
+        // Mark display cache dirty so screen updates with new data
+        s_displayCache.markDirty();
+
         if (phoneOnly) {
             LOG_INFO("Send packet to phone");
             service->sendToPhone(p);
