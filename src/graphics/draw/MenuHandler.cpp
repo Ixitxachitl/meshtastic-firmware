@@ -407,10 +407,9 @@ void menuHandler::clockMenu()
     };
     screen->showOverlayBanner(bannerOptions);
 }
-
 void menuHandler::messageResponseMenu()
 {
-    enum optionsNumbers { Back = 0, ViewMode, DismissAll, DismissOldest, Preset, Freetext, Aloud, enumEnd };
+    enum optionsNumbers { Back = 0, ViewMode, DeleteAll, DeleteOldest, ReplyMenu, Aloud, enumEnd };
 
     static const char *optionsArray[enumEnd];
     static int optionsEnumArray[enumEnd];
@@ -421,35 +420,16 @@ void menuHandler::messageResponseMenu()
     optionsArray[options] = "Back";
     optionsEnumArray[options++] = Back;
 
-#if defined(M5STACK_UNITC6L)
-    optionsArray[options] = "Respond Preset";
-#else
-    optionsArray[options] = "Respond via Preset";
-#endif
-    optionsEnumArray[options++] = Preset;
-
-    if (kb_found) {
-        optionsArray[options] = "Respond via Freetext";
-        optionsEnumArray[options++] = Freetext;
-    }
+    // New Reply submenu (replaces Preset and Freetext directly in this menu)
+    optionsArray[options] = "Reply";
+    optionsEnumArray[options++] = ReplyMenu;
 
     optionsArray[options] = "View Chats";
     optionsEnumArray[options++] = ViewMode;
 
-    // Only show Dismiss All in View All mode
-#if defined(M5STACK_UNITC6L)
-    optionsArray[options] = "Delete All";
-#else
-    optionsArray[options] = "Delete All Chats";
-#endif
-    optionsEnumArray[options++] = DismissAll;
-
-    if (isHighResolution) {
-        optionsArray[options] = "Delete Oldest Message";
-    } else {
-        optionsArray[options] = "Delete Oldest Msg";
-    }
-    optionsEnumArray[options++] = DismissOldest;
+    // Delete submenu
+    optionsArray[options] = "Delete";
+    optionsEnumArray[options++] = 900;
 
 #ifdef HAS_I2S
     optionsArray[options] = "Read Aloud";
@@ -477,53 +457,40 @@ void menuHandler::messageResponseMenu()
         if (selected == ViewMode) {
             menuHandler::menuQueue = menuHandler::message_viewmode_menu;
             screen->runNow();
-        } else if (selected == DismissAll) {
-            messageStore.clearAllMessages();
-            graphics::MessageRenderer::clearThreadRegistries();
-            graphics::MessageRenderer::clearMessageCache();
-        } else if (selected == DismissOldest) {
+
+            // Reply submenu
+        } else if (selected == ReplyMenu) {
+            menuHandler::menuQueue = menuHandler::reply_menu;
+            screen->runNow();
+
+            // Delete submenu
+        } else if (selected == 900) {
+            menuHandler::menuQueue = menuHandler::delete_messages_menu;
+            screen->runNow();
+
+            // Delete oldest FIRST (only change)
+        } else if (selected == DeleteOldest) {
             auto mode = graphics::MessageRenderer::getThreadMode();
             int ch = graphics::MessageRenderer::getThreadChannel();
             uint32_t peer = graphics::MessageRenderer::getThreadPeer();
 
             if (mode == graphics::MessageRenderer::ThreadMode::ALL) {
                 // Global oldest
-                messageStore.dismissOldestMessage();
+                messageStore.deleteOldestMessage();
             } else if (mode == graphics::MessageRenderer::ThreadMode::CHANNEL) {
                 // Oldest in current channel
-                messageStore.dismissOldestMessageInChannel(ch);
+                messageStore.deleteOldestMessageInChannel(ch);
             } else if (mode == graphics::MessageRenderer::ThreadMode::DIRECT) {
                 // Oldest in current DM
-                messageStore.dismissOldestMessageWithPeer(peer);
+                messageStore.deleteOldestMessageWithPeer(peer);
             }
-        } else if (selected == Preset || selected == Freetext) {
-            if (mode == graphics::MessageRenderer::ThreadMode::CHANNEL) {
-                LOG_DEBUG("Replying to CHANNEL %d", ch);
-                if (selected == Preset)
-                    cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST, ch);
-                else
-                    cannedMessageModule->LaunchFreetextWithDestination(NODENUM_BROADCAST, ch);
-            } else if (mode == graphics::MessageRenderer::ThreadMode::DIRECT) {
-                LOG_DEBUG("Replying to DIRECT peer=0x%08x", peer);
-                if (selected == Preset)
-                    cannedMessageModule->LaunchWithDestination(peer);
-                else
-                    cannedMessageModule->LaunchFreetextWithDestination(peer);
-            } else {
-                LOG_DEBUG("Fallback reply using last rx_text_message");
-                if (devicestate.rx_text_message.to == NODENUM_BROADCAST) {
-                    if (selected == Preset)
-                        cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST, devicestate.rx_text_message.channel);
-                    else
-                        cannedMessageModule->LaunchFreetextWithDestination(NODENUM_BROADCAST,
-                                                                           devicestate.rx_text_message.channel);
-                } else {
-                    if (selected == Preset)
-                        cannedMessageModule->LaunchWithDestination(devicestate.rx_text_message.from);
-                    else
-                        cannedMessageModule->LaunchFreetextWithDestination(devicestate.rx_text_message.from);
-                }
-            }
+
+            // Delete all messages
+        } else if (selected == DeleteAll) {
+            messageStore.clearAllMessages();
+            graphics::MessageRenderer::clearThreadRegistries();
+            graphics::MessageRenderer::clearMessageCache();
+
 #ifdef HAS_I2S
         } else if (selected == Aloud) {
             const meshtastic_MeshPacket &mp = devicestate.rx_text_message;
@@ -532,6 +499,184 @@ void menuHandler::messageResponseMenu()
 #endif
         }
     };
+    screen->showOverlayBanner(bannerOptions);
+}
+
+void menuHandler::replyMenu()
+{
+    enum replyOptions { Back = 0, ReplyPreset, ReplyFreetext, enumEnd };
+
+    static const char *optionsArray[enumEnd];
+    static int optionsEnumArray[enumEnd];
+    int options = 0;
+
+    // Back
+    optionsArray[options] = "Back";
+    optionsEnumArray[options++] = Back;
+
+    // Preset reply
+    optionsArray[options] = "With Preset";
+    optionsEnumArray[options++] = ReplyPreset;
+
+    // Freetext reply (only when keyboard exists)
+    if (kb_found) {
+        optionsArray[options] = "With Freetext";
+        optionsEnumArray[options++] = ReplyFreetext;
+    }
+
+    BannerOverlayOptions bannerOptions;
+
+    // Dynamic title based on thread mode
+    auto mode = graphics::MessageRenderer::getThreadMode();
+    if (mode == graphics::MessageRenderer::ThreadMode::CHANNEL) {
+        bannerOptions.message = "Reply to Channel";
+    } else if (mode == graphics::MessageRenderer::ThreadMode::DIRECT) {
+        bannerOptions.message = "Reply to DM";
+    } else {
+        // View All
+        bannerOptions.message = "Reply to Last Msg";
+    }
+
+    bannerOptions.optionsArrayPtr = optionsArray;
+    bannerOptions.optionsEnumPtr = optionsEnumArray;
+    bannerOptions.optionsCount = options;
+    bannerOptions.InitialSelected = 1;
+
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        auto mode = graphics::MessageRenderer::getThreadMode();
+        int ch = graphics::MessageRenderer::getThreadChannel();
+        uint32_t peer = graphics::MessageRenderer::getThreadPeer();
+
+        if (selected == Back) {
+            menuHandler::menuQueue = menuHandler::message_response_menu;
+            screen->runNow();
+            return;
+        }
+
+        // Preset reply
+        if (selected == ReplyPreset) {
+
+            if (mode == graphics::MessageRenderer::ThreadMode::CHANNEL) {
+                cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST, ch);
+
+            } else if (mode == graphics::MessageRenderer::ThreadMode::DIRECT) {
+                cannedMessageModule->LaunchWithDestination(peer);
+
+            } else {
+                // Fallback for last received message
+                if (devicestate.rx_text_message.to == NODENUM_BROADCAST) {
+                    cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST, devicestate.rx_text_message.channel);
+                } else {
+                    cannedMessageModule->LaunchWithDestination(devicestate.rx_text_message.from);
+                }
+            }
+
+            return;
+        }
+
+        // Freetext reply
+        if (selected == ReplyFreetext) {
+
+            if (mode == graphics::MessageRenderer::ThreadMode::CHANNEL) {
+                cannedMessageModule->LaunchFreetextWithDestination(NODENUM_BROADCAST, ch);
+
+            } else if (mode == graphics::MessageRenderer::ThreadMode::DIRECT) {
+                cannedMessageModule->LaunchFreetextWithDestination(peer);
+
+            } else {
+                // Fallback for last received message
+                if (devicestate.rx_text_message.to == NODENUM_BROADCAST) {
+                    cannedMessageModule->LaunchFreetextWithDestination(NODENUM_BROADCAST, devicestate.rx_text_message.channel);
+                } else {
+                    cannedMessageModule->LaunchFreetextWithDestination(devicestate.rx_text_message.from);
+                }
+            }
+
+            return;
+        }
+    };
+    screen->showOverlayBanner(bannerOptions);
+}
+void menuHandler::deleteMessagesMenu()
+{
+    enum optionsNumbers { Back = 0, DeleteOldest, DeleteThis, DeleteAll, enumEnd };
+
+    static const char *optionsArray[enumEnd];
+    static int optionsEnumArray[enumEnd];
+    int options = 0;
+
+    auto mode = graphics::MessageRenderer::getThreadMode();
+
+    optionsArray[options] = "Back";
+    optionsEnumArray[options++] = Back;
+
+    optionsArray[options] = "Delete Oldest";
+    optionsEnumArray[options++] = DeleteOldest;
+
+    // If viewing ALL chats → hide “Delete This Chat”
+    if (mode != graphics::MessageRenderer::ThreadMode::ALL) {
+        optionsArray[options] = "Delete This Chat";
+        optionsEnumArray[options++] = DeleteThis;
+    }
+#if defined(M5STACK_UNITC6L)
+    optionsArray[options] = "Delete All";
+#else
+    optionsArray[options] = "Delete All Chats";
+#endif
+    optionsEnumArray[options++] = DeleteAll;
+
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = "Delete Messages";
+
+    bannerOptions.optionsArrayPtr = optionsArray;
+    bannerOptions.optionsEnumPtr = optionsEnumArray;
+    bannerOptions.optionsCount = options;
+    bannerOptions.bannerCallback = [mode](int selected) -> void {
+        int ch = graphics::MessageRenderer::getThreadChannel();
+        uint32_t peer = graphics::MessageRenderer::getThreadPeer();
+
+        if (selected == Back) {
+            menuHandler::menuQueue = menuHandler::message_response_menu;
+            screen->runNow();
+            return;
+        }
+
+        if (selected == DeleteAll) {
+            LOG_INFO("Deleting all messages");
+            messageStore.clearAllMessages();
+            graphics::MessageRenderer::clearThreadRegistries();
+            graphics::MessageRenderer::clearMessageCache();
+            return;
+        }
+
+        if (selected == DeleteOldest) {
+            LOG_INFO("Deleting oldest message");
+
+            if (mode == graphics::MessageRenderer::ThreadMode::ALL) {
+                messageStore.deleteOldestMessage();
+            } else if (mode == graphics::MessageRenderer::ThreadMode::CHANNEL) {
+                messageStore.deleteOldestMessageInChannel(ch);
+            } else if (mode == graphics::MessageRenderer::ThreadMode::DIRECT) {
+                messageStore.deleteOldestMessageWithPeer(peer);
+            }
+
+            return;
+        }
+
+        // This only appears in non-ALL modes
+        if (selected == DeleteThis) {
+            LOG_INFO("Deleting all messages in this thread");
+
+            if (mode == graphics::MessageRenderer::ThreadMode::CHANNEL) {
+                messageStore.deleteAllMessagesInChannel(ch);
+            } else if (mode == graphics::MessageRenderer::ThreadMode::DIRECT) {
+                messageStore.deleteAllMessagesWithPeer(peer);
+            }
+
+            return;
+        }
+    };
+
     screen->showOverlayBanner(bannerOptions);
 }
 
@@ -696,16 +841,6 @@ void menuHandler::homeBaseMenu()
         optionsArray[options] = "Send Node Info";
     }
     optionsEnumArray[options++] = Position;
-#if defined(M5STACK_UNITC6L)
-    optionsArray[options] = "New Preset";
-#else
-    optionsArray[options] = "New Preset Msg";
-#endif
-    optionsEnumArray[options++] = Preset;
-    if (kb_found) {
-        optionsArray[options] = "New Freetext Msg";
-        optionsEnumArray[options++] = Freetext;
-    }
 
     BannerOverlayOptions bannerOptions;
 #if defined(M5STACK_UNITC6L)
@@ -1978,6 +2113,12 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
         break;
     case message_response_menu:
         messageResponseMenu();
+        break;
+    case reply_menu:
+        replyMenu();
+        break;
+    case delete_messages_menu:
+        deleteMessagesMenu();
         break;
     case message_viewmode_menu:
         messageViewModeMenu();
