@@ -139,6 +139,8 @@ template <size_t N> struct NodeHist {
 
 // One record per node; no per-sample heap churn
 static std::unordered_map<uint32_t, NodeHist<kHistLen>> s_hist;
+// Cap on maximum nodes to prevent unbounded growth
+static constexpr size_t kMaxHistNodes = 64;
 // (Optional) pre-size if you have a typical node count:
 // static bool s_histReserved = (s_hist.reserve(64), true);
 
@@ -973,6 +975,17 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
 
         // look up per-source history for sparklines (fixed-capacity rings)
         uint32_t from = packetToShow->from;
+
+        // Enforce maximum node limit to prevent unbounded memory growth
+        if (s_hist.size() >= kMaxHistNodes && s_hist.find(from) == s_hist.end()) {
+            // Map is full and this is a new node - remove oldest entry (arbitrary eviction)
+            auto it = s_hist.begin();
+            if (it != s_hist.end()) {
+                LOG_DEBUG("EnvironmentTelemetry: History map full (%zu nodes), evicting node 0x%08x", s_hist.size(), it->first);
+                s_hist.erase(it);
+            }
+        }
+
         auto &nh = s_hist[from]; // default-constructs empty rings for new nodes
 
         // Calculate sparkline width based on screen width for better fit on narrow displays
@@ -1144,6 +1157,15 @@ bool EnvironmentTelemetryModule::handleReceivedProtobuf(const meshtastic_MeshPac
         lastBySource[from] = packetPool.allocCopy(mp);
         // record per-source history for tiny graphs
         const auto &em = t->variant.environment_metrics;
+
+        // Enforce maximum node limit to prevent unbounded memory growth
+        if (s_hist.size() >= kMaxHistNodes && s_hist.find(from) == s_hist.end()) {
+            auto it2 = s_hist.begin();
+            if (it2 != s_hist.end()) {
+                s_hist.erase(it2);
+            }
+        }
+
         auto &nh2 = s_hist[from];
         if (em.has_temperature)
             nh2.temp.push(em.temperature);

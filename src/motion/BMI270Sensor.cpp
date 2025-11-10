@@ -108,6 +108,20 @@ BMI270Sensor::BMI270Sensor(ScanI2C::FoundDevice foundDevice) : MotionSensor::Mot
 
 // ---- 3D compass handoff for CompassRenderer (no UI plumbing needed) ----
 static BMI270Sensor *g_bmi270_instance = nullptr;
+
+BMI270Sensor::~BMI270Sensor()
+{
+#if HAS_BMI270_TINYU
+    if (impl_) {
+        auto *impl = static_cast<BMI270Impl *>(impl_);
+        delete impl;
+        impl_ = nullptr;
+    }
+    if (g_bmi270_instance == this) {
+        g_bmi270_instance = nullptr;
+    }
+#endif
+}
 extern "C" Quat GetAttitudeForRenderer()
 {
     return (g_bmi270_instance) ? g_bmi270_instance->getAttitudeQuat() : Quat::identity();

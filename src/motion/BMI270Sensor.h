@@ -13,6 +13,7 @@ class BMI270Sensor : public MotionSensor
 {
   public:
     explicit BMI270Sensor(ScanI2C::FoundDevice foundDevice);
+    ~BMI270Sensor(); // Destructor to free impl_
 
     bool init() override;
     int32_t runOnce() override;
