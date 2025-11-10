@@ -85,6 +85,7 @@ class ScanI2C
         DRV2605,
         BH1750,
         DA217,
+        CHSC6X,
         BMI270
     } DeviceType;
 
