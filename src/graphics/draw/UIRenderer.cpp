@@ -1076,7 +1076,6 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
     config.display.heading_bold = false;
 
     const char *displayLine = ""; // Initialize to empty string by default
-    meshtastic_NodeInfoLite *ourNode = nodeDB->getMeshNode(nodeDB->getNodeNum());
 
     if (config.position.gps_mode != meshtastic_Config_PositionConfig_GpsMode_ENABLED) {
         if (config.position.fixed_position) {

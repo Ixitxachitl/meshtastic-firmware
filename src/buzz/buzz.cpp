@@ -326,7 +326,6 @@ size_t tonesToRtttl(char *out, size_t outCap, const ToneDuration *td, int n, con
 
             // Format: <duration><note>[octave if different from current]
             // Sharp notes can have octave numbers: "4f#3" works correctly in parser
-            bool hasSharp = (strchr(noteName, '#') != nullptr);
 
             if (noteOctave != currentOctave) {
                 // Octave needs to change - always add octave number for clarity

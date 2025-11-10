@@ -407,39 +407,29 @@ void menuHandler::clockMenu()
 }
 void menuHandler::messageResponseMenu()
 {
-    enum OptionId { Back = 0, ViewMode, DismissAll, DismissOldest, Preset, Freetext, Aloud };
+    enum optionsNumbers { Back = 0, ViewMode, DeleteAll, DeleteOldest, ReplyMenu, Aloud, enumEnd };
 
-    // Build menu dynamically based on context
-    static const char *optionsArray[10]; // Max possible options
-    static int optionsEnumArray[10];
-    int optionCount = 0;
+    static const char *optionsArray[enumEnd];
+    static int optionsEnumArray[enumEnd];
+    int options = 0;
 
-    auto mode = graphics::MessageRenderer::getThreadMode();
-
-    // 1) Back
-    optionsArray[optionCount] = "Back";
-    optionsEnumArray[optionCount++] = Back;
+    optionsArray[options] = "Back";
+    optionsEnumArray[options++] = Back;
 
     // New Reply submenu (replaces Preset and Freetext directly in this menu)
     optionsArray[options] = "Reply";
     optionsEnumArray[options++] = ReplyMenu;
 
-    // 4) Dismiss Oldest — always available
-    if (isHighResolution) {
-        optionsArray[optionCount] = "Delete Oldest Message";
-    } else {
-        optionsArray[optionCount] = "Delete Oldest Msg";
-    }
-    optionsEnumArray[optionCount++] = DismissOldest;
+    optionsArray[options] = "View Chats";
+    optionsEnumArray[options++] = ViewMode;
 
     // Delete submenu
     optionsArray[options] = "Delete";
     optionsEnumArray[options++] = 900;
 
-    // 7) Read Aloud (I2S only)
 #ifdef HAS_I2S
-    optionsArray[optionCount] = "Read Aloud";
-    optionsEnumArray[optionCount++] = Aloud;
+    optionsArray[options] = "Read Aloud";
+    optionsEnumArray[options++] = Aloud;
 #endif
 
     BannerOverlayOptions bannerOptions;
@@ -450,15 +440,15 @@ void menuHandler::messageResponseMenu()
 #endif
     bannerOptions.optionsArrayPtr = optionsArray;
     bannerOptions.optionsEnumPtr = optionsEnumArray;
-    bannerOptions.optionsCount = optionCount;
-
+    bannerOptions.optionsCount = options;
     bannerOptions.bannerCallback = [](int selected) -> void {
-        graphics::setOverlayActive(false);
         LOG_DEBUG("messageResponseMenu: selected %d", selected);
 
         auto mode = graphics::MessageRenderer::getThreadMode();
         int ch = graphics::MessageRenderer::getThreadChannel();
         uint32_t peer = graphics::MessageRenderer::getThreadPeer();
+
+        LOG_DEBUG("[ReplyCtx] mode=%d ch=%d peer=0x%08x", (int)mode, ch, (unsigned int)peer);
 
         if (selected == ViewMode) {
             menuHandler::menuQueue = menuHandler::message_viewmode_menu;
@@ -473,29 +463,6 @@ void menuHandler::messageResponseMenu()
         } else if (selected == 900) {
             menuHandler::menuQueue = menuHandler::delete_messages_menu;
             screen->runNow();
-
-            // Delete oldest FIRST (only change)
-        } else if (selected == DeleteOldest) {
-            auto mode = graphics::MessageRenderer::getThreadMode();
-            int ch = graphics::MessageRenderer::getThreadChannel();
-            uint32_t peer = graphics::MessageRenderer::getThreadPeer();
-
-            if (mode == graphics::MessageRenderer::ThreadMode::ALL) {
-                // Global oldest
-                messageStore.deleteOldestMessage();
-            } else if (mode == graphics::MessageRenderer::ThreadMode::CHANNEL) {
-                // Oldest in current channel
-                messageStore.deleteOldestMessageInChannel(ch);
-            } else if (mode == graphics::MessageRenderer::ThreadMode::DIRECT) {
-                // Oldest in current DM
-                messageStore.deleteOldestMessageWithPeer(peer);
-            }
-
-            // Delete all messages
-        } else if (selected == DeleteAll) {
-            messageStore.clearAllMessages();
-            graphics::MessageRenderer::clearThreadRegistries();
-            graphics::MessageRenderer::clearMessageCache();
 
 #ifdef HAS_I2S
         } else if (selected == Aloud) {

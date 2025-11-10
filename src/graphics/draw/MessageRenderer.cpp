@@ -955,16 +955,6 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 senderStr += "...";
             }
 
-        char senderBuf[48] = "";
-        if (node && node->has_user) {
-            // Use long name if present
-            strncpy(senderBuf, node->user.long_name, sizeof(senderBuf) - 1);
-            senderBuf[sizeof(senderBuf) - 1] = '\0';
-        } else {
-            // No long/short name → show NodeID in parentheses
-            snprintf(senderBuf, sizeof(senderBuf), "(%08x)", m.sender);
-        }
-
             // Final header line (no time here; time is drawn live during render)
             char headerStr[96] = "";
             if (mine)
