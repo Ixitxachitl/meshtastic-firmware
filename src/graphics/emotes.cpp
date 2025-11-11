@@ -46,6 +46,11 @@ const Emote emotes[] = {
     {"\U0001F920", cowboy, cowboy_width, cowboy_height},                      // 🤠 Cowboy Hat Face
     {"\U0001F3A7", deadmau5, deadmau5_width, deadmau5_height},                // 🎧 Headphones
 
+    // --- Symbols ---
+    {"\u2714\uFE0F", check_mark, check_mark_width, check_mark_height}, // ✔️ Check Mark
+    {"\u2705", check_mark, check_mark_width, check_mark_height},       // ✅ Check Mark Button
+    {"\u2611\uFE0F", check_mark, check_mark_width, check_mark_height}, // ☑️ Check Box with Check
+
     // --- Weather ---
     {"\u2600", sun, sun_width, sun_height},                                   // ☀ Sun (without variation selector)
     {"\u2600\uFE0F", sun, sun_width, sun_height},                             // ☀️ Sun (with variation selector)
@@ -436,6 +441,10 @@ const unsigned char Rightwards_Arrow[] PROGMEM = {0x00, 0x00, 0x00, 0x00, 0x00, 
 const unsigned char strong[] PROGMEM = {0x38, 0x00, 0x44, 0x00, 0x62, 0x00, 0x42, 0x00, 0x42, 0x00, 0x3A,
                                         0x00, 0x11, 0x3C, 0x11, 0x42, 0xD1, 0x81, 0x31, 0x82, 0x11, 0x82,
                                         0x21, 0x80, 0x01, 0x80, 0x01, 0x80, 0x02, 0x40, 0xFC, 0x3F};
+
+const unsigned char check_mark[] PROGMEM = {0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x70, 0x00, 0x3C, 0x00,
+                                            0x1E, 0x00, 0x0F, 0x80, 0x07, 0xC3, 0x03, 0xEE, 0x03, 0xFC, 0x01,
+                                            0xF8, 0x00, 0xF0, 0x00, 0x70, 0x00, 0x60, 0x00, 0x20, 0x00};
 #endif
 
 } // namespace graphics

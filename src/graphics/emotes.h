@@ -305,6 +305,10 @@ extern const unsigned char Rightwards_Arrow[] PROGMEM;
 #define strong_width 16
 #define strong_height 16
 extern const unsigned char strong[] PROGMEM;
+
+#define check_mark_width 16
+#define check_mark_height 16
+extern const unsigned char check_mark[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
 } // namespace graphics
