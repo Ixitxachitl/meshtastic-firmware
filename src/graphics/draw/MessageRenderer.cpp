@@ -1450,12 +1450,15 @@ void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const mesht
 
         // Banner logic
         const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(packet.from);
-        char longName[48] = "???";
-        if (node && node->user.long_name) {
+        char longName[48] = "";
+        if (node && node->has_user && node->user.long_name && node->user.long_name[0] != '\0') {
             // Apply emoji replacement to banner name
             std::string processedName = replaceUnknownEmoji(std::string(node->user.long_name), emotes, numEmotes);
             strncpy(longName, processedName.c_str(), sizeof(longName) - 1);
             longName[sizeof(longName) - 1] = '\0';
+        } else {
+            // No long/short name → show NodeID in parentheses
+            snprintf(longName, sizeof(longName), "(%08x)", packet.from);
         }
         int availWidth = display->getWidth() - (isHighResolution ? 40 : 20);
         if (availWidth < 0)
