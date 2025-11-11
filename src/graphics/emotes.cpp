@@ -42,6 +42,7 @@ const Emote emotes[] = {
     {"\u270C\uFE0F", peace_sign, peace_sign_width, peace_sign_height},        // ✌️ Victory Hand
     {"\U0001F596", vulcan_salute, vulcan_salute_width, vulcan_salute_height}, // 🖖 Vulcan Salute
     {"\U0001F64F", Praying, Praying_width, Praying_height},                   // 🙏 Praying Hands
+    {"\U0001F4AA", strong, strong_width, strong_height},                      // 💪 Flexed Biceps
     {"\U0001F920", cowboy, cowboy_width, cowboy_height},                      // 🤠 Cowboy Hat Face
     {"\U0001F3A7", deadmau5, deadmau5_width, deadmau5_height},                // 🎧 Headphones
 
@@ -431,6 +432,10 @@ const unsigned char Upwards_Arrow[] PROGMEM = {0x80, 0x01, 0xC0, 0x03, 0xE0, 0x0
 const unsigned char Rightwards_Arrow[] PROGMEM = {0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x0C, 0x00, 0x1C, 0x00,
                                                   0x3C, 0xFC, 0x7F, 0xFC, 0xFF, 0xFC, 0xFF, 0xFC, 0x7F, 0x00, 0x3C,
                                                   0x00, 0x1C, 0x00, 0x0C, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00};
+
+const unsigned char strong[] PROGMEM = {0x38, 0x00, 0x44, 0x00, 0x62, 0x00, 0x42, 0x00, 0x42, 0x00, 0x3A,
+                                        0x00, 0x11, 0x3C, 0x11, 0x42, 0xD1, 0x81, 0x31, 0x82, 0x11, 0x82,
+                                        0x21, 0x80, 0x01, 0x80, 0x01, 0x80, 0x02, 0x40, 0xFC, 0x3F};
 #endif
 
 } // namespace graphics
