@@ -913,14 +913,17 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(m.sender);
             meshtastic_NodeInfoLite *node_recipient = nodeDB->getMeshNode(m.dest);
 
-            char senderBuf[48] = "???";
+            char senderBuf[48] = "";
             if (node && node->has_user && node->user.long_name && node->user.long_name[0] != '\0') {
                 // Apply emoji replacement to sender name
                 std::string processedName = replaceUnknownEmoji(std::string(node->user.long_name), emotes, numEmotes);
                 std::snprintf(senderBuf, sizeof(senderBuf), "%s", processedName.c_str());
+            } else {
+                // No long/short name → show NodeID in parentheses
+                snprintf(senderBuf, sizeof(senderBuf), "(%08x)", m.sender);
             }
 
-            // If this is *our own* message, override senderBuf to the recipient's name
+            // If this is *our own* message, override senderBuf to who the recipient was
             bool mine = (m.sender == nodeDB->getNodeNum());
             if (mine && node_recipient && node_recipient->has_user && node_recipient->user.long_name &&
                 node_recipient->user.long_name[0] != '\0') {
@@ -954,6 +957,9 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             if (senderStr.length() < origLen) {
                 senderStr += "...";
             }
+
+            // Copy back to senderBuf for header generation
+            std::snprintf(senderBuf, sizeof(senderBuf), "%s", senderStr.c_str());
 
             // Final header line (no time here; time is drawn live during render)
             char headerStr[96] = "";
