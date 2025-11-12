@@ -43,6 +43,9 @@ const Emote emotes[] = {
     {"\U0001F596", vulcan_salute, vulcan_salute_width, vulcan_salute_height}, // 🖖 Vulcan Salute
     {"\U0001F64F", Praying, Praying_width, Praying_height},                   // 🙏 Praying Hands
     {"\U0001F4AA", strong, strong_width, strong_height},                      // 💪 Flexed Biceps
+    {"\U0001F937", shrug, shrug_width, shrug_height},                         // 🤷 Person Shrugging
+    {"\U0001F937\u200D\u2642\uFE0F", shrug, shrug_width, shrug_height},       // 🤷‍♂️ Man Shrugging
+    {"\U0001F937\u200D\u2640\uFE0F", shrug, shrug_width, shrug_height},       // 🤷‍♀️ Woman Shrugging
     {"\U0001F920", cowboy, cowboy_width, cowboy_height},                      // 🤠 Cowboy Hat Face
     {"\U0001F3A7", deadmau5, deadmau5_width, deadmau5_height},                // 🎧 Headphones
 
@@ -450,6 +453,10 @@ const unsigned char check_mark[] PROGMEM = {0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 
 const unsigned char house[] PROGMEM = {0x80, 0x01, 0x5C, 0x02, 0x34, 0x04, 0x14, 0x08, 0x0C, 0x10, 0x04,
                                        0x20, 0x02, 0x40, 0xFF, 0xFF, 0x02, 0x40, 0x7A, 0x5F, 0x4A, 0x55,
                                        0x4A, 0x5F, 0x6A, 0x55, 0x4A, 0x5F, 0x4A, 0x40, 0xFE, 0x7F};
+
+const unsigned char shrug[] PROGMEM = {0xC0, 0x03, 0x20, 0x04, 0x10, 0x08, 0x50, 0x0A, 0x10, 0x08, 0x90,
+                                       0x09, 0x27, 0xE4, 0x49, 0x92, 0xAA, 0x55, 0x16, 0x68, 0x12, 0x48,
+                                       0x02, 0x40, 0x02, 0x40, 0x0C, 0x30, 0x08, 0x10, 0xF8, 0x1F};
 #endif
 
 } // namespace graphics

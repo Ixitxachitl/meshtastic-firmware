@@ -313,6 +313,10 @@ extern const unsigned char check_mark[] PROGMEM;
 #define house_width 16
 #define house_height 16
 extern const unsigned char house[] PROGMEM;
+
+#define shrug_width 16
+#define shrug_height 16
+extern const unsigned char shrug[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
 } // namespace graphics
