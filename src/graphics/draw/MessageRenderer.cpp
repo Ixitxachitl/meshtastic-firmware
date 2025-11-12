@@ -1070,7 +1070,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     lastUsableScrollHeight = usableScrollHeight;
 
     // bottom alignment (one text row above bottom)
-    int kBottomPadPx = FONT_HEIGHT_SMALL * 2; // Two lines of spacing from bottom
+    int kBottomPadPx = FONT_HEIGHT_SMALL; // One line of spacing from bottom
     int bottomOffsetOneRow = totalHeight - usableScrollHeight + kBottomPadPx;
     if (bottomOffsetOneRow < 0)
         bottomOffsetOneRow = 0; // guard small lists
@@ -1115,7 +1115,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     }
 #else
     // E-Ink: disable autoscroll but anchor to bottom
-    int kBottomPadPx = FONT_HEIGHT_SMALL * 2; // Two lines of spacing from bottom
+    int kBottomPadPx = FONT_HEIGHT_SMALL; // One line of spacing from bottom
     int bottomOffsetOneRow = totalHeight - usableScrollHeight + kBottomPadPx;
     if (bottomOffsetOneRow < 0)
         bottomOffsetOneRow = 0; // guard small lists
