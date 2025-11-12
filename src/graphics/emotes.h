@@ -317,6 +317,14 @@ extern const unsigned char house[] PROGMEM;
 #define shrug_width 16
 #define shrug_height 16
 extern const unsigned char shrug[] PROGMEM;
+
+#define eyes_width 16
+#define eyes_height 16
+extern const unsigned char eyes[] PROGMEM;
+
+#define eye_width 16
+#define eye_height 16
+extern const unsigned char eye[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
 } // namespace graphics
