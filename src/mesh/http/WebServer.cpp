@@ -142,13 +142,18 @@ void createSSLCert()
         // Create a new process just to handle creating the cert.
         //   This is a workaround for Bug: https://github.com/fhessel/esp32_https_server/issues/48
         //  jm@casler.org (Oct 2020)
+        // Use larger stack for devices with PSRAM, smaller for memory-constrained devices
+#if BOARD_HAS_PSRAM
+        const uint32_t certTaskStack = 16384; // 16KB for PSRAM devices (ESP32-S3-BOX-3, etc.)
+#else
+        const uint32_t certTaskStack = 8192; // 8KB for devices without PSRAM (Cardputer, etc.)
+#endif
         xTaskCreate(taskCreateCert, /* Task function. */
                     "createCert",   /* String with name of task. */
-                    // 16384,          /* Stack size in bytes. */
-                    8192,  /* Stack size in bytes. */
-                    NULL,  /* Parameter passed as input of the task */
-                    16,    /* Priority of the task. */
-                    NULL); /* Task handle. */
+                    certTaskStack,  /* Stack size in bytes - conditional based on PSRAM availability */
+                    NULL,           /* Parameter passed as input of the task */
+                    16,             /* Priority of the task. */
+                    NULL);          /* Task handle. */
 
         LOG_DEBUG("Waiting for SSL Cert to be generated");
         while (!isCertReady) {
@@ -234,17 +239,30 @@ void initWebServer()
 
     registerHandlers(insecureServer, secureServer);
 
+    bool httpsOk = false;
     if (secureServer) {
-        LOG_INFO("Start Secure Web Server");
+        LOG_INFO("Start Secure Web Server (HTTPS)");
         secureServer->start();
+        if (secureServer->isRunning()) {
+            LOG_INFO("HTTPS Server started successfully on port 443");
+            httpsOk = true;
+        } else {
+            LOG_WARN("HTTPS Server failed to start - SSL/TLS may not be available");
+        }
     }
-    LOG_INFO("Start Insecure Web Server");
+
+    LOG_INFO("Start Insecure Web Server (HTTP)");
     insecureServer->start();
     if (insecureServer->isRunning()) {
-        LOG_INFO("Web Servers Ready! :-) ");
+        LOG_INFO("HTTP Server started successfully on port 80");
         isWebServerReady = true;
+        if (httpsOk) {
+            LOG_INFO("Web Servers Ready! Both HTTP and HTTPS available");
+        } else {
+            LOG_WARN("Web Servers Ready! HTTP only (HTTPS failed)");
+        }
     } else {
-        LOG_ERROR("Web Servers Failed! ;-( ");
+        LOG_ERROR("Web Servers Failed! HTTP server did not start");
     }
 }
 #endif
