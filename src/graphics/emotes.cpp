@@ -44,8 +44,6 @@ const Emote emotes[] = {
     {"\U0001F64F", Praying, Praying_width, Praying_height},                   // 🙏 Praying Hands
     {"\U0001F4AA", strong, strong_width, strong_height},                      // 💪 Flexed Biceps
     {"\U0001F937", shrug, shrug_width, shrug_height},                         // 🤷 Person Shrugging
-    {"\U0001F937\u200D\u2642\uFE0F", shrug, shrug_width, shrug_height},       // 🤷‍♂️ Man Shrugging
-    {"\U0001F937\u200D\u2640\uFE0F", shrug, shrug_width, shrug_height},       // 🤷‍♀️ Woman Shrugging
     {"\U0001F920", cowboy, cowboy_width, cowboy_height},                      // 🤠 Cowboy Hat Face
     {"\U0001F3A7", deadmau5, deadmau5_width, deadmau5_height},                // 🎧 Headphones
 

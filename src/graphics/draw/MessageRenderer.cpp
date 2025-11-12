@@ -230,12 +230,30 @@ std::string normalizeEmoji(const std::string &s)
         uint8_t c = static_cast<uint8_t>(s[i]);
         size_t len = utf8CharLen(c);
 
+        // Skip variation selector (U+FE0F): EF B8 8F
         if (c == 0xEF && i + 2 < s.size() && (uint8_t)s[i + 1] == 0xB8 && (uint8_t)s[i + 2] == 0x8F) {
             i += 3;
             continue;
         }
 
-        // Skip skin tone modifiers
+        // Skip Zero Width Joiner (U+200D): E2 80 8D
+        // Also skip the following gender/modifier symbol if present
+        if (c == 0xE2 && i + 2 < s.size() && (uint8_t)s[i + 1] == 0x80 && (uint8_t)s[i + 2] == 0x8D) {
+            i += 3;
+            // Skip the next character which is typically a gender symbol (♂/♀) or other modifier
+            if (i < s.size()) {
+                uint8_t next = static_cast<uint8_t>(s[i]);
+                size_t nextLen = utf8CharLen(next);
+                i += nextLen;
+                // Also skip variation selector after the gender symbol if present
+                if (i + 2 < s.size() && (uint8_t)s[i] == 0xEF && (uint8_t)s[i + 1] == 0xB8 && (uint8_t)s[i + 2] == 0x8F) {
+                    i += 3;
+                }
+            }
+            continue;
+        }
+
+        // Skip skin tone modifiers (U+1F3FB-U+1F3FF): F0 9F 8F BB-BF
         if (c == 0xF0 && i + 3 < s.size() && (uint8_t)s[i + 1] == 0x9F && (uint8_t)s[i + 2] == 0x8F &&
             ((uint8_t)s[i + 3] >= 0xBB && (uint8_t)s[i + 3] <= 0xBF)) {
             i += 4;
