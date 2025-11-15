@@ -211,7 +211,7 @@ ScanI2C::FoundDevice rgb_found = ScanI2C::FoundDevice(ScanI2C::DeviceType::NONE,
 /// The I2C address of our Air Quality Indicator (if found)
 ScanI2C::DeviceAddress aqi_found = ScanI2C::ADDRESS_NONE;
 
-#if defined(T_WATCH_S3) || defined(T_LORA_PAGER)
+#if defined(T_WATCH_S3) || defined(T_LORA_PAGER) || defined(TTGO_T_ECHO_PLUS)
 Adafruit_DRV2605 drv;
 #endif
 
@@ -854,7 +854,11 @@ void setup()
 #endif
 #endif
 
-#if defined(T_WATCH_S3) || defined(T_LORA_PAGER)
+#if defined(T_WATCH_S3) || defined(T_LORA_PAGER) || defined(TTGO_T_ECHO_PLUS)
+#ifdef PIN_VIBRATION_EN
+    pinMode(PIN_VIBRATION_EN, OUTPUT);
+    digitalWrite(PIN_VIBRATION_EN, HIGH); // Enable DRV2605
+#endif
     drv.begin();
     drv.selectLibrary(1);
     // I2C trigger by sending 'go' command

@@ -495,6 +495,11 @@ void BMI270Sensor::calibrate(uint16_t /*forSeconds*/)
 
 // Fallback implementations when BMI270 is not available
 #if !__has_include(<bmi2.h>) || defined(ARCH_STM32WL) || defined(MESHTASTIC_EXCLUDE_I2C)
+
+#ifdef HAS_BHI260AP
+#include "BHI260APSensor.h"
+#endif
+
 extern "C" Quat GetAttitudeForRenderer()
 {
     return Quat::identity();
@@ -502,12 +507,21 @@ extern "C" Quat GetAttitudeForRenderer()
 
 extern "C" uint32_t GetStepCountForRenderer()
 {
+#ifdef HAS_BHI260AP
+    if (g_bhi260ap_instance) {
+        return g_bhi260ap_instance->getStepCount();
+    }
+#endif
     return 0;
 }
 
 extern "C" bool HasStepCounterForRenderer()
 {
+#ifdef HAS_BHI260AP
+    return (g_bhi260ap_instance != nullptr);
+#else
     return false;
+#endif
 }
 
 extern "C" Vec3 GetGravityForRenderer()

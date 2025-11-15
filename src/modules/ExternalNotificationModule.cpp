@@ -168,7 +168,7 @@ int32_t ExternalNotificationModule::runOnce()
             delay = EXT_NOTIFICATION_FAST_THREAD_MS;
 #endif
 
-#ifdef T_WATCH_S3
+#if defined(T_WATCH_S3) || defined(TTGO_T_ECHO_PLUS)
             drv.go();
 #endif
         }
@@ -283,7 +283,7 @@ void ExternalNotificationModule::setExternalState(uint8_t index, bool on)
 #ifdef UNPHONE
     unphone.rgb(red, green, blue);
 #endif
-#ifdef T_WATCH_S3
+#if defined(T_WATCH_S3) || defined(TTGO_T_ECHO_PLUS)
     if (on) {
         drv.go();
     } else {
@@ -445,7 +445,7 @@ ExternalNotificationModule::ExternalNotificationModule()
 ProcessMessage ExternalNotificationModule::handleReceived(const meshtastic_MeshPacket &mp)
 {
     if (moduleConfig.external_notification.enabled && !isSilenced) {
-#ifdef T_WATCH_S3
+#if defined(T_WATCH_S3) || defined(TTGO_T_ECHO_PLUS)
         drv.setWaveform(0, 75);
         drv.setWaveform(1, 56);
         drv.setWaveform(2, 0);

@@ -1315,6 +1315,30 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
             if (availableHeight < FONT_HEIGHT_SMALL * 2)
                 return;
 
+            // Add step count display in top right corner for portrait/square screens
+            uint32_t stepCount = GetStepCountForRenderer();
+            if (HasStepCounterForRenderer()) {
+                display->setTextAlignment(TEXT_ALIGN_RIGHT);
+                display->setFont(FONT_SMALL);
+
+                const int16_t stepX = SCREEN_WIDTH - 2;
+                const int16_t stepY = getTextPositions(display)[1];
+
+                char stepText[16];
+                if (stepCount >= 10000) {
+                    snprintf(stepText, sizeof(stepText), "%.1fK", stepCount / 1000.0f);
+                } else if (stepCount >= 1000) {
+                    snprintf(stepText, sizeof(stepText), "%.2fK", stepCount / 1000.0f);
+                } else {
+                    snprintf(stepText, sizeof(stepText), "%u", stepCount);
+                }
+
+                int16_t textWidth = display->getStringWidth(stepText);
+                drawFootprintIcon(display, stepX - textWidth - 15, stepY + 2);
+                display->drawString(stepX, stepY, stepText);
+                display->setTextAlignment(TEXT_ALIGN_LEFT);
+            }
+
             int compassRadius = availableHeight / 2;
             if (compassRadius < 8)
                 compassRadius = 8;

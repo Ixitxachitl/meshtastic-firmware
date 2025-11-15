@@ -154,9 +154,9 @@ void buzzOnAudioThreadReady()
 // RTTL Conversion System
 // ==============================================================================
 
-// Use 320 BPM for faster tempo to better match GPIO buzzer timing
-// At 320 BPM: whole=750ms, half=375ms, quarter=187.5ms, eighth=93.75ms, sixteenth=46.875ms
-static constexpr int RTTL_BPM = 320;
+// Use 240 BPM for faster tempo to better match GPIO buzzer timing
+// At 240 BPM: whole=1000ms, half=500ms, quarter=250ms, eighth=125ms, sixteenth=62.5ms
+static constexpr int RTTL_BPM = 240;
 
 // Frequency to RTTL note mapping
 // Note: octave is stored separately and only added when it differs from default

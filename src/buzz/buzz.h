@@ -1,5 +1,6 @@
 #pragma once
-#include <cstddef> 
+#include <cstddef>
+#include <cstdint>
 
 struct ToneDuration {
     int frequency_khz;
@@ -7,9 +8,7 @@ struct ToneDuration {
 };
 
 // Convert a ToneDuration[] melody into RTTTL (written into `out`)
-size_t tonesToRtttl(char* out, size_t outCap,
-                    const ToneDuration* td, int n,
-                    const char* name);
+size_t tonesToRtttl(char *out, size_t outCap, const ToneDuration *td, int n, const char *name);
 
 void playBeep();
 void playLongBeep();

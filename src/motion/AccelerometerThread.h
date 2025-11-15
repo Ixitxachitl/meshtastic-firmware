@@ -28,6 +28,10 @@
 #include "BMI270Sensor.h"
 #endif
 
+#ifdef HAS_BHI260AP
+#include "BHI260APSensor.h"
+#endif
+
 extern ScanI2C::DeviceAddress accelerometer_found;
 
 class AccelerometerThread : public concurrency::OSThread
@@ -123,6 +127,11 @@ class AccelerometerThread : public concurrency::OSThread
 #ifdef HAS_BMI270
         case ScanI2C::DeviceType::BMI270:
             sensor = new BMI270Sensor(device);
+            break;
+#endif
+#ifdef HAS_BHI260AP
+        case ScanI2C::DeviceType::BHI260AP:
+            sensor = new BHI260APSensor(device);
             break;
 #endif
         default:
