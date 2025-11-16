@@ -5,8 +5,13 @@
 #include "configuration.h"
 #include "input/InputBroker.h"
 
-#if !defined(ARCH_PORTDUINO) && !defined(ARCH_STM32WL) && !defined(CONFIG_IDF_TARGET_ESP32C6)
+#if !defined(ARCH_PORTDUINO) && !defined(ARCH_STM32WL)
+#if defined(CONFIG_IDF_TARGET_ESP32C6)
+// Use local ESP32-C6 compatible implementation
+#include "buzz/NonBlockingRtttl.h"
+#else
 #include <NonBlockingRtttl.h>
+#endif
 #else
 // Noop class for portduino.
 class rtttl
