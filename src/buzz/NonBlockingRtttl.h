@@ -2,6 +2,9 @@
 // Based on https://github.com/end2endzone/NonBlockingRTTTL
 // MIT License
 
+// Only compile for ESP32-C6 (other platforms use the external library)
+#ifdef CONFIG_IDF_TARGET_ESP32C6
+
 #ifndef NonBlockingRtttl_h
 #define NonBlockingRtttl_h
 
@@ -149,5 +152,8 @@ bool isPlaying();
 bool done();
 
 }; // namespace rtttl
+
+#endif // NonBlockingRtttl_h
+#endif // CONFIG_IDF_TARGET_ESP32C6
 
 #endif
