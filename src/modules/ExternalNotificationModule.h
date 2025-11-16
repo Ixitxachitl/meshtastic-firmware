@@ -6,8 +6,8 @@
 #include "input/InputBroker.h"
 
 #if !defined(ARCH_PORTDUINO) && !defined(ARCH_STM32WL)
-#if defined(CONFIG_IDF_TARGET_ESP32C6)
-// Use local ESP32-C6 compatible implementation
+#if defined(M5STACK_UNITC6L)
+// Use local implementation for M5Stack UnitC6L (Arduino Core 3.x compatible)
 #include "buzz/NonBlockingRtttl.h"
 #else
 #include <NonBlockingRtttl.h>

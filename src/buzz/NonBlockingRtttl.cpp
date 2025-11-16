@@ -1,9 +1,9 @@
-// NonBlockingRTTTL - ESP32-C6 compatible port
+// NonBlockingRTTTL - ESP32 Arduino Core 3.x compatible port
 // Based on https://github.com/end2endzone/NonBlockingRTTTL
 // MIT License
 
-// Only compile for ESP32-C6 (other platforms use the external library)
-#ifdef CONFIG_IDF_TARGET_ESP32C6
+// Only compile for M5Stack UnitC6L (other platforms use the external library)
+#ifdef M5STACK_UNITC6L
 
 #include "NonBlockingRtttl.h"
 #include "Arduino.h"
@@ -244,4 +244,4 @@ bool done()
 
 }; // namespace rtttl
 
-#endif // CONFIG_IDF_TARGET_ESP32C6
+#endif // M5STACK_UNITC6L
