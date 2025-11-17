@@ -1404,28 +1404,39 @@ std::vector<int> calculateLineHeights(const std::vector<std::string> &lines, con
     std::vector<int> rowHeights;
     rowHeights.reserve(lines.size());
 
+    // Helper lambda to detect if a line contains any emoji by normalizing both line and label
+    auto lineContainsEmoji = [&](const std::string &str) -> bool {
+        const std::string normLine = normalizeEmoji(str);
+        for (int i = 0; i < numEmotes; ++i) {
+            const std::string normLabel = normalizeEmoji(std::string(emotes[i].label));
+            if (normLine.find(normLabel) != std::string::npos) {
+                return true;
+            }
+        }
+        return false;
+    };
+
     for (size_t idx = 0; idx < lines.size(); ++idx) {
         const auto &line = lines[idx];
         const int baseHeight = FONT_HEIGHT_SMALL;
 
-        // Detect if THIS line or NEXT line contains an emote
-        bool hasEmote = false;
+        // Detect if THIS line contains an emote (normalize for comparison)
+        bool hasEmote = lineContainsEmoji(line);
         int tallestEmote = baseHeight;
-        for (int i = 0; i < numEmotes; ++i) {
-            if (line.find(emotes[i].label) != std::string::npos) {
-                hasEmote = true;
-                tallestEmote = std::max(tallestEmote, emotes[i].height);
+        // Check known emotes for their actual height
+        if (hasEmote) {
+            const std::string normLine = normalizeEmoji(line);
+            for (int i = 0; i < numEmotes; ++i) {
+                const std::string normLabel = normalizeEmoji(std::string(emotes[i].label));
+                if (normLine.find(normLabel) != std::string::npos) {
+                    tallestEmote = std::max(tallestEmote, emotes[i].height);
+                }
             }
         }
 
         bool nextHasEmote = false;
         if (idx + 1 < lines.size()) {
-            for (int i = 0; i < numEmotes; ++i) {
-                if (lines[idx + 1].find(emotes[i].label) != std::string::npos) {
-                    nextHasEmote = true;
-                    break;
-                }
-            }
+            nextHasEmote = lineContainsEmoji(lines[idx + 1]);
         }
 
         int lineHeight = baseHeight;
