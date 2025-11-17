@@ -214,10 +214,13 @@ void drawDigitalClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int1
     const int target_width = display->getWidth() - 2;                         // small horizontal margin
     const int target_height = display->getHeight() - (headerReserve + bottomReserve);
 
+    // Use widest possible time format for consistent sizing (23:59 for 24h or 12:59 for 12h)
+    const char *maxWidthTime = config.display.use_12h_clock ? "12:59" : "23:59";
+
     uint16_t calcW = 0;
     uint16_t calcH = 0;
     while (true) {
-        calcW = measureTimeWidth(scale, timeString);
+        calcW = measureTimeWidth(scale, maxWidthTime);
         calcH = measureCellHeight(scale);
         if (calcW >= target_width || calcH >= target_height || scale >= max_scale) {
             break;
@@ -256,7 +259,12 @@ void drawDigitalClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int1
     uint16_t hourMinuteTextX = (display->getWidth() / 2) - (timeStringWidth / 2);
     uint16_t startingHourMinuteTextX = hourMinuteTextX;
 
+#if defined(M5STACK_UNITC6L)
+    uint16_t hourMinuteTextY =
+        (display->getHeight() / 2) - (((segmentWidth * 2) + (segmentHeight * 3) + 8) / 2) + 2 - 5; // Move up 5 pixels
+#else
     uint16_t hourMinuteTextY = (display->getHeight() / 2) - (((segmentWidth * 2) + (segmentHeight * 3) + 8) / 2) + 2;
+#endif
 
     // iterate over characters in hours:minutes string and draw segmented characters
     int interCharSpacing = std::max(1, static_cast<int>(roundf(1.5f * scale)));
@@ -284,8 +292,14 @@ void drawDigitalClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int1
         xOffset += (isHighResolution) ? 32 : 18;
     }
 
+#if defined(M5STACK_UNITC6L)
+    int labelYPos = (display->getHeight() - hourMinuteTextY) - 1 - 5; // Move up 5 pixels with clock
+#else
+    int labelYPos = (display->getHeight() - hourMinuteTextY) - 1;
+#endif
+
     if (config.display.use_12h_clock) {
-        display->drawString(startingHourMinuteTextX + xOffset, (display->getHeight() - hourMinuteTextY) - 1, isPM ? "pm" : "am");
+        display->drawString(startingHourMinuteTextX + xOffset, labelYPos, isPM ? "pm" : "am");
     }
 
 #ifndef USE_EINK
@@ -293,8 +307,7 @@ void drawDigitalClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int1
     if (scale >= 2.0f) {
         xOffset -= (int)(4.5f * scale);
     }
-    display->drawString(startingHourMinuteTextX + timeStringWidth - xOffset, (display->getHeight() - hourMinuteTextY) - 1,
-                        secondString);
+    display->drawString(startingHourMinuteTextX + timeStringWidth - xOffset, labelYPos, secondString);
 #endif
 
     graphics::drawCommonFooter(display, x, y);
