@@ -1021,23 +1021,26 @@ void UIRenderer::drawIconScreen(const char *upperMsg, OLEDDisplay *display, OLED
 
     // draw centered icon left to right and centered above the one line of app text
 #if defined(M5STACK_UNITC6L)
-    display->drawXbm(x + (SCREEN_WIDTH - 50) / 2, y + (SCREEN_HEIGHT - 28) / 2, icon_width, icon_height, icon_bits);
-    display->setFont(FONT_MEDIUM);
-    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    display->drawXbm(x + (SCREEN_WIDTH - 50) / 2, y + (SCREEN_HEIGHT - FONT_HEIGHT_SMALL - icon_height) / 2 + 1, icon_width,
+                     icon_height, icon_bits);
     display->setFont(FONT_SMALL);
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+
+    // Draw meshtastic.org at bottom
+    const char *title = "meshtastic.org";
+    display->drawString(x + getStringCenteredX(title), y + SCREEN_HEIGHT - FONT_HEIGHT_SMALL, title);
+
     // Draw region in upper left
-    if (upperMsg) {
-        int msgWidth = display->getStringWidth(upperMsg);
-        int msgX = x + (SCREEN_WIDTH - msgWidth) / 2;
-        int msgY = y;
-        display->drawString(msgX, msgY, upperMsg);
-    }
-    // Draw version and short name in bottom middle
+    if (upperMsg)
+        display->drawString(x + 0, y + 0, upperMsg);
+
+    // Draw version and short name in upper right
     char buf[25];
-    snprintf(buf, sizeof(buf), "%s   %s", xstr(APP_VERSION_SHORT),
+    snprintf(buf, sizeof(buf), "%s\n%s", xstr(APP_VERSION_SHORT),
              graphics::UIRenderer::haveGlyphs(owner.short_name) ? owner.short_name : "");
 
-    display->drawString(x + getStringCenteredX(buf), y + SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM, buf);
+    display->setTextAlignment(TEXT_ALIGN_RIGHT);
+    display->drawString(x + SCREEN_WIDTH, y + 0, buf);
     screen->forceDisplay();
 
     display->setTextAlignment(TEXT_ALIGN_LEFT); // Restore left align, just to be kind to any other unsuspecting code
