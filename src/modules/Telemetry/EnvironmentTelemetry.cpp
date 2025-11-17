@@ -784,7 +784,11 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     graphics::drawCommonHeader(display, x, y, titleStr);
 
     // === Row spacing setup ===
+#if defined(M5STACK_UNITC6L)
+    const int rowHeight = 7; // Tom Thumb font spacing
+#else
     const int rowHeight = FONT_HEIGHT_SMALL - 4;
+#endif
     int currentY = graphics::getTextPositions(display)[line++];
 
     // === Determine which packet to show ===
@@ -880,6 +884,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         // Build entries vector for other metrics
         s_displayCache.entries.clear();
 
+#if !defined(M5STACK_UNITC6L)
         // Dew point
         if (m.has_temperature && m.has_relative_humidity && m.relative_humidity > 0.0f) {
             const float dpC = dewPointC(m.temperature, m.relative_humidity);
@@ -900,6 +905,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
             (m.gas_resistance >= kMinGasKOhm && m.gas_resistance <= kMaxGasKOhm)) {
             s_displayCache.entries.push_back("Gas: " + String(m.gas_resistance, 2) + " kOhm");
         }
+#endif
 
         // Other metrics
         if (m.voltage != 0 || m.current != 0)
@@ -1014,6 +1020,13 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         }
 
         // === Draw remaining entries in 2-column format (dew, gas, voltage, etc.) ===
+#if defined(M5STACK_UNITC6L)
+        // Single column for tiny display
+        for (const auto &entry : s_displayCache.entries) {
+            display->drawString(x, currentY, entry);
+            currentY += rowHeight;
+        }
+#else
         static constexpr int kSplitShift = 14;
         const int splitX = (SCREEN_WIDTH / 2) - kSplitShift;
 
@@ -1026,6 +1039,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
 
             currentY += rowHeight;
         }
+#endif
     } else {
         // Simple display for low-resolution screens (like develop branch)
         // Build all metrics into a single vector
@@ -1045,6 +1059,14 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         // First row: sender/time on left, first metric right-aligned on right (if available)
         graphics::MessageRenderer::drawStringWithEmotes(display, x, currentY, displayStr.c_str(), emotes, numEmotes);
 
+#if defined(M5STACK_UNITC6L)
+        // For tiny display: put sender/time on first line, then all metrics on separate lines
+        currentY += rowHeight;
+        for (const auto &metric : allMetrics) {
+            display->drawString(x, currentY, metric);
+            currentY += rowHeight;
+        }
+#else
         if (!allMetrics.empty()) {
             int rightX = SCREEN_WIDTH - display->getStringWidth(allMetrics[0].c_str());
             display->drawString(rightX, currentY, allMetrics[0]);
@@ -1065,6 +1087,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
 
             currentY += rowHeight;
         }
+#endif
     }
 
     // === IAQ display ===

@@ -37,7 +37,11 @@ using graphics::numEmotes;
 
 static inline void drawSatelliteIcon(OLEDDisplay *display, int16_t x, int16_t y)
 {
+#if defined(M5STACK_UNITC6L)
+    int yOffset = -2;
+#else
     int yOffset = (isHighResolution) ? -5 : 1;
+#endif
     if (isHighResolution) {
         NodeListRenderer::drawScaledXBitmap16x16(x, y + yOffset, imgSatellite_width, imgSatellite_height, imgSatellite, display);
     } else {
@@ -82,11 +86,16 @@ extern uint32_t dopThresholds[5];
 // Draw GPS status summary
 void UIRenderer::drawGps(OLEDDisplay *display, int16_t x, int16_t y, const meshtastic::GPSStatus *gps)
 {
+#if defined(M5STACK_UNITC6L)
+    int yOffset = -2;
+#else
+    int yOffset = (isHighResolution) ? -2 : 1;
+#endif
     // Draw satellite image
     if (isHighResolution) {
-        NodeListRenderer::drawScaledXBitmap16x16(x, y - 2, imgSatellite_width, imgSatellite_height, imgSatellite, display);
+        NodeListRenderer::drawScaledXBitmap16x16(x, y + yOffset, imgSatellite_width, imgSatellite_height, imgSatellite, display);
     } else {
-        display->drawXbm(x + 1, y + 1, imgSatellite_width, imgSatellite_height, imgSatellite);
+        display->drawXbm(x + 1, y + yOffset, imgSatellite_width, imgSatellite_height, imgSatellite);
     }
     char textString[10];
 
@@ -296,7 +305,11 @@ void UIRenderer::drawNodes(OLEDDisplay *display, int16_t x, int16_t y, const mes
     if (isHighResolution) {
         NodeListRenderer::drawScaledXBitmap16x16(x, y - 1, 8, 8, imgUser, display);
     } else {
+#if defined(M5STACK_UNITC6L)
+        display->drawFastImage(x, y - 3, 8, 8, imgUser);
+#else
         display->drawFastImage(x, y + 1, 8, 8, imgUser);
+#endif
     }
 #endif
     int string_offset = (isHighResolution) ? 9 : 0;

@@ -435,6 +435,16 @@ const int *getTextPositions(OLEDDisplay *display)
 {
     static int textPositions[7]; // Static array that persists beyond function scope
 
+#if defined(M5STACK_UNITC6L)
+    // Use extra vertical spacing for M5Stack UnitC6L to prevent line overlap with Tom Thumb font
+    textPositions[0] = textZeroLine;
+    textPositions[1] = textFirstLine_unitc6l;
+    textPositions[2] = textSecondLine_unitc6l;
+    textPositions[3] = textThirdLine_unitc6l;
+    textPositions[4] = textFourthLine_unitc6l;
+    textPositions[5] = textFifthLine_unitc6l;
+    textPositions[6] = textSixthLine_unitc6l;
+#else
     if (isHighResolution) {
         textPositions[0] = textZeroLine;
         textPositions[1] = textFirstLine_medium;
@@ -452,6 +462,7 @@ const int *getTextPositions(OLEDDisplay *display)
         textPositions[5] = textFifthLine;
         textPositions[6] = textSixthLine;
     }
+#endif
     return textPositions;
 }
 

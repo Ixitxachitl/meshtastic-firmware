@@ -932,6 +932,25 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             meshtastic_NodeInfoLite *node_recipient = nodeDB->getMeshNode(m.dest);
 
             char senderBuf[48] = "";
+#if defined(M5STACK_UNITC6L)
+            if (node && node->has_user && node->user.short_name && node->user.short_name[0] != '\0') {
+                // Apply emoji replacement to sender name (use short_name for unitc6l)
+                std::string processedName = replaceUnknownEmoji(std::string(node->user.short_name), emotes, numEmotes);
+                std::snprintf(senderBuf, sizeof(senderBuf), "%s", processedName.c_str());
+            } else {
+                // No long/short name → show NodeID in parentheses
+                snprintf(senderBuf, sizeof(senderBuf), "(%08x)", m.sender);
+            }
+
+            // If this is *our own* message, override senderBuf to who the recipient was
+            bool mine = (m.sender == nodeDB->getNodeNum());
+            if (mine && node_recipient && node_recipient->has_user && node_recipient->user.short_name &&
+                node_recipient->user.short_name[0] != '\0') {
+                // Apply emoji replacement to recipient name (use short_name for unitc6l)
+                std::string processedName = replaceUnknownEmoji(std::string(node_recipient->user.short_name), emotes, numEmotes);
+                std::snprintf(senderBuf, sizeof(senderBuf), "%s", processedName.c_str());
+            }
+#else
             if (node && node->has_user && node->user.long_name && node->user.long_name[0] != '\0') {
                 // Apply emoji replacement to sender name
                 std::string processedName = replaceUnknownEmoji(std::string(node->user.long_name), emotes, numEmotes);
@@ -949,6 +968,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 std::string processedName = replaceUnknownEmoji(std::string(node_recipient->user.long_name), emotes, numEmotes);
                 std::snprintf(senderBuf, sizeof(senderBuf), "%s", processedName.c_str());
             }
+#endif
 
             // Compute how much room the sender label has (use timeSlotPx, NOT timeBuf)
             int availWidth =
@@ -1140,7 +1160,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     scrollY = bottomOffsetOneRow;
     waitingToReset = false;
     scrollStarted = false;
-    lastTime = millis(); // keep timebase sane
+    lastTime = millis();                    // keep timebase sane
 #endif
 
     int scrollOffset = static_cast<int>(scrollY);
@@ -1365,12 +1385,21 @@ std::vector<int> calculateLineHeights(const std::vector<std::string> &lines, con
                                       const std::vector<bool> &isHeaderVec)
 {
     // Tunables for layout control
+#if defined(M5STACK_UNITC6L)
+    constexpr int HEADER_UNDERLINE_GAP = 1; // space between underline and first body line
+    constexpr int HEADER_UNDERLINE_PIX = 1; // underline thickness (1px row drawn)
+    constexpr int BODY_LINE_LEADING = -1;   // default vertical leading for normal body lines (was -3, +2 for more spacing)
+    constexpr int MESSAGE_BLOCK_GAP = 2;    // gap after a message block before a new header
+    constexpr int EMOTE_PADDING_ABOVE = 2;  // space above emote line (added to line above)
+    constexpr int EMOTE_PADDING_BELOW = 2;  // space below emote line (added to emote line)
+#else
     constexpr int HEADER_UNDERLINE_GAP = 0; // space between underline and first body line
     constexpr int HEADER_UNDERLINE_PIX = 1; // underline thickness (1px row drawn)
     constexpr int BODY_LINE_LEADING = -4;   // default vertical leading for normal body lines
     constexpr int MESSAGE_BLOCK_GAP = 4;    // gap after a message block before a new header
     constexpr int EMOTE_PADDING_ABOVE = 4;  // space above emote line (added to line above)
     constexpr int EMOTE_PADDING_BELOW = 3;  // space below emote line (added to emote line)
+#endif
 
     std::vector<int> rowHeights;
     rowHeights.reserve(lines.size());
