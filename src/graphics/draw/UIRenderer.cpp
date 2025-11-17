@@ -683,25 +683,28 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
 
     // Display Region and Channel Utilization
 #if defined(M5STACK_UNITC6L)
-    drawNodes(display, x, getTextPositions(display)[line] + 2, nodeStatus, -1, false, "online");
+    drawNodes(display, x, getTextPositions(display)[line++] + 2, nodeStatus, -1, false, "online");
+    // Uptime calculated here but drawn later with channel utilization
+    uint32_t uptime = millis() / 1000;
+    uint32_t days = uptime / 86400;
+    uint32_t hours = (uptime % 86400) / 3600;
+    uint32_t mins = (uptime % 3600) / 60;
 #else
     drawNodes(display, x + 1, getTextPositions(display)[line] + 2, nodeStatus, -1, false, "online");
-#endif
     char uptimeStr[32] = "";
     uint32_t uptime = millis() / 1000;
     uint32_t days = uptime / 86400;
     uint32_t hours = (uptime % 86400) / 3600;
     uint32_t mins = (uptime % 3600) / 60;
     // Show as "Up: 2d 3h", "Up: 5h 14m", or "Up: 37m"
-#if !defined(M5STACK_UNITC6L)
     if (days)
         snprintf(uptimeStr, sizeof(uptimeStr), "Up: %ud %uh", days, hours);
     else if (hours)
         snprintf(uptimeStr, sizeof(uptimeStr), "Up: %uh %um", hours, mins);
     else
         snprintf(uptimeStr, sizeof(uptimeStr), "Up: %um", mins);
-#endif
     display->drawString(SCREEN_WIDTH - display->getStringWidth(uptimeStr), getTextPositions(display)[line++], uptimeStr);
+#endif
 
     // === Second Row: Satellites and Voltage ===
     config.display.heading_bold = false;
@@ -725,14 +728,44 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
 #if defined(M5STACK_UNITC6L)
     line += 1;
 
-    // === Node Identity ===
+    // === Channel Utilization and Uptime (same line) ===
+    char chUtilStr[16];
+    snprintf(chUtilStr, sizeof(chUtilStr), "Ch:%2.0f%%", airTime->channelUtilizationPercent());
+    display->drawString(x, getTextPositions(display)[line], chUtilStr);
+
+    char uptimeCompactStr[24] = "";
+    if (days)
+        snprintf(uptimeCompactStr, sizeof(uptimeCompactStr), "Up:%ud%uh", days, hours);
+    else if (hours)
+        snprintf(uptimeCompactStr, sizeof(uptimeCompactStr), "Up:%uh%um", hours, mins);
+    else
+        snprintf(uptimeCompactStr, sizeof(uptimeCompactStr), "Up:%um", mins);
+
+    display->drawString(SCREEN_WIDTH - display->getStringWidth(uptimeCompactStr), getTextPositions(display)[line],
+                        uptimeCompactStr);
+    line += 1;
+
+    // === Node Identity (Long Name + Short Name) ===
     int textWidth = 0;
     int nameX = 0;
+    std::string longNameStr;
+
+    if (ourNode && ourNode->has_user && strlen(ourNode->user.long_name) > 0) {
+        longNameStr = sanitizeString(ourNode->user.long_name);
+    }
+
     char shortnameble[35];
     snprintf(shortnameble, sizeof(shortnameble), "%s",
              graphics::UIRenderer::haveGlyphs(owner.short_name) ? owner.short_name : "");
 
-    // === ShortName Centered ===
+    // Show long name if available
+    if (!longNameStr.empty()) {
+        textWidth = display->getStringWidth(longNameStr.c_str());
+        nameX = (SCREEN_WIDTH - textWidth) / 2;
+        display->drawString(nameX, getTextPositions(display)[line++], longNameStr.c_str());
+    }
+
+    // Show short name on next line
     textWidth = display->getStringWidth(shortnameble);
     nameX = (SCREEN_WIDTH - textWidth) / 2;
     display->drawString(nameX, getTextPositions(display)[line++], shortnameble);
