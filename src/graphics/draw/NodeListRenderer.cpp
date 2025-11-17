@@ -196,7 +196,11 @@ void drawEntryLastHeard(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int
         if (isHighResolution) {
             drawScaledXBitmap16x16(x, y + 6, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
         } else {
+#if defined(M5STACK_UNITC6L)
+            display->drawXbm(x, y + 1, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
+#else
             display->drawXbm(x, y + 5, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
+#endif
         }
     }
 
@@ -227,7 +231,11 @@ void drawEntryHopSignal(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int
         if (isHighResolution) {
             drawScaledXBitmap16x16(x, y + 6, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
         } else {
+#if defined(M5STACK_UNITC6L)
+            display->drawXbm(x, y + 1, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
+#else
             display->drawXbm(x, y + 5, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
+#endif
         }
     }
 
@@ -319,7 +327,11 @@ void drawNodeDistance(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
         if (isHighResolution) {
             drawScaledXBitmap16x16(x, y + 6, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
         } else {
+#if defined(M5STACK_UNITC6L)
+            display->drawXbm(x, y + 1, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
+#else
             display->drawXbm(x, y + 5, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
+#endif
         }
     }
 
@@ -365,7 +377,11 @@ void drawEntryCompass(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
         if (isHighResolution) {
             drawScaledXBitmap16x16(x, y + 6, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
         } else {
+#if defined(M5STACK_UNITC6L)
+            display->drawXbm(x, y + 1, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
+#else
             display->drawXbm(x, y + 5, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
+#endif
         }
     }
 }
@@ -427,7 +443,11 @@ void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
                         EntryRenderer renderer, NodeExtrasRenderer extras, float heading, double lat, double lon)
 {
     const int COMMON_HEADER_HEIGHT = FONT_HEIGHT_SMALL - 1;
+#if defined(M5STACK_UNITC6L)
+    const int rowYOffset = 7; // More spacing for Tom Thumb font
+#else
     const int rowYOffset = FONT_HEIGHT_SMALL - 3;
+#endif
     bool locationScreen = false;
 
     if (strcmp(title, "Bearings") == 0)
@@ -446,6 +466,9 @@ void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
 
     // Space below header
     y += COMMON_HEADER_HEIGHT;
+#if defined(M5STACK_UNITC6L)
+    y += 2; // Additional spacing below title banner for unitc6l
+#endif
 
     int totalEntries = nodeDB->getNumMeshNodes();
     int totalRowsAvailable = (display->getHeight() - y) / rowYOffset;

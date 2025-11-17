@@ -33,6 +33,15 @@ OSThread::OSThread(const char *_name, uint32_t period, ThreadController *_contro
 
     ThreadName = _name;
 
+#if defined(ARDUINO_ARCH_ESP32)
+    // Initialize FreeRTOS config with defaults
+    rtosConfig.enabled = false;
+    rtosConfig.stackSizeWords = 2048;
+    rtosConfig.priority = tskIDLE_PRIORITY + 1;
+    rtosConfig.coreAffinity = tskNO_AFFINITY;
+    taskHandle = nullptr;
+#endif
+
     if (controller) {
         bool added = controller->add(this);
         assert(added);
@@ -41,6 +50,11 @@ OSThread::OSThread(const char *_name, uint32_t period, ThreadController *_contro
 
 OSThread::~OSThread()
 {
+#if defined(ARDUINO_ARCH_ESP32)
+    // Clean up FreeRTOS task if it exists (ESP32 only)
+    stopFreeRTOSTask();
+#endif
+
     if (controller)
         controller->remove(this);
 }
@@ -140,5 +154,106 @@ void assertIsSetup()
      */
     assert(hasBeenSetup);
 }
+
+#if defined(ARDUINO_ARCH_ESP32)
+
+void OSThread::setFreeRTOSTask(bool enable, uint32_t stackSizeWords, UBaseType_t priority, BaseType_t coreAffinity)
+{
+    // Can only configure before task is started
+    if (taskHandle != nullptr) {
+        LOG_WARN("Cannot reconfigure FreeRTOS task while it's running");
+        return;
+    }
+
+    rtosConfig.enabled = enable;
+    rtosConfig.stackSizeWords = stackSizeWords;
+    rtosConfig.priority = priority;
+    rtosConfig.coreAffinity = coreAffinity;
+
+    if (enable) {
+        // Remove from cooperative scheduler since we'll run as FreeRTOS task
+        if (controller) {
+            controller->remove(this);
+            controller = nullptr;
+        }
+    }
+}
+
+bool OSThread::startFreeRTOSTask()
+{
+    if (!rtosConfig.enabled) {
+        LOG_WARN("Thread %s: FreeRTOS task not enabled", ThreadName.c_str());
+        return false;
+    }
+
+    if (taskHandle != nullptr) {
+        LOG_WARN("Thread %s: FreeRTOS task already running", ThreadName.c_str());
+        return false;
+    }
+
+    // ESP32 supports core affinity
+    BaseType_t result = xTaskCreatePinnedToCore(rtosTaskEntryPoint,        // Task function
+                                                ThreadName.c_str(),        // Task name
+                                                rtosConfig.stackSizeWords, // Stack size in words
+                                                this,                      // Task parameter (this instance)
+                                                rtosConfig.priority,       // Task priority
+                                                &taskHandle,               // Task handle
+                                                rtosConfig.coreAffinity    // Core affinity
+    );
+
+    if (result == pdPASS) {
+        LOG_INFO("Thread %s: FreeRTOS task started (stack: %u words, priority: %u)", ThreadName.c_str(),
+                 rtosConfig.stackSizeWords, rtosConfig.priority);
+        return true;
+    } else {
+        LOG_ERROR("Thread %s: Failed to create FreeRTOS task", ThreadName.c_str());
+        taskHandle = nullptr;
+        return false;
+    }
+}
+
+void OSThread::stopFreeRTOSTask()
+{
+    if (taskHandle != nullptr) {
+        LOG_INFO("Thread %s: Stopping FreeRTOS task", ThreadName.c_str());
+        vTaskDelete(taskHandle);
+        taskHandle = nullptr;
+    }
+}
+
+void OSThread::rtosTaskEntryPoint(void *pvParameters)
+{
+    OSThread *instance = static_cast<OSThread *>(pvParameters);
+    if (instance) {
+        instance->rtosTaskLoop();
+    }
+    // Task function should never return, but if it does, delete the task
+    vTaskDelete(nullptr);
+}
+
+void OSThread::rtosTaskLoop()
+{
+    LOG_DEBUG("Thread %s: FreeRTOS task loop started", ThreadName.c_str());
+
+    for (;;) {
+        currentThread = this;
+
+        // Call the thread's runOnce method
+        int32_t delayMs = runOnce();
+
+        currentThread = nullptr;
+
+        // Handle the delay
+        if (delayMs <= 0) {
+            // Yield to other tasks
+            taskYIELD();
+        } else {
+            // Sleep for the specified time
+            vTaskDelay(pdMS_TO_TICKS(delayMs));
+        }
+    }
+}
+
+#endif // ARDUINO_ARCH_ESP32
 
 } // namespace concurrency

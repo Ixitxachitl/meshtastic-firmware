@@ -35,6 +35,13 @@ int32_t LinuxInput::runOnce()
     if (firstTime) {
         if (portduino_config.keyboardDevice == "")
             return disable();
+
+        // Special marker "sdl2" means keyboard is handled by SDL2, just set kb_found
+        if (portduino_config.keyboardDevice == "sdl2") {
+            kb_found = true;
+            return disable(); // Don't process Linux input events, SDL2 handles it
+        }
+
         fd = open(portduino_config.keyboardDevice.c_str(), O_RDWR);
         if (fd < 0)
             return disable();

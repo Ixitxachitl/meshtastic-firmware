@@ -1,0 +1,17 @@
+General:
+  MACAddress: "a3b74f9c2dee"
+
+Lora:
+  Module: simradio
+
+Display:
+  Panel: X11
+  Width: 240
+  Height: 135
+  OffsetRotate: 0
+
+Input:
+  KeyboardDevice: sdl2
+
+Config:
+  DisplayMode: TWOCOLOR

@@ -37,6 +37,9 @@ void clearThreadRegistries();
 // Text and emote rendering
 void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string &line, const Emote *emotes, int emoteCount);
 
+// Calculate the width of a string with emotes (for alignment calculations)
+int getStringWidthWithEmotes(OLEDDisplay *display, const std::string &line, const Emote *emotes, int emoteCount);
+
 /// Draws the text message frame for displaying received messages
 void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
 
@@ -49,6 +52,10 @@ std::vector<int> calculateLineHeights(const std::vector<std::string> &lines, con
 
 // Reset scroll state when new messages arrive
 void resetScrollState();
+
+// Manual scroll controls (used by keyboard to override auto-scroll)
+void scrollUp();
+void scrollDown();
 
 // Helper to auto-select the correct thread mode from a message
 void setThreadFor(const StoredMessage &sm, const meshtastic_MeshPacket &packet);

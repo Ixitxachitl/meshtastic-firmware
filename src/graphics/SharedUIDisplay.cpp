@@ -5,7 +5,9 @@
 #include "draw/NodeListRenderer.h"
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
+#include "graphics/draw/MessageRenderer.h"
 #include "graphics/draw/UIRenderer.h"
+#include "graphics/emotes.h"
 #include "main.h"
 #include "meshtastic/config.pb.h"
 #include "power.h"
@@ -14,6 +16,10 @@
 
 namespace graphics
 {
+
+using graphics::Emote;
+using graphics::emotes;
+using graphics::numEmotes;
 
 void determineResolution(int16_t screenheight, int16_t screenwidth)
 {
@@ -48,6 +54,40 @@ void decomposeTime(uint32_t rtc_sec, int &hour, int &minute, int &second)
 bool hasUnreadMessage = false;
 bool isMuted = false;
 bool isHighResolution = false;
+
+static volatile bool s_overlayActive = false;
+void setOverlayActive(bool active)
+{
+    s_overlayActive = active;
+}
+bool isOverlayActive()
+{
+    return s_overlayActive;
+}
+
+// === Active screen classification (coarse) ===
+// We only need to know "is this the Messages screen?" for keyboard arrows.
+static volatile bool s_isMessagesScreenActive = false;
+
+static int s_messagesFrameIndex = -1;
+
+bool isMessagesScreenActive()
+{
+    return s_isMessagesScreenActive;
+}
+void setMessagesScreenActive(bool active)
+{
+    s_isMessagesScreenActive = active;
+}
+
+void setMessagesFrameIndex(int idx)
+{
+    s_messagesFrameIndex = idx;
+}
+int getMessagesFrameIndex()
+{
+    return s_messagesFrameIndex;
+}
 
 // === Internal State ===
 bool isBoltVisibleShared = true;
@@ -111,10 +151,13 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
         }
 
         // === Screen Title ===
-        display->setTextAlignment(TEXT_ALIGN_CENTER);
-        display->drawString(SCREEN_WIDTH / 2, y, titleStr);
+        // Calculate width and manually center since drawStringWithEmotes doesn't respect TEXT_ALIGN_CENTER
+        int titleWidth = graphics::MessageRenderer::getStringWidthWithEmotes(display, titleStr, emotes, numEmotes);
+        int titleX = (SCREEN_WIDTH - titleWidth) / 2;
+
+        graphics::MessageRenderer::drawStringWithEmotes(display, titleX, y, titleStr, emotes, numEmotes);
         if (config.display.heading_bold) {
-            display->drawString((SCREEN_WIDTH / 2) + 1, y, titleStr);
+            graphics::MessageRenderer::drawStringWithEmotes(display, titleX + 1, y, titleStr, emotes, numEmotes);
         }
     }
     display->setTextAlignment(TEXT_ALIGN_LEFT);
@@ -211,7 +254,6 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
 
     if (rtc_sec > 0) {
         // === Build Time String ===
-        long hms = (rtc_sec % SEC_PER_DAY + SEC_PER_DAY) % SEC_PER_DAY;
         int hour, minute, second;
         graphics::decomposeTime(rtc_sec, hour, minute, second);
         snprintf(timeStr, sizeof(timeStr), "%d:%02d", hour, minute);
@@ -393,6 +435,16 @@ const int *getTextPositions(OLEDDisplay *display)
 {
     static int textPositions[7]; // Static array that persists beyond function scope
 
+#if defined(M5STACK_UNITC6L)
+    // Use extra vertical spacing for M5Stack UnitC6L to prevent line overlap with Tom Thumb font
+    textPositions[0] = textZeroLine;
+    textPositions[1] = textFirstLine_unitc6l;
+    textPositions[2] = textSecondLine_unitc6l;
+    textPositions[3] = textThirdLine_unitc6l;
+    textPositions[4] = textFourthLine_unitc6l;
+    textPositions[5] = textFifthLine_unitc6l;
+    textPositions[6] = textSixthLine_unitc6l;
+#else
     if (isHighResolution) {
         textPositions[0] = textZeroLine;
         textPositions[1] = textFirstLine_medium;
@@ -410,6 +462,7 @@ const int *getTextPositions(OLEDDisplay *display)
         textPositions[5] = textFifthLine;
         textPositions[6] = textSixthLine;
     }
+#endif
     return textPositions;
 }
 
