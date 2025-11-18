@@ -1467,6 +1467,112 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
     graphics::drawCommonFooter(display, x, y);
 }
 
+#if defined(M5STACK_UNITC6L)
+// ****************************
+// * Compass-Only Screen      *
+// ****************************
+void UIRenderer::drawCompassScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
+{
+    display->clear();
+
+#if HAS_GPS
+    // === Determine Compass Heading ===
+    float heading = 0;
+    static float frozenHeading = 0;
+    static bool hasStoredFrozenHeading = false;
+    static meshtastic_CompassMode lastCompassMode = (meshtastic_CompassMode)-1;
+    bool validHeading = false;
+
+    // Get current heading
+    if (screen->hasHeading()) {
+        heading = radians(screen->getHeading());
+        validHeading = true;
+    } else {
+        meshtastic_NodeInfoLite *ourNode = nodeDB->getMeshNode(nodeDB->getNodeNum());
+        if (ourNode) {
+            double lat = DegD(ourNode->position.latitude_i);
+            double lon = DegD(ourNode->position.longitude_i);
+            heading = screen->estimatedHeading(lat, lon);
+            validHeading = !isnan(heading);
+        }
+    }
+
+    // Handle freeze heading mode
+    if (uiconfig.compass_mode != lastCompassMode) {
+        hasStoredFrozenHeading = false;
+        lastCompassMode = uiconfig.compass_mode;
+    }
+
+    if (uiconfig.compass_mode == meshtastic_CompassMode_FREEZE_HEADING) {
+        if (!hasStoredFrozenHeading && validHeading) {
+            frozenHeading = heading;
+            hasStoredFrozenHeading = true;
+        }
+    }
+
+    // Determine needle heading based on mode
+    float needleHeading = (uiconfig.compass_mode == meshtastic_CompassMode_FREEZE_HEADING) ? frozenHeading : heading;
+
+    if (validHeading) {
+        // Calculate compass position - smaller compass centered horizontally with labels outside
+        // Reserve space for labels on all sides
+        const int labelSpace = FONT_HEIGHT_SMALL + 2; // Reduced from 4 to 2 to allow larger compass
+        int availableHeight = SCREEN_HEIGHT - (labelSpace * 2);
+        int availableWidth = SCREEN_WIDTH - (labelSpace * 2);
+
+        // Use smaller dimension to ensure labels fit, then add 2 pixels
+        int maxRadius = std::min(availableWidth, availableHeight) / 2;
+        int compassRadius = maxRadius + 2; // Add 2 pixels to make compass larger
+        if (compassRadius < 12)
+            compassRadius = 12;
+
+        // Center horizontally and vertically
+        int compassX = x + SCREEN_WIDTH / 2;
+        int compassY = y + (SCREEN_HEIGHT / 2);
+
+        // Get attitude quaternion for 3D compass
+        const Quat att = GetAttitudeForRenderer();
+
+        // Render 3D compass sphere with mode-specific behavior
+        if (uiconfig.compass_mode == meshtastic_CompassMode_FIXED_RING) {
+            // FIXED_RING: Use top-down view (ignore gravity tilt)
+            CompassRenderer::setTopDownView(true);
+            CompassRenderer::drawCompassSphere(display, compassX, compassY, compassRadius, Quat::identity());
+
+            // Draw needle respecting freeze mode
+            CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, Quat::identity(), needleHeading,
+                                                0.0f);
+            CompassRenderer::setTopDownView(false);
+        } else {
+            // DYNAMIC/FREEZE_HEADING: Full 3D compass with gravity
+            CompassRenderer::drawCompassSphere(display, compassX, compassY, compassRadius, att);
+
+            // Draw needle (uses needleHeading so freeze mode is respected)
+            CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, needleHeading, 0.0f);
+        }
+
+        // Draw cardinal direction labels outside the compass sphere
+        const float rLabel = compassRadius + (FONT_HEIGHT_SMALL / 2) + 1; // Reduced from 2 to 1 to move labels closer
+
+        display->setFont(FONT_SMALL);
+        display->setTextAlignment(TEXT_ALIGN_CENTER);
+        display->drawString(compassX, compassY - (int)rLabel - (FONT_HEIGHT_SMALL / 2), "N");
+        display->drawString(compassX + (int)rLabel, compassY - (FONT_HEIGHT_SMALL / 2), "E");
+        display->drawString(compassX, compassY + (int)rLabel - (FONT_HEIGHT_SMALL / 2), "S");
+        display->drawString(compassX - (int)rLabel, compassY - (FONT_HEIGHT_SMALL / 2), "W");
+    } else {
+        // No valid heading - show message
+        display->setFont(FONT_SMALL);
+        display->setTextAlignment(TEXT_ALIGN_CENTER);
+        display->drawString(x + SCREEN_WIDTH / 2, y + SCREEN_HEIGHT / 2 - FONT_HEIGHT_SMALL / 2, "No Heading");
+    }
+#endif // HAS_GPS
+
+    // Draw footer only (no header to maximize compass size)
+    graphics::drawCommonFooter(display, x, y);
+}
+#endif // M5STACK_UNITC6L
+
 #ifdef USERPREFS_OEM_TEXT
 
 void UIRenderer::drawOEMIconScreen(const char *upperMsg, OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)

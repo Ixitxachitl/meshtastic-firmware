@@ -1042,6 +1042,12 @@ void Screen::setFrames(FrameFocus focus)
         normalFrames[numframes++] = graphics::UIRenderer::drawCompassAndLocationScreen;
         indicatorIcons.push_back(icon_compass);
     }
+#if defined(M5STACK_UNITC6L)
+    // Add dedicated compass screen after GPS for small displays
+    fsi.positions.compass = numframes;
+    normalFrames[numframes++] = graphics::UIRenderer::drawCompassScreen;
+    indicatorIcons.push_back(compass_ball);
+#endif
 #endif
     if (RadioLibInterface::instance && !hiddenFrames.lora) {
         fsi.positions.lora = numframes;
@@ -1523,6 +1529,10 @@ int Screen::handleInputEvent(const InputEvent *event)
 #if HAS_GPS
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.gps && gps) {
                     menuHandler::positionBaseMenu();
+#if defined(M5STACK_UNITC6L)
+                } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.compass && gps) {
+                    menuHandler::positionBaseMenu();
+#endif
 #endif
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.clock) {
                     menuHandler::clockMenu();

@@ -646,6 +646,7 @@ class Screen : public concurrency::OSThread
             uint8_t deviceFocused = 255;
             uint8_t system = 255;
             uint8_t gps = 255;
+            uint8_t compass = 255;
             uint8_t home = 255;
             uint8_t textMessage = 255;
             uint8_t nodelist = 255;

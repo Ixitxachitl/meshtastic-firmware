@@ -3,7 +3,8 @@
 #include "CompassRenderer.h"
 
 // Memory optimization: Use smaller cache on memory-constrained devices
-#if defined(ARCH_RP2040) || defined(ARCH_NRF52)
+// Also use simplified compass for small displays
+#if defined(ARCH_RP2040) || defined(ARCH_NRF52) || defined(M5STACK_UNITC6L)
 #define COMPASS_MEMORY_OPTIMIZED 1
 #else
 #define COMPASS_MEMORY_OPTIMIZED 0
