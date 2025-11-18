@@ -417,7 +417,7 @@ void NotificationRenderer::drawAlertBannerOverlay(OLEDDisplay *display, OLEDDisp
 
     uint16_t screenHeight = display->height();
 #if defined(M5STACK_UNITC6L)
-    uint8_t effectiveLineHeight = FONT_HEIGHT_SMALL - 1; // Tighter spacing for Tom Thumb font
+    uint8_t effectiveLineHeight = FONT_HEIGHT_TINY - 1; // Tighter spacing for Tom Thumb font
 #else
     uint8_t effectiveLineHeight = FONT_HEIGHT_SMALL - 3;
 #endif
@@ -541,7 +541,7 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
 
     uint16_t screenHeight = display->height();
 #if defined(M5STACK_UNITC6L)
-    uint8_t effectiveLineHeight = FONT_HEIGHT_SMALL - 1; // Tighter spacing for Tom Thumb font
+    uint8_t effectiveLineHeight = FONT_HEIGHT_TINY - 1; // Tighter spacing for Tom Thumb font
 #else
     uint8_t effectiveLineHeight = FONT_HEIGHT_SMALL - 3;
 #endif
@@ -612,7 +612,7 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
             display->fillRect(boxLeft, boxTop + 1, boxWidth, effectiveLineHeight - background_yOffset);
             display->setColor(BLACK);
 #if defined(M5STACK_UNITC6L)
-            int yOffset = 1; // Move text down 2 pixels for Tom Thumb font (was 3, now 1 = +2 down)
+            int yOffset = FONT_HEIGHT_TINY - 6; // Move text down for Tom Thumb font (7-6=1, was 3, now 1 = +2 down)
 #else
             int yOffset = 3;
 #endif
@@ -654,7 +654,7 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
                 }
             } else {
 #if defined(M5STACK_UNITC6L)
-                int textYOffset = 2; // Move text down 2 pixels for Tom Thumb font
+                int textYOffset = FONT_HEIGHT_TINY - 5; // Move text down for Tom Thumb font (7-5=2)
 #else
                 int textYOffset = 0;
 #endif

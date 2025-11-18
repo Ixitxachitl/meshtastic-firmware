@@ -443,12 +443,12 @@ void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
                         EntryRenderer renderer, NodeExtrasRenderer extras, float heading, double lat, double lon)
 {
 #if defined(M5STACK_UNITC6L)
-    const int COMMON_HEADER_HEIGHT = 10; // Account for padding row + header row + spacing
+    const int COMMON_HEADER_HEIGHT = FONT_HEIGHT_TINY + 3; // Account for padding row + header row + spacing
 #else
     const int COMMON_HEADER_HEIGHT = FONT_HEIGHT_SMALL - 1;
 #endif
 #if defined(M5STACK_UNITC6L)
-    const int rowYOffset = 7; // More spacing for Tom Thumb font
+    const int rowYOffset = FONT_HEIGHT_TINY; // More spacing for Tom Thumb font
 #else
     const int rowYOffset = FONT_HEIGHT_SMALL - 3;
 #endif

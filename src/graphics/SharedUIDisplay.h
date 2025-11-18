@@ -29,14 +29,16 @@ namespace graphics
 #define textFifthLine_medium (textFourthLine_medium + FONT_HEIGHT_SMALL)
 #define textSixthLine_medium (textFifthLine_medium + FONT_HEIGHT_SMALL)
 
-// Consistent Line Spacing for M5Stack UnitC6L with Tom Thumb 3x6 font
-// 7-pixel line spacing (6px font + 1px gap)
-#define textFirstLine_unitc6l 11
-#define textSecondLine_unitc6l (textFirstLine_unitc6l + 7)
-#define textThirdLine_unitc6l (textSecondLine_unitc6l + 7)
-#define textFourthLine_unitc6l (textThirdLine_unitc6l + 7)
-#define textFifthLine_unitc6l (textFourthLine_unitc6l + 7)
-#define textSixthLine_unitc6l (textFifthLine_unitc6l + 7)
+// Consistent Line Spacing for M5Stack UnitC6L with FONT_TINY (Tom Thumb 3x6 font)
+// FONT_HEIGHT_TINY is 7 (6px font + 1px gap calculated by _fontHeight macro)
+#ifdef M5STACK_UNITC6L
+#define textFirstLine_unitc6l (FONT_HEIGHT_TINY + 4) // 11 pixels (header + spacing)
+#define textSecondLine_unitc6l (textFirstLine_unitc6l + FONT_HEIGHT_TINY)
+#define textThirdLine_unitc6l (textSecondLine_unitc6l + FONT_HEIGHT_TINY)
+#define textFourthLine_unitc6l (textThirdLine_unitc6l + FONT_HEIGHT_TINY)
+#define textFifthLine_unitc6l (textFourthLine_unitc6l + FONT_HEIGHT_TINY)
+#define textSixthLine_unitc6l (textFifthLine_unitc6l + FONT_HEIGHT_TINY)
+#endif
 
 // Consistent Line Spacing for devices like VisionMaster T190
 #define textFirstLine_large (FONT_HEIGHT_SMALL + 1)
