@@ -83,6 +83,11 @@ static const unsigned char mail[] PROGMEM = {
     0b11111111, 0b00  // Bottom line
 };
 
+// Compact envelope icon for M5STACK_UNITC6L (7x6)
+const int envelope_width = 7;
+const int envelope_height = 6;
+static const unsigned char envelope[] PROGMEM = {0x7F, 0x63, 0x55, 0x49, 0x41, 0x7F};
+
 // 📬 Mail / Message
 const uint8_t icon_mail[] PROGMEM = {
     0b11111111, // ████████ top border

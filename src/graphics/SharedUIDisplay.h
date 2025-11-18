@@ -31,7 +31,7 @@ namespace graphics
 
 // Consistent Line Spacing for M5Stack UnitC6L with Tom Thumb 3x6 font
 // 7-pixel line spacing (6px font + 1px gap)
-#define textFirstLine_unitc6l 10
+#define textFirstLine_unitc6l 11
 #define textSecondLine_unitc6l (textFirstLine_unitc6l + 7)
 #define textThirdLine_unitc6l (textSecondLine_unitc6l + 7)
 #define textFourthLine_unitc6l (textThirdLine_unitc6l + 7)

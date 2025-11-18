@@ -442,7 +442,11 @@ void drawCompassArrow(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
 void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y, const char *title,
                         EntryRenderer renderer, NodeExtrasRenderer extras, float heading, double lat, double lon)
 {
+#if defined(M5STACK_UNITC6L)
+    const int COMMON_HEADER_HEIGHT = 10; // Account for padding row + header row + spacing
+#else
     const int COMMON_HEADER_HEIGHT = FONT_HEIGHT_SMALL - 1;
+#endif
 #if defined(M5STACK_UNITC6L)
     const int rowYOffset = 7; // More spacing for Tom Thumb font
 #else
@@ -466,9 +470,6 @@ void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
 
     // Space below header
     y += COMMON_HEADER_HEIGHT;
-#if defined(M5STACK_UNITC6L)
-    y += 2; // Additional spacing below title banner for unitc6l
-#endif
 
     int totalEntries = nodeDB->getNumMeshNodes();
     int totalRowsAvailable = (display->getHeight() - y) / rowYOffset;
