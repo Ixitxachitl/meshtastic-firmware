@@ -1514,17 +1514,14 @@ void UIRenderer::drawCompassScreen(OLEDDisplay *display, OLEDDisplayUiState *sta
     float needleHeading = (uiconfig.compass_mode == meshtastic_CompassMode_FREEZE_HEADING) ? frozenHeading : heading;
 
     if (validHeading) {
-        // Calculate compass position - smaller compass centered horizontally with labels outside
-        // Reserve space for labels on all sides
-        const int labelSpace = FONT_HEIGHT_SMALL + 2; // Reduced from 4 to 2 to allow larger compass
-        int availableHeight = SCREEN_HEIGHT - (labelSpace * 2);
-        int availableWidth = SCREEN_WIDTH - (labelSpace * 2);
+        // Calculate compass position - maximize compass size with labels inside
+        int availableHeight = SCREEN_HEIGHT - 4;
+        int availableWidth = SCREEN_WIDTH - 4;
 
-        // Use smaller dimension to ensure labels fit, then add 2 pixels
-        int maxRadius = std::min(availableWidth, availableHeight) / 2;
-        int compassRadius = maxRadius + 2; // Add 2 pixels to make compass larger
-        if (compassRadius < 12)
-            compassRadius = 12;
+        // Use smaller dimension for compass radius
+        int compassRadius = std::min(availableWidth, availableHeight) / 2;
+        if (compassRadius < 16)
+            compassRadius = 16;
 
         // Center horizontally and vertically
         int compassX = x + SCREEN_WIDTH / 2;
@@ -1551,15 +1548,45 @@ void UIRenderer::drawCompassScreen(OLEDDisplay *display, OLEDDisplayUiState *sta
             CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, needleHeading, 0.0f);
         }
 
-        // Draw cardinal direction labels outside the compass sphere
-        const float rLabel = compassRadius + (FONT_HEIGHT_SMALL / 2) + 1; // Reduced from 2 to 1 to move labels closer
+        // Draw cardinal direction labels on the edge of the compass with black background boxes
+        const float rLabel = compassRadius - (FONT_HEIGHT_SMALL / 2) - 1; // Position on the edge
+        const int boxWidth = 5;
+        const int boxHeight = 7;
 
         display->setFont(FONT_SMALL);
         display->setTextAlignment(TEXT_ALIGN_CENTER);
-        display->drawString(compassX, compassY - (int)rLabel - (FONT_HEIGHT_SMALL / 2), "N");
-        display->drawString(compassX + (int)rLabel, compassY - (FONT_HEIGHT_SMALL / 2), "E");
-        display->drawString(compassX, compassY + (int)rLabel - (FONT_HEIGHT_SMALL / 2), "S");
-        display->drawString(compassX - (int)rLabel, compassY - (FONT_HEIGHT_SMALL / 2), "W");
+
+        // Draw "N" with black background box (shifted 2 pixels left)
+        int nX = compassX - 2;
+        int nY = compassY - (int)rLabel - (FONT_HEIGHT_SMALL / 2);
+        display->setColor(BLACK);
+        display->fillRect(nX - boxWidth / 2 - 1, nY - 1, boxWidth, boxHeight);
+        display->setColor(WHITE);
+        display->drawString(nX, nY, "N");
+
+        // Draw "E" with black background box (shifted 2 pixels left)
+        int eX = compassX + (int)rLabel - 2;
+        int eY = compassY - (FONT_HEIGHT_SMALL / 2);
+        display->setColor(BLACK);
+        display->fillRect(eX - boxWidth / 2 - 1, eY - 1, boxWidth, boxHeight);
+        display->setColor(WHITE);
+        display->drawString(eX, eY, "E");
+
+        // Draw "S" with black background box (shifted 2 pixels left)
+        int sX = compassX - 2;
+        int sY = compassY + (int)rLabel - (FONT_HEIGHT_SMALL / 2);
+        display->setColor(BLACK);
+        display->fillRect(sX - boxWidth / 2 - 1, sY - 1, boxWidth, boxHeight);
+        display->setColor(WHITE);
+        display->drawString(sX, sY, "S");
+
+        // Draw "W" with black background box (shifted 2 pixels left)
+        int wX = compassX - (int)rLabel - 2;
+        int wY = compassY - (FONT_HEIGHT_SMALL / 2);
+        display->setColor(BLACK);
+        display->fillRect(wX - boxWidth / 2 - 1, wY - 1, boxWidth, boxHeight);
+        display->setColor(WHITE);
+        display->drawString(wX, wY, "W");
     } else {
         // No valid heading - show message
         display->setFont(FONT_SMALL);
