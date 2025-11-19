@@ -660,11 +660,13 @@ int CannedMessageModule::handleDestinationSelectionInput(const InputEvent *event
         runState = returnToCannedList ? CANNED_MESSAGE_RUN_STATE_ACTIVE : CANNED_MESSAGE_RUN_STATE_FREETEXT;
         returnToCannedList = false;
 
-        if (runState == CANNED_MESSAGE_RUN_STATE_ACTIVE) {
-            graphics::setOverlayActive(false);
-            runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
-            screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
-        }
+        // Close overlay and return to the previous state (message list or freetext)
+        graphics::setOverlayActive(false);
+
+        // Notify UI to regenerate frames
+        UIFrameEvent e;
+        e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+        notifyObservers(&e);
 
         screen->forceDisplay(true);
         return 1;

@@ -1523,8 +1523,8 @@ void UIRenderer::drawCompassScreen(OLEDDisplay *display, OLEDDisplayUiState *sta
         if (compassRadius < 16)
             compassRadius = 16;
 
-        // Center horizontally and vertically
-        int compassX = x + SCREEN_WIDTH / 2;
+        // Center horizontally and vertically (shifted 4 pixels right)
+        int compassX = x + SCREEN_WIDTH / 2 + 4;
         int compassY = y + (SCREEN_HEIGHT / 2);
 
         // Get attitude quaternion for 3D compass
