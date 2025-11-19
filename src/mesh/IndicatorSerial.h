@@ -23,8 +23,9 @@ class SensecapIndicator : public concurrency::OSThread
     bool send_uplink(meshtastic_InterdeviceMessage message);
 
     // Send beep command to RP2040 buzzer
-    // frequency_hz: tone frequency in Hz (e.g., 2000 for 2kHz)
-    // duration_ms: beep duration in milliseconds
+    // For packed format: bit 31=queue flag, bits 30-16=frequency, bits 15-0=duration
+    void sendBeep(uint32_t packed_value);
+    // Legacy method for manual beeps (non-queued)
     void sendBeep(uint16_t frequency_hz, uint16_t duration_ms);
     void stopBeep();
 

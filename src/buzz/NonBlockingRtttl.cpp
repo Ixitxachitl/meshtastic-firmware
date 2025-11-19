@@ -18,15 +18,19 @@ void tone(uint8_t pin, unsigned int frequency, unsigned long duration)
 {
     if (sensecapIndicator && frequency > 0) {
         LOG_DEBUG("RTTL tone: freq=%u Hz, dur=%lu ms", frequency, duration);
-        sensecapIndicator->sendBeep((uint16_t)frequency, (uint16_t)duration);
+        // Set high bit (0x80000000) to indicate this is a queued RTTL note
+        // Format: bit 31=queue, bits 30-16=frequency, bits 15-0=duration
+        uint32_t packed = (1U << 31) | ((uint32_t)frequency << 16) | (uint32_t)duration;
+        sensecapIndicator->sendBeep(packed);
     }
 }
 
 void noTone(uint8_t pin)
 {
-    if (sensecapIndicator) {
-        sensecapIndicator->stopBeep();
-    }
+    // Don't send BEEP_OFF during RTTL playback - it creates gaps between notes.
+    // The RP2040's hardware timer automatically stops each note after its duration.
+    // BEEP_OFF is only sent when rtttl::stop() is called to end playback.
+    (void)pin; // Suppress unused parameter warning
 }
 #endif // SENSECAP_INDICATOR
 
@@ -216,10 +220,10 @@ void nextnote()
         LOG_DEBUG("RTTL tone: freq=%u Hz, dur=%lu ms", frequency, duration);
         tone(pin, frequency, duration);
 #ifdef SENSECAP_INDICATOR
-        // Reduce delay by 20ms to send next note earlier, eliminating gaps between notes.
-        // The RP2040 takes ~20ms (UART RX + decode + PWM setup) to start playing,
-        // so sending the next command 20ms early ensures smooth note transitions.
-        noteDelay = millis() + (duration > 20 ? duration - 20 : duration);
+        // For SENSECAP_INDICATOR, send next note immediately (no delay).
+        // The RP2040's queue handles timing - it plays notes for their full duration
+        // while queueing the next one. This keeps the pipeline full without gaps.
+        noteDelay = millis();
 #else
         noteDelay = millis() + duration;
 #endif
@@ -227,7 +231,7 @@ void nextnote()
         // silence
         noTone(pin);
 #ifdef SENSECAP_INDICATOR
-        noteDelay = millis() + (duration > 20 ? duration - 20 : duration);
+        noteDelay = millis();
 #else
         noteDelay = millis() + duration;
 #endif
@@ -263,7 +267,14 @@ void play()
 void stop()
 {
     playing = false;
+#ifdef SENSECAP_INDICATOR
+    // For SENSECAP_INDICATOR, explicitly send BEEP_OFF to stop playback
+    if (sensecapIndicator) {
+        sensecapIndicator->stopBeep();
+    }
+#else
     noTone(pin);
+#endif
 }
 
 bool isPlaying()

@@ -109,24 +109,30 @@ bool SensecapIndicator::send_uplink(meshtastic_InterdeviceMessage message)
     return true;
 }
 
-void SensecapIndicator::sendBeep(uint16_t frequency_hz, uint16_t duration_ms)
+void SensecapIndicator::sendBeep(uint32_t packed_value)
 {
     meshtastic_InterdeviceMessage message = meshtastic_InterdeviceMessage_init_zero;
     message.which_data = meshtastic_InterdeviceMessage_sensor_tag;
     message.data.sensor.type = meshtastic_MessageType_BEEP_ON;
     message.data.sensor.which_data = meshtastic_SensorData_uint32_value_tag;
+    message.data.sensor.data.uint32_value = packed_value;
 
-    // Pack frequency (upper 16 bits) and duration (lower 16 bits) into uint32
-    message.data.sensor.data.uint32_value = ((uint32_t)frequency_hz << 16) | duration_ms;
+    bool is_queued = (packed_value & 0x80000000) != 0;
+    uint16_t freq = (packed_value >> 16) & 0x7FFF; // Mask out queue bit
+    uint16_t dur = packed_value & 0xFFFF;
 
-    LOG_INFO("Sending BEEP_ON to RP2040: freq=%u Hz, duration=%u ms (packed=0x%08x)", frequency_hz, duration_ms,
-             message.data.sensor.data.uint32_value);
+    LOG_DEBUG("Sending BEEP_ON to RP2040: freq=%u Hz, dur=%u ms, queued=%d (packed=0x%08x)", freq, dur, is_queued, packed_value);
 
-    if (send_uplink(message)) {
-        LOG_DEBUG("Sent BEEP_ON to RP2040: %u Hz for %u ms", frequency_hz, duration_ms);
-    } else {
+    if (!send_uplink(message)) {
         LOG_WARN("Failed to send BEEP_ON to RP2040");
     }
+}
+
+void SensecapIndicator::sendBeep(uint16_t frequency_hz, uint16_t duration_ms)
+{
+    // Manual beep (non-queued): no high bit set
+    uint32_t packed = ((uint32_t)frequency_hz << 16) | duration_ms;
+    sendBeep(packed);
 }
 
 void SensecapIndicator::stopBeep()
