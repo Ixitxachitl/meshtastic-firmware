@@ -2,6 +2,10 @@
 #include "NodeDB.h"
 #include "configuration.h"
 
+#ifdef SENSECAP_INDICATOR
+#include "mesh/IndicatorSerial.h"
+#endif
+
 #if !defined(ARCH_ESP32) && !defined(ARCH_RP2040) && !defined(ARCH_PORTDUINO)
 #include "Tone.h"
 #endif
@@ -388,6 +392,26 @@ static void playMelody(const ToneDuration *melody, int count, const char *name =
         return; // Buzzer disabled or not configured for system sounds
     }
 
+#ifdef SENSECAP_INDICATOR
+    // For SenseCAP Indicator, send melody notes to RP2040 buzzer
+    // RP2040 now supports tone() with frequency control
+    extern SensecapIndicator *sensecapIndicator;
+    if (sensecapIndicator) {
+        // Play each note in the melody
+        for (int i = 0; i < count; i++) {
+            uint16_t frequency = melody[i].frequency_khz;
+            uint16_t duration = melody[i].duration_ms;
+
+            LOG_DEBUG("Note %d: freq=%u Hz, dur=%u ms", i, frequency, duration);
+            sensecapIndicator->sendBeep(frequency, duration);
+
+            // Wait for note to complete plus spacing (30% longer)
+            delay(duration * 1.3);
+        }
+        return;
+    }
+#endif
+
 #ifdef HAS_I2S
     if (i2sBuzzerEnabled()) {
         char rttl[RTTL_BUFFER_SIZE];
@@ -422,6 +446,8 @@ void playTones(const ToneDuration *tone_durations, int size)
 void playBeep()
 {
     ToneDuration melody[] = {{NOTE_B3, DURATION_1_8}};
+    LOG_DEBUG("playBeep: NOTE_B3=%d, DURATION_1_8=%d, melody[0].freq=%d, melody[0].dur=%d", NOTE_B3, DURATION_1_8,
+              melody[0].frequency_khz, melody[0].duration_ms);
     playMelody(melody, sizeof(melody) / sizeof(ToneDuration), "beep");
 }
 

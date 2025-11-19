@@ -44,9 +44,10 @@
 #define TOUCH_I2C_PORT 0
 #define TOUCH_SLAVE_ADDRESS 0x48
 
-// in future, we may want to add a buzzer and add all sensors to the indicator via a data protocol for now only GPS is supported
-// // Buzzer
-// #define PIN_BUZZER 19
+// Buzzer on RP2040 companion processor (GPIO 19 on RP2040 side)
+// Use GPIO 1 (unused UART TX) as dummy pin for ESP32 PWM setup
+// Actual buzzer control redirected to RP2040 via tone() override
+#define PIN_BUZZER 1
 
 #define GPS_DEFAULT_NOT_PRESENT 1
 #define GPS_RX_PIN 20

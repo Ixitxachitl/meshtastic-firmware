@@ -2,6 +2,11 @@
 #if !MESHTASTIC_EXCLUDE_GPS
 #include "GPS.h"
 #endif
+#ifdef SENSECAP_INDICATOR
+#include "mesh/IndicatorSerial.h"
+#include "mesh/comms/FakeI2C.h"
+#include "mesh/comms/FakeUART.h"
+#endif
 #include "MeshRadio.h"
 #include "MeshService.h"
 #include "NodeDB.h"
@@ -804,6 +809,14 @@ void setup()
     // but we need to do this after main cpu init (esp32setup), because we need the random seed set
     nodeDB = new NodeDB;
 
+#ifdef SENSECAP_INDICATOR
+    // Initialize SenseCAP Indicator communication early so buzzer works for startup melody
+    LOG_INFO("Initializing SenseCAP Indicator communication");
+    fakeUART = new FakeUART();
+    fakeI2C = new FakeI2C();
+    sensecapIndicator = new SensecapIndicator(Serial2);
+#endif
+
 #if HAS_TFT
     if (config.display.displaymode == meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
         tftSetup();
@@ -952,6 +965,10 @@ SPI.setFrequency(4000000);
     if (sensor_detected == false) {
 #endif
         if (HAS_GPS) {
+#ifdef SENSECAP_INDICATOR
+            // Set GPS to use FakeUART (already initialized earlier)
+            GPS::_serial_gps = (HardwareSerial *)fakeUART;
+#endif
             if (config.position.gps_mode != meshtastic_Config_PositionConfig_GpsMode_NOT_PRESENT) {
                 gps = GPS::createGps();
                 if (gps) {

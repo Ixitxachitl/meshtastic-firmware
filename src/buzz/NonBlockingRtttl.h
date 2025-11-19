@@ -2,8 +2,8 @@
 // Based on https://github.com/end2endzone/NonBlockingRTTTL
 // MIT License
 
-// Only compile for M5Stack UnitC6L (other platforms use the external library)
-#ifdef M5STACK_UNITC6L
+// Compile for M5Stack UnitC6L and SenseCAP Indicator (other platforms use the external library)
+#if defined(M5STACK_UNITC6L) || defined(SENSECAP_INDICATOR)
 
 #ifndef NonBlockingRtttl_h
 #define NonBlockingRtttl_h

@@ -2,11 +2,33 @@
 // Based on https://github.com/end2endzone/NonBlockingRTTTL
 // MIT License
 
-// Only compile for M5Stack UnitC6L (other platforms use the external library)
-#ifdef M5STACK_UNITC6L
+// Compile for M5Stack UnitC6L and SenseCAP Indicator (other platforms use the external library)
+#if defined(M5STACK_UNITC6L) || defined(SENSECAP_INDICATOR)
 
 #include "NonBlockingRtttl.h"
 #include "Arduino.h"
+
+#ifdef SENSECAP_INDICATOR
+#include "configuration.h"
+#include "mesh/IndicatorSerial.h"
+extern SensecapIndicator *sensecapIndicator;
+
+// Redirect tone functions to RP2040
+void tone(uint8_t pin, unsigned int frequency, unsigned long duration)
+{
+    if (sensecapIndicator && frequency > 0) {
+        LOG_DEBUG("RTTL tone: freq=%u Hz, dur=%lu ms", frequency, duration);
+        sensecapIndicator->sendBeep((uint16_t)frequency, (uint16_t)duration);
+    }
+}
+
+void noTone(uint8_t pin)
+{
+    if (sensecapIndicator) {
+        sensecapIndicator->stopBeep();
+    }
+}
+#endif // SENSECAP_INDICATOR
 
 namespace rtttl
 {
@@ -191,12 +213,24 @@ void nextnote()
         // Note that in mathematical terms, C4 should be 16.35 Hz (4 octaves below middle C)
         // but in RTTTL specification, C4 is note 261.63 Hz which is note C in the 4th octave up from the bottom of a piano.
         unsigned int frequency = (unsigned int)(261.63 * pow(2.0, (note - 1) / 12.0 + (scale - 4)));
+        LOG_DEBUG("RTTL tone: freq=%u Hz, dur=%lu ms", frequency, duration);
         tone(pin, frequency, duration);
+#ifdef SENSECAP_INDICATOR
+        // Reduce delay by 20ms to send next note earlier, eliminating gaps between notes.
+        // The RP2040 takes ~20ms (UART RX + decode + PWM setup) to start playing,
+        // so sending the next command 20ms early ensures smooth note transitions.
+        noteDelay = millis() + (duration > 20 ? duration - 20 : duration);
+#else
         noteDelay = millis() + duration;
+#endif
     } else {
         // silence
         noTone(pin);
+#ifdef SENSECAP_INDICATOR
+        noteDelay = millis() + (duration > 20 ? duration - 20 : duration);
+#else
         noteDelay = millis() + duration;
+#endif
     }
 }
 
@@ -214,7 +248,7 @@ void play()
                 loopCount--;
             }
             if (loopCount == 0) {
-                stop();
+                rtttl::stop();
             } else {
                 // play again
                 buffer = firstNote;
