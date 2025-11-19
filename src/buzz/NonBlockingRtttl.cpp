@@ -217,7 +217,6 @@ void nextnote()
         // Note that in mathematical terms, C4 should be 16.35 Hz (4 octaves below middle C)
         // but in RTTTL specification, C4 is note 261.63 Hz which is note C in the 4th octave up from the bottom of a piano.
         unsigned int frequency = (unsigned int)(261.63 * pow(2.0, (note - 1) / 12.0 + (scale - 4)));
-        LOG_DEBUG("RTTL tone: freq=%u Hz, dur=%lu ms", frequency, duration);
         tone(pin, frequency, duration);
 #ifdef SENSECAP_INDICATOR
         // For SENSECAP_INDICATOR, send next note immediately (no delay).
