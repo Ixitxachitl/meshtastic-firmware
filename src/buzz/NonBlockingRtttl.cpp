@@ -16,10 +16,11 @@ extern SensecapIndicator *sensecapIndicator;
 // Redirect tone functions to RP2040
 void tone(uint8_t pin, unsigned int frequency, unsigned long duration)
 {
-    if (sensecapIndicator && frequency > 0) {
+    if (sensecapIndicator) {
         LOG_DEBUG("RTTL tone: freq=%u Hz, dur=%lu ms", frequency, duration);
         // Set high bit (0x80000000) to indicate this is a queued RTTL note
         // Format: bit 31=queue, bits 30-16=frequency, bits 15-0=duration
+        // Frequency 0 indicates a rest (silence)
         uint32_t packed = (1U << 31) | ((uint32_t)frequency << 16) | (uint32_t)duration;
         sensecapIndicator->sendBeep(packed);
     }
@@ -218,20 +219,15 @@ void nextnote()
         // but in RTTTL specification, C4 is note 261.63 Hz which is note C in the 4th octave up from the bottom of a piano.
         unsigned int frequency = (unsigned int)(261.63 * pow(2.0, (note - 1) / 12.0 + (scale - 4)));
         tone(pin, frequency, duration);
-#ifdef SENSECAP_INDICATOR
-        // For SENSECAP_INDICATOR, send next note immediately (no delay).
-        // The RP2040's queue handles timing - it plays notes for their full duration
-        // while queueing the next one. This keeps the pipeline full without gaps.
         noteDelay = millis();
-#else
-        noteDelay = millis() + duration;
-#endif
     } else {
-        // silence
-        noTone(pin);
+        // silence (rest)
 #ifdef SENSECAP_INDICATOR
+        // Send rest as frequency 0 with duration to RP2040
+        tone(pin, 0, duration);
         noteDelay = millis();
 #else
+        noTone(pin);
         noteDelay = millis() + duration;
 #endif
     }
@@ -243,6 +239,25 @@ void play()
         return;
 
     unsigned long m = millis();
+#ifdef SENSECAP_INDICATOR
+    // For SENSECAP_INDICATOR, send all notes immediately in a burst
+    // The RP2040 queue handles the timing, so we don't wait between notes
+    while (playing && *buffer != '\0') {
+        nextnote();
+    }
+    // Handle end of song
+    if (*buffer == '\0') {
+        if (loopCount != 255 && loopCount > 0) {
+            loopCount--;
+        }
+        if (loopCount == 0) {
+            rtttl::stop();
+        } else {
+            buffer = firstNote;
+            noteDelay = m + loopGap;
+        }
+    }
+#else
     if ((long)(m - noteDelay) >= 0) {
         if (*buffer == '\0') {
             // end of the song
@@ -261,6 +276,7 @@ void play()
             nextnote();
         }
     }
+#endif
 }
 
 void stop()
