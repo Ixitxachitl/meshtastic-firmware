@@ -66,6 +66,7 @@ class BME680Sensor : public TelemetrySensor
   private:
     Bsec2 bme680;
     float lastGasOhms = NAN;
+    ScanI2C::DeviceAddress deviceAddress; // Track port for pin switching
 
   protected:
     const char *bsecConfigFileName = "/prefs/bsec.dat";

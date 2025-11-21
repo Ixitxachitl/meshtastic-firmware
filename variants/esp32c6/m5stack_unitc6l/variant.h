@@ -7,6 +7,11 @@ void c6l_init();
 #define I2C_SDA 10
 #define I2C_SCL 8
 
+// Grove Port I2C (shares GPIO4/5 with GPS UART)
+// ESP32-C6 only has 1 I2C peripheral, so we use pin switching
+#define GROVE_SDA 5
+#define GROVE_SCL 4
+
 #define PIN_BUZZER 11
 
 #define HAS_NEOPIXEL                         // Enable the use of neopixels

@@ -136,6 +136,19 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
 
     LOG_DEBUG("Scan for I2C devices on port %d", port);
 
+    // ESP32-C6 only has 1 I2C peripheral - use pin switching for Grove port
+#if defined(M5STACK_UNITC6L) && defined(GROVE_SDA) && defined(GROVE_SCL)
+    bool switchedPins = false;
+    if (port == I2CPort::WIRE1) {
+        // Temporarily switch Wire to Grove pins (GPIO5/4)
+        Wire.end();
+        Wire.begin(GROVE_SDA, GROVE_SCL);
+        Wire.setClock(100000);
+        switchedPins = true;
+        LOG_DEBUG("Switched I2C to Grove port (GPIO%d/GPIO%d)", GROVE_SDA, GROVE_SCL);
+    }
+#endif
+
     uint8_t err;
 
     DeviceAddress addr(port, 0x00);
@@ -656,6 +669,16 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
             foundDevices[addr] = type;
         }
     }
+
+    // Restore original I2C pins if we switched to Grove
+#if defined(M5STACK_UNITC6L) && defined(GROVE_SDA) && defined(GROVE_SCL)
+    if (switchedPins) {
+        Wire.end();
+        Wire.begin(I2C_SDA, I2C_SCL);
+        Wire.setClock(100000);
+        LOG_DEBUG("Restored I2C to internal bus (GPIO%d/GPIO%d)", I2C_SDA, I2C_SCL);
+    }
+#endif
 }
 
 void ScanI2CTwoWire::scanPort(I2CPort port)

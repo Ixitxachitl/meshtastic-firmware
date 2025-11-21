@@ -29,8 +29,27 @@ int32_t BME680Sensor::runOnce()
     if ((int32_t)(now - next_due) < 0)
         return (int32_t)(next_due - now);
 
+#if defined(M5STACK_UNITC6L) && defined(GROVE_SDA) && defined(GROVE_SCL)
+    // ESP32-C6: Temporarily switch to Grove pins if sensor is on WIRE1
+    bool needsPinSwitch = (deviceAddress.port == ScanI2C::I2CPort::WIRE1);
+    if (needsPinSwitch) {
+        Wire.end();
+        Wire.begin(GROVE_SDA, GROVE_SCL);
+        Wire.setClock(100000);
+        delay(5);
+    }
+#endif
+
     if (!bme680.run()) {
         checkStatus("runTrigger");
+#if defined(M5STACK_UNITC6L) && defined(GROVE_SDA) && defined(GROVE_SCL)
+        // Restore internal I2C pins
+        if (needsPinSwitch) {
+            Wire.end();
+            Wire.begin(I2C_SDA, I2C_SCL);
+            Wire.setClock(100000);
+        }
+#endif
         next_due = now + 3000;
         return 3000;
     }
@@ -44,6 +63,15 @@ int32_t BME680Sensor::runOnce()
 #endif
 #endif
 
+#if defined(M5STACK_UNITC6L) && defined(GROVE_SDA) && defined(GROVE_SCL)
+    // Restore internal I2C pins after reading
+    if (needsPinSwitch) {
+        Wire.end();
+        Wire.begin(I2C_SDA, I2C_SCL);
+        Wire.setClock(100000);
+    }
+#endif
+
     next_due = now + 3000;
     return 3000;
 }
@@ -51,6 +79,20 @@ int32_t BME680Sensor::runOnce()
 bool BME680Sensor::initDevice(TwoWire *bus, ScanI2C::FoundDevice *dev)
 {
     status = 0;
+    deviceAddress = dev->address; // Store for pin switching
+
+#if defined(M5STACK_UNITC6L) && defined(GROVE_SDA) && defined(GROVE_SCL)
+    // ESP32-C6: Switch to Grove pins if sensor is on WIRE1
+    bool needsPinSwitch = (dev->address.port == ScanI2C::I2CPort::WIRE1);
+    if (needsPinSwitch) {
+        Wire.end();
+        Wire.begin(GROVE_SDA, GROVE_SCL);
+        Wire.setClock(100000);
+        delay(10);
+        bus = &Wire; // Use the reconfigured Wire
+    }
+#endif
+
     if (!bme680.begin(dev->address.address, *bus))
         checkStatus("begin");
 
@@ -71,6 +113,15 @@ bool BME680Sensor::initDevice(TwoWire *bus, ScanI2C::FoundDevice *dev)
 
     if (status == 0)
         LOG_DEBUG("BME680Sensor::runOnce: bme680.status %d", bme680.status);
+
+#if defined(M5STACK_UNITC6L) && defined(GROVE_SDA) && defined(GROVE_SCL)
+    // Restore internal I2C pins after initialization
+    if (needsPinSwitch) {
+        Wire.end();
+        Wire.begin(I2C_SDA, I2C_SCL);
+        Wire.setClock(100000);
+    }
+#endif
 
     initI2CSensor();
     return status;

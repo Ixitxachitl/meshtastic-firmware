@@ -640,6 +640,12 @@ void setup()
         LOG_INFO("CAP bus (Wire1) is disabled; skipping.");
     }
 
+    // ESP32-C6 Unit-C6L: Scan Grove port using pin switching
+#if defined(M5STACK_UNITC6L) && defined(GROVE_SDA) && defined(GROVE_SCL)
+    LOG_INFO("Scanning Grove port (GPIO5/GPIO4)...");
+    i2cScanner->scanPort(ScanI2C::I2CPort::WIRE1);
+#endif
+
     // Always scan the internal/default bus
 #if defined(I2C_SDA) || HAS_WIRE
     LOG_INFO("Scanning internal bus (Wire)...");

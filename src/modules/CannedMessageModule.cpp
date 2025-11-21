@@ -309,7 +309,11 @@ void CannedMessageModule::resetSearch()
 
     // Adjust scrollIndex so previousDestIndex is still visible
     int totalEntries = activeChannelIndices.size() + filteredNodes.size();
+#if defined(M5STACK_UNITC6L)
+    this->visibleRows = (displayHeight - FONT_HEIGHT_TINY * 2) / FONT_HEIGHT_TINY;
+#else
     this->visibleRows = (displayHeight - FONT_HEIGHT_SMALL * 2) / FONT_HEIGHT_SMALL;
+#endif
     if (this->visibleRows < 1)
         this->visibleRows = 1;
     int maxScrollIndex = std::max(0, totalEntries - visibleRows);
@@ -1757,11 +1761,19 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
     display->setTextAlignment(TEXT_ALIGN_LEFT);
 
     // List Items
+#if defined(M5STACK_UNITC6L)
+    int rowYOffset = titleY + FONT_HEIGHT_TINY;
+#else
     int rowYOffset = titleY + (FONT_HEIGHT_SMALL - 4);
+#endif
     int numActiveChannels = this->activeChannelIndices.size();
     int totalEntries = numActiveChannels + this->filteredNodes.size();
     int columns = 1;
+#if defined(M5STACK_UNITC6L)
+    this->visibleRows = (display->getHeight() - (titleY + FONT_HEIGHT_TINY)) / FONT_HEIGHT_TINY;
+#else
     this->visibleRows = (display->getHeight() - (titleY + FONT_HEIGHT_SMALL)) / (FONT_HEIGHT_SMALL - 4);
+#endif
     if (this->visibleRows < 1)
         this->visibleRows = 1;
 
@@ -1773,11 +1785,15 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
 
     for (int row = 0; row < visibleRows; row++) {
         int itemIndex = scrollIndex + row;
+#if defined(M5STACK_UNITC6L)
+        int yOffset = row * FONT_HEIGHT_TINY + rowYOffset;
+#else
+        int yOffset = row * (FONT_HEIGHT_SMALL - 4) + rowYOffset;
+#endif
         if (itemIndex >= totalEntries)
             break;
 
         int xOffset = 0;
-        int yOffset = row * (FONT_HEIGHT_SMALL - 4) + rowYOffset;
         char entryText[64] = "";
 
         // Draw Channels First
@@ -1830,7 +1846,11 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
         // Highlight background (if selected)
         if (itemIndex == destIndex) {
             int scrollPadding = 8; // Reserve space for scrollbar
+#if defined(M5STACK_UNITC6L)
+            display->fillRect(0, yOffset, display->getWidth() - scrollPadding, FONT_HEIGHT_TINY);
+#else
             display->fillRect(0, yOffset + 2, display->getWidth() - scrollPadding, FONT_HEIGHT_SMALL - 5);
+#endif
             display->setColor(BLACK);
         }
 
@@ -1846,7 +1866,11 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
                 const meshtastic_NodeInfoLite *node = this->filteredNodes[nodeIndex].node;
                 if (node && hasKeyForNode(node)) {
                     int iconX = display->getWidth() - key_symbol_width - 15;
+#if defined(M5STACK_UNITC6L)
+                    int iconY = yOffset + (FONT_HEIGHT_TINY - key_symbol_height) / 2;
+#else
                     int iconY = yOffset + (FONT_HEIGHT_SMALL - key_symbol_height) / 2;
+#endif
 
                     if (itemIndex == destIndex) {
                         display->setColor(INVERSE);
@@ -1862,7 +1886,11 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
 
     // Scrollbar
     if (totalEntries > visibleRows) {
+#if defined(M5STACK_UNITC6L)
+        int scrollbarHeight = visibleRows * FONT_HEIGHT_TINY;
+#else
         int scrollbarHeight = visibleRows * (FONT_HEIGHT_SMALL - 4);
+#endif
         int totalScrollable = totalEntries;
         int scrollTrackX = display->getWidth() - 6;
         display->drawRect(scrollTrackX, rowYOffset, 4, scrollbarHeight);
@@ -2113,7 +2141,11 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
         display->setFont(FONT_SMALL);
 
         // Precompute per-row heights based on emotes (centered if present)
+#if defined(M5STACK_UNITC6L)
+        const int baseRowSpacing = FONT_HEIGHT_TINY;
+#else
         const int baseRowSpacing = FONT_HEIGHT_SMALL - 4;
+#endif
 
         int topMsg;
         std::vector<int> rowHeights;
@@ -2123,7 +2155,11 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
         drawHeader(display, x, y, buffer);
 
         // Shift message list upward by 3 pixels to reduce spacing between header and first message
+#if defined(M5STACK_UNITC6L)
+        const int listYOffset = y + FONT_HEIGHT_TINY;
+#else
         const int listYOffset = y + FONT_HEIGHT_SMALL - 3;
+#endif
         _visibleRows = (display->getHeight() - listYOffset) / baseRowSpacing;
 
         // Figure out which messages are visible and their needed heights
