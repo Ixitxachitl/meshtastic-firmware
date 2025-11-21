@@ -824,6 +824,7 @@ int32_t Screen::runOnce()
             break;
         case Cmd::STOP_ALERT_FRAME:
             NotificationRenderer::pauseBanner = false;
+            setFrames(); // Restore normal screen frames
             break;
         case Cmd::STOP_BOOT_SCREEN:
             EINK_ADD_FRAMEFLAG(dispdev, COSMETIC); // E-Ink: Explicitly use full-refresh for next frame

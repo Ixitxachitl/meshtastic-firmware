@@ -651,6 +651,9 @@ class NimbleBluetoothServerCallback : public NimBLEServerCallbacks
     {
         LOG_INFO("BLE incoming connection %s", connInfo.getAddress().toString().c_str());
 
+        // Store the connection handle for future use
+        nimbleBluetoothConnHandle = connInfo.getConnHandle();
+
 #if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32C6)
         const uint16_t connHandle = connInfo.getConnHandle();
         int phyResult =
@@ -671,6 +674,18 @@ class NimbleBluetoothServerCallback : public NimBLEServerCallbacks
         LOG_INFO("BLE conn %u initial MTU %u (target %u)", connHandle, connInfo.getMTU(), kPreferredBleMtu);
         pServer->updateConnParams(connHandle, 6, 12, 0, 200);
 #endif
+
+        // If this is a bonded connection, authentication won't happen again, so close the pairing screen now
+        if (connInfo.isBonded()) {
+            LOG_INFO("BLE bonded connection, closing pairing screen if showing");
+            if (passkeyShowing) {
+                passkeyShowing = false;
+                if (screen)
+                    screen->endAlert();
+            }
+            meshtastic::BluetoothStatus newStatus(meshtastic::BluetoothStatus::ConnectionState::CONNECTED);
+            bluetoothStatus->updateStatus(&newStatus);
+        }
     }
 
     virtual void onDisconnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo, int reason)
