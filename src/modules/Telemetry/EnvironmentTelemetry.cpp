@@ -891,9 +891,9 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
             if (!isnan(dpC)) {
                 if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
                     const float dpF = dpC * 9.0f / 5.0f + 32.0f;
-                    s_displayCache.entries.push_back("Dew: " + String(dpF, 1) + " °F");
+                    s_displayCache.entries.push_back("Dew: " + String(dpF, 1) + "°F");
                 } else {
-                    s_displayCache.entries.push_back("Dew: " + String(dpC, 1) + " °C");
+                    s_displayCache.entries.push_back("Dew: " + String(dpC, 1) + "°C");
                 }
             }
         }
@@ -994,8 +994,28 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
 
         auto &nh = s_hist[from]; // default-constructs empty rings for new nodes
 
-        // Calculate sparkline width based on screen width for better fit on narrow displays
-        const int kSparkW = (SCREEN_WIDTH >= 240) ? 115 : (SCREEN_WIDTH >= 220) ? 95 : 75;
+        // Calculate sparkline width dynamically based on the width of the text labels
+        // Find the maximum width of the three main metric strings
+        int maxLabelWidth = 0;
+        if (s_displayCache.tempStr.length() != 0) {
+            int w = display->getStringWidth(s_displayCache.tempStr);
+            if (w > maxLabelWidth)
+                maxLabelWidth = w;
+        }
+        if (s_displayCache.humStr.length() != 0) {
+            int w = display->getStringWidth(s_displayCache.humStr);
+            if (w > maxLabelWidth)
+                maxLabelWidth = w;
+        }
+        if (s_displayCache.pressStr.length() != 0) {
+            int w = display->getStringWidth(s_displayCache.pressStr);
+            if (w > maxLabelWidth)
+                maxLabelWidth = w;
+        }
+
+        // Calculate sparkline width: remaining space minus padding
+        const int kPadding = 4;                                                            // space between label and graph
+        const int kSparkW = std::max(50, SCREEN_WIDTH - maxLabelWidth - kPadding - x - 2); // at least 50px
         const int graphX = SCREEN_WIDTH - (kSparkW + 2);
 
         // === Temperature row (Tmp) with sparkline ===
