@@ -45,9 +45,53 @@ int32_t SensecapIndicator::runOnce()
                     if (pb_decode(&stream, meshtastic_InterdeviceMessage_fields, &message)) {
                         // Handle incoming messages from RP2040
                         if (message.which_data == meshtastic_InterdeviceMessage_nmea_tag) {
-                            // GPS NMEA data - forward to FakeUART which handles GPS
-                            if (fakeUART) {
-                                fakeUART->handleIncomingNMEA(message.data.nmea);
+                            // Check if this is BME688 data or GPS NMEA
+                            if (strncmp(message.data.nmea, "BME688,", 7) == 0) {
+                                // Parse BME688 NMEA message
+                                // Format: "BME688,temp,humidity,pressure,iaq,gas,co2eq,voceq,accuracy"
+                                // Manual parsing using strtok for better reliability
+                                char buffer[128];
+                                strncpy(buffer, message.data.nmea + 7, sizeof(buffer) - 1);
+                                buffer[sizeof(buffer) - 1] = '\0';
+
+                                char *token;
+                                char *saveptr = nullptr;
+                                int field = 0;
+                                float values[8] = {0};
+
+                                token = strtok_r(buffer, ",", &saveptr);
+                                while (token != nullptr && field < 8) {
+                                    values[field] = atof(token);
+                                    field++;
+                                    token = strtok_r(nullptr, ",", &saveptr);
+                                }
+
+                                if (field >= 5) { // At minimum we need temp, humidity, pressure, iaq, gas
+                                    bme688_data.temperature = values[0];
+                                    bme688_data.humidity = values[1];
+                                    bme688_data.pressure = values[2];
+                                    bme688_data.iaq = values[3];
+                                    bme688_data.gas_resistance = values[4];
+                                    bme688_data.co2_equivalent = (field >= 6) ? values[5] : 0.0f;
+                                    bme688_data.voc_equivalent = (field >= 7) ? values[6] : 0.0f;
+                                    bme688_data.accuracy = (field >= 8) ? (uint8_t)values[7] : 0;
+                                    bme688_data.has_data = true;
+                                    bme688_data.last_update = millis();
+
+                                    LOG_DEBUG(
+                                        "BME688: T=%.2f°C H=%.1f%% P=%.1fhPa IAQ=%.0f Gas=%.2fkΩ CO2=%.0fppm VOC=%.2fppm Acc=%d",
+                                        bme688_data.temperature, bme688_data.humidity, bme688_data.pressure, bme688_data.iaq,
+                                        bme688_data.gas_resistance, bme688_data.co2_equivalent, bme688_data.voc_equivalent,
+                                        bme688_data.accuracy);
+                                } else {
+                                    LOG_WARN("Failed to parse BME688 NMEA message: %s (parsed %d fields)", message.data.nmea,
+                                             field);
+                                }
+                            } else {
+                                // GPS NMEA data - forward to FakeUART which handles GPS
+                                if (fakeUART) {
+                                    fakeUART->handleIncomingNMEA(message.data.nmea);
+                                }
                             }
                         } else if (message.which_data == meshtastic_InterdeviceMessage_sensor_tag) {
                             // Handle sensor data including beep commands

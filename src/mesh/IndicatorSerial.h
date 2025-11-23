@@ -15,6 +15,21 @@
 #define PROTOBUF_MAGIC_BYTE1 0x94
 #define PROTOBUF_MAGIC_BYTE2 0xc3
 
+// BME688 sensor data storage (from RP2040)
+// Format: "BME688,temp,humidity,pressure,iaq,gas,co2eq,voceq,accuracy"
+struct BME688Data {
+    float temperature = 0.0f;    // °C
+    float humidity = 0.0f;       // %
+    float pressure = 0.0f;       // hPa
+    float iaq = 0.0f;            // Indoor Air Quality index (0-500)
+    float gas_resistance = 0.0f; // kOhms
+    float co2_equivalent = 0.0f; // ppm
+    float voc_equivalent = 0.0f; // ppm
+    uint8_t accuracy = 0;        // IAQ accuracy (0-3)
+    bool has_data = false;
+    uint32_t last_update = 0; // millis() timestamp
+};
+
 class SensecapIndicator : public concurrency::OSThread
 {
   public:
@@ -29,10 +44,15 @@ class SensecapIndicator : public concurrency::OSThread
     void sendBeep(uint16_t frequency_hz, uint16_t duration_ms);
     void stopBeep();
 
+    // Get BME688 sensor data from RP2040
+    BME688Data getBME688Data() const { return bme688_data; }
+    bool hasBME688Data() const { return bme688_data.has_data; }
+
   private:
     pb_byte_t protobuf_buffer[PB_BUFSIZE];
     HardwareSerial *_serial = nullptr;
     bool running = false;
+    BME688Data bme688_data;
 };
 
 extern SensecapIndicator *sensecapIndicator;

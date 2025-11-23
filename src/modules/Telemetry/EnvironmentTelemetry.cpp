@@ -111,7 +111,7 @@ static void drawIAQRuler(OLEDDisplay *dpy, int x, int y, int w, int iaqValue, co
 // keep last N samples per source
 // Use larger buffer to accommodate various screen widths, actual display width determined at runtime
 static constexpr size_t kHistLen = 120; // max samples to keep
-static constexpr int kSparkH = 10;      // pixels tall
+static constexpr int kSparkH = 12;      // pixels tall
 
 // Fixed-capacity ring buffer (oldest→newest iteration)
 template <size_t N> struct RingF {
@@ -148,7 +148,7 @@ static constexpr size_t kMaxHistNodes = 64;
 // Overload for fixed-capacity ring
 
 // Sparkline placement offsets (tweak to taste)
-static constexpr int kSparkXOffset = -4; // shift left
+static constexpr int kSparkXOffset = -2; // shift left
 static constexpr int kSparkYOffset = 1;  // shift down
 
 template <size_t N> static void drawMiniSparkBoxed(OLEDDisplay *dpy, int x, int y, int w, int h, const RingF<N> &hist)
@@ -1021,21 +1021,21 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         // === Temperature row (Tmp) with sparkline ===
         if (s_displayCache.tempStr.length() != 0) {
             display->drawString(x, currentY, s_displayCache.tempStr);
-            drawMiniSparkBoxed(display, graphX, currentY, kSparkW, rowHeight - 2, nh.temp);
+            drawMiniSparkBoxed(display, graphX, currentY, kSparkW, rowHeight, nh.temp);
             currentY += rowHeight;
         }
 
         // === Humidity row (Hum) with sparkline ===
         if (s_displayCache.humStr.length() != 0) {
             display->drawString(x, currentY, s_displayCache.humStr);
-            drawMiniSparkBoxed(display, graphX, currentY, kSparkW, rowHeight - 2, nh.hum);
+            drawMiniSparkBoxed(display, graphX, currentY, kSparkW, rowHeight, nh.hum);
             currentY += rowHeight;
         }
 
         // === Pressure row (Prss) with sparkline ===
         if (s_displayCache.pressStr.length() != 0) {
             display->drawString(x, currentY, s_displayCache.pressStr);
-            drawMiniSparkBoxed(display, graphX, currentY, kSparkW, rowHeight - 2, nh.press);
+            drawMiniSparkBoxed(display, graphX, currentY, kSparkW, rowHeight, nh.press);
             currentY += rowHeight;
         }
 
