@@ -14,6 +14,7 @@
 #include "buzz.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/draw/MessageRenderer.h"
+#include "graphics/draw/UIRenderer.h"
 #include "graphics/emotes.h"
 #include "graphics/images.h"
 #include "main.h"
@@ -111,7 +112,11 @@ static void drawIAQRuler(OLEDDisplay *dpy, int x, int y, int w, int iaqValue, co
 // keep last N samples per source
 // Use larger buffer to accommodate various screen widths, actual display width determined at runtime
 static constexpr size_t kHistLen = 120; // max samples to keep
-static constexpr int kSparkH = 12;      // pixels tall
+static constexpr int kSparkH = 12;      // pixels tall for standard displays
+
+// Large display sparkline settings (SenseCAP Indicator 480x480, T-Deck 320x240)
+static constexpr int kLargeSparkH = 80;      // Double height graphs for large displays
+static constexpr int kLargeSparkMargin = 52; // Left margin for axis labels
 
 // Fixed-capacity ring buffer (oldest→newest iteration)
 template <size_t N> struct RingF {
@@ -150,6 +155,143 @@ static constexpr size_t kMaxHistNodes = 64;
 // Sparkline placement offsets (tweak to taste)
 static constexpr int kSparkXOffset = -2; // shift left
 static constexpr int kSparkYOffset = 1;  // shift down
+
+// Large display sparkline with min/max labels and better visibility
+// convertTemp: convert Celsius to Fahrenheit for display
+// convertPress: convert hPa to inHg for display
+template <size_t N>
+static void drawLargeSparkBoxed(OLEDDisplay *dpy, int x, int y, int w, int h, const RingF<N> &hist, const String &unit = "",
+                                bool convertTemp = false, bool convertPress = false)
+{
+    if (hist.len < 2)
+        return;
+
+    // Tuning knobs (same as mini version)
+    constexpr float kHeadroomFrac = 0.10f;
+    constexpr float kWinsorLowerFrac = 0.02f;
+    constexpr float kWinsorUpperFrac = 0.02f;
+    constexpr float kSmoothAlpha = 0.0f;
+
+    // Geometry - reserve space for labels on left
+    const int labelMargin = 52; // space for "99.9" type labels with extra padding
+    const int ix = x + labelMargin;
+    const int iy = y + 1;
+    const int iw = w - labelMargin - 4; // Extra margin to prevent line spillover
+    const int ih = h - 2;
+    const uint16_t L = hist.len;
+    const float step = (L > 1) ? (float(iw) / float(L - 1)) : 0.0f;
+
+    // First pass: raw extrema
+    float lo = hist.at(0), hi = hist.at(0);
+    for (uint16_t i = 1; i < L; ++i) {
+        const float v = hist.at(i);
+        if (v < lo)
+            lo = v;
+        if (v > hi)
+            hi = v;
+    }
+    float span0 = hi - lo;
+    if (span0 < 1e-6f) {
+        lo -= 0.5f;
+        hi += 0.5f;
+        span0 = hi - lo;
+    }
+
+    // Winsorization
+    const float loClamp = lo + span0 * kWinsorLowerFrac;
+    const float hiClamp = hi - span0 * kWinsorUpperFrac;
+    auto clampTo = [&](float v) {
+        if (kWinsorLowerFrac > 0.f && v < loClamp)
+            v = loClamp;
+        if (kWinsorUpperFrac > 0.f && v > hiClamp)
+            v = hiClamp;
+        return v;
+    };
+
+    // Second pass: extrema after clamp
+    float sPrev = clampTo(hist.at(0));
+    float lo2 = sPrev, hi2 = sPrev;
+    for (uint16_t i = 1; i < L; ++i) {
+        float v = clampTo(hist.at(i));
+        float s = (kSmoothAlpha > 0.f && kSmoothAlpha < 1.f) ? (kSmoothAlpha * v + (1.0f - kSmoothAlpha) * sPrev) : v;
+        if (s < lo2)
+            lo2 = s;
+        if (s > hi2)
+            hi2 = s;
+        sPrev = s;
+    }
+
+    // Headroom + final span
+    float loS = lo2, hiS = hi2;
+    float span = hiS - loS;
+    if (span < 1e-6f) {
+        loS -= 0.5f;
+        hiS += 0.5f;
+        span = hiS - loS;
+    }
+    const float pad = span * kHeadroomFrac;
+    loS -= pad;
+    hiS += pad;
+    span = hiS - loS;
+
+    auto valToY = [&](float v) -> int {
+        const float t = (v - loS) / span;
+        int yy = iy + ih - int(std::lround(t * ih));
+        if (yy < iy)
+            yy = iy;
+        if (yy > iy + ih)
+            yy = iy + ih;
+        return yy;
+    };
+
+    // Draw box
+    dpy->drawRect(ix, iy, iw, ih);
+
+    // Draw min/max labels with unit (small font for notation)
+    dpy->setFont(ArialMT_Plain_10);
+    dpy->setTextAlignment(TEXT_ALIGN_RIGHT);
+    float maxVal = hi2;
+    float minVal = lo2;
+    // Convert units if needed (data is stored in metric: Celsius, hPa)
+    if (convertTemp) {
+        maxVal = maxVal * 9.0f / 5.0f + 32.0f; // C to F
+        minVal = minVal * 9.0f / 5.0f + 32.0f;
+    } else if (convertPress) {
+        maxVal = maxVal * 0.02953f; // hPa to inHg
+        minVal = minVal * 0.02953f;
+    }
+    String maxStr = String(maxVal, 1) + unit;
+    String minStr = String(minVal, 1) + unit;
+    dpy->drawString(ix - 3, iy, maxStr);
+    dpy->drawString(ix - 3, iy + ih - 10, minStr);
+    dpy->setTextAlignment(TEXT_ALIGN_LEFT); // restore default
+    dpy->setFont(FONT_SMALL);               // restore to label font
+
+    // Draw polyline (thicker for better visibility on large screens)
+    sPrev = clampTo(hist.at(0));
+    int xPrev = ix + 1;
+    int yPrev = valToY(sPrev);
+
+    for (uint16_t i = 1; i < L; ++i) {
+        int xCur = ix + 1 + int(std::lround(step * i));
+        // Clamp to stay within box
+        if (xCur >= ix + iw - 1) {
+            xCur = ix + iw - 2;
+        }
+        float v = clampTo(hist.at(i));
+        float s = (kSmoothAlpha > 0.f && kSmoothAlpha < 1.f) ? (kSmoothAlpha * v + (1.0f - kSmoothAlpha) * sPrev) : v;
+        const int yCur = valToY(s);
+
+        // Draw thicker line for large displays
+        dpy->drawLine(xPrev, yPrev, xCur, yCur);
+        if (h >= kLargeSparkH / 2) { // Only thicken if graph is reasonably tall
+            dpy->drawLine(xPrev, yPrev + 1, xCur, yCur + 1);
+        }
+        xPrev = xCur;
+        yPrev = yCur;
+        sPrev = s;
+    }
+}
 
 template <size_t N> static void drawMiniSparkBoxed(OLEDDisplay *dpy, int x, int y, int w, int h, const RingF<N> &hist)
 {
@@ -614,15 +756,15 @@ int32_t EnvironmentTelemetryModule::runOnce()
 
         // Initialize screen data immediately if screen is enabled
         if (moduleConfig.telemetry.environment_screen_enabled) {
-            lastScreenUpdate = 0; // Force immediate screen update on next run
-            LOG_INFO("Screen enabled - will update in 2 seconds, mesh broadcast in %dms", broadcastDelay);
-            // Return 2 seconds to quickly update screen after sensor init
-            return result == UINT32_MAX ? disable() : 2000;
+            // Set lastScreenUpdate to trigger shortly after first sensor reading, but avoid
+            // duplicating the initial mesh broadcast which will also update the screen data
+            lastScreenUpdate = millis();
+            LOG_INFO("Screen enabled - will update after first broadcast in %dms", broadcastDelay);
         }
 
-        // it's possible to have this module enabled, only for displaying values on the screen.
-        // therefore, we should only enable the sensor loop if measurement is also enabled
-        return result == UINT32_MAX ? disable() : broadcastDelay;
+        // Return 2 seconds to allow timely checking of broadcast window
+        // (broadcastDelay could be 30+ seconds, which would delay the actual broadcast)
+        return result == UINT32_MAX ? disable() : 2000;
     } else {
         // if we somehow got to a second run of this module with measurement disabled, then just wait forever
         if (!moduleConfig.telemetry.environment_measurement_enabled && !ENVIRONMENTAL_TELEMETRY_MODULE_ENABLE) {
@@ -973,8 +1115,139 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     }
 
     // === Now render ===
+    // Detect large display devices (SenseCAP Indicator 480x480, T-Deck 320x240)
+    bool isLargeDisplay = false;
+#if defined(SENSECAP_INDICATOR) || defined(T_DECK)
+    isLargeDisplay = true;
+#endif
+
     // Use advanced display with sparklines only on high-resolution screens
-    if (graphics::isHighResolution) {
+    if (graphics::isHighResolution && isLargeDisplay) {
+        // === LARGE DISPLAY LAYOUT (Single column, tall graphs with annotations) ===
+        // Show sender/timestamp on first row with uptime on the right
+        graphics::MessageRenderer::drawStringWithEmotes(display, x, currentY, displayStr.c_str(), emotes, numEmotes);
+
+        // Add uptime on top right (formatted like home screen)
+        uint32_t uptimeMillis = millis();
+        uint32_t seconds = uptimeMillis / 1000;
+        uint32_t minutes = seconds / 60;
+        uint32_t hours = minutes / 60;
+        uint32_t days = hours / 24;
+        // Note: drawTimeDelta expects total values, not modulo
+
+        std::string uptimeValue = graphics::UIRenderer::drawTimeDelta(days, hours, minutes, seconds);
+        std::string uptimeStr = "Up: " + uptimeValue;
+        int uptimeWidth = display->getStringWidth(uptimeStr.c_str());
+        display->drawString(SCREEN_WIDTH - uptimeWidth - 2, currentY, uptimeStr.c_str());
+
+        currentY += rowHeight + 2;
+
+        // look up per-source history for sparklines
+        uint32_t from = packetToShow->from;
+
+        // Enforce maximum node limit
+        if (s_hist.size() >= kMaxHistNodes && s_hist.find(from) == s_hist.end()) {
+            auto it = s_hist.begin();
+            if (it != s_hist.end()) {
+                LOG_DEBUG("EnvironmentTelemetry: History map full (%zu nodes), evicting node 0x%08x", s_hist.size(), it->first);
+                s_hist.erase(it);
+            }
+        }
+
+        auto &nh = s_hist[from];
+
+        // Full-width graphs spanning to screen edge
+        const int graphW = SCREEN_WIDTH - x - 2;
+        // T-Deck has smaller screen in landscape, use smaller graphs
+#if defined(T_DECK)
+        const int graphH = kLargeSparkH / 3; // 1/3 height for T-Deck
+#else
+        const int graphH = kLargeSparkH; // Full height for SenseCAP Indicator
+#endif
+
+        // Use FONT_SMALL which is medium-sized (19px) on large TFT displays
+        display->setFont(FONT_SMALL);
+        const int labelRowHeight = FONT_HEIGHT_SMALL;
+
+        // Temperature graph with full unabbreviated label above
+        if (m.has_temperature && nh.temp.len >= 2) {
+            String tempLabel = "Temperature: ";
+            if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
+                tempLabel += String(UnitConversions::CelsiusToFahrenheit(m.temperature), 1) + "°F";
+            } else {
+                tempLabel += String(m.temperature, 1) + "°C";
+            }
+            display->drawString(x, currentY, tempLabel);
+            currentY += labelRowHeight;
+            bool isImperial = (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL);
+            String tempUnit = isImperial ? "°F" : "°C";
+            drawLargeSparkBoxed(display, x, currentY, graphW, graphH, nh.temp, tempUnit, isImperial);
+            currentY += graphH + 4;
+        } else if (m.has_temperature) {
+            String tempLabel = "Temperature: ";
+            if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
+                tempLabel += String(UnitConversions::CelsiusToFahrenheit(m.temperature), 1) + "°F";
+            } else {
+                tempLabel += String(m.temperature, 1) + "°C";
+            }
+            display->drawString(x, currentY, tempLabel);
+            currentY += labelRowHeight;
+        }
+
+        // Humidity graph with full unabbreviated label above
+        if (m.has_relative_humidity && nh.hum.len >= 2) {
+            String humLabel = "Humidity: " + String(m.relative_humidity, 0) + "%";
+            display->drawString(x, currentY, humLabel);
+            currentY += labelRowHeight;
+            drawLargeSparkBoxed(display, x, currentY, graphW, graphH, nh.hum, "%");
+            currentY += graphH + 4;
+        } else if (m.has_relative_humidity) {
+            String humLabel = "Humidity: " + String(m.relative_humidity, 0) + "%";
+            display->drawString(x, currentY, humLabel);
+            currentY += labelRowHeight;
+        }
+
+        // Pressure graph with full unabbreviated label above
+        if (m.barometric_pressure != 0 && nh.press.len >= 2) {
+            String pressLabel = "Pressure: ";
+            if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
+                pressLabel += String(UnitConversions::HectoPascalToInchesOfMercury(m.barometric_pressure), 2) + " inHg";
+            } else {
+                pressLabel += String(m.barometric_pressure, 0) + " hPa";
+            }
+            display->drawString(x, currentY, pressLabel);
+            currentY += labelRowHeight;
+            bool isPressImperial = (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL);
+            String pressUnit = isPressImperial ? "inHg" : "hPa";
+            drawLargeSparkBoxed(display, x, currentY, graphW, graphH, nh.press, pressUnit, false, isPressImperial);
+            currentY += graphH + 4;
+        } else if (m.barometric_pressure != 0) {
+            String pressLabel = "Pressure: ";
+            if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
+                pressLabel += String(UnitConversions::HectoPascalToInchesOfMercury(m.barometric_pressure), 2) + " inHg";
+            } else {
+                pressLabel += String(m.barometric_pressure, 0) + " hPa";
+            }
+            display->drawString(x, currentY, pressLabel);
+            currentY += labelRowHeight;
+        }
+
+        // Reset to smaller font for remaining entries
+        display->setFont(FONT_SMALL);
+
+        // Remaining metrics in 2-column format (if space allows)
+        if (!s_displayCache.entries.empty()) {
+            const int splitX = SCREEN_WIDTH / 2;
+            for (size_t i = 0; i < s_displayCache.entries.size(); i += 2) {
+                display->drawString(x, currentY, s_displayCache.entries[i]);
+                if (i + 1 < s_displayCache.entries.size()) {
+                    display->drawString(splitX, currentY, s_displayCache.entries[i + 1]);
+                }
+                currentY += rowHeight;
+            }
+        }
+    } else if (graphics::isHighResolution) {
+        // === STANDARD HIGH-RES LAYOUT (Original compact with inline graphs) ===
         // Show sender/timestamp on first row
         graphics::MessageRenderer::drawStringWithEmotes(display, x, currentY, displayStr.c_str(), emotes, numEmotes);
         currentY += rowHeight;
