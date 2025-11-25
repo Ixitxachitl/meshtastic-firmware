@@ -29,6 +29,7 @@ namespace graphics
 menuHandler::screenMenus menuHandler::menuQueue = menu_none;
 bool test_enabled = false;
 uint8_t test_count = 0;
+static menuHandler::screenMenus displayUnitsParentMenu = menuHandler::screen_options_menu;
 
 void menuHandler::loraMenu()
 {
@@ -1750,6 +1751,7 @@ void menuHandler::screenOptionsMenu()
             menuHandler::menuQueue = menuHandler::FrameToggles;
             screen->runNow();
         } else if (selected == DisplayUnits) {
+            displayUnitsParentMenu = menuHandler::screen_options_menu;
             menuHandler::menuQueue = menuHandler::DisplayUnits;
             screen->runNow();
         } else {
@@ -1992,7 +1994,7 @@ void menuHandler::DisplayUnits_menu()
                 environmentTelemetryModule->invalidateDisplayCache();
 #endif
         } else {
-            menuHandler::menuQueue = menuHandler::screen_options_menu;
+            menuHandler::menuQueue = displayUnitsParentMenu;
             screen->runNow();
         }
     };
@@ -2031,6 +2033,7 @@ void menuHandler::envTelemetryMenu()
             }
             screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
         } else if (selected == DisplayUnits) {
+            displayUnitsParentMenu = menuHandler::env_menu;
             menuHandler::menuQueue = menuHandler::DisplayUnits;
             screen->runNow();
         } else {
