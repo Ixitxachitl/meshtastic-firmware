@@ -96,7 +96,6 @@ constexpr float STILL_THR_DPS = 0.5f;     // consider still if |g| sum < this
 float s_yawDeg = 0.0f;          // integrated yaw angle
 float s_yawZeroDeg = 0.0f;      // user-defined "north" reference
 uint32_t s_lastMicros = 0;      // timestamp for integration
-bool s_showingCalUI = false;    // UI state guard
 bool s_anchorRequested = false; // instant calibration flag
 } // namespace
 
@@ -288,7 +287,7 @@ bool BMI270Sensor::init()
     // Initialize compass state
     s_yawDeg = s_yawZeroDeg = 0.0f;
     s_lastMicros = 0;
-    s_showingCalUI = s_anchorRequested = false;
+    s_anchorRequested = false;
 
     // Initialize gravity vector with first reading
     bmi2_sens_data initial_data{};
@@ -318,24 +317,6 @@ int32_t BMI270Sensor::runOnce()
 {
 #if HAS_BMI270_TINYU
     if (inited_ && impl_) {
-
-        // --- Calibration UI handling (same pattern as BMX160) ---
-#if !defined(MESHTASTIC_EXCLUDE_SCREEN) && HAS_SCREEN
-        if (doCalibration) {
-            if (!s_showingCalUI) {
-                powerFSM.trigger(EVENT_PRESS); // keep screen awake during calibration
-                s_showingCalUI = true;
-                if (screen)
-                    screen->startAlert((FrameCallback)drawFrameCalibration);
-            }
-        } else {
-            if (s_showingCalUI) {
-                if (screen)
-                    screen->endAlert();
-                s_showingCalUI = false;
-            }
-        }
-#endif
 
         auto *impl = static_cast<BMI270Impl *>(impl_);
 
@@ -389,15 +370,13 @@ int32_t BMI270Sensor::runOnce()
                 // 3) Guard against a big first dt after anchoring
                 s_lastMicros = micros();
 
-                // 4) Clear request and close any lingering UI
+                // 4) Clear request - calibration is instant, no UI needed
                 s_anchorRequested = false;
 #if !defined(MESHTASTIC_EXCLUDE_SCREEN) && HAS_SCREEN
                 if (screen && !ScanI2C::hasMagnetometer()) {
                     screen->setHeading(0.0f); // force the snap visually this frame
                     screen->forceDisplay(true);
                 }
-                if (screen)
-                    screen->endAlert();
 #endif
 
                 LOG_DEBUG("BMI270: anchored & snapped (bias=%.3f, %.3f, %.3f dps, zero=%.1f deg)", s_biasX, s_biasY, s_biasZ,
@@ -480,15 +459,9 @@ int32_t BMI270Sensor::runOnce()
 void BMI270Sensor::calibrate(uint16_t /*forSeconds*/)
 {
     // Instant "face north and calibrate": just anchor on next IMU sample.
+    // Don't show calibration UI since it's instant and would just cause screen to jump
     LOG_DEBUG("BMI270: instant calibrate requested (anchor current facing as north)");
     s_anchorRequested = true;
-
-    // Ensure no legacy countdown/alerts remain active
-    doCalibration = false;
-#if !defined(MESHTASTIC_EXCLUDE_SCREEN) && HAS_SCREEN
-    if (screen)
-        screen->endAlert();
-#endif
 }
 
 #endif // !defined(ARCH_STM32WL) && !MESHTASTIC_EXCLUDE_I2C && __has_include(<bmi2.h>)
