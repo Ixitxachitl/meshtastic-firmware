@@ -40,18 +40,13 @@ template <typename T, std::size_t N> std::size_t array_count(const T (&)[N])
 
 #ifndef GPS_SERIAL_PORT
 #define GPS_SERIAL_PORT Serial1
+#endif
+
 #ifdef SENSECAP_INDICATOR
 // SenseCAP Indicator uses FakeUART to communicate with RP2040 companion processor
 #include "mesh/comms/FakeUART.h"
 HardwareSerial *GPS::_serial_gps = nullptr; // Will be set to fakeUART later
-#elif defined(NRF52840_XXAA) || defined(NRF52833_XXAA) || defined(ARCH_ESP32) || defined(ARCH_PORTDUINO) || defined(ARCH_STM32WL)
-#if defined(GPS_SERIAL_PORT)
-HardwareSerial *GPS::_serial_gps = &GPS_SERIAL_PORT;
-#else
-HardwareSerial *GPS::_serial_gps = &Serial1;
-#endif
-
-#if defined(ARCH_NRF52)
+#elif defined(ARCH_NRF52)
 Uart *GPS::_serial_gps = &GPS_SERIAL_PORT;
 #elif defined(ARCH_ESP32) || defined(ARCH_PORTDUINO) || defined(ARCH_STM32WL)
 HardwareSerial *GPS::_serial_gps = &GPS_SERIAL_PORT;
