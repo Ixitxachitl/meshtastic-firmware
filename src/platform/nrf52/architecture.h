@@ -62,7 +62,7 @@
 #define HW_VENDOR meshtastic_HardwareModel_RAK4631
 #elif defined(RAK3401)
 #define HW_VENDOR meshtastic_HardwareModel_RAK3401
-#elif defined(TTGO_T_ECHO)
+#elif defined(TTGO_T_ECHO) || defined(TTGO_T_ECHO_PLUS)
 #define HW_VENDOR meshtastic_HardwareModel_T_ECHO
 #elif defined(T_ECHO_LITE)
 #define HW_VENDOR meshtastic_HardwareModel_T_ECHO_LITE

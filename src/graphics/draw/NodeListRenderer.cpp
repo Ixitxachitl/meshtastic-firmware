@@ -196,7 +196,11 @@ void drawEntryLastHeard(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int
         if (isHighResolution) {
             drawScaledXBitmap16x16(x, y + 6, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
         } else {
+#if defined(M5STACK_UNITC6L)
+            display->drawXbm(x, y + 1, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
+#else
             display->drawXbm(x, y + 5, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
+#endif
         }
     }
 
@@ -227,7 +231,11 @@ void drawEntryHopSignal(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int
         if (isHighResolution) {
             drawScaledXBitmap16x16(x, y + 6, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
         } else {
+#if defined(M5STACK_UNITC6L)
+            display->drawXbm(x, y + 1, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
+#else
             display->drawXbm(x, y + 5, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
+#endif
         }
     }
 
@@ -319,7 +327,11 @@ void drawNodeDistance(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
         if (isHighResolution) {
             drawScaledXBitmap16x16(x, y + 6, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
         } else {
+#if defined(M5STACK_UNITC6L)
+            display->drawXbm(x, y + 1, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
+#else
             display->drawXbm(x, y + 5, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
+#endif
         }
     }
 
@@ -365,7 +377,11 @@ void drawEntryCompass(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
         if (isHighResolution) {
             drawScaledXBitmap16x16(x, y + 6, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
         } else {
+#if defined(M5STACK_UNITC6L)
+            display->drawXbm(x, y + 1, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
+#else
             display->drawXbm(x, y + 5, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
+#endif
         }
     }
 }
@@ -426,8 +442,16 @@ void drawCompassArrow(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
 void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y, const char *title,
                         EntryRenderer renderer, NodeExtrasRenderer extras, float heading, double lat, double lon)
 {
+#if defined(M5STACK_UNITC6L)
+    const int COMMON_HEADER_HEIGHT = FONT_HEIGHT_TINY + 3; // Account for padding row + header row + spacing
+#else
     const int COMMON_HEADER_HEIGHT = FONT_HEIGHT_SMALL - 1;
+#endif
+#if defined(M5STACK_UNITC6L)
+    const int rowYOffset = FONT_HEIGHT_TINY; // More spacing for Tom Thumb font
+#else
     const int rowYOffset = FONT_HEIGHT_SMALL - 3;
+#endif
     bool locationScreen = false;
 
     if (strcmp(title, "Bearings") == 0)
