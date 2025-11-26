@@ -593,42 +593,40 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
 
             case ICM20948_ADDR:     // same as BMX160_ADDR
             case ICM20948_ADDR_ALT: // same as MPU6050_ADDR
-                registerValue = getRegisterValue(ScanI2CTwoWire::RegisterLocation(addr, 0x00), 1);
 #ifdef HAS_ICM20948
                 type = ICM20948;
                 logFoundDevice("ICM20948", (uint8_t)addr.address);
                 break;
 #endif
-                if (registerValue == 0xEA) {
-            {
-                // First try explicit ID reads in a robust order:
-                uint16_t id = getRegisterValue(ScanI2CTwoWire::RegisterLocation(addr, 0x00), 1);
+                {
+                    // First try explicit ID reads in a robust order:
+                    uint16_t id = getRegisterValue(ScanI2CTwoWire::RegisterLocation(addr, 0x00), 1);
 
-                if (id == 0xEA) { // ICM-20948 ID
-                    type = ICM20948;
-                    logFoundDevice("ICM20948", (uint8_t)addr.address);
-                    ScanI2C::setMagOnPort(port, true);
+                    if (id == 0xEA) { // ICM-20948 ID
+                        type = ICM20948;
+                        logFoundDevice("ICM20948", (uint8_t)addr.address);
+                        ScanI2C::setMagOnPort(port, true);
+                        break;
+                    }
+
+                    // BMI270 ID is 0x24 on reg 0x00; some boards need a repeated read, so use helper
+                    if (id == 0x24 || detectBMI270(i2cBus, addr.address)) {
+                        type = BMI270;
+                        logFoundDevice("BMI270", (uint8_t)addr.address);
+                        break;
+                    }
+
+                    // Legacy fallbacks by address if nothing matched
+                    if (addr.address == BMX160_ADDR) {
+                        type = BMX160;
+                        logFoundDevice("BMX160", (uint8_t)addr.address);
+                        ScanI2C::setMagOnPort(port, true);
+                    } else {
+                        type = MPU6050;
+                        logFoundDevice("MPU6050", (uint8_t)addr.address);
+                    }
                     break;
                 }
-
-                // BMI270 ID is 0x24 on reg 0x00; some boards need a repeated read, so use helper
-                if (id == 0x24 || detectBMI270(i2cBus, addr.address)) {
-                    type = BMI270;
-                    logFoundDevice("BMI270", (uint8_t)addr.address);
-                    break;
-                }
-
-                // Legacy fallbacks by address if nothing matched
-                if (addr.address == BMX160_ADDR) {
-                    type = BMX160;
-                    logFoundDevice("BMX160", (uint8_t)addr.address);
-                    ScanI2C::setMagOnPort(port, true);
-                } else {
-                    type = MPU6050;
-                    logFoundDevice("MPU6050", (uint8_t)addr.address);
-                }
-                break;
-            }
 
             case CGRADSENS_ADDR:
                 // Register 0x00 of the RadSens sensor contains is product identifier 0x7D
