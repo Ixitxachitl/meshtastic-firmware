@@ -743,9 +743,10 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
 
     // Show long name if available
     if (!longNameStr.empty()) {
-        textWidth = display->getStringWidth(longNameStr.c_str());
+        textWidth = graphics::MessageRenderer::getStringWidthWithEmotes(display, longNameStr, emotes, numEmotes);
         nameX = (SCREEN_WIDTH - textWidth) / 2;
-        display->drawString(nameX, getTextPositions(display)[line++], longNameStr.c_str());
+        graphics::MessageRenderer::drawStringWithEmotes(display, nameX, getTextPositions(display)[line++], longNameStr, emotes,
+                                                        numEmotes);
     }
 
     // Show short name on next line
@@ -867,9 +868,10 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
             nameX, ((rows == 4) ? getTextPositions(display)[line++] : getTextPositions(display)[line++]) + yOffset, combinedName);
     } else {
         // === LongName Centered ===
-        textWidth = display->getStringWidth(longNameStr.c_str());
+        textWidth = graphics::MessageRenderer::getStringWidthWithEmotes(display, longNameStr, emotes, numEmotes);
         nameX = (SCREEN_WIDTH - textWidth) / 2;
-        display->drawString(nameX, getTextPositions(display)[line++], longNameStr.c_str());
+        graphics::MessageRenderer::drawStringWithEmotes(display, nameX, getTextPositions(display)[line++], longNameStr, emotes,
+                                                        numEmotes);
 
         // === ShortName Centered ===
         textWidth = display->getStringWidth(shortnameble);
