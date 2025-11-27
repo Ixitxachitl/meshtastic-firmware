@@ -86,6 +86,7 @@ class ScanI2C
         BH1750,
         DA217,
         CHSC6X,
+        CST226SE,
         BMI270
     } DeviceType;
 
