@@ -39,7 +39,14 @@ extern MessageStore messageStore;
 #endif
 
 #include "graphics/ScreenFonts.h"
+#include "graphics/draw/MenuHandler.h"
 #include <Throttle.h>
+
+namespace
+{
+graphics::menuHandler::screenMenus s_prevMenu = graphics::menuHandler::menu_none;
+bool s_cameFromMenu = false;
+} // namespace
 
 // Remove Canned message screen if no action is taken for some milliseconds
 #define INACTIVATE_AFTER_MS 20000
@@ -167,6 +174,12 @@ void CannedMessageModule::LaunchWithDestination(NodeNum newDest, uint8_t newChan
     // This triggers the canned message list
     runState = CANNED_MESSAGE_RUN_STATE_ACTIVE;
     requestFocus();
+    graphics::setOverlayActive(true);
+    // remember the menu page we were on (if any)
+    if (!s_cameFromMenu) {
+        s_prevMenu = graphics::menuHandler::menuQueue;
+        s_cameFromMenu = (s_prevMenu != graphics::menuHandler::menu_none);
+    }
     UIFrameEvent e;
     e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
     notifyObservers(&e);
@@ -197,6 +210,11 @@ void CannedMessageModule::LaunchFreetextWithDestination(NodeNum newDest, uint8_t
 
     runState = CANNED_MESSAGE_RUN_STATE_FREETEXT;
     requestFocus();
+    // remember the menu page we were on (if any)
+    if (!s_cameFromMenu) {
+        s_prevMenu = graphics::menuHandler::menuQueue;
+        s_cameFromMenu = (s_prevMenu != graphics::menuHandler::menu_none);
+    }
     UIFrameEvent e;
     e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
     notifyObservers(&e);
@@ -291,7 +309,11 @@ void CannedMessageModule::resetSearch()
 
     // Adjust scrollIndex so previousDestIndex is still visible
     int totalEntries = activeChannelIndices.size() + filteredNodes.size();
+#if defined(M5STACK_UNITC6L)
+    this->visibleRows = (displayHeight - FONT_HEIGHT_TINY * 2) / FONT_HEIGHT_TINY;
+#else
     this->visibleRows = (displayHeight - FONT_HEIGHT_SMALL * 2) / FONT_HEIGHT_SMALL;
+#endif
     if (this->visibleRows < 1)
         this->visibleRows = 1;
     int maxScrollIndex = std::max(0, totalEntries - visibleRows);
@@ -435,8 +457,14 @@ int CannedMessageModule::handleInputEvent(const InputEvent *event)
             break;
         }
         // Handle UP/DOWN: activate canned message list!
+        // BUT: Don't intercept UP/DOWN when on messages screen - allow scrolling instead
         if (event->inputEvent == INPUT_BROKER_UP || event->inputEvent == INPUT_BROKER_DOWN ||
             event->inputEvent == INPUT_BROKER_ALT_LONG) {
+            if (graphics::isMessagesScreenActive() && !graphics::isOverlayActive() &&
+                (event->inputEvent == INPUT_BROKER_UP || event->inputEvent == INPUT_BROKER_DOWN)) {
+                // On messages screen with UP/DOWN - let it pass through for scrolling
+                return 0;
+            }
             LaunchWithDestination(NODENUM_BROADCAST);
             return 1;
         }
@@ -444,6 +472,12 @@ int CannedMessageModule::handleInputEvent(const InputEvent *event)
         if (event->kbchar >= 32 && event->kbchar <= 126) {
             runState = CANNED_MESSAGE_RUN_STATE_FREETEXT;
             requestFocus();
+            graphics::setOverlayActive(true);
+            // remember the menu page we were on (if any)
+            if (!s_cameFromMenu) {
+                s_prevMenu = graphics::menuHandler::menuQueue;
+                s_cameFromMenu = (s_prevMenu != graphics::menuHandler::menu_none);
+            }
             UIFrameEvent e;
             e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
             notifyObservers(&e);
@@ -493,13 +527,19 @@ bool CannedMessageModule::handleTabSwitch(const InputEvent *event)
     runState = (runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION) ? CANNED_MESSAGE_RUN_STATE_FREETEXT
                                                                             : CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION;
 
+    graphics::setOverlayActive(true);
+
     destIndex = 0;
     scrollIndex = 0;
     // RESTORE THIS!
     if (runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION)
         updateDestinationSelectionList();
     requestFocus();
-
+    // remember the menu page we were on (if any)
+    if (!s_cameFromMenu) {
+        s_prevMenu = graphics::menuHandler::menuQueue;
+        s_cameFromMenu = (s_prevMenu != graphics::menuHandler::menu_none);
+    }
     UIFrameEvent e;
     e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
     notifyObservers(&e);
@@ -544,8 +584,25 @@ int CannedMessageModule::handleDestinationSelectionInput(const InputEvent *event
             runOnce();
         }
         if (searchQuery.length() == 0) {
+            // We’re backing out of the destination picker entirely.
             resetSearch();
             needsUpdate = false;
+
+            // Make sure the underlying screen (e.g., Messages) remains the focused frame.
+            graphics::setOverlayActive(false);
+            runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
+            screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
+            freetext = "";
+            cursor = 0;
+            payload = 0;
+            currentMessageIndex = -1;
+
+            UIFrameEvent e;
+            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+            notifyObservers(&e);
+            screen->forceDisplay(true);
+
+            return 1;
         }
         return 1;
     }
@@ -606,6 +663,15 @@ int CannedMessageModule::handleDestinationSelectionInput(const InputEvent *event
 
         runState = returnToCannedList ? CANNED_MESSAGE_RUN_STATE_ACTIVE : CANNED_MESSAGE_RUN_STATE_FREETEXT;
         returnToCannedList = false;
+
+        // Close overlay and return to the previous state (message list or freetext)
+        graphics::setOverlayActive(false);
+
+        // Notify UI to regenerate frames
+        UIFrameEvent e;
+        e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+        notifyObservers(&e);
+
         screen->forceDisplay(true);
         return 1;
     }
@@ -616,9 +682,15 @@ int CannedMessageModule::handleDestinationSelectionInput(const InputEvent *event
         returnToCannedList = false;
         searchQuery = "";
 
-        // UIFrameEvent e;
-        // e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
-        // notifyObservers(&e);
+        if (runState == CANNED_MESSAGE_RUN_STATE_ACTIVE) {
+            graphics::setOverlayActive(false);
+            runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
+            screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
+        }
+
+        UIFrameEvent e;
+        e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+        notifyObservers(&e);
         screen->forceDisplay(true);
         return 1;
     }
@@ -643,7 +715,9 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
     // Handle Cancel key: go inactive, clear UI state
     if (runState != CANNED_MESSAGE_RUN_STATE_INACTIVE &&
         (event->inputEvent == INPUT_BROKER_CANCEL || event->inputEvent == INPUT_BROKER_ALT_LONG)) {
+        graphics::setOverlayActive(false);
         runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
+        screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
         freetext = "";
         cursor = 0;
         payload = 0;
@@ -676,6 +750,7 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
             destIndex = 0;
             scrollIndex = 0;
             updateDestinationSelectionList(); // Make sure list is fresh
+            graphics::setOverlayActive(true);
             screen->forceDisplay();
             return true;
         }
@@ -683,8 +758,10 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
         // [Exit] returns to the main/inactive screen
         if (strcmp(current, "[Exit]") == 0) {
             // Set runState to inactive so we return to main UI
+            graphics::setOverlayActive(false);
             runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
             currentMessageIndex = -1;
+            screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
 
             // Notify UI to regenerate frame set and redraw
             UIFrameEvent e;
@@ -699,6 +776,11 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
         if (strcmp(current, "[-- Free Text --]") == 0) {
             runState = CANNED_MESSAGE_RUN_STATE_FREETEXT;
             requestFocus();
+            // remember the menu page we were on (if any)
+            if (!s_cameFromMenu) {
+                s_prevMenu = graphics::menuHandler::menuQueue;
+                s_cameFromMenu = (s_prevMenu != graphics::menuHandler::menu_none);
+            }
             UIFrameEvent e;
             e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
             notifyObservers(&e);
@@ -735,6 +817,7 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
 
                         // Return to inactive state
                         this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
+                        screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
                         this->currentMessageIndex = -1;
                         this->freetext = "";
                         this->cursor = 0;
@@ -795,7 +878,9 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
 #if defined(USE_VIRTUAL_KEYBOARD)
     // Cancel (dismiss freetext screen)
     if (event->inputEvent == INPUT_BROKER_LEFT) {
+        graphics::setOverlayActive(false);
         runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
+        screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
         freetext = "";
         cursor = 0;
         payload = 0;
@@ -920,7 +1005,9 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
     // Cancel (dismiss freetext screen)
     if (event->inputEvent == INPUT_BROKER_CANCEL || event->inputEvent == INPUT_BROKER_ALT_LONG ||
         (event->inputEvent == INPUT_BROKER_BACK && this->freetext.length() == 0)) {
+        graphics::setOverlayActive(false);
         runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
+        screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
         freetext = "";
         cursor = 0;
         payload = 0;
@@ -1158,7 +1245,9 @@ int32_t CannedMessageModule::runOnce()
         } else {
             // Empty message, just go inactive
             LOG_INFO("Empty freetext detected in delayed processing, returning to inactive state");
+            graphics::setOverlayActive(false);
             this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
+            screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
         }
 
         UIFrameEvent e;
@@ -1175,6 +1264,7 @@ int32_t CannedMessageModule::runOnce()
          this->payload != CANNED_MESSAGE_RUN_STATE_FREETEXT) ||
         (this->runState == CANNED_MESSAGE_RUN_STATE_ACK_NACK_RECEIVED) ||
         (this->runState == CANNED_MESSAGE_RUN_STATE_MESSAGE_SELECTION)) {
+        graphics::setOverlayActive(false);
         this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
         e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
         this->currentMessageIndex = -1;
@@ -1197,6 +1287,7 @@ int32_t CannedMessageModule::runOnce()
         this->freetext = "";
         this->cursor = 0;
         this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
+        screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
 
         // Clean up virtual keyboard if it exists during timeout
         if (graphics::NotificationRenderer::virtualKeyboard) {
@@ -1213,6 +1304,7 @@ int32_t CannedMessageModule::runOnce()
             // [Exit] button pressed - return to inactive state
             LOG_INFO("Processing [Exit] action - returning to inactive state");
             this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
+            screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
         } else if (this->payload == CANNED_MESSAGE_RUN_STATE_FREETEXT) {
             if (this->freetext.length() > 0) {
                 sendText(this->dest, this->channel, this->freetext.c_str(), true);
@@ -1233,6 +1325,7 @@ int32_t CannedMessageModule::runOnce()
                 return INT32_MAX; // don’t fall back into canned list
             } else {
                 this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
+                screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
             }
         } else {
             if (strcmp(this->messages[this->currentMessageIndex], "[Select Destination]") == 0) {
@@ -1262,6 +1355,7 @@ int32_t CannedMessageModule::runOnce()
                 }
             } else {
                 this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
+                screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
             }
         }
         // fallback clean-up if nothing above returned
@@ -1670,11 +1764,19 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
     display->setTextAlignment(TEXT_ALIGN_LEFT);
 
     // List Items
+#if defined(M5STACK_UNITC6L)
+    int rowYOffset = titleY + FONT_HEIGHT_TINY;
+#else
     int rowYOffset = titleY + (FONT_HEIGHT_SMALL - 4);
+#endif
     int numActiveChannels = this->activeChannelIndices.size();
     int totalEntries = numActiveChannels + this->filteredNodes.size();
     int columns = 1;
+#if defined(M5STACK_UNITC6L)
+    this->visibleRows = (display->getHeight() - (titleY + FONT_HEIGHT_TINY)) / FONT_HEIGHT_TINY;
+#else
     this->visibleRows = (display->getHeight() - (titleY + FONT_HEIGHT_SMALL)) / (FONT_HEIGHT_SMALL - 4);
+#endif
     if (this->visibleRows < 1)
         this->visibleRows = 1;
 
@@ -1686,11 +1788,15 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
 
     for (int row = 0; row < visibleRows; row++) {
         int itemIndex = scrollIndex + row;
+#if defined(M5STACK_UNITC6L)
+        int yOffset = row * FONT_HEIGHT_TINY + rowYOffset;
+#else
+        int yOffset = row * (FONT_HEIGHT_SMALL - 4) + rowYOffset;
+#endif
         if (itemIndex >= totalEntries)
             break;
 
         int xOffset = 0;
-        int yOffset = row * (FONT_HEIGHT_SMALL - 4) + rowYOffset;
         char entryText[64] = "";
 
         // Draw Channels First
@@ -1743,7 +1849,11 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
         // Highlight background (if selected)
         if (itemIndex == destIndex) {
             int scrollPadding = 8; // Reserve space for scrollbar
+#if defined(M5STACK_UNITC6L)
+            display->fillRect(0, yOffset, display->getWidth() - scrollPadding, FONT_HEIGHT_TINY);
+#else
             display->fillRect(0, yOffset + 2, display->getWidth() - scrollPadding, FONT_HEIGHT_SMALL - 5);
+#endif
             display->setColor(BLACK);
         }
 
@@ -1759,7 +1869,11 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
                 const meshtastic_NodeInfoLite *node = this->filteredNodes[nodeIndex].node;
                 if (node && hasKeyForNode(node)) {
                     int iconX = display->getWidth() - key_symbol_width - 15;
+#if defined(M5STACK_UNITC6L)
+                    int iconY = yOffset + (FONT_HEIGHT_TINY - key_symbol_height) / 2;
+#else
                     int iconY = yOffset + (FONT_HEIGHT_SMALL - key_symbol_height) / 2;
+#endif
 
                     if (itemIndex == destIndex) {
                         display->setColor(INVERSE);
@@ -1775,7 +1889,11 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
 
     // Scrollbar
     if (totalEntries > visibleRows) {
+#if defined(M5STACK_UNITC6L)
+        int scrollbarHeight = visibleRows * FONT_HEIGHT_TINY;
+#else
         int scrollbarHeight = visibleRows * (FONT_HEIGHT_SMALL - 4);
+#endif
         int totalScrollable = totalEntries;
         int scrollTrackX = display->getWidth() - 6;
         display->drawRect(scrollTrackX, rowYOffset, 4, scrollbarHeight);
@@ -2026,7 +2144,11 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
         display->setFont(FONT_SMALL);
 
         // Precompute per-row heights based on emotes (centered if present)
+#if defined(M5STACK_UNITC6L)
+        const int baseRowSpacing = FONT_HEIGHT_TINY;
+#else
         const int baseRowSpacing = FONT_HEIGHT_SMALL - 4;
+#endif
 
         int topMsg;
         std::vector<int> rowHeights;
@@ -2036,7 +2158,11 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
         drawHeader(display, x, y, buffer);
 
         // Shift message list upward by 3 pixels to reduce spacing between header and first message
+#if defined(M5STACK_UNITC6L)
+        const int listYOffset = y + FONT_HEIGHT_TINY;
+#else
         const int listYOffset = y + FONT_HEIGHT_SMALL - 3;
+#endif
         _visibleRows = (display->getHeight() - listYOffset) / baseRowSpacing;
 
         // Figure out which messages are visible and their needed heights

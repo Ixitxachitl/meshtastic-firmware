@@ -168,7 +168,7 @@ int32_t ExternalNotificationModule::runOnce()
             delay = EXT_NOTIFICATION_FAST_THREAD_MS;
 #endif
 
-#ifdef T_WATCH_S3
+#if defined(T_WATCH_S3) || defined(TTGO_T_ECHO_PLUS)
             drv.go();
 #endif
         }
@@ -186,12 +186,19 @@ int32_t ExternalNotificationModule::runOnce()
         }
 #endif
         // now let the PWM buzzer play
+        // SenseCAP Indicator doesn't need use_pwm since tone() redirects to RP2040
+#ifdef SENSECAP_INDICATOR
+        if (config.device.buzzer_gpio && canBuzz()) {
+#else
         if (moduleConfig.external_notification.use_pwm && config.device.buzzer_gpio && canBuzz()) {
+#endif
             if (rtttl::isPlaying()) {
                 rtttl::play();
             } else if (isNagging && (nagCycleCutoff >= millis())) {
                 // start the song again if we have time left
+                LOG_DEBUG("Starting RTTL: buzzer_gpio=%d, ringtone=%.50s", config.device.buzzer_gpio, rtttlConfig.ringtone);
                 rtttl::begin(config.device.buzzer_gpio, rtttlConfig.ringtone);
+                LOG_DEBUG("RTTL started, isPlaying=%d", rtttl::isPlaying());
             }
             // we need fast updates to play the RTTTL
             delay = EXT_NOTIFICATION_FAST_THREAD_MS;
@@ -283,7 +290,7 @@ void ExternalNotificationModule::setExternalState(uint8_t index, bool on)
 #ifdef UNPHONE
     unphone.rgb(red, green, blue);
 #endif
-#ifdef T_WATCH_S3
+#if defined(T_WATCH_S3) || defined(TTGO_T_ECHO_PLUS)
     if (on) {
         drv.go();
     } else {
@@ -408,6 +415,13 @@ ExternalNotificationModule::ExternalNotificationModule()
                 LOG_INFO("Use Pin %i in PWM mode", config.device.buzzer_gpio);
             }
         }
+#ifdef SENSECAP_INDICATOR
+        // SenseCAP Indicator: Set buzzer_gpio for RTTL even without use_pwm
+        if (!config.device.buzzer_gpio) {
+            config.device.buzzer_gpio = PIN_BUZZER;
+            LOG_INFO("SenseCAP Indicator: Set buzzer_gpio=%i for RTTL", config.device.buzzer_gpio);
+        }
+#endif
 #ifdef HAS_NCP5623
         if (rgb_found.type == ScanI2C::NCP5623) {
             rgb.begin();
@@ -444,7 +458,7 @@ ExternalNotificationModule::ExternalNotificationModule()
 ProcessMessage ExternalNotificationModule::handleReceived(const meshtastic_MeshPacket &mp)
 {
     if (moduleConfig.external_notification.enabled && !isSilenced) {
-#ifdef T_WATCH_S3
+#if defined(T_WATCH_S3) || defined(TTGO_T_ECHO_PLUS)
         drv.setWaveform(0, 75);
         drv.setWaveform(1, 56);
         drv.setWaveform(2, 0);

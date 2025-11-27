@@ -82,6 +82,7 @@ void TCA8418KeyboardBase::reset()
     matrix(rows, columns);
     enableDebounce();
     flush();
+     
     state = Idle;
 }
 

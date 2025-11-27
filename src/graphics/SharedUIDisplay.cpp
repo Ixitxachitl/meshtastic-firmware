@@ -5,7 +5,9 @@
 #include "draw/NodeListRenderer.h"
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
+#include "graphics/draw/MessageRenderer.h"
 #include "graphics/draw/UIRenderer.h"
+#include "graphics/emotes.h"
 #include "main.h"
 #include "meshtastic/config.pb.h"
 #include "power.h"
@@ -14,6 +16,10 @@
 
 namespace graphics
 {
+
+using graphics::Emote;
+using graphics::emotes;
+using graphics::numEmotes;
 
 void determineResolution(int16_t screenheight, int16_t screenwidth)
 {
@@ -49,6 +55,40 @@ bool hasUnreadMessage = false;
 bool isMuted = false;
 bool isHighResolution = false;
 
+static volatile bool s_overlayActive = false;
+void setOverlayActive(bool active)
+{
+    s_overlayActive = active;
+}
+bool isOverlayActive()
+{
+    return s_overlayActive;
+}
+
+// === Active screen classification (coarse) ===
+// We only need to know "is this the Messages screen?" for keyboard arrows.
+static volatile bool s_isMessagesScreenActive = false;
+
+static int s_messagesFrameIndex = -1;
+
+bool isMessagesScreenActive()
+{
+    return s_isMessagesScreenActive;
+}
+void setMessagesScreenActive(bool active)
+{
+    s_isMessagesScreenActive = active;
+}
+
+void setMessagesFrameIndex(int idx)
+{
+    s_messagesFrameIndex = idx;
+}
+int getMessagesFrameIndex()
+{
+    return s_messagesFrameIndex;
+}
+
 // === Internal State ===
 bool isBoltVisibleShared = true;
 uint32_t lastBlinkShared = 0;
@@ -77,7 +117,11 @@ void drawRoundedHighlight(OLEDDisplay *display, int16_t x, int16_t y, int16_t w,
 // *************************
 void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *titleStr, bool force_no_invert, bool show_date)
 {
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+    constexpr int HEADER_OFFSET_Y = 1; // 1 pixel top padding
+#else
     constexpr int HEADER_OFFSET_Y = 1;
+#endif
     y += HEADER_OFFSET_Y;
 
     display->setFont(FONT_SMALL);
@@ -94,10 +138,19 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
     if (!force_no_invert) {
         // === Inverted Header Background ===
         if (isInverted) {
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+            int fillH = highlightHeight + 4;
+            int roundH = highlightHeight + 2;
+            int radius = 1;
+#else
+            int fillH = highlightHeight + 2;
+            int roundH = highlightHeight;
+            int radius = 2;
+#endif
             display->setColor(BLACK);
-            display->fillRect(0, 0, screenW, highlightHeight + 2);
+            display->fillRect(0, 0, screenW, fillH);
             display->setColor(WHITE);
-            drawRoundedHighlight(display, x, y, screenW, highlightHeight, 2);
+            drawRoundedHighlight(display, x, y, screenW, roundH, radius);
             display->setColor(BLACK);
         } else {
             display->setColor(BLACK);
@@ -111,10 +164,20 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
         }
 
         // === Screen Title ===
-        display->setTextAlignment(TEXT_ALIGN_CENTER);
-        display->drawString(SCREEN_WIDTH / 2, y, titleStr);
-        if (config.display.heading_bold) {
-            display->drawString((SCREEN_WIDTH / 2) + 1, y, titleStr);
+        int titleWidth = graphics::MessageRenderer::getStringWidthWithEmotes(display, titleStr, emotes, numEmotes);
+#if defined(M5STACK_UNITC6L)
+        int titleX = 1;
+#else
+        int titleX = (SCREEN_WIDTH - titleWidth) / 2;
+#endif
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+        int titleY = y + 1;
+#else
+        int titleY = y;
+#endif
+        graphics::MessageRenderer::drawStringWithEmotes(display, titleX, titleY, titleStr, emotes, numEmotes);
+        if (isBold) {
+            graphics::MessageRenderer::drawStringWithEmotes(display, titleX + 1, titleY, titleStr, emotes, numEmotes);
         }
     }
     display->setTextAlignment(TEXT_ALIGN_LEFT);
@@ -142,11 +205,46 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
 #endif
 
     bool useHorizontalBattery = (isHighResolution && screenW >= screenH);
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+    const int textY = y + (highlightHeight - FONT_HEIGHT_SMALL) / 2 + 1; // Skip first padding row
+#else
     const int textY = y + (highlightHeight - FONT_HEIGHT_SMALL) / 2;
+#endif
 
     int batteryX = 1;
     int batteryY = HEADER_OFFSET_Y + 1;
-#if !defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+    // === Tiny Battery Icons for Small Displays ===
+    if (usbPowered && !isCharging) {
+        batteryX += 1;
+        batteryY += 1;
+        display->drawXbm(batteryX, batteryY, usb_tiny_width, usb_tiny_height, usb_tiny);
+        batteryX += usb_tiny_width + 1;
+    } else {
+        batteryX += 1;
+        batteryY += 1;
+        display->drawXbm(batteryX, batteryY, battery_tiny_width, battery_tiny_height, battery_tiny);
+        // Simple fill for charge level (3 pixels wide)
+        int fillWidth = 3 * chargePercent / 100;
+        display->fillRect(batteryX + 1, batteryY + 1, fillWidth, 2);
+        batteryX += battery_tiny_width + 1;
+    }
+
+#if defined(USE_TINY_FONT)
+    // Show battery percentage for USE_TINY_FONT devices
+    if (chargePercent != 101) {
+        char chargeStr[4];
+        snprintf(chargeStr, sizeof(chargeStr), "%d", chargePercent);
+        int chargeNumWidth = display->getStringWidth(chargeStr);
+        display->drawString(batteryX, textY, chargeStr);
+        display->drawString(batteryX + chargeNumWidth - 1, textY, "%");
+        if (isBold) {
+            display->drawString(batteryX + 1, textY, chargeStr);
+            display->drawString(batteryX + chargeNumWidth, textY, "%");
+        }
+    }
+#endif
+#elif !defined(M5STACK_UNITC6L)
     // === Battery Icons ===
     if (usbPowered && !isCharging) { // This is a basic check to determine USB Powered is flagged but not charging
         batteryX += 1;
@@ -190,8 +288,8 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
         }
     }
 
+    // Show battery percentage for standard devices (not M5STACK_UNITC6L or USE_TINY_FONT)
     if (chargePercent != 101) {
-        // === Battery % Display ===
         char chargeStr[4];
         snprintf(chargeStr, sizeof(chargeStr), "%d", chargePercent);
         int chargeNumWidth = display->getStringWidth(chargeStr);
@@ -202,6 +300,17 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
             display->drawString(batteryX + chargeNumWidth, textY, "%");
         }
     }
+#endif
+
+#if defined(M5STACK_UNITC6L)
+    // Ensure correct color for time/date text on M5STACK_UNITC6L
+    // Must be set here before time rendering, not inside the rtc_sec check
+    if (isInverted && !force_no_invert) {
+        display->setColor(BLACK);
+    } else {
+        display->setColor(WHITE);
+    }
+#endif
 
     // === Time and Right-aligned Icons ===
     uint32_t rtc_sec = getValidTime(RTCQuality::RTCQualityDevice, true);
@@ -211,7 +320,6 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
 
     if (rtc_sec > 0) {
         // === Build Time String ===
-        long hms = (rtc_sec % SEC_PER_DAY + SEC_PER_DAY) % SEC_PER_DAY;
         int hour, minute, second;
         graphics::decomposeTime(rtc_sec, hour, minute, second);
         snprintf(timeStr, sizeof(timeStr), "%d:%02d", hour, minute);
@@ -246,6 +354,35 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
         }
         timeX = screenW - xOffset - timeStrWidth + 3;
 
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+        // Show compact envelope icon to the left of time if there are unread messages
+        if (hasUnreadMessage) {
+            bool showMail = false;
+#ifndef USE_EINK
+            if (now - lastMailBlink > 500) {
+                isMailIconVisible = !isMailIconVisible;
+                lastMailBlink = now;
+            }
+            showMail = isMailIconVisible;
+#else
+            showMail = true;
+#endif
+            if (showMail) {
+                int iconX = timeX - envelope_width - 2; // Position to left of time
+                int iconY = textY + (FONT_HEIGHT_SMALL - envelope_height) / 2;
+                if (isInverted && !force_no_invert) {
+                    display->setColor(WHITE);
+                    display->fillRect(iconX - 1, iconY - 1, envelope_width + 2, envelope_height + 2);
+                    display->setColor(BLACK);
+                } else {
+                    display->setColor(BLACK);
+                    display->fillRect(iconX - 1, iconY - 1, envelope_width + 2, envelope_height + 2);
+                    display->setColor(WHITE);
+                }
+                display->drawXbm(iconX, iconY, envelope_width, envelope_height, envelope);
+            }
+        }
+#else
         // === Show Mail or Mute Icon to the Left of Time ===
         int iconRightEdge = timeX - 2;
 
@@ -327,7 +464,9 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
                 display->drawXbm(iconX, iconY, mute_symbol_width, mute_symbol_height, mute_symbol);
             }
         }
+#endif
 
+        // Draw time/date for all devices (moved outside M5STACK_UNITC6L exclusion)
         if (show_date) {
             // === Draw Date ===
             display->drawString(timeX, textY, dateLine);
@@ -341,6 +480,12 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
         }
 
     } else {
+#if defined(M5STACK_UNITC6L)
+        // Draw fallback time for M5STACK_UNITC6L when no RTC available
+        display->drawString(timeX, textY, timeStr); // timeStr is "--:--"
+        if (isBold)
+            display->drawString(timeX - 1, textY, timeStr);
+#else
         // === No Time Available: Mail/Mute Icon Moves to Far Right ===
         int iconRightEdge = screenW - xOffset;
 
@@ -384,8 +529,8 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
                 display->drawXbm(iconX, iconY, mute_symbol_width, mute_symbol_height, mute_symbol);
             }
         }
-    }
 #endif
+    }
     display->setColor(WHITE); // Reset for other UI
 }
 
@@ -393,6 +538,15 @@ const int *getTextPositions(OLEDDisplay *display)
 {
     static int textPositions[7]; // Static array that persists beyond function scope
 
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+    textPositions[0] = textZeroLine;
+    textPositions[1] = textFirstLine_unitc6l;
+    textPositions[2] = textSecondLine_unitc6l;
+    textPositions[3] = textThirdLine_unitc6l;
+    textPositions[4] = textFourthLine_unitc6l;
+    textPositions[5] = textFifthLine_unitc6l;
+    textPositions[6] = textSixthLine_unitc6l;
+#else
     if (isHighResolution) {
         textPositions[0] = textZeroLine;
         textPositions[1] = textFirstLine_medium;
@@ -410,6 +564,7 @@ const int *getTextPositions(OLEDDisplay *display)
         textPositions[5] = textFifthLine;
         textPositions[6] = textSixthLine;
     }
+#endif
     return textPositions;
 }
 

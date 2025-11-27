@@ -70,6 +70,7 @@ static monitor_t *const getMonitorByWindowID(uint32_t windowID)
 //----------------------------------------------------------------------------
 
 static std::vector<Panel_sdl::KeyCodeMapping_t> _key_code_map;
+std::string Panel_sdl::_text_input_buffer;
 
 void Panel_sdl::addKeyCodeMapping(SDL_KeyCode keyCode, uint8_t gpio)
 {
@@ -137,6 +138,28 @@ void Panel_sdl::_event_proc(void)
                         }
                     }
                     break;
+
+                /// Backspace key for text input
+                case SDLK_BACKSPACE:
+                    if (event.type == SDL_KEYDOWN) {
+                        _text_input_buffer += '\b'; // 0x08
+                    }
+                    break;
+
+                /// Tab key for switching destinations (like Cardputer)
+                case SDLK_TAB:
+                    if (event.type == SDL_KEYDOWN) {
+                        _text_input_buffer += '\t'; // 0x09
+                    }
+                    break;
+
+                /// Escape key for cancel/exit (like Cardputer)
+                case SDLK_ESCAPE:
+                    if (event.type == SDL_KEYDOWN) {
+                        _text_input_buffer += '\x1b'; // 0x1B (ESC)
+                    }
+                    break;
+
                 default:
                     continue;
                 }
@@ -195,6 +218,9 @@ void Panel_sdl::_event_proc(void)
             for (auto &m : _list_monitor) {
                 m->closing = true;
             }
+        } else if (event.type == SDL_TEXTINPUT) {
+            // Add text input to buffer for keyboard character input
+            _text_input_buffer += event.text.text;
         }
     }
 }
@@ -523,7 +549,6 @@ void Panel_sdl::sdl_create(monitor_t *m)
     m->texture =
         SDL_CreateTexture(m->renderer, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING, _cfg.panel_width, _cfg.panel_height);
     SDL_SetTextureBlendMode(m->texture, SDL_BLENDMODE_NONE);
-
     if (m->frame_image) {
         // 枠画像用のサーフェイスを作成
         auto sf = SDL_CreateRGBSurfaceFrom((void *)m->frame_image, m->frame_width, m->frame_height, 32, m->frame_width * 4,

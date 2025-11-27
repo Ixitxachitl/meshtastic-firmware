@@ -16,6 +16,11 @@
 #include "graphics/fonts/OLEDDisplayFontsCS.h"
 #endif
 
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+#include "graphics/fonts/OLEDDisplayFontsTomThumb.h"
+#define FONT_TINY TomThumb4x6 // Height: 6
+#endif
+
 #if defined(CROWPANEL_ESP32S3_5_EPAPER) && defined(USE_EINK)
 #include "graphics/fonts/EinkDisplayFonts.h"
 #endif
@@ -73,16 +78,17 @@
 #endif
 
 #if (defined(USE_EINK) || defined(ILI9341_DRIVER) || defined(ILI9342_DRIVER) || defined(ST7701_CS) || defined(ST7735_CS) ||      \
-     defined(ST7789_CS) || defined(USE_ST7789) || defined(HX8357_CS) || defined(ILI9488_CS) || defined(ST7796_CS) || defined(USE_ST7796)) &&            \
+     defined(ST7789_CS) || defined(USE_ST7789) || defined(HX8357_CS) || defined(ILI9488_CS) || defined(ST7796_CS) ||             \
+     defined(USE_X11)) || defined(USE_ST7796)) &&                                                                                                        \
     !defined(DISPLAY_FORCE_SMALL_FONTS)
 // The screen is bigger so use bigger fonts
 #define FONT_SMALL FONT_MEDIUM_LOCAL // Height: 19
 #define FONT_MEDIUM FONT_LARGE_LOCAL // Height: 28
 #define FONT_LARGE FONT_LARGE_LOCAL  // Height: 28
-#elif defined(M5STACK_UNITC6L)
-#define FONT_SMALL FONT_SMALL_LOCAL  // Height: 13
-#define FONT_MEDIUM FONT_SMALL_LOCAL // Height: 13
-#define FONT_LARGE FONT_SMALL_LOCAL  // Height: 13
+#elif defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+#define FONT_SMALL FONT_TINY  // Height: 6
+#define FONT_MEDIUM FONT_TINY // Height: 6
+#define FONT_LARGE FONT_TINY  // Height: 6
 #else
 #define FONT_SMALL FONT_SMALL_LOCAL   // Height: 13
 #define FONT_MEDIUM FONT_MEDIUM_LOCAL // Height: 19
@@ -103,3 +109,7 @@
 #define FONT_HEIGHT_SMALL _fontHeight(FONT_SMALL)
 #define FONT_HEIGHT_MEDIUM _fontHeight(FONT_MEDIUM)
 #define FONT_HEIGHT_LARGE _fontHeight(FONT_LARGE)
+
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+#define FONT_HEIGHT_TINY _fontHeight(FONT_TINY)
+#endif
