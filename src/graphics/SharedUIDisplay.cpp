@@ -229,6 +229,21 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
         display->fillRect(batteryX + 1, batteryY + 1, fillWidth, 2);
         batteryX += battery_tiny_width + 1;
     }
+
+#if defined(USE_TINY_FONT)
+    // Show battery percentage for USE_TINY_FONT devices
+    if (chargePercent != 101) {
+        char chargeStr[4];
+        snprintf(chargeStr, sizeof(chargeStr), "%d", chargePercent);
+        int chargeNumWidth = display->getStringWidth(chargeStr);
+        display->drawString(batteryX, textY, chargeStr);
+        display->drawString(batteryX + chargeNumWidth - 1, textY, "%");
+        if (isBold) {
+            display->drawString(batteryX + 1, textY, chargeStr);
+            display->drawString(batteryX + chargeNumWidth, textY, "%");
+        }
+    }
+#endif
 #elif !defined(M5STACK_UNITC6L)
     // === Battery Icons ===
     if (usbPowered && !isCharging) { // This is a basic check to determine USB Powered is flagged but not charging
@@ -273,9 +288,8 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
         }
     }
 
-#if !defined(M5STACK_UNITC6L)
+    // Show battery percentage for standard devices (not M5STACK_UNITC6L or USE_TINY_FONT)
     if (chargePercent != 101) {
-        // === Battery % Display ===
         char chargeStr[4];
         snprintf(chargeStr, sizeof(chargeStr), "%d", chargePercent);
         int chargeNumWidth = display->getStringWidth(chargeStr);
@@ -286,7 +300,6 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
             display->drawString(batteryX + chargeNumWidth, textY, "%");
         }
     }
-#endif
 #endif
 
 #if defined(M5STACK_UNITC6L)
