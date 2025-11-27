@@ -107,16 +107,18 @@ const Emote emotes[] = {
     {"\U0001F498", heart, heart_width, heart_height},   // 💘 Heart with Arrow
 
     // --- Objects ---
-    {"\U0001F4A9", poo, poo_width, poo_height},                   // 💩 Pile of Poo
-    {"\U0001F514", bell_icon, bell_icon_width, bell_icon_height}, // 🔔 Bell
-    {"\U0001F4CB", clipboard, clipboard_width, clipboard_height}, // 📋 Clipboard
-    {"\U0001F36A", cookie, cookie_width, cookie_height},          // 🍪 Cookie
-    {"\U0001F370", shortcake, shortcake_width, shortcake_height}, // 🍰 Shortcake
-    {"\U0001F351", peach, peach_width, peach_height},             // 🍑 Peach
-    {"\U0001F525", Fire, Fire_width, Fire_height},                // 🔥 Fire
-    {"\u2728", Sparkles, Sparkles_width, Sparkles_height},        // ✨ Sparkles
-    {"\U0001F573\uFE0F", hole, hole_width, hole_height},          // 🕳️ Hole
-    {"\U0001F3B3", bowling, bowling_width, bowling_height},       // 🎳 Bowling
+    {"\U0001F4A9", poo, poo_width, poo_height},                      // 💩 Pile of Poo
+    {"\U0001F514", bell_icon, bell_icon_width, bell_icon_height},    // 🔔 Bell
+    {"\U0001F4CB", clipboard, clipboard_width, clipboard_height},    // 📋 Clipboard
+    {"\U0001F36A", cookie, cookie_width, cookie_height},             // 🍪 Cookie
+    {"\U0001F370", shortcake, shortcake_width, shortcake_height},    // 🍰 Shortcake
+    {"\U0001F351", peach, peach_width, peach_height},                // 🍑 Peach
+    {"\U0001F983", turkey, turkey_width, turkey_height},             // 🦃 Turkey
+    {"\U0001F357", turkey_leg, turkey_leg_width, turkey_leg_height}, // 🍗 Poultry Leg
+    {"\U0001F525", Fire, Fire_width, Fire_height},                   // 🔥 Fire
+    {"\u2728", Sparkles, Sparkles_width, Sparkles_height},           // ✨ Sparkles
+    {"\U0001F573\uFE0F", hole, hole_width, hole_height},             // 🕳️ Hole
+    {"\U0001F3B3", bowling, bowling_width, bowling_height},          // 🎳 Bowling
 
     // --- Arrows ---
     {"\u2193", Downwards_Arrow, Downwards_Arrow_width, Downwards_Arrow_height},          // ↓ Downwards Arrow
@@ -409,6 +411,14 @@ const unsigned char first_quarter_moon_face[] PROGMEM = {0x00, 0x0F, 0x00, 0x12,
 const unsigned char peach[] PROGMEM = {0x70, 0x0F, 0x88, 0x10, 0x78, 0x1F, 0x88, 0x11, 0x04, 0x22, 0x02,
                                        0x44, 0x02, 0x44, 0x02, 0x44, 0x02, 0x44, 0x02, 0x42, 0x02, 0x40,
                                        0x04, 0x20, 0x04, 0x20, 0x08, 0x10, 0x30, 0x0C, 0xC0, 0x03};
+
+const unsigned char turkey[] PROGMEM = {0x00, 0x00, 0x38, 0x00, 0x44, 0x38, 0x56, 0x54, 0x45, 0x52, 0xE2,
+                                        0x21, 0x2C, 0x56, 0x14, 0x58, 0x0A, 0x37, 0x86, 0x68, 0x82, 0x50,
+                                        0x82, 0x20, 0x04, 0x41, 0xF8, 0x7F, 0x40, 0x02, 0xF0, 0x07};
+
+const unsigned char turkey_leg[] PROGMEM = {0x0C, 0x00, 0x1E, 0x00, 0x1F, 0x00, 0x2F, 0x00, 0x46, 0x00, 0x88,
+                                            0x01, 0x10, 0x0E, 0x20, 0x30, 0x20, 0x40, 0x40, 0x40, 0x40, 0x80,
+                                            0x40, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00, 0x43, 0x00, 0x3C};
 
 const unsigned char South_West_Arrow[] PROGMEM = {0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x1C, 0x00, 0x3E, 0x00,
                                                   0x1F, 0x80, 0x0F, 0xC2, 0x07, 0xE6, 0x03, 0xFE, 0x01, 0xFE, 0x00,
