@@ -117,7 +117,7 @@ void drawRoundedHighlight(OLEDDisplay *display, int16_t x, int16_t y, int16_t w,
 // *************************
 void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *titleStr, bool force_no_invert, bool show_date)
 {
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     constexpr int HEADER_OFFSET_Y = 1; // 1 pixel top padding
 #else
     constexpr int HEADER_OFFSET_Y = 1;
@@ -138,18 +138,19 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
     if (!force_no_invert) {
         // === Inverted Header Background ===
         if (isInverted) {
-            display->setColor(BLACK);
-#if defined(M5STACK_UNITC6L)
-            // Fill from top pixel (row 0) with one pixel top padding, extend down to include text
-            display->fillRect(0, 0, screenW, highlightHeight + 4);
-            display->setColor(WHITE);
-            // Use reduced corner radius (1 instead of 2) for M5STACK_UNITC6L
-            drawRoundedHighlight(display, x, y, screenW, highlightHeight + 2, 1);
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+            int fillH = highlightHeight + 4;
+            int roundH = highlightHeight + 2;
+            int radius = 1;
 #else
-            display->fillRect(0, 0, screenW, highlightHeight + 2);
-            display->setColor(WHITE);
-            drawRoundedHighlight(display, x, y, screenW, highlightHeight, 2);
+            int fillH = highlightHeight + 2;
+            int roundH = highlightHeight;
+            int radius = 2;
 #endif
+            display->setColor(BLACK);
+            display->fillRect(0, 0, screenW, fillH);
+            display->setColor(WHITE);
+            drawRoundedHighlight(display, x, y, screenW, roundH, radius);
             display->setColor(BLACK);
         } else {
             display->setColor(BLACK);
@@ -163,22 +164,21 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
         }
 
         // === Screen Title ===
-#if defined(M5STACK_UNITC6L)
-        // Left-aligned title for M5STACK_UNITC6L
-        int titleX = 1;
-        graphics::MessageRenderer::drawStringWithEmotes(display, titleX, y + 1, titleStr, emotes, numEmotes);
-        if (config.display.heading_bold) {
-            graphics::MessageRenderer::drawStringWithEmotes(display, titleX + 1, y + 1, titleStr, emotes, numEmotes);
-        }
-#else
-        // Calculate width and manually center since drawStringWithEmotes doesn't respect TEXT_ALIGN_CENTER
         int titleWidth = graphics::MessageRenderer::getStringWidthWithEmotes(display, titleStr, emotes, numEmotes);
+#if defined(M5STACK_UNITC6L)
+        int titleX = 1;
+#else
         int titleX = (SCREEN_WIDTH - titleWidth) / 2;
-        graphics::MessageRenderer::drawStringWithEmotes(display, titleX, y, titleStr, emotes, numEmotes);
-        if (config.display.heading_bold) {
-            graphics::MessageRenderer::drawStringWithEmotes(display, titleX + 1, y, titleStr, emotes, numEmotes);
-        }
 #endif
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+        int titleY = y + 1;
+#else
+        int titleY = y;
+#endif
+        graphics::MessageRenderer::drawStringWithEmotes(display, titleX, titleY, titleStr, emotes, numEmotes);
+        if (isBold) {
+            graphics::MessageRenderer::drawStringWithEmotes(display, titleX + 1, titleY, titleStr, emotes, numEmotes);
+        }
     }
     display->setTextAlignment(TEXT_ALIGN_LEFT);
 
@@ -205,7 +205,7 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
 #endif
 
     bool useHorizontalBattery = (isHighResolution && screenW >= screenH);
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     const int textY = y + (highlightHeight - FONT_HEIGHT_SMALL) / 2 + 1; // Skip first padding row
 #else
     const int textY = y + (highlightHeight - FONT_HEIGHT_SMALL) / 2;
@@ -213,7 +213,23 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
 
     int batteryX = 1;
     int batteryY = HEADER_OFFSET_Y + 1;
-#if !defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+    // === Tiny Battery Icons for Small Displays ===
+    if (usbPowered && !isCharging) {
+        batteryX += 1;
+        batteryY += 1;
+        display->drawXbm(batteryX, batteryY, usb_tiny_width, usb_tiny_height, usb_tiny);
+        batteryX += usb_tiny_width + 1;
+    } else {
+        batteryX += 1;
+        batteryY += 1;
+        display->drawXbm(batteryX, batteryY, battery_tiny_width, battery_tiny_height, battery_tiny);
+        // Simple fill for charge level (3 pixels wide)
+        int fillWidth = 3 * chargePercent / 100;
+        display->fillRect(batteryX + 1, batteryY + 1, fillWidth, 2);
+        batteryX += battery_tiny_width + 1;
+    }
+#elif !defined(M5STACK_UNITC6L)
     // === Battery Icons ===
     if (usbPowered && !isCharging) { // This is a basic check to determine USB Powered is flagged but not charging
         batteryX += 1;
@@ -325,8 +341,8 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
         }
         timeX = screenW - xOffset - timeStrWidth + 3;
 
-#if defined(M5STACK_UNITC6L)
-        // For M5STACK_UNITC6L, show envelope icon to the left of time if there are unread messages
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+        // Show compact envelope icon to the left of time if there are unread messages
         if (hasUnreadMessage) {
             bool showMail = false;
 #ifndef USE_EINK
@@ -509,8 +525,7 @@ const int *getTextPositions(OLEDDisplay *display)
 {
     static int textPositions[7]; // Static array that persists beyond function scope
 
-#if defined(M5STACK_UNITC6L)
-    // Use extra vertical spacing for M5Stack UnitC6L to prevent line overlap with Tom Thumb font
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     textPositions[0] = textZeroLine;
     textPositions[1] = textFirstLine_unitc6l;
     textPositions[2] = textSecondLine_unitc6l;

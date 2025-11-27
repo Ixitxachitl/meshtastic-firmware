@@ -1385,7 +1385,7 @@ std::vector<int> calculateLineHeights(const std::vector<std::string> &lines, con
                                       const std::vector<bool> &isHeaderVec)
 {
     // Tunables for layout control
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     constexpr int HEADER_UNDERLINE_GAP = 1; // space between underline and first body line
     constexpr int HEADER_UNDERLINE_PIX = 1; // underline thickness (1px row drawn)
     constexpr int BODY_LINE_LEADING = -1;   // default vertical leading for normal body lines (was -3, +2 for more spacing)

@@ -16,7 +16,7 @@
 #include "graphics/fonts/OLEDDisplayFontsCS.h"
 #endif
 
-#ifdef M5STACK_UNITC6L
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
 #include "graphics/fonts/OLEDDisplayFontsTomThumb.h"
 #define FONT_TINY TomThumb4x6 // Height: 6
 #endif
@@ -85,7 +85,7 @@
 #define FONT_SMALL FONT_MEDIUM_LOCAL // Height: 19
 #define FONT_MEDIUM FONT_LARGE_LOCAL // Height: 28
 #define FONT_LARGE FONT_LARGE_LOCAL  // Height: 28
-#elif defined(M5STACK_UNITC6L)
+#elif defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
 #define FONT_SMALL FONT_TINY  // Height: 6
 #define FONT_MEDIUM FONT_TINY // Height: 6
 #define FONT_LARGE FONT_TINY  // Height: 6
@@ -110,6 +110,6 @@
 #define FONT_HEIGHT_MEDIUM _fontHeight(FONT_MEDIUM)
 #define FONT_HEIGHT_LARGE _fontHeight(FONT_LARGE)
 
-#ifdef M5STACK_UNITC6L
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
 #define FONT_HEIGHT_TINY _fontHeight(FONT_TINY)
 #endif

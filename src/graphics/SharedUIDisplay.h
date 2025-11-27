@@ -31,7 +31,7 @@ namespace graphics
 
 // Consistent Line Spacing for M5Stack UnitC6L with FONT_TINY (Tom Thumb 3x6 font)
 // FONT_HEIGHT_TINY is 7 (6px font + 1px gap calculated by _fontHeight macro)
-#ifdef M5STACK_UNITC6L
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
 #define textFirstLine_unitc6l (FONT_HEIGHT_TINY + 4) // 11 pixels (header + spacing)
 #define textSecondLine_unitc6l (textFirstLine_unitc6l + FONT_HEIGHT_TINY)
 #define textThirdLine_unitc6l (textSecondLine_unitc6l + FONT_HEIGHT_TINY)

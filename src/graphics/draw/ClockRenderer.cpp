@@ -259,7 +259,7 @@ void drawDigitalClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int1
     uint16_t hourMinuteTextX = (display->getWidth() / 2) - (timeStringWidth / 2);
     uint16_t startingHourMinuteTextX = hourMinuteTextX;
 
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     uint16_t hourMinuteTextY =
         (display->getHeight() / 2) - (((segmentWidth * 2) + (segmentHeight * 3) + 8) / 2) + 2 - 4; // Move up 4 pixels
 #else
@@ -292,7 +292,7 @@ void drawDigitalClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int1
         xOffset += (isHighResolution) ? 32 : 18;
     }
 
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     int labelYPos = (display->getHeight() - hourMinuteTextY) - 1 - 4; // Move up 4 pixels with clock
 #else
     int labelYPos = (display->getHeight() - hourMinuteTextY) - 1;

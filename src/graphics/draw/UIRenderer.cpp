@@ -21,10 +21,12 @@
 
 // External variables
 extern graphics::Screen *screen;
+#if !MESHTASTIC_EXCLUDE_BMI270
 extern "C" Quat GetAttitudeForRenderer();
 extern "C" uint32_t GetStepCountForRenderer();
 extern "C" bool HasStepCounterForRenderer();
-#if defined(M5STACK_UNITC6L)
+#endif
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
 static uint32_t lastSwitchTime = 0;
 #endif
 namespace graphics
@@ -38,7 +40,7 @@ using graphics::numEmotes;
 
 static inline void drawSatelliteIcon(OLEDDisplay *display, int16_t x, int16_t y)
 {
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     int yOffset = -2;
 #else
     int yOffset = (isHighResolution) ? -5 : 1;
@@ -87,7 +89,7 @@ extern uint32_t dopThresholds[5];
 // Draw GPS status summary
 void UIRenderer::drawGps(OLEDDisplay *display, int16_t x, int16_t y, const meshtastic::GPSStatus *gps)
 {
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     int yOffset = -2;
 #else
     int yOffset = (isHighResolution) ? -2 : 1;
@@ -306,7 +308,7 @@ void UIRenderer::drawNodes(OLEDDisplay *display, int16_t x, int16_t y, const mes
     if (isHighResolution) {
         NodeListRenderer::drawScaledXBitmap16x16(x, y - 1, 8, 8, imgUser, display);
     } else {
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
         display->drawFastImage(x, y - 3, 8, 8, imgUser);
 #else
         display->drawFastImage(x, y + 1, 8, 8, imgUser);
@@ -334,7 +336,7 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
     if (!node || node->num == nodeDB->getNodeNum() || !node->is_favorite)
         return;
     display->clear();
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     uint32_t now = millis();
     if (now - lastSwitchTime >= 10000) // 10000 ms = 10 秒
     {
@@ -363,7 +365,7 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
     int line = 1; // which slot to use next
     std::string usernameStr;
     // === 1. Long Name (always try to show first) ===
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     const char *username = (node->has_user && node->user.long_name[0]) ? node->user.short_name : nullptr;
 #else
     const char *username = (node->has_user && node->user.long_name[0]) ? node->user.long_name : nullptr;
@@ -424,7 +426,7 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
     if (seenStr[0] && line < 5) {
         display->drawString(x, getTextPositions(display)[line++], seenStr);
     }
-#if !defined(M5STACK_UNITC6L)
+#if !defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     // === 4. Uptime (only show if metric is present) ===
     char uptimeStr[32] = "";
     if (node->has_device_metrics && node->device_metrics.has_uptime_seconds) {
@@ -542,7 +544,11 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
 #if !defined(USE_EINK)
             if (isHighResolution) {
                 // 3D spherical compass + 3D-aware rim chevron toward favorite node
+#if !MESHTASTIC_EXCLUDE_BMI270
                 const Quat att = GetAttitudeForRenderer();
+#else
+                const Quat att = {1, 0, 0, 0}; // Identity quaternion
+#endif
                 graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, bearingRel);
                 graphics::CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, bearingWorld,
                                                               elevRad);
@@ -623,7 +629,11 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
 
 #if !defined(USE_EINK)
             if (isHighResolution) {
+#if !MESHTASTIC_EXCLUDE_BMI270
                 const Quat att = GetAttitudeForRenderer();
+#else
+                const Quat att = {1, 0, 0, 0};
+#endif
                 graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, bearingRel);
                 graphics::CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, bearingWorld,
                                                               elevRad);
@@ -683,9 +693,7 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
 #else
     drawNodes(display, x + 1, getTextPositions(display)[line] + 2, nodeStatus, -1, false, "online");
     char uptimeStr[32] = "";
-#if !defined(M5STACK_UNITC6L)
     getUptimeStr(millis(), "Up", uptimeStr, sizeof(uptimeStr));
-#endif
     display->drawString(SCREEN_WIDTH - display->getStringWidth(uptimeStr), getTextPositions(display)[line++], uptimeStr);
 #endif
 
@@ -772,7 +780,11 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
     snprintf(chUtilPercentage, sizeof(chUtilPercentage), "%2.0f%%", airTime->channelUtilizationPercent());
 
     int chUtil_x = (isHighResolution) ? display->getStringWidth(chUtil) + 10 : display->getStringWidth(chUtil) + 5;
+#if defined(USE_TINY_FONT)
+    int chUtil_y = getTextPositions(display)[line] - 1;
+#else
     int chUtil_y = getTextPositions(display)[line] + 3;
+#endif
 
     int chutil_bar_width = (isHighResolution) ? 100 : 50;
     if (!config.bluetooth.enabled) {
@@ -1038,7 +1050,7 @@ void UIRenderer::drawIconScreen(const char *upperMsg, OLEDDisplay *display, OLED
     // needs to be drawn relative to x and y
 
     // draw centered icon left to right and centered above the one line of app text
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     display->drawXbm(x + (SCREEN_WIDTH - 50) / 2, y + (SCREEN_HEIGHT - FONT_HEIGHT_SMALL - icon_height) / 2 + 1, icon_width,
                      icon_height, icon_bits);
     display->setFont(FONT_SMALL);
@@ -1202,7 +1214,7 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
         }
         display->drawString(x, getTextPositions(display)[line++], altitudeLine);
     }
-#if !defined(M5STACK_UNITC6L)
+#if !defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     // === Draw Compass if heading is valid ===
     if (validHeading) {
         // --- Compass Rendering: landscape (wide) screens use original side-aligned logic ---
@@ -1221,6 +1233,7 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
             const int16_t compassY = topY + (usableHeight / 2) + ((FONT_HEIGHT_SMALL - 1) / 2) + 2;
 
             // Add step count display above compass (top right area)
+#if !MESHTASTIC_EXCLUDE_BMI270
             uint32_t stepCount = GetStepCountForRenderer();
             if (HasStepCounterForRenderer()) { // Show if step counter hardware exists
                 display->setTextAlignment(TEXT_ALIGN_RIGHT);
@@ -1249,9 +1262,14 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
                 display->drawString(stepX, stepY, stepText);
                 display->setTextAlignment(TEXT_ALIGN_LEFT); // Reset alignment
             }
+#endif
 
             // Compass with mode-specific behavior
+#if !MESHTASTIC_EXCLUDE_BMI270
             const Quat att = GetAttitudeForRenderer();
+#else
+            const Quat att = {1, 0, 0, 0};
+#endif
 
             // Render compass sphere with mode-specific attitude
             if (uiconfig.compass_mode == meshtastic_CompassMode_FIXED_RING) {
@@ -1330,7 +1348,8 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
             if (availableHeight < FONT_HEIGHT_SMALL * 2)
                 return;
 
-            // Add step count display in top right corner for portrait/square screens
+                // Add step count display in top right corner for portrait/square screens
+#if !MESHTASTIC_EXCLUDE_BMI270
             uint32_t stepCount = GetStepCountForRenderer();
             if (HasStepCounterForRenderer()) {
                 display->setTextAlignment(TEXT_ALIGN_RIGHT);
@@ -1353,6 +1372,7 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
                 display->drawString(stepX, stepY, stepText);
                 display->setTextAlignment(TEXT_ALIGN_LEFT);
             }
+#endif
 
             int compassRadius = availableHeight / 2;
             if (compassRadius < 8)
@@ -1364,7 +1384,11 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
             int compassY = yBelowContent + availableHeight / 2;
 
             // Compass with mode-specific behavior
+#if !MESHTASTIC_EXCLUDE_BMI270
             const Quat att = GetAttitudeForRenderer();
+#else
+            const Quat att = {1, 0, 0, 0};
+#endif
 
             // Render compass sphere with mode-specific attitude
             if (uiconfig.compass_mode == meshtastic_CompassMode_FIXED_RING) {
@@ -1494,7 +1518,11 @@ void UIRenderer::drawCompassScreen(OLEDDisplay *display, OLEDDisplayUiState *sta
         int compassY = y + (SCREEN_HEIGHT / 2);
 
         // Get attitude quaternion for 3D compass
+#if !MESHTASTIC_EXCLUDE_BMI270
         const Quat att = GetAttitudeForRenderer();
+#else
+        const Quat att = {1, 0, 0, 0};
+#endif
 
         // Render 3D compass sphere with mode-specific behavior
         if (uiconfig.compass_mode == meshtastic_CompassMode_FIXED_RING) {

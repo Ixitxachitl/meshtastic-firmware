@@ -60,7 +60,7 @@ class UIRenderer
     static void drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
 
 #if defined(M5STACK_UNITC6L)
-    // Compass-only screen for small displays
+    // Compass-only screen for small displays (M5STACK_UNITC6L only, not USE_TINY_FONT)
     static void drawCompassScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
 #endif
 

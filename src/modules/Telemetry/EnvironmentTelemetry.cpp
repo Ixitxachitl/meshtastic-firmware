@@ -926,8 +926,8 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     graphics::drawCommonHeader(display, x, y, titleStr);
 
     // === Row spacing setup ===
-#if defined(M5STACK_UNITC6L)
-    const int rowHeight = 7; // Tom Thumb font spacing
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+    const int rowHeight = 7;
 #else
     const int rowHeight = FONT_HEIGHT_SMALL - 4;
 #endif
@@ -1314,7 +1314,6 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
 
         // === Draw remaining entries in 2-column format (dew, gas, voltage, etc.) ===
 #if defined(M5STACK_UNITC6L)
-        // Single column for tiny display
         for (const auto &entry : s_displayCache.entries) {
             display->drawString(x, currentY, entry);
             currentY += rowHeight;
@@ -1353,7 +1352,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         graphics::MessageRenderer::drawStringWithEmotes(display, x, currentY, displayStr.c_str(), emotes, numEmotes);
 
 #if defined(M5STACK_UNITC6L)
-        // For tiny display: put sender/time on first line, then all metrics on separate lines
+        // For M5STACK_UNITC6L only: put sender/time on first line, then all metrics on separate lines
         currentY += rowHeight;
         for (const auto &metric : allMetrics) {
             display->drawString(x, currentY, metric);
