@@ -213,8 +213,11 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
 
     int batteryX = 1;
     int batteryY = HEADER_OFFSET_Y + 1;
-#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
-    // === Tiny Battery Icons for Small Displays ===
+#if defined(M5STACK_UNITC6L)
+    // === M5STACK_UNITC6L: No battery icons shown ===
+    // Screen too small, skip battery display entirely
+#elif defined(USE_TINY_FONT)
+    // === Tiny Battery Icons for USE_TINY_FONT Devices ===
     if (usbPowered && !isCharging) {
         batteryX += 1;
         batteryY += 1;
@@ -230,7 +233,6 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
         batteryX += battery_tiny_width + 1;
     }
 
-#if defined(USE_TINY_FONT)
     // Show battery percentage for USE_TINY_FONT devices
     if (chargePercent != 101) {
         char chargeStr[4];
@@ -243,8 +245,7 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
             display->drawString(batteryX + chargeNumWidth, textY, "%");
         }
     }
-#endif
-#elif !defined(M5STACK_UNITC6L)
+#else
     // === Battery Icons ===
     if (usbPowered && !isCharging) { // This is a basic check to determine USB Powered is flagged but not charging
         batteryX += 1;
