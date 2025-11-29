@@ -2,6 +2,11 @@
 #if !MESHTASTIC_EXCLUDE_GPS
 #include "GPS.h"
 #endif
+#ifdef SENSECAP_INDICATOR
+#include "mesh/IndicatorSerial.h"
+#include "mesh/comms/FakeI2C.h"
+#include "mesh/comms/FakeUART.h"
+#endif
 #include "MeshRadio.h"
 #include "MeshService.h"
 #include "NodeDB.h"
@@ -9,7 +14,7 @@
 #include "PowerMon.h"
 #include "ReliableRouter.h"
 #include "airtime.h"
-#include "buzz.h"
+#include "buzz.h" // if you have this
 
 #include "FSCommon.h"
 #include "Led.h"
@@ -170,6 +175,12 @@ volatile static const char slipstreamTZString[] = {USERPREFS_TZ_STRING};
 // We always create a screen object, but we only init it if we find the hardware
 graphics::Screen *screen = nullptr;
 
+// After boot melody completes, speak "meshtastic" once
+#ifdef HAS_I2S
+enum class BootTTSState : uint8_t { Idle, WaitMelodyStart, WaitMelodyEnd };
+static BootTTSState bootTTS = BootTTSState::Idle;
+#endif
+
 // Global power status
 meshtastic::PowerStatus *powerStatus = new meshtastic::PowerStatus();
 
@@ -205,7 +216,7 @@ ScanI2C::FoundDevice rgb_found = ScanI2C::FoundDevice(ScanI2C::DeviceType::NONE,
 /// The I2C address of our Air Quality Indicator (if found)
 ScanI2C::DeviceAddress aqi_found = ScanI2C::ADDRESS_NONE;
 
-#if defined(T_WATCH_S3) || defined(T_LORA_PAGER)
+#if defined(T_WATCH_S3) || defined(T_LORA_PAGER) || defined(TTGO_T_ECHO_PLUS)
 Adafruit_DRV2605 drv;
 #endif
 
@@ -531,20 +542,42 @@ void setup()
 #else
     ledPeriodic = new Periodic("Blink", ledBlinker);
 #endif
+#endif
 
     fsInit();
 
-#if !MESHTASTIC_EXCLUDE_I2C
-#if defined(I2C_SDA1) && defined(ARCH_RP2040)
-    Wire1.setSDA(I2C_SDA1);
-    Wire1.setSCL(I2C_SCL1);
-    Wire1.begin();
-#elif defined(I2C_SDA1) && !defined(ARCH_RP2040)
-    Wire1.begin(I2C_SDA1, I2C_SCL1);
-#elif WIRE_INTERFACES_COUNT == 2
-    Wire1.begin();
-#endif
+    // Tracks if we actually enabled the 2nd I2C bus
+    bool wire1Active = false;
 
+#if !MESHTASTIC_EXCLUDE_I2C
+    // --- Secondary I2C (Wire1) on CAP/Grove pins (G2=SDA, G1=SCL) ---
+#if WIRE_INTERFACES_COUNT == 2
+    const bool wantExternalI2COnCap = true;
+    if (wantExternalI2COnCap) {
+#if defined(ARCH_RP2040)
+        Wire1.setSDA(G2);
+        Wire1.setSCL(G1);
+        Wire1.begin();
+#else
+        Wire1.begin(G2 /*SDA*/, G1 /*SCL*/);
+#endif
+        Wire1.setClock(100000); // start at 100kHz for reliability
+        LOG_INFO("Wire1 CAP bus enabled: SDA=%d SCL=%d @100k", G2, G1);
+        wire1Active = true;
+
+        // Optional: quick probe for BME688 default addresses
+        for (uint8_t addr = 0x76; addr <= 0x77; ++addr) {
+            Wire1.beginTransmission(addr);
+            if (Wire1.endTransmission() == 0) {
+                LOG_INFO("Wire1 device found at 0x%02X", addr);
+            }
+        }
+    } else {
+        LOG_INFO("CAP bus (Wire1) disabled by config.");
+    }
+#endif // WIRE_INTERFACES_COUNT == 2
+
+    // --- Primary I2C (Wire) ---
 #if defined(I2C_SDA) && defined(ARCH_RP2040)
     Wire.setSDA(I2C_SDA);
     Wire.setSCL(I2C_SCL);
@@ -560,7 +593,6 @@ void setup()
     }
 #elif HAS_WIRE
     Wire.begin();
-#endif
 #endif
 
 #if defined(M5STACK_UNITC6L)
@@ -592,28 +624,35 @@ void setup()
     power->setup(); // Must be after status handler is installed, so that handler gets notified of the initial configuration
 
 #if !MESHTASTIC_EXCLUDE_I2C
-    // We need to scan here to decide if we have a screen for nodeDB.init() and because power has been applied to
-    // accessories
+    // We need to scan here to decide if we have a screen for nodeDB.init()
+    // and because power has been applied to accessories
     auto i2cScanner = std::unique_ptr<ScanI2CTwoWire>(new ScanI2CTwoWire());
+
 #if HAS_WIRE
-    LOG_INFO("Scan for i2c devices");
+    LOG_INFO("Scan for I2C devices (starting)...");
 #endif
 
-#if defined(I2C_SDA1) || (defined(NRF52840_XXAA) && (WIRE_INTERFACES_COUNT == 2))
+    // Scan CAP/Grove bus first if enabled
+    if (wire1Active) {
+        LOG_INFO("Scanning CAP bus (Wire1)...");
+        i2cScanner->scanPort(ScanI2C::I2CPort::WIRE1);
+    } else {
+        LOG_INFO("CAP bus (Wire1) is disabled; skipping.");
+    }
+
+    // ESP32-C6 Unit-C6L: Scan Grove port using pin switching
+#if defined(M5STACK_UNITC6L) && defined(GROVE_SDA) && defined(GROVE_SCL)
+    LOG_INFO("Scanning Grove port (GPIO5/GPIO4)...");
     i2cScanner->scanPort(ScanI2C::I2CPort::WIRE1);
 #endif
 
-#if defined(I2C_SDA)
-    i2cScanner->scanPort(ScanI2C::I2CPort::WIRE);
-#elif defined(ARCH_PORTDUINO)
-    if (portduino_config.i2cdev != "") {
-        LOG_INFO("Scan for i2c devices");
-        i2cScanner->scanPort(ScanI2C::I2CPort::WIRE);
-    }
-#elif HAS_WIRE
+    // Always scan the internal/default bus
+#if defined(I2C_SDA) || HAS_WIRE
+    LOG_INFO("Scanning internal bus (Wire)...");
     i2cScanner->scanPort(ScanI2C::I2CPort::WIRE);
 #endif
 
+    // Summary
     auto i2cCount = i2cScanner->countDevices();
     if (i2cCount == 0) {
         LOG_INFO("No I2C devices found");
@@ -623,6 +662,7 @@ void setup()
         sensor_detected = true;
 #endif
     }
+#endif // !MESHTASTIC_EXCLUDE_I2C
 
 #ifdef ARCH_ESP32
     // Don't init display if we don't have one or we are waking headless due to a timer event
@@ -779,6 +819,14 @@ void setup()
     // but we need to do this after main cpu init (esp32setup), because we need the random seed set
     nodeDB = new NodeDB;
 
+#ifdef SENSECAP_INDICATOR
+    // Initialize SenseCAP Indicator communication early so buzzer works for startup melody
+    LOG_INFO("Initializing SenseCAP Indicator communication");
+    fakeUART = new FakeUART();
+    fakeI2C = new FakeI2C();
+    sensecapIndicator = new SensecapIndicator(Serial2);
+#endif
+
 #if HAS_TFT
     if (config.display.displaymode == meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
         tftSetup();
@@ -794,6 +842,11 @@ void setup()
         LOG_DEBUG("Tracker/Sensor: Skip start melody");
     else
         playStartMelody();
+
+#ifdef HAS_I2S
+    // Arm: wait until we detect the melody actually starts playing
+    bootTTS = BootTTSState::WaitMelodyStart;
+#endif
 
     // fixed screen override?
     if (config.display.oled != meshtastic_Config_DisplayConfig_OledType_OLED_AUTO)
@@ -824,7 +877,11 @@ void setup()
 #endif
 #endif
 
-#if defined(T_WATCH_S3) || defined(T_LORA_PAGER)
+#if defined(T_WATCH_S3) || defined(T_LORA_PAGER) || defined(TTGO_T_ECHO_PLUS)
+#ifdef PIN_VIBRATION_EN
+    pinMode(PIN_VIBRATION_EN, OUTPUT);
+    digitalWrite(PIN_VIBRATION_EN, HIGH); // Enable DRV2605
+#endif
     drv.begin();
     drv.selectLibrary(1);
     // I2C trigger by sending 'go' command
@@ -847,28 +904,28 @@ void setup()
     SPI.begin(false);
 #endif // HW_SPI1_DEVICE
 #elif ARCH_PORTDUINO
-    if (portduino_config.lora_spi_dev != "ch341") {
-        SPI.begin();
-    }
+if (portduino_config.lora_spi_dev != "ch341") {
+    SPI.begin();
+}
 #elif !defined(ARCH_ESP32) // ARCH_RP2040
 #if defined(RAK3401) || defined(RAK13302)
-    pinMode(WB_IO2, OUTPUT);
-    digitalWrite(WB_IO2, HIGH);
-    SPI1.setPins(LORA_MISO, LORA_SCK, LORA_MOSI);
-    SPI1.begin();
+pinMode(WB_IO2, OUTPUT);
+digitalWrite(WB_IO2, HIGH);
+SPI1.setPins(LORA_MISO, LORA_SCK, LORA_MOSI);
+SPI1.begin();
 #else
-    SPI.begin();
+SPI.begin();
 #endif
 #else
-        // ESP32
+    // ESP32
 #if defined(HW_SPI1_DEVICE)
-    SPI1.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
-    LOG_DEBUG("SPI1.begin(SCK=%d, MISO=%d, MOSI=%d, NSS=%d)", LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
-    SPI1.setFrequency(4000000);
+SPI1.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
+LOG_DEBUG("SPI1.begin(SCK=%d, MISO=%d, MOSI=%d, NSS=%d)", LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
+SPI1.setFrequency(4000000);
 #else
-    SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
-    LOG_DEBUG("SPI.begin(SCK=%d, MISO=%d, MOSI=%d, NSS=%d)", LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
-    SPI.setFrequency(4000000);
+SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
+LOG_DEBUG("SPI.begin(SCK=%d, MISO=%d, MOSI=%d, NSS=%d)", LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
+SPI.setFrequency(4000000);
 #endif
 #endif
 
@@ -918,6 +975,10 @@ void setup()
     if (sensor_detected == false) {
 #endif
         if (HAS_GPS) {
+#ifdef SENSECAP_INDICATOR
+            // Set GPS to use FakeUART (already initialized earlier)
+            GPS::_serial_gps = (HardwareSerial *)fakeUART;
+#endif
             if (config.position.gps_mode != meshtastic_Config_PositionConfig_GpsMode_NOT_PRESENT) {
                 gps = GPS::createGps();
                 if (gps) {
@@ -938,6 +999,16 @@ void setup()
 #ifdef HAS_I2S
     LOG_DEBUG("Start audio thread");
     audioThread = new AudioThread();
+#if defined(ARDUINO_ARCH_ESP32)
+    // On ESP32, run AudioThread as a FreeRTOS task when configured
+    if (audioThread && audioThread->isFreeRTOSTask()) {
+        if (!audioThread->startFreeRTOSTask()) {
+            LOG_ERROR("Failed to start AudioThread FreeRTOS task");
+            delete audioThread;
+            audioThread = nullptr;
+        }
+    }
+#endif
 #endif
 
 #ifdef HAS_UDP_MULTICAST
@@ -980,7 +1051,7 @@ void setup()
 #if HAS_BUTTON
     int pullup_sense = 0;
 #ifdef INPUT_PULLUP_SENSE
-    // Some platforms (nrf52) have a SENSE variant which allows wake from sleep - override what OneButton did
+// Some platforms (nrf52) have a SENSE variant which allows wake from sleep - override what OneButton did
 #ifdef BUTTON_SENSE_TYPE
     pullup_sense = BUTTON_SENSE_TYPE;
 #else
@@ -1144,7 +1215,7 @@ void setup()
         digitalWrite(LED_PIN, HIGH ^ LED_STATE_ON);
 #endif
 
-// Do this after service.init (because that clears error_code)
+        // Do this after service.init (because that clears error_code)
 #ifdef HAS_PMU
     if (!pmu_found)
         RECORD_CRITICALERROR(meshtastic_CriticalErrorCode_NO_AXP192); // Record a hardware fault for missing hardware
@@ -1224,9 +1295,9 @@ void setup()
     }
 
 #elif defined(HW_SPI1_DEVICE)
-    LockingArduinoHal *RadioLibHAL = new LockingArduinoHal(SPI1, spiSettings);
+LockingArduinoHal *RadioLibHAL = new LockingArduinoHal(SPI1, spiSettings);
 #else // HW_SPI1_DEVICE
-    LockingArduinoHal *RadioLibHAL = new LockingArduinoHal(SPI, spiSettings);
+LockingArduinoHal *RadioLibHAL = new LockingArduinoHal(SPI, spiSettings);
 #endif
 
     // radio init MUST BE AFTER service.init, so we have our radio config settings (from nodedb init)
@@ -1497,7 +1568,6 @@ void setup()
     nodeDB->notifyObservers(true);
 }
 
-#endif
 uint32_t rebootAtMsec;   // If not zero we will reboot at this time (used to reboot shortly after the update completes)
 uint32_t shutdownAtMsec; // If not zero we will shutdown at this time (used to shutdown from python or mobile client)
 
@@ -1525,19 +1595,19 @@ extern meshtastic_DeviceMetadata getDeviceMetadata()
 #if MESHTASTIC_EXCLUDE_AUDIO
     deviceMetadata.excluded_modules |= meshtastic_ExcludedModules_AUDIO_CONFIG;
 #endif
-// Option to explicitly include canned messages for edge cases, e.g. niche graphics
+    // Option to explicitly include canned messages for edge cases, e.g. niche graphics
 #if ((!HAS_SCREEN || NO_EXT_GPIO) || MESHTASTIC_EXCLUDE_CANNEDMESSAGES) && !defined(MESHTASTIC_INCLUDE_NICHE_GRAPHICS)
     deviceMetadata.excluded_modules |= meshtastic_ExcludedModules_CANNEDMSG_CONFIG;
 #endif
 #if NO_EXT_GPIO || MESHTASTIC_EXCLUDE_EXTERNALNOTIFICATION
     deviceMetadata.excluded_modules |= meshtastic_ExcludedModules_EXTNOTIF_CONFIG;
 #endif
-// Only edge case here is if we apply this a device with built in Accelerometer and want to detect interrupts
-// We'll have to macro guard against those targets potentially
+    // Only edge case here is if we apply this a device with built in Accelerometer and want to detect interrupts
+    // We'll have to macro guard against those targets potentially
 #if NO_EXT_GPIO || MESHTASTIC_EXCLUDE_DETECTIONSENSOR
     deviceMetadata.excluded_modules |= meshtastic_ExcludedModules_DETECTIONSENSOR_CONFIG;
 #endif
-// If we don't have any GPIO and we don't have GPS OR we don't want too - no purpose in having serial config
+    // If we don't have any GPIO and we don't have GPS OR we don't want too - no purpose in having serial config
 #if NO_EXT_GPIO && NO_GPS || MESHTASTIC_EXCLUDE_SERIAL
     deviceMetadata.excluded_modules |= meshtastic_ExcludedModules_SERIAL_CONFIG;
 #endif
@@ -1548,9 +1618,9 @@ extern meshtastic_DeviceMetadata getDeviceMetadata()
     deviceMetadata.excluded_modules |= meshtastic_ExcludedModules_AMBIENTLIGHTING_CONFIG;
 #endif
 
-// No bluetooth on these targets (yet):
-// Pico W / 2W may get it at some point
-// Portduino and ESP32-C6 are excluded because we don't have a working bluetooth stacks integrated yet.
+    // No bluetooth on these targets (yet):
+    // Pico W / 2W may get it at some point
+    // Portduino and ESP32-C6 are excluded because we don't have a working bluetooth stacks integrated yet.
 #if defined(ARCH_RP2040) || defined(ARCH_PORTDUINO) || defined(ARCH_STM32WL) || defined(CONFIG_IDF_TARGET_ESP32C6)
     deviceMetadata.excluded_modules |= meshtastic_ExcludedModules_BLUETOOTH_CONFIG;
 #endif
@@ -1605,6 +1675,53 @@ void loop()
     if (inputBroker)
         inputBroker->processInputEventQueue();
 #endif
+
+        // --- FLUSH PENDING BOOT MELODY ONCE THE SCHEDULER IS RUNNING ---
+#if defined(HAS_I2S) && defined(ARDUINO_ARCH_ESP32)
+    {
+        static bool bootMelodyFlushed = false;
+        static uint32_t flushStartMs = 0;
+
+        if (!bootMelodyFlushed) {
+            // Record when we first see a valid audioThread
+            extern AudioThread *audioThread;
+            if (audioThread) {
+                if (flushStartMs == 0)
+                    flushStartMs = millis();
+
+                const bool warmedUp = (audioThread->pumpTicks() >= 20); // be conservative; 20 is enough
+
+                const bool timeFallback = (millis() - flushStartMs) >= 800; // hard fallback after ~0.8s
+
+                if (warmedUp || timeFallback) {
+                    buzzOnAudioThreadReady(); // starts queued boot RTTTL
+                    bootMelodyFlushed = true;
+                }
+            }
+        }
+        // Speak "meshtastic" only AFTER we observed the melody start and then end
+        if (audioThread) {
+            switch (bootTTS) {
+            case BootTTSState::WaitMelodyStart:
+                if (audioThread->isPlaying()) {
+                    // Melody has begun; now wait for it to finish
+                    bootTTS = BootTTSState::WaitMelodyEnd;
+                }
+                break;
+            case BootTTSState::WaitMelodyEnd:
+                if (!audioThread->isPlaying()) {
+                    audioThread->readAloud("meshtastic");
+                    bootTTS = BootTTSState::Idle;
+                }
+                break;
+            default:
+                break;
+            }
+        }
+    }
+#endif
+    // --- END FLUSH ---
+
 #if ARCH_PORTDUINO && HAS_TFT
     if (screen && portduino_config.displayPanel == x11 &&
         config.display.displaymode != meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
@@ -1613,7 +1730,9 @@ void loop()
             static_cast<TFTDisplay *>(dispdev)->sdlLoop();
     }
 #endif
-    long delayMsec = mainController.runOrDelay();
+
+    // Calculate the delay based on scheduler
+    int32_t delayMsec = mainController.runOrDelay();
 
     // We want to sleep as long as possible here - because it saves power
     if (!runASAP && loopCanSleep()) {

@@ -2,10 +2,12 @@
 
 #if HAS_SCREEN
 #include "DisplayFormatters.h"
+#include "MessageRenderer.h"
 #include "NodeDB.h"
 #include "NotificationRenderer.h"
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
+#include "graphics/emotes.h"
 #include "graphics/images.h"
 #include "input/RotaryEncoderInterruptImpl1.h"
 #include "input/UpDownInterruptImpl1.h"
@@ -25,6 +27,9 @@
 #endif
 
 using namespace meshtastic;
+using graphics::Emote;
+using graphics::emotes;
+using graphics::numEmotes;
 
 #if HAS_BUTTON
 // Global button thread pointer defined in main.cpp
@@ -277,7 +282,11 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
 
     uint16_t totalLines = lineCount + alertBannerOptions;
     uint16_t screenHeight = display->height();
+#if defined(M5STACK_UNITC6L)
+    uint8_t effectiveLineHeight = FONT_HEIGHT_SMALL - 1; // Tighter spacing for Tom Thumb font
+#else
     uint8_t effectiveLineHeight = FONT_HEIGHT_SMALL - 3;
+#endif
     uint8_t visibleTotalLines = std::min<uint8_t>(totalLines, (screenHeight - vPadding * 2) / effectiveLineHeight);
     uint8_t linesShown = lineCount;
     const char *linePointers[visibleTotalLines + 1] = {0}; // this is sort of a dynamic allocation
@@ -407,7 +416,11 @@ void NotificationRenderer::drawAlertBannerOverlay(OLEDDisplay *display, OLEDDisp
     uint16_t totalLines = lineCount + alertBannerOptions;
 
     uint16_t screenHeight = display->height();
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+    uint8_t effectiveLineHeight = FONT_HEIGHT_TINY - 1; // Tighter spacing for Tom Thumb font
+#else
     uint8_t effectiveLineHeight = FONT_HEIGHT_SMALL - 3;
+#endif
     uint8_t visibleTotalLines = std::min<uint8_t>(totalLines, (screenHeight - vPadding * 2) / effectiveLineHeight);
     uint8_t linesShown = lineCount;
     const char *linePointers[visibleTotalLines + 1] = {0}; // this is sort of a dynamic allocation
@@ -527,7 +540,11 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
     }
 
     uint16_t screenHeight = display->height();
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+    uint8_t effectiveLineHeight = FONT_HEIGHT_TINY - 1; // Tighter spacing for Tom Thumb font
+#else
     uint8_t effectiveLineHeight = FONT_HEIGHT_SMALL - 3;
+#endif
     uint8_t visibleTotalLines = std::min<uint8_t>(lineCount, (screenHeight - vPadding * 2) / effectiveLineHeight);
     uint16_t contentHeight = visibleTotalLines * effectiveLineHeight;
     uint16_t boxHeight = contentHeight + vPadding * 2;
@@ -542,8 +559,9 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
     int16_t boxTop = (display->height() / 2) - (boxHeight / 2);
     boxHeight += (isHighResolution) ? 2 : 1;
 #if defined(M5STACK_UNITC6L)
+    // Center on screen vertically - adjust for header and overall layout
     if (visibleTotalLines == 1) {
-        boxTop += 25;
+        boxTop = (display->height() / 2) - (boxHeight / 2) + 2; // Recenter single line banners
     }
     if (alertBannerOptions < 3) {
         int missingLines = 3 - alertBannerOptions;
@@ -593,8 +611,13 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
             }
             display->fillRect(boxLeft, boxTop + 1, boxWidth, effectiveLineHeight - background_yOffset);
             display->setColor(BLACK);
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+            int yOffset = FONT_HEIGHT_TINY - 6; // Move text down for Tom Thumb font (7-6=1, was 3, now 1 = +2 down)
+#else
             int yOffset = 3;
-            display->drawString(textX, lineY - yOffset, lineBuffer);
+#endif
+            graphics::MessageRenderer::drawStringWithEmotes(display, textX, lineY - yOffset, std::string(lineBuffer), emotes,
+                                                            numEmotes);
             display->setColor(WHITE);
             lineY += (effectiveLineHeight - 2 - background_yOffset);
         } else {
@@ -613,7 +636,8 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
                 int totalWidth = textWidth + barsWidth;
                 int groupStartX = boxLeft + (boxWidth - totalWidth) / 2;
 
-                display->drawString(groupStartX, lineY, lineBuffer);
+                graphics::MessageRenderer::drawStringWithEmotes(display, groupStartX, lineY, std::string(lineBuffer), emotes,
+                                                                numEmotes);
 
                 int baseX = groupStartX + textWidth + gap;
                 int baseY = lineY + effectiveLineHeight - 1;
@@ -629,7 +653,13 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
                     }
                 }
             } else {
-                display->drawString(textX, lineY, lineBuffer);
+#if defined(M5STACK_UNITC6L)
+                int textYOffset = FONT_HEIGHT_TINY - 5; // Move text down for Tom Thumb font (7-5=2)
+#else
+                int textYOffset = 0;
+#endif
+                graphics::MessageRenderer::drawStringWithEmotes(display, textX, lineY + textYOffset, std::string(lineBuffer),
+                                                                emotes, numEmotes);
             }
             lineY += (effectiveLineHeight);
         }

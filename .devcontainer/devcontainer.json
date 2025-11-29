@@ -25,11 +25,26 @@
     }
   },
 
-  // Use 'forwardPorts' to make a list of ports inside the container available locally.
-  "forwardPorts": [4403],
-
   // Use "--device=" to make a local device available inside the container.
-  // "runArgs": ["--device=/dev/ttyACM0"],
+  "runArgs": ["--device=/dev/ttyACM0", "--group-add=dialout"],
+
+  // Expose ports from the container to all network interfaces
+  "appPort": ["4403:4403"],
+
+  // Forward ports from the container to the host
+  "forwardPorts": [4403],
+  "portsAttributes": {
+    "4403": {
+      "label": "Meshtastic API",
+      "onAutoForward": "notify",
+      "elevateIfNeeded": true
+    }
+  },
+
+  // Environment variables for X11 forwarding
+  "containerEnv": {
+    "DISPLAY": "${localEnv:DISPLAY}"
+  },
 
   // Run commands to prepare the container for use
   "postCreateCommand": ".devcontainer/setup.sh"
