@@ -53,6 +53,25 @@ namespace graphics
 namespace MessageRenderer
 {
 
+// Forward declarations
+static std::string normalizeEmoji(const std::string &s);
+
+// Cache normalized emoji labels to avoid repeated allocations
+static std::vector<std::string> cachedNormalizedEmoteLabels;
+static bool emoteLabelsCached = false;
+
+static void ensureEmoteLabelsNormalized()
+{
+    if (!emoteLabelsCached) {
+        cachedNormalizedEmoteLabels.clear();
+        cachedNormalizedEmoteLabels.reserve(numEmotes);
+        for (int i = 0; i < numEmotes; ++i) {
+            cachedNormalizedEmoteLabels.push_back(normalizeEmoji(std::string(emotes[i].label)));
+        }
+        emoteLabelsCached = true;
+    }
+}
+
 static std::vector<std::string> cachedLines;
 static std::vector<int> cachedHeights;
 
@@ -269,6 +288,8 @@ std::string normalizeEmoji(const std::string &s)
 // Replace unknown 4-byte emoji with upside-down question mark
 std::string replaceUnknownEmoji(const std::string &s, const Emote *emotes, int emoteCount)
 {
+    ensureEmoteLabelsNormalized(); // Ensure cache is ready
+
     // Normalize input to strip variation selectors and skin tone modifiers first
     const std::string normInput = normalizeEmoji(s);
 
@@ -282,7 +303,7 @@ std::string replaceUnknownEmoji(const std::string &s, const Emote *emotes, int e
         // Check if this matches a known emote
         bool isKnownEmote = false;
         for (int e = 0; e < emoteCount; ++e) {
-            const std::string labelNorm = normalizeEmoji(std::string(emotes[e].label));
+            const std::string &labelNorm = cachedNormalizedEmoteLabels[e];
             size_t labelLen = labelNorm.length();
             if (labelLen > 0 && i + labelLen <= normInput.size() && normInput.compare(i, labelLen, labelNorm) == 0) {
                 isKnownEmote = true;
@@ -350,13 +371,15 @@ std::string replaceUnknownEmoji(const std::string &s, const Emote *emotes, int e
 
 int getStringWidthWithEmotes(OLEDDisplay *display, const std::string &line, const Emote *emotes, int emoteCount)
 {
+    ensureEmoteLabelsNormalized(); // Ensure cache is ready
+
     const std::string normLine = normalizeEmoji(line);
     int totalWidth = 0;
 
     for (size_t i = 0; i < normLine.length();) {
         bool matched = false;
         for (int e = 0; e < emoteCount; ++e) {
-            const std::string labelNorm = normalizeEmoji(std::string(emotes[e].label));
+            const std::string &labelNorm = cachedNormalizedEmoteLabels[e];
             const size_t emojiLen = labelNorm.length();
             if (emojiLen && normLine.compare(i, emojiLen, labelNorm) == 0) {
                 totalWidth += emotes[e].width + 1; // emote width + spacing
@@ -617,6 +640,8 @@ void clearMessageCache()
     cachedFiltered.clear();
     cachedFiltered.shrink_to_fit();
 
+    // No need to clear emoji label cache - it's constant and reusable
+
     // Rebuild from scratch on next draw
     resetScrollState();
     markDirty();
@@ -730,6 +755,8 @@ static void drawRelayMark(OLEDDisplay *display, int x, int y, int size = 8)
 
 static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &line, const Emote *emotes, int emoteCount)
 {
+    ensureEmoteLabelsNormalized(); // Ensure cache is ready
+
     std::string normalized = normalizeEmoji(line);
     int totalWidth = 0;
 
@@ -737,7 +764,7 @@ static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &
     while (i < normalized.length()) {
         bool matched = false;
         for (int e = 0; e < emoteCount; ++e) {
-            const std::string labelNorm = normalizeEmoji(std::string(emotes[e].label));
+            const std::string &labelNorm = cachedNormalizedEmoteLabels[e];
             size_t emojiLen = labelNorm.length();
             if (emojiLen > 0 && normalized.compare(i, emojiLen, labelNorm) == 0) {
                 totalWidth += emotes[e].width + 1; // +1 spacing
@@ -793,6 +820,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     if (filterChanged || s_dirty || cachedFiltered.empty()) {
         // Filter messages based on thread mode
         cachedFiltered.clear();
+        cachedFiltered.shrink_to_fit(); // Release memory when filter changes
         for (const auto &m : messageStore.getLiveMessages()) {
             bool include = false;
             switch (currentMode) {
@@ -1404,11 +1432,13 @@ std::vector<int> calculateLineHeights(const std::vector<std::string> &lines, con
     std::vector<int> rowHeights;
     rowHeights.reserve(lines.size());
 
+    ensureEmoteLabelsNormalized(); // Ensure cache is ready
+
     // Helper lambda to detect if a line contains any emoji by normalizing both line and label
     auto lineContainsEmoji = [&](const std::string &str) -> bool {
         const std::string normLine = normalizeEmoji(str);
         for (int i = 0; i < numEmotes; ++i) {
-            const std::string normLabel = normalizeEmoji(std::string(emotes[i].label));
+            const std::string &normLabel = cachedNormalizedEmoteLabels[i];
             if (normLine.find(normLabel) != std::string::npos) {
                 return true;
             }
@@ -1427,7 +1457,7 @@ std::vector<int> calculateLineHeights(const std::vector<std::string> &lines, con
         if (hasEmote) {
             const std::string normLine = normalizeEmoji(line);
             for (int i = 0; i < numEmotes; ++i) {
-                const std::string normLabel = normalizeEmoji(std::string(emotes[i].label));
+                const std::string &normLabel = cachedNormalizedEmoteLabels[i];
                 if (normLine.find(normLabel) != std::string::npos) {
                     tallestEmote = std::max(tallestEmote, emotes[i].height);
                 }

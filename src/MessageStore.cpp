@@ -130,14 +130,6 @@ static inline uint16_t storeTextInPool(const char *src, size_t len)
     g_poolWritePos += (len + 1);
     MessageStore::markPersistDirty();
 
-    // Log utilization periodically for debugging
-    static uint32_t lastLogTime = 0;
-    uint32_t now = millis();
-    if (now - lastLogTime > 30000) { // Log every 30 seconds max
-        logPoolUtilization("new message stored");
-        lastLogTime = now;
-    }
-
     return offset;
 }
 
@@ -167,32 +159,18 @@ static inline void assignTimestamp(StoredMessage &sm)
 // Generic push with cap (used by live + persisted queues)
 template <typename T> static inline void pushWithLimit(std::deque<T> &queue, const T &msg)
 {
-    bool removedMessage = false;
     if (queue.size() >= MAX_MESSAGES_SAVED) {
         queue.pop_front();
-        removedMessage = true;
     }
     queue.push_back(msg);
-
-    // Compact pool periodically when messages are removed to reclaim space
-    if (removedMessage && queue.size() % 5 == 0) { // Compact every 5th removal
-        messageStore.compactPoolLossless();
-    }
 }
 
 template <typename T> static inline void pushWithLimit(std::deque<T> &queue, T &&msg)
 {
-    bool removedMessage = false;
     if (queue.size() >= MAX_MESSAGES_SAVED) {
         queue.pop_front();
-        removedMessage = true;
     }
     queue.emplace_back(std::move(msg));
-
-    // Compact pool periodically when messages are removed to reclaim space
-    if (removedMessage && queue.size() % 5 == 0) { // Compact every 5th removal
-        messageStore.compactPoolLossless();
-    }
 }
 
 MessageStore::MessageStore(const std::string &label)
@@ -310,17 +288,10 @@ static inline uint16_t directAllocateInPool(const char *src, size_t len)
     if (len >= MAX_MESSAGE_SIZE)
         len = MAX_MESSAGE_SIZE - 1;
 
-    // Ensure we have space (compact if needed, like in storeTextInPool)
+    // Simple wrap if out of space during loading (no compaction to avoid heap churn)
     if (g_poolWritePos + len + 1 >= MESSAGE_TEXT_POOL_SIZE) {
-        LOG_DEBUG("MessageStore: Pool nearly full during loading (%zu/%d), attempting compaction", g_poolWritePos,
-                  MESSAGE_TEXT_POOL_SIZE);
-        messageStore.compactPoolLossless();
-
-        if (g_poolWritePos + len + 1 >= MESSAGE_TEXT_POOL_SIZE) {
-            LOG_WARN("MessageStore: Pool full even after compaction during loading (%zu/%d), forcibly wrapping", g_poolWritePos,
-                     MESSAGE_TEXT_POOL_SIZE);
-            g_poolWritePos = 0; // Last resort
-        }
+        LOG_WARN("MessageStore: Pool full during loading (%zu/%d), wrapping", g_poolWritePos, MESSAGE_TEXT_POOL_SIZE);
+        g_poolWritePos = 0;
     }
 
     uint16_t offset = g_poolWritePos;
