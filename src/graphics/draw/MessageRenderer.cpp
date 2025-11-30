@@ -1539,6 +1539,18 @@ void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const mesht
         // Banner logic
         const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(packet.from);
         char longName[48] = "";
+#if defined(M5STACK_UNITC6L)
+        // Use short_name for C6L due to limited screen space
+        if (node && node->has_user && node->user.short_name && node->user.short_name[0] != '\0') {
+            // Apply emoji replacement to banner name
+            std::string processedName = replaceUnknownEmoji(std::string(node->user.short_name), emotes, numEmotes);
+            strncpy(longName, processedName.c_str(), sizeof(longName) - 1);
+            longName[sizeof(longName) - 1] = '\0';
+        } else {
+            // No long/short name → show NodeID in parentheses
+            snprintf(longName, sizeof(longName), "(%08x)", packet.from);
+        }
+#else
         if (node && node->has_user && node->user.long_name && node->user.long_name[0] != '\0') {
             // Apply emoji replacement to banner name
             std::string processedName = replaceUnknownEmoji(std::string(node->user.long_name), emotes, numEmotes);
@@ -1548,6 +1560,7 @@ void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const mesht
             // No long/short name → show NodeID in parentheses
             snprintf(longName, sizeof(longName), "(%08x)", packet.from);
         }
+#endif
         int availWidth = display->getWidth() - (isHighResolution ? 40 : 20);
         if (availWidth < 0)
             availWidth = 0;
@@ -1586,11 +1599,7 @@ void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const mesht
                 return;
 
             if (longName && longName[0]) {
-#if defined(M5STACK_UNITC6L)
-                strcpy(banner, "New Message");
-#else
                 snprintf(banner, sizeof(banner), "New Message from\n%s", longName);
-#endif
             } else
                 strcpy(banner, "New Message");
         }
