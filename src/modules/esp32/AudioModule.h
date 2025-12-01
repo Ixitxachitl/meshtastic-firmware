@@ -51,6 +51,7 @@ class AudioModule : public SinglePortModule, public Observable<const UIFrameEven
     // int16_t sample;
 
     AudioModule();
+    ~AudioModule();
 
     bool shouldDraw();
 
