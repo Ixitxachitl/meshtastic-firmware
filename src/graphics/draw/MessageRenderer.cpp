@@ -486,7 +486,12 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
                 if (charLen == 2 && (uint8_t)textChunk[j] == 0xC2 && j + 1 < textChunk.length() &&
                     (uint8_t)textChunk[j + 1] == 0xBF) {
                     // Render custom upside-down question mark bitmap
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+                    // For tiny fonts, clamp offset to prevent negative positioning
+                    int iconY = fontY + std::max(0, (fontHeight - upsidedown_qmark_height) / 2);
+#else
                     int iconY = fontY + (fontHeight - upsidedown_qmark_height) / 2;
+#endif
                     display->drawXbm(cursorX, iconY, upsidedown_qmark_width, upsidedown_qmark_height, upsidedown_qmark);
                     cursorX += upsidedown_qmark_width + 1; // Bitmap width + spacing
                     j += 2;
@@ -547,7 +552,12 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
                 if (charLen == 2 && (uint8_t)remaining[j] == 0xC2 && j + 1 < remaining.length() &&
                     (uint8_t)remaining[j + 1] == 0xBF) {
                     // Render custom upside-down question mark bitmap
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+                    // For tiny fonts, clamp offset to prevent negative positioning
+                    int iconY = fontY + std::max(0, (fontHeight - upsidedown_qmark_height) / 2);
+#else
                     int iconY = fontY + (fontHeight - upsidedown_qmark_height) / 2;
+#endif
                     display->drawXbm(cursorX, iconY, upsidedown_qmark_width, upsidedown_qmark_height, upsidedown_qmark);
                     cursorX += upsidedown_qmark_width + 1; // Bitmap width + spacing
                     j += 2;
@@ -784,7 +794,7 @@ static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &
             } else if (charLen == 2 && (uint8_t)normalized[i] == 0xC2 && i + 1 < normalized.length() &&
                        (uint8_t)normalized[i + 1] == 0xBF) {
                 // ¿ character (our emoji replacement) - use custom bitmap width
-                totalWidth += 8 + 1; // upsidedown_qmark_width + spacing
+                totalWidth += upsidedown_qmark_width + 1;
             } else {
                 // Regular character - use actual font width
 #if defined(OLED_UA) || defined(OLED_RU)
@@ -1446,12 +1456,16 @@ std::vector<int> calculateLineHeights(const std::vector<std::string> &lines, con
         return false;
     };
 
+    // Helper lambda to check if line contains upside-down question mark
+    auto lineContainsUpsidedownQmark = [](const std::string &str) -> bool { return str.find("\xC2\xBF") != std::string::npos; };
+
     for (size_t idx = 0; idx < lines.size(); ++idx) {
         const auto &line = lines[idx];
         const int baseHeight = FONT_HEIGHT_SMALL;
 
         // Detect if THIS line contains an emote (normalize for comparison)
         bool hasEmote = lineContainsEmoji(line);
+        bool hasQmark = lineContainsUpsidedownQmark(line);
         int tallestEmote = baseHeight;
         // Check known emotes for their actual height
         if (hasEmote) {
@@ -1463,10 +1477,16 @@ std::vector<int> calculateLineHeights(const std::vector<std::string> &lines, con
                 }
             }
         }
+        // Account for upside-down question mark height
+        if (hasQmark) {
+            tallestEmote = std::max(tallestEmote, upsidedown_qmark_height);
+        }
 
         bool nextHasEmote = false;
+        bool nextHasQmark = false;
         if (idx + 1 < lines.size()) {
             nextHasEmote = lineContainsEmoji(lines[idx + 1]);
+            nextHasQmark = lineContainsUpsidedownQmark(lines[idx + 1]);
         }
 
         int lineHeight = baseHeight;
@@ -1478,16 +1498,16 @@ std::vector<int> calculateLineHeights(const std::vector<std::string> &lines, con
             // Base spacing for normal lines
             int desiredBody = baseHeight + BODY_LINE_LEADING;
 
-            if (hasEmote) {
-                // Emote line: add overshoot + bottom padding
+            if (hasEmote || hasQmark) {
+                // Emote/qmark line: add overshoot + bottom padding
                 int overshoot = std::max(0, tallestEmote - baseHeight);
                 lineHeight = desiredBody + overshoot + EMOTE_PADDING_BELOW;
             } else {
                 // Regular line: no emote → standard spacing
                 lineHeight = desiredBody;
 
-                // If next line has an emote → add top padding *here*
-                if (nextHasEmote) {
+                // If next line has an emote or qmark → add top padding *here*
+                if (nextHasEmote || nextHasQmark) {
                     lineHeight += EMOTE_PADDING_ABOVE;
                 }
             }
