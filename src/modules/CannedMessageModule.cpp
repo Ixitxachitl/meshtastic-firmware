@@ -309,7 +309,7 @@ void CannedMessageModule::resetSearch()
 
     // Adjust scrollIndex so previousDestIndex is still visible
     int totalEntries = activeChannelIndices.size() + filteredNodes.size();
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     this->visibleRows = (displayHeight - FONT_HEIGHT_TINY * 2) / FONT_HEIGHT_TINY;
 #else
     this->visibleRows = (displayHeight - FONT_HEIGHT_SMALL * 2) / FONT_HEIGHT_SMALL;
@@ -1764,7 +1764,7 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
     display->setTextAlignment(TEXT_ALIGN_LEFT);
 
     // List Items
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     int rowYOffset = titleY + FONT_HEIGHT_TINY;
 #else
     int rowYOffset = titleY + (FONT_HEIGHT_SMALL - 4);
@@ -1772,7 +1772,7 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
     int numActiveChannels = this->activeChannelIndices.size();
     int totalEntries = numActiveChannels + this->filteredNodes.size();
     int columns = 1;
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     this->visibleRows = (display->getHeight() - (titleY + FONT_HEIGHT_TINY)) / FONT_HEIGHT_TINY;
 #else
     this->visibleRows = (display->getHeight() - (titleY + FONT_HEIGHT_SMALL)) / (FONT_HEIGHT_SMALL - 4);
@@ -1788,7 +1788,7 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
 
     for (int row = 0; row < visibleRows; row++) {
         int itemIndex = scrollIndex + row;
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
         int yOffset = row * FONT_HEIGHT_TINY + rowYOffset;
 #else
         int yOffset = row * (FONT_HEIGHT_SMALL - 4) + rowYOffset;
@@ -1849,7 +1849,7 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
         // Highlight background (if selected)
         if (itemIndex == destIndex) {
             int scrollPadding = 8; // Reserve space for scrollbar
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
             display->fillRect(0, yOffset, display->getWidth() - scrollPadding, FONT_HEIGHT_TINY);
 #else
             display->fillRect(0, yOffset + 2, display->getWidth() - scrollPadding, FONT_HEIGHT_SMALL - 5);
@@ -1869,7 +1869,7 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
                 const meshtastic_NodeInfoLite *node = this->filteredNodes[nodeIndex].node;
                 if (node && hasKeyForNode(node)) {
                     int iconX = display->getWidth() - key_symbol_width - 15;
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
                     int iconY = yOffset + (FONT_HEIGHT_TINY - key_symbol_height) / 2;
 #else
                     int iconY = yOffset + (FONT_HEIGHT_SMALL - key_symbol_height) / 2;
@@ -1889,7 +1889,7 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
 
     // Scrollbar
     if (totalEntries > visibleRows) {
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
         int scrollbarHeight = visibleRows * FONT_HEIGHT_TINY;
 #else
         int scrollbarHeight = visibleRows * (FONT_HEIGHT_SMALL - 4);
