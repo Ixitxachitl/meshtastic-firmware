@@ -599,14 +599,18 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
             display->fillRect(boxLeft, boxTop + 1, boxWidth, effectiveLineHeight - background_yOffset);
             display->setColor(BLACK);
 #if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
-            int yOffset = FONT_HEIGHT_TINY - 6; // Move text down for Tom Thumb font (7-6=1, was 3, now 1 = +2 down)
+            int yOffset = 1; // Consistent spacing for tiny fonts (FONT_HEIGHT_TINY is 6, so 6-5=1 for proper alignment)
 #else
             int yOffset = 3;
 #endif
             graphics::MessageRenderer::drawStringWithEmotes(display, textX, lineY - yOffset, std::string(lineBuffer), emotes,
                                                             numEmotes);
             display->setColor(WHITE);
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+            lineY += effectiveLineHeight; // Consistent spacing for tiny fonts
+#else
             lineY += (effectiveLineHeight - 2 - background_yOffset);
+#endif
         } else {
             // Pop-up
             // If this is the Signal line, center text + bars as one group
@@ -640,7 +644,7 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
                     }
                 }
             } else {
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
                 int textYOffset = FONT_HEIGHT_TINY - 5; // Move text down for Tom Thumb font (7-5=2)
 #else
                 int textYOffset = 0;

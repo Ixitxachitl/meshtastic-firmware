@@ -35,7 +35,8 @@ const std::vector<uint32_t> &getSeenPeers();
 void clearThreadRegistries();
 
 // Text and emote rendering
-void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string &line, const Emote *emotes, int emoteCount);
+void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string &line, const Emote *emotes, int emoteCount,
+                          bool isMessageHeader = false);
 
 // Calculate the width of a string with emotes (for alignment calculations)
 int getStringWidthWithEmotes(OLEDDisplay *display, const std::string &line, const Emote *emotes, int emoteCount);

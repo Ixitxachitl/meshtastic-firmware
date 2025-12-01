@@ -407,7 +407,8 @@ int getStringWidthWithEmotes(OLEDDisplay *display, const std::string &line, cons
     return totalWidth;
 }
 
-void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string &line, const Emote *emotes, int emoteCount)
+void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string &line, const Emote *emotes, int emoteCount,
+                          bool isMessageHeader)
 {
     // Normalize the incoming line so variation selectors and skin tones don't render as stray glyphs
     const std::string normLine = normalizeEmoji(line);
@@ -533,8 +534,19 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
 
         // Render the emote (if found)
         if (matchedEmote && i == nextEmotePos) {
-            // Vertically center emote relative to font baseline (not just midline)
-            int iconY = fontY + (fontHeight - matchedEmote->height) / 2;
+            // For message headers with tiny fonts, bottom-align emoji with text
+            int iconY;
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+            if (isMessageHeader) {
+                // Bottom-align with 2px offset from pure bottom
+                iconY = y + fontHeight - matchedEmote->height + 2;
+            } else {
+                // Center vertically relative to font
+                iconY = fontY + (fontHeight - matchedEmote->height) / 2;
+            }
+#else
+            iconY = fontY + (fontHeight - matchedEmote->height) / 2;
+#endif
             display->drawXbm(cursorX, iconY, matchedEmote->width, matchedEmote->height, matchedEmote->bitmap);
             cursorX += matchedEmote->width + 1;
             i += emojiLen;
@@ -1198,7 +1210,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     scrollY = bottomOffsetOneRow;
     waitingToReset = false;
     scrollStarted = false;
-    lastTime = millis();                    // keep timebase sane
+    lastTime = millis(); // keep timebase sane
 #endif
 
     int scrollOffset = static_cast<int>(scrollY);
@@ -1263,10 +1275,22 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 fullHeader.append(tbuf).push_back(' ');
                 fullHeader.append(cachedLines[i]);
 
+                // Find tallest emoji in header for underline positioning
+                int tallestInHeader = FONT_HEIGHT_SMALL;
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+                const std::string normHeader = normalizeEmoji(fullHeader);
+                for (int e = 0; e < numEmotes; ++e) {
+                    const std::string labelNorm = normalizeEmoji(std::string(emotes[e].label));
+                    if (!labelNorm.empty() && normHeader.find(labelNorm) != std::string::npos) {
+                        tallestInHeader = std::max(tallestInHeader, emotes[e].height);
+                    }
+                }
+#endif
+
                 // Render header (measure/draw/underline using the full string)
                 int w = getRenderedLineWidth(display, fullHeader, emotes, numEmotes);
                 int headerX = cachedIsMine[i] ? (SCREEN_WIDTH - w - 2) : x;
-                drawStringWithEmotes(display, headerX, lineY, fullHeader, emotes, numEmotes);
+                drawStringWithEmotes(display, headerX, lineY, fullHeader, emotes, numEmotes, true);
 
                 // Draw ACK/NACK mark for our own messages
                 if (cachedIsMine[i]) {
@@ -1282,8 +1306,15 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                     // AckStatus::NONE → show nothing
                 }
 
-                // Draw underline just under header text
+                // Draw underline just under header text (not under emojis)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+                // Position underline based on whether header has tall emoji
+                int underlineY = (tallestInHeader > FONT_HEIGHT_SMALL)
+                                     ? lineY + FONT_HEIGHT_SMALL + 3 // 3px gap when emoji present
+                                     : lineY + FONT_HEIGHT_SMALL;    // No gap for text-only headers
+#else
                 int underlineY = lineY + FONT_HEIGHT_SMALL;
+#endif
                 for (int px = 0; px < w; ++px) {
                     display->setPixel(headerX + px, underlineY);
                 }
@@ -1493,7 +1524,18 @@ std::vector<int> calculateLineHeights(const std::vector<std::string> &lines, con
 
         if (isHeaderVec[idx]) {
             // Header line spacing
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+            // For tiny fonts, adjust spacing based on content
+            if (hasEmote || hasQmark) {
+                // With emoji: minimal spacing after underline
+                lineHeight = FONT_HEIGHT_SMALL + 4 + HEADER_UNDERLINE_GAP;
+            } else {
+                // Text only: standard spacing with underline
+                lineHeight = baseHeight + HEADER_UNDERLINE_PIX + HEADER_UNDERLINE_GAP;
+            }
+#else
             lineHeight = baseHeight + HEADER_UNDERLINE_PIX + HEADER_UNDERLINE_GAP;
+#endif
         } else {
             // Base spacing for normal lines
             int desiredBody = baseHeight + BODY_LINE_LEADING;
