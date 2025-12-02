@@ -61,6 +61,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "mesh/Channels.h"
 #include "mesh/generated/meshtastic/deviceonly.pb.h"
 #include "modules/ExternalNotificationModule.h"
+#include "modules/Telemetry/EnvironmentTelemetry.h"
 #include "modules/TextMessageModule.h"
 #include "modules/WaypointModule.h"
 #include "sleep.h"
@@ -463,7 +464,7 @@ void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
 #endif
 
             dispdev->displayOn();
-#if defined(HELTEC_TRACKER_V1_X) || defined(HELTEC_WIRELESS_TRACKER_V2)
+#ifdef HELTEC_TRACKER_V1_X
             ui->init();
 #endif
 #ifdef USE_ST7789
@@ -471,7 +472,11 @@ void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
             digitalWrite(VTFT_CTRL, LOW);
             ui->init();
 #ifdef ESP_PLATFORM
+#if defined(M5STACK_CARDPUTER_ADV)
+            analogWrite(VTFT_LEDA, uiconfig.screen_brightness);
+#else
             analogWrite(VTFT_LEDA, BRIGHTNESS_DEFAULT);
+#endif
 #else
             pinMode(VTFT_LEDA, OUTPUT);
             digitalWrite(VTFT_LEDA, TFT_BACKLIGHT_ON);
@@ -489,6 +494,7 @@ void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
             enabled = true;
             setInterval(0); // Draw ASAP
             runASAP = true;
+            graphics::MessageRenderer::resetScrollState();
         } else {
             powerMon->clearState(meshtastic_PowerMon_State_Screen_On);
 #ifdef USE_EINK
@@ -879,6 +885,7 @@ int32_t Screen::runOnce()
             break;
         case Cmd::STOP_ALERT_FRAME:
             NotificationRenderer::pauseBanner = false;
+            setFrames(); // Restore normal screen frames
             break;
         case Cmd::STOP_BOOT_SCREEN:
             EINK_ADD_FRAMEFLAG(dispdev, COSMETIC); // E-Ink: Explicitly use full-refresh for next frame
@@ -1097,6 +1104,12 @@ void Screen::setFrames(FrameFocus focus)
         normalFrames[numframes++] = graphics::UIRenderer::drawCompassAndLocationScreen;
         indicatorIcons.push_back(icon_compass);
     }
+#if defined(M5STACK_UNITC6L)
+    // Add dedicated compass screen after GPS for small displays
+    fsi.positions.compass = numframes;
+    normalFrames[numframes++] = graphics::UIRenderer::drawCompassScreen;
+    indicatorIcons.push_back(compass_ball);
+#endif
 #endif
     if (RadioLibInterface::instance && !hiddenFrames.lora) {
         fsi.positions.lora = numframes;
@@ -1152,6 +1165,9 @@ void Screen::setFrames(FrameFocus focus)
                 fsi.positions.focusedModule = numframes;
             if (m && m == waypointModule)
                 fsi.positions.waypoint = numframes;
+            if (m && m == environmentTelemetryModule->asMesh()) {
+                fsi.positions.environment = numframes;
+            }
 
             indicatorIcons.push_back(icon_module);
             numframes++;
@@ -1239,6 +1255,7 @@ void Screen::setFrames(FrameFocus focus)
 
     // Store the info about this frameset, for future setFrames calls
     this->framesetInfo = fsi;
+    graphics::setMessagesFrameIndex(fsi.positions.textMessage);
 
     setFastFramerate(); // Draw ASAP
 }
@@ -1436,6 +1453,37 @@ int Screen::handleStatusUpdate(const meshtastic::Status *arg)
     return 0;
 }
 
+int Screen::handleTextMessage(const meshtastic_MeshPacket *packet)
+{
+    if (showingNormalScreen) {
+        if (packet->from == 0) {
+            // Outgoing message (likely sent from phone)
+            devicestate.has_rx_text_message = false;
+            memset(&devicestate.rx_text_message, 0, sizeof(devicestate.rx_text_message));
+            hiddenFrames.textMessage = true;
+            hasUnreadMessage = false; // Clear unread state when user replies
+
+            setFrames(FOCUS_PRESERVE); // Stay on same frame, silently update frame list
+        } else {
+            // Incoming message
+            devicestate.has_rx_text_message = true; // Needed to include the message frame
+            hasUnreadMessage = true;                // Enables mail icon in the header
+            setFrames(FOCUS_PRESERVE);              // Refresh frame list without switching view
+
+            // Only wake (do not switch tabs) if the configuration allows it
+            if (shouldWakeOnReceivedMessage()) {
+                screen->setOn(true); // wake the display
+                setFastFramerate();  // draw ASAP so the banner appears promptly
+                forceDisplay(true);  // commit a frame if we were idling
+            }
+            // Note: Banner notification is handled by MessageRenderer::handleNewMessage()
+            // which provides more detailed context (channel/DM info)
+        }
+    }
+
+    return 0;
+}
+
 // Triggered by MeshModules
 int Screen::handleUIFrameEvent(const UIFrameEvent *event)
 {
@@ -1462,9 +1510,12 @@ int Screen::handleUIFrameEvent(const UIFrameEvent *event)
 
         // Jump directly to the Text Message screen
         else if (event->action == UIFrameEvent::Action::SWITCH_TO_TEXTMESSAGE) {
+            setOn(true);               // ensure display is on
             setFrames(FOCUS_PRESERVE); // preserve current frame ordering
             ui->switchToFrame(framesetInfo.positions.textMessage);
-            setFastFramerate(); // force redraw ASAP
+            setFastFramerate();            // draw ASAP
+            forceDisplay(true);            // commit the frame
+            powerFSM.trigger(EVENT_PRESS); // reset auto-off timer
         }
     }
 
@@ -1517,7 +1568,19 @@ int Screen::handleInputEvent(const InputEvent *event)
 
         // If no modules are using the input, move between frames
         if (!inputIntercepted) {
-            if (event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_ALT_PRESS) {
+            // Handle UP/DOWN for scrolling in messages screen (trackball, touchscreen, keyboard)
+            if (event->inputEvent == INPUT_BROKER_UP || event->inputEvent == INPUT_BROKER_DOWN) {
+                if (graphics::isMessagesScreenActive() && !graphics::isOverlayActive()) {
+                    // When on messages screen, UP/DOWN scroll the message list
+                    if (event->inputEvent == INPUT_BROKER_UP) {
+                        graphics::MessageRenderer::scrollUp();
+                    } else {
+                        graphics::MessageRenderer::scrollDown();
+                    }
+                    return 0; // Consume the event
+                }
+                // Not on messages screen - UP/DOWN do nothing (fall through)
+            } else if (event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_ALT_PRESS) {
                 showFrame(FrameDirection::PREVIOUS);
             } else if (event->inputEvent == INPUT_BROKER_RIGHT || event->inputEvent == INPUT_BROKER_USER_PRESS) {
                 showFrame(FrameDirection::NEXT);
@@ -1529,11 +1592,17 @@ int Screen::handleInputEvent(const InputEvent *event)
 #if HAS_GPS
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.gps && gps) {
                     menuHandler::positionBaseMenu();
+#if defined(M5STACK_UNITC6L)
+                } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.compass && gps) {
+                    menuHandler::positionBaseMenu();
+#endif
 #endif
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.clock) {
                     menuHandler::clockMenu();
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.lora) {
                     menuHandler::loraMenu();
+                } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.environment) {
+                    menuHandler::envTelemetryMenu();
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.textMessage) {
                     if (!messageStore.getMessages().empty()) {
                         menuHandler::messageResponseMenu();
@@ -1557,6 +1626,19 @@ int Screen::handleInputEvent(const InputEvent *event)
                     menuHandler::nodeListMenu();
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.wifi) {
                     menuHandler::wifiBaseMenu();
+                }
+            } else if (event->inputEvent == INPUT_BROKER_SELECT_LONG) {
+                // Long press on messages screen opens menu (for devices with scrolling like T-Deck)
+                if (this->ui->getUiState()->currentFrame == framesetInfo.positions.textMessage) {
+                    if (!messageStore.getMessages().empty()) {
+                        menuHandler::messageResponseMenu();
+                    } else {
+#if defined(M5STACK_UNITC6L)
+                        menuHandler::textMessageMenu();
+#else
+                        menuHandler::textMessageBaseMenu();
+#endif
+                    }
                 }
             } else if (event->inputEvent == INPUT_BROKER_BACK) {
                 showFrame(FrameDirection::PREVIOUS);
@@ -1600,13 +1682,9 @@ bool shouldWakeOnReceivedMessage()
 {
     /*
     The goal here is to determine when we do NOT wake up the screen on message received:
-    - Any ext. notifications are turned on
     - If role is not CLIENT / CLIENT_MUTE / CLIENT_HIDDEN / CLIENT_BASE
     - If the battery level is very low
     */
-    if (moduleConfig.external_notification.enabled) {
-        return false;
-    }
     if (!IS_ONE_OF(config.device.role, meshtastic_Config_DeviceConfig_Role_CLIENT,
                    meshtastic_Config_DeviceConfig_Role_CLIENT_MUTE, meshtastic_Config_DeviceConfig_Role_CLIENT_HIDDEN,
                    meshtastic_Config_DeviceConfig_Role_CLIENT_BASE)) {

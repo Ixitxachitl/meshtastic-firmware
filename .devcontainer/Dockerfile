@@ -34,6 +34,13 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     libxcb-xkb-dev \
     libxkbcommon-dev \
     libinput-dev \
+    libsdl2-dev \
+    libsdl2-2.0-0 \
+    libsdl2-ttf-dev \
+    libsdl2-image-dev \
+    libsdl2-mixer-dev \
+    libdecor-0-0 \
+    libdecor-0-plugin-1-cairo \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 RUN pipx install platformio
