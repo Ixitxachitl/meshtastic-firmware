@@ -410,6 +410,8 @@ int getStringWidthWithEmotes(OLEDDisplay *display, const std::string &line, cons
 void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string &line, const Emote *emotes, int emoteCount,
                           bool isMessageHeader)
 {
+    ensureEmoteLabelsNormalized(); // Ensure cache is ready
+
     // Normalize the incoming line so variation selectors and skin tones don't render as stray glyphs
     const std::string normLine = normalizeEmoji(line);
     int cursorX = x;
@@ -420,8 +422,8 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
     for (size_t i = 0; i < normLine.length();) {
         bool matched = false;
         for (int e = 0; e < emoteCount; ++e) {
-            // Compare against normalized label so FE0F variants also match
-            const std::string labelNorm = normalizeEmoji(std::string(emotes[e].label));
+            // Compare against cached normalized label
+            const std::string &labelNorm = cachedNormalizedEmoteLabels[e];
             const size_t emojiLen = labelNorm.length();
             if (emojiLen && normLine.compare(i, emojiLen, labelNorm) == 0) {
                 if (emotes[e].height > maxIconHeight)
@@ -459,7 +461,7 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
         size_t emojiLen = 0;
 
         for (int e = 0; e < emoteCount; ++e) {
-            const std::string labelNorm = normalizeEmoji(std::string(emotes[e].label));
+            const std::string &labelNorm = cachedNormalizedEmoteLabels[e];
             if (labelNorm.empty())
                 continue;
             size_t pos = normLine.find(labelNorm, i);
@@ -839,10 +841,16 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     // Check if we need to rebuild the filtered message list
     bool filterChanged = (currentMode != lastFilterMode || currentChannel != lastFilterChannel || currentPeer != lastFilterPeer);
 
-    if (filterChanged || s_dirty || cachedFiltered.empty()) {
+    // In ALL mode, we should match the full message store size
+    // In filtered modes, check if our cache might be stale
+    size_t liveCount = messageStore.getLiveMessages().size();
+    bool messageSizeMismatch = (currentMode == ThreadMode::ALL && cachedFiltered.size() != liveCount) ||
+                               (currentMode != ThreadMode::ALL && cachedFiltered.size() > liveCount);
+
+    if (filterChanged || s_dirty || cachedFiltered.empty() || messageSizeMismatch) {
         // Filter messages based on thread mode
         cachedFiltered.clear();
-        cachedFiltered.shrink_to_fit(); // Release memory when filter changes
+        cachedFiltered.shrink_to_fit(); // Release memory when rebuilding
         for (const auto &m : messageStore.getLiveMessages()) {
             bool include = false;
             switch (currentMode) {
@@ -1269,28 +1277,26 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                     snprintf(tbuf, sizeof(tbuf), "%ud", seconds / 86400);
                 }
 
-                // Compose full header inline: "<time> " + cached header (which holds @sender + chan)
-                std::string fullHeader;
-                fullHeader.reserve(strlen(tbuf) + 1 + cachedLines[i].size());
-                fullHeader.append(tbuf).push_back(' ');
-                fullHeader.append(cachedLines[i]);
+                // Compose full header using static buffer to avoid heap allocation per frame
+                static char fullHeaderBuf[128];
+                snprintf(fullHeaderBuf, sizeof(fullHeaderBuf), "%s %s", tbuf, cachedLines[i].c_str());
 
                 // Find tallest emoji in header for underline positioning
                 int tallestInHeader = FONT_HEIGHT_SMALL;
 #if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
-                const std::string normHeader = normalizeEmoji(fullHeader);
+                // Check if header contains any emoji (avoid normalizing fullHeader string)
                 for (int e = 0; e < numEmotes; ++e) {
-                    const std::string labelNorm = normalizeEmoji(std::string(emotes[e].label));
-                    if (!labelNorm.empty() && normHeader.find(labelNorm) != std::string::npos) {
+                    const std::string &labelNorm = cachedNormalizedEmoteLabels[e];
+                    if (!labelNorm.empty() && cachedLines[i].find(labelNorm) != std::string::npos) {
                         tallestInHeader = std::max(tallestInHeader, emotes[e].height);
                     }
                 }
 #endif
 
                 // Render header (measure/draw/underline using the full string)
-                int w = getRenderedLineWidth(display, fullHeader, emotes, numEmotes);
+                int w = getRenderedLineWidth(display, std::string(fullHeaderBuf), emotes, numEmotes);
                 int headerX = cachedIsMine[i] ? (SCREEN_WIDTH - w - 2) : x;
-                drawStringWithEmotes(display, headerX, lineY, fullHeader, emotes, numEmotes, true);
+                drawStringWithEmotes(display, headerX, lineY, std::string(fullHeaderBuf), emotes, numEmotes, true);
 
                 // Draw ACK/NACK mark for our own messages
                 if (cachedIsMine[i]) {
