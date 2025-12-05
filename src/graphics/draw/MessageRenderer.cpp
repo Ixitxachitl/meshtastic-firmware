@@ -221,24 +221,6 @@ static inline size_t utf8CharLen(uint8_t c)
     return 1;
 }
 
-// Custom bitmap for upside-down question mark (¿) - 8x12 pixels
-static const unsigned char upsidedown_qmark[] PROGMEM = {
-    0x00, // 00000000
-    0x18, // 00011000  dot at top
-    0x18, // 00011000  dot
-    0x00, // 00000000  gap
-    0x18, // 00011000  stem
-    0x18, // 00011000  stem
-    0x18, // 00011000  stem
-    0x0C, // 00001100  curve
-    0x06, // 00110000  curve
-    0x66, // 01100110  curve
-    0x7E, // 01111110  curve bottom
-    0x3C  // 00111100  curve bottom
-};
-static const int upsidedown_qmark_width = 8;
-static const int upsidedown_qmark_height = 12;
-
 // Remove variation selectors (FE0F) and skin tone modifiers from emoji so they match your labels
 std::string normalizeEmoji(const std::string &s)
 {
@@ -390,17 +372,12 @@ int getStringWidthWithEmotes(OLEDDisplay *display, const std::string &line, cons
         }
         if (!matched) {
             size_t charLen = utf8CharLen(static_cast<uint8_t>(normLine[i]));
-            // Check for special ¿ character
-            if (charLen == 2 && (uint8_t)normLine[i] == 0xC2 && i + 1 < normLine.length() && (uint8_t)normLine[i + 1] == 0xBF) {
-                totalWidth += upsidedown_qmark_width + 1;
-            } else {
-                std::string singleChar = normLine.substr(i, charLen);
+            std::string singleChar = normLine.substr(i, charLen);
 #if defined(OLED_UA) || defined(OLED_RU)
-                totalWidth += display->getStringWidth(singleChar.c_str(), singleChar.length(), true);
+            totalWidth += display->getStringWidth(singleChar.c_str(), singleChar.length(), true);
 #else
-                totalWidth += display->getStringWidth(singleChar.c_str());
+            totalWidth += display->getStringWidth(singleChar.c_str());
 #endif
-            }
             i += charLen;
         }
     }
@@ -485,23 +462,10 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
             while (j < textChunk.length()) {
                 size_t charLen = utf8CharLen(static_cast<uint8_t>(textChunk[j]));
 
-                // Check if this is the ¿ character
+                // Check if this is the ° character followed by C or F
                 if (charLen == 2 && (uint8_t)textChunk[j] == 0xC2 && j + 1 < textChunk.length() &&
-                    (uint8_t)textChunk[j + 1] == 0xBF) {
-                    // Render custom upside-down question mark bitmap
-#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
-                    // For tiny fonts, clamp offset to prevent negative positioning
-                    int iconY = fontY + std::max(0, (fontHeight - upsidedown_qmark_height) / 2);
-#else
-                    int iconY = fontY + (fontHeight - upsidedown_qmark_height) / 2;
-#endif
-                    display->drawXbm(cursorX, iconY, upsidedown_qmark_width, upsidedown_qmark_height, upsidedown_qmark);
-                    cursorX += upsidedown_qmark_width + 1; // Bitmap width + spacing
-                    j += 2;
-                    // Check if this is the ° character followed by C or F
-                } else if (charLen == 2 && (uint8_t)textChunk[j] == 0xC2 && j + 1 < textChunk.length() &&
-                           (uint8_t)textChunk[j + 1] == 0xB0 && j + 2 < textChunk.length() &&
-                           (textChunk[j + 2] == 'C' || textChunk[j + 2] == 'F')) {
+                    (uint8_t)textChunk[j + 1] == 0xB0 && j + 2 < textChunk.length() &&
+                    (textChunk[j + 2] == 'C' || textChunk[j + 2] == 'F')) {
                     // Render °C or °F as a single unit to avoid spacing issues
                     std::string tempUnit = textChunk.substr(j, 3); // °C or °F
                     if (inBold) {
@@ -562,23 +526,10 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
             while (j < remaining.length()) {
                 size_t charLen = utf8CharLen(static_cast<uint8_t>(remaining[j]));
 
-                // Check if this is the ¿ character
+                // Check if this is the ° character followed by C or F
                 if (charLen == 2 && (uint8_t)remaining[j] == 0xC2 && j + 1 < remaining.length() &&
-                    (uint8_t)remaining[j + 1] == 0xBF) {
-                    // Render custom upside-down question mark bitmap
-#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
-                    // For tiny fonts, clamp offset to prevent negative positioning
-                    int iconY = fontY + std::max(0, (fontHeight - upsidedown_qmark_height) / 2);
-#else
-                    int iconY = fontY + (fontHeight - upsidedown_qmark_height) / 2;
-#endif
-                    display->drawXbm(cursorX, iconY, upsidedown_qmark_width, upsidedown_qmark_height, upsidedown_qmark);
-                    cursorX += upsidedown_qmark_width + 1; // Bitmap width + spacing
-                    j += 2;
-                    // Check if this is the ° character followed by C or F
-                } else if (charLen == 2 && (uint8_t)remaining[j] == 0xC2 && j + 1 < remaining.length() &&
-                           (uint8_t)remaining[j + 1] == 0xB0 && j + 2 < remaining.length() &&
-                           (remaining[j + 2] == 'C' || remaining[j + 2] == 'F')) {
+                    (uint8_t)remaining[j + 1] == 0xB0 && j + 2 < remaining.length() &&
+                    (remaining[j + 2] == 'C' || remaining[j + 2] == 'F')) {
                     // Render °C or °F as a single unit to avoid spacing issues
                     std::string tempUnit = remaining.substr(j, 3); // °C or °F
                     if (inBold) {
@@ -805,10 +756,6 @@ static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &
                 (charLen == 3 && ((uint8_t)normalized[i] == 0xE2 || (uint8_t)normalized[i] == 0xEF))) {
                 // Unknown emoji: use a reasonable width estimate
                 totalWidth += 16 + 1; // Most emojis are 16px + spacing
-            } else if (charLen == 2 && (uint8_t)normalized[i] == 0xC2 && i + 1 < normalized.length() &&
-                       (uint8_t)normalized[i + 1] == 0xBF) {
-                // ¿ character (our emoji replacement) - use custom bitmap width
-                totalWidth += upsidedown_qmark_width + 1;
             } else {
                 // Regular character - use actual font width
 #if defined(OLED_UA) || defined(OLED_RU)
@@ -992,9 +939,8 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             char senderBuf[48] = "";
 #if defined(M5STACK_UNITC6L)
             if (node && node->has_user && node->user.short_name && node->user.short_name[0] != '\0') {
-                // Apply emoji replacement to sender name (use short_name for unitc6l)
-                std::string processedName = replaceUnknownEmoji(std::string(node->user.short_name), emotes, numEmotes);
-                std::snprintf(senderBuf, sizeof(senderBuf), "%s", processedName.c_str());
+                // Use short_name directly without emoji replacement to avoid allocations
+                std::snprintf(senderBuf, sizeof(senderBuf), "%s", node->user.short_name);
             } else {
                 // No long/short name → show NodeID in parentheses
                 snprintf(senderBuf, sizeof(senderBuf), "(%08x)", m.sender);
@@ -1004,15 +950,13 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             bool mine = (m.sender == nodeDB->getNodeNum());
             if (mine && node_recipient && node_recipient->has_user && node_recipient->user.short_name &&
                 node_recipient->user.short_name[0] != '\0') {
-                // Apply emoji replacement to recipient name (use short_name for unitc6l)
-                std::string processedName = replaceUnknownEmoji(std::string(node_recipient->user.short_name), emotes, numEmotes);
-                std::snprintf(senderBuf, sizeof(senderBuf), "%s", processedName.c_str());
+                // Use short_name directly without emoji replacement to avoid allocations
+                std::snprintf(senderBuf, sizeof(senderBuf), "%s", node_recipient->user.short_name);
             }
 #else
             if (node && node->has_user && node->user.long_name && node->user.long_name[0] != '\0') {
-                // Apply emoji replacement to sender name
-                std::string processedName = replaceUnknownEmoji(std::string(node->user.long_name), emotes, numEmotes);
-                std::snprintf(senderBuf, sizeof(senderBuf), "%s", processedName.c_str());
+                // Use long_name directly without emoji replacement to avoid allocations
+                std::snprintf(senderBuf, sizeof(senderBuf), "%s", node->user.long_name);
             } else {
                 // No long/short name → show NodeID in parentheses
                 snprintf(senderBuf, sizeof(senderBuf), "(%08x)", m.sender);
@@ -1022,9 +966,8 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             bool mine = (m.sender == nodeDB->getNodeNum());
             if (mine && node_recipient && node_recipient->has_user && node_recipient->user.long_name &&
                 node_recipient->user.long_name[0] != '\0') {
-                // Apply emoji replacement to recipient name
-                std::string processedName = replaceUnknownEmoji(std::string(node_recipient->user.long_name), emotes, numEmotes);
-                std::snprintf(senderBuf, sizeof(senderBuf), "%s", processedName.c_str());
+                // Use long_name directly without emoji replacement to avoid allocations
+                std::snprintf(senderBuf, sizeof(senderBuf), "%s", node_recipient->user.long_name);
             }
 #endif
 
@@ -1034,28 +977,19 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             if (availWidth < 0)
                 availWidth = 0;
 
-            // Fit sender to available width with emoji support
-            std::string senderStr(senderBuf);
-            size_t origLen = senderStr.length();
-            while (!senderStr.empty() && getRenderedLineWidth(display, senderStr, emotes, numEmotes) > availWidth) {
-                // Remove last UTF-8 character
-                size_t pos = senderStr.length();
-                while (pos > 0 && (senderStr[pos - 1] & 0xC0) == 0x80) {
-                    pos--; // Skip UTF-8 continuation bytes
-                }
-                if (pos > 0) {
-                    pos--; // Remove the start of the UTF-8 character
-                }
-                senderStr.erase(pos);
+            // Fit sender to available width - truncate senderBuf directly to avoid string allocations
+            size_t origLen = strlen(senderBuf);
+            while (senderBuf[0] && display->getStringWidth(senderBuf) > availWidth) {
+                // Remove last character (naive truncation, but avoids allocations)
+                size_t len = strlen(senderBuf);
+                if (len > 0)
+                    senderBuf[len - 1] = '\0';
             }
 
             // If we actually truncated, append "..."
-            if (senderStr.length() < origLen) {
-                senderStr += "...";
+            if (strlen(senderBuf) < origLen && strlen(senderBuf) + 3 < sizeof(senderBuf)) {
+                strcat(senderBuf, "...");
             }
-
-            // Copy back to senderBuf for header generation
-            std::snprintf(senderBuf, sizeof(senderBuf), "%s", senderStr.c_str());
 
             // Final header line (no time here; time is drawn live during render)
             char headerStr[96] = "";
@@ -1077,13 +1011,10 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 break; // couldn't grow even after shedding
             }
 
-            // Body lines (from feat/m5stack-cardputer-adv)
+            // Body lines - use message text directly to avoid allocations
             const char *msgText = MessageStore::getText(m);
 
-            // Replace unknown emoji with ? before processing
-            std::string processedText = replaceUnknownEmoji(std::string(msgText), emotes, numEmotes);
-
-            std::vector<std::string> wrapped = generateLines(display, "", processedText.c_str(), textWidth);
+            std::vector<std::string> wrapped = generateLines(display, "", msgText, textWidth);
 
             // Cap per-message wrapped lines so one long message can't explode memory.
             if (wrapped.size() > kMaxLinesPerMessage) {
@@ -1493,16 +1424,12 @@ std::vector<int> calculateLineHeights(const std::vector<std::string> &lines, con
         return false;
     };
 
-    // Helper lambda to check if line contains upside-down question mark
-    auto lineContainsUpsidedownQmark = [](const std::string &str) -> bool { return str.find("\xC2\xBF") != std::string::npos; };
-
     for (size_t idx = 0; idx < lines.size(); ++idx) {
         const auto &line = lines[idx];
         const int baseHeight = FONT_HEIGHT_SMALL;
 
         // Detect if THIS line contains an emote (normalize for comparison)
         bool hasEmote = lineContainsEmoji(line);
-        bool hasQmark = lineContainsUpsidedownQmark(line);
         int tallestEmote = baseHeight;
         // Check known emotes for their actual height
         if (hasEmote) {
@@ -1514,16 +1441,10 @@ std::vector<int> calculateLineHeights(const std::vector<std::string> &lines, con
                 }
             }
         }
-        // Account for upside-down question mark height
-        if (hasQmark) {
-            tallestEmote = std::max(tallestEmote, upsidedown_qmark_height);
-        }
 
         bool nextHasEmote = false;
-        bool nextHasQmark = false;
         if (idx + 1 < lines.size()) {
             nextHasEmote = lineContainsEmoji(lines[idx + 1]);
-            nextHasQmark = lineContainsUpsidedownQmark(lines[idx + 1]);
         }
 
         int lineHeight = baseHeight;
@@ -1532,7 +1453,7 @@ std::vector<int> calculateLineHeights(const std::vector<std::string> &lines, con
             // Header line spacing
 #if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
             // For tiny fonts, adjust spacing based on content
-            if (hasEmote || hasQmark) {
+            if (hasEmote) {
                 // With emoji: minimal spacing after underline
                 lineHeight = FONT_HEIGHT_SMALL + 4 + HEADER_UNDERLINE_GAP;
             } else {
@@ -1546,16 +1467,16 @@ std::vector<int> calculateLineHeights(const std::vector<std::string> &lines, con
             // Base spacing for normal lines
             int desiredBody = baseHeight + BODY_LINE_LEADING;
 
-            if (hasEmote || hasQmark) {
-                // Emote/qmark line: add overshoot + bottom padding
+            if (hasEmote) {
+                // Emote line: add overshoot + bottom padding
                 int overshoot = std::max(0, tallestEmote - baseHeight);
                 lineHeight = desiredBody + overshoot + EMOTE_PADDING_BELOW;
             } else {
                 // Regular line: no emote → standard spacing
                 lineHeight = desiredBody;
 
-                // If next line has an emote or qmark → add top padding *here*
-                if (nextHasEmote || nextHasQmark) {
+                // If next line has an emote → add top padding *here*
+                if (nextHasEmote) {
                     lineHeight += EMOTE_PADDING_ABOVE;
                 }
             }
@@ -1715,19 +1636,23 @@ void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const mesht
 
     // Reset scroll for a clean start
     resetScrollState();
-    markDirty();
+    // Note: markDirty() is called by setThreadFor if thread changes
 }
 
 void setThreadFor(const StoredMessage &sm, const meshtastic_MeshPacket &packet)
 {
     if (packet.to == 0 || packet.to == NODENUM_BROADCAST) {
-        setThreadMode(ThreadMode::CHANNEL, sm.channelIndex);
-        markDirty();
+        // Only mark dirty if we're actually changing threads
+        if (currentMode != ThreadMode::CHANNEL || currentChannel != (int)sm.channelIndex) {
+            setThreadMode(ThreadMode::CHANNEL, sm.channelIndex);
+        }
     } else {
         uint32_t localNode = nodeDB->getNodeNum();
         uint32_t peer = (sm.sender == localNode) ? packet.to : sm.sender;
-        setThreadMode(ThreadMode::DIRECT, -1, peer);
-        markDirty();
+        // Only mark dirty if we're actually changing threads
+        if (currentMode != ThreadMode::DIRECT || currentPeer != peer) {
+            setThreadMode(ThreadMode::DIRECT, -1, peer);
+        }
     }
 }
 
