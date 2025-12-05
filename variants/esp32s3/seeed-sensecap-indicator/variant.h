@@ -5,7 +5,7 @@
 #define SENSOR_RP2040_TXD 19
 #define SENSOR_RP2040_RXD 20
 #define SENSOR_PORT_NUM 2
-#define SENSOR_BAUD_RATE 115200
+#define SENSOR_BAUD_RATE 921600
 
 #define BUTTON_PIN 38
 #define BUTTON_ACTIVE_LOW true
@@ -33,7 +33,7 @@
 #define TFT_WIDTH 480
 #define TFT_OFFSET_X 0
 #define TFT_OFFSET_Y 0
-#define TFT_OFFSET_ROTATION 0
+#define TFT_OFFSET_ROTATION 2 // Fix reversed touchscreen axes
 #define TFT_BL 45
 #define SCREEN_ROTATE
 #define SCREEN_TRANSITION_FRAMERATE 5 // fps
@@ -45,9 +45,10 @@
 #define TOUCH_I2C_PORT 0
 #define TOUCH_SLAVE_ADDRESS 0x48
 
-// in future, we may want to add a buzzer and add all sensors to the indicator via a data protocol for now only GPS is supported
-// // Buzzer
-// #define PIN_BUZZER 19
+// Buzzer on RP2040 companion processor (GPIO 19 on RP2040 side)
+// Use GPIO 1 (unused UART TX) as dummy pin for ESP32 PWM setup
+// Actual buzzer control redirected to RP2040 via tone() override
+#define PIN_BUZZER 1
 
 #define GPS_DEFAULT_NOT_PRESENT 1
 #define GPS_RX_PIN 20

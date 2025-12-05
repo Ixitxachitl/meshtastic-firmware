@@ -21,7 +21,7 @@ extern bool haveGlyphs(const char *str);
 // Global screen instance
 extern graphics::Screen *screen;
 
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
 static uint32_t lastSwitchTime = 0;
 #else
 #endif
@@ -42,6 +42,22 @@ void drawScaledXBitmap16x16(int x, int y, int width, int height, const uint8_t *
                 display->fillRect(x + row * 2, y + col * 2, 2, 2);
             }
         }
+    }
+}
+
+// Helper to draw favorite bullet point with platform-specific offset
+static inline void drawFavoriteBullet(OLEDDisplay *display, int x, int y, meshtastic_NodeInfoLite *node)
+{
+    if (!node->is_favorite)
+        return;
+    if (isHighResolution) {
+        drawScaledXBitmap16x16(x, y + 6, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
+    } else {
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+        display->drawXbm(x, y + 1, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
+#else
+        display->drawXbm(x, y + 5, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
+#endif
     }
 }
 
@@ -192,13 +208,7 @@ void drawEntryLastHeard(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
     display->drawString(x + ((isHighResolution) ? 6 : 3), y, nodeName);
-    if (node->is_favorite) {
-        if (isHighResolution) {
-            drawScaledXBitmap16x16(x, y + 6, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
-        } else {
-            display->drawXbm(x, y + 5, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
-        }
-    }
+    drawFavoriteBullet(display, x, y, node);
 
     int rightEdge = x + columnWidth - timeOffset;
     if (timeStr[strlen(timeStr) - 1] == 'm') // Fix the fact that our fonts don't line up well all the time
@@ -223,13 +233,7 @@ void drawEntryHopSignal(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int
     display->setFont(FONT_SMALL);
 
     display->drawStringMaxWidth(x + ((isHighResolution) ? 6 : 3), y, nameMaxWidth, nodeName);
-    if (node->is_favorite) {
-        if (isHighResolution) {
-            drawScaledXBitmap16x16(x, y + 6, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
-        } else {
-            display->drawXbm(x, y + 5, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
-        }
-    }
+    drawFavoriteBullet(display, x, y, node);
 
     // Draw signal strength bars
     int bars = (node->snr > 5) ? 4 : (node->snr > 0) ? 3 : (node->snr > -5) ? 2 : (node->snr > -10) ? 1 : 0;
@@ -315,13 +319,7 @@ void drawNodeDistance(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
     display->drawStringMaxWidth(x + ((isHighResolution) ? 6 : 3), y, nameMaxWidth, nodeName);
-    if (node->is_favorite) {
-        if (isHighResolution) {
-            drawScaledXBitmap16x16(x, y + 6, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
-        } else {
-            display->drawXbm(x, y + 5, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
-        }
-    }
+    drawFavoriteBullet(display, x, y, node);
 
     if (strlen(distStr) > 0) {
         int offset = (isHighResolution) ? (isLeftCol ? 7 : 10) // Offset for Wide Screens (Left Column:Right Column)
@@ -361,13 +359,7 @@ void drawEntryCompass(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
     display->drawStringMaxWidth(x + ((isHighResolution) ? 6 : 3), y, nameMaxWidth, nodeName);
-    if (node->is_favorite) {
-        if (isHighResolution) {
-            drawScaledXBitmap16x16(x, y + 6, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
-        } else {
-            display->drawXbm(x, y + 5, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
-        }
-    }
+    drawFavoriteBullet(display, x, y, node);
 }
 
 void drawCompassArrow(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16_t x, int16_t y, int columnWidth, float myHeading,
@@ -426,8 +418,16 @@ void drawCompassArrow(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
 void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y, const char *title,
                         EntryRenderer renderer, NodeExtrasRenderer extras, float heading, double lat, double lon)
 {
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+    const int COMMON_HEADER_HEIGHT = FONT_HEIGHT_TINY + 3;
+#else
     const int COMMON_HEADER_HEIGHT = FONT_HEIGHT_SMALL - 1;
+#endif
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+    const int rowYOffset = FONT_HEIGHT_TINY;
+#else
     const int rowYOffset = FONT_HEIGHT_SMALL - 3;
+#endif
     bool locationScreen = false;
 
     if (strcmp(title, "Bearings") == 0)
@@ -499,12 +499,10 @@ void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
     totalEntries -= numskipped;
 
 #if !defined(M5STACK_UNITC6L)
-    // Draw column separator
     if (shownCount > 0) {
         const int firstNodeY = y + 3;
         drawColumnSeparator(display, x, firstNodeY, lastNodeY);
     }
-
 #endif
     const int scrollStartY = y + 3;
     drawScrollbar(display, visibleNodeRows, totalEntries, scrollIndex, 2, scrollStartY);
@@ -524,7 +522,7 @@ void drawDynamicNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, 
 
     unsigned long now = millis();
 
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     display->clear();
     if (now - lastSwitchTime >= 3000) {
         display->display();
@@ -585,7 +583,7 @@ void drawNodeListWithCompasses(OLEDDisplay *display, OLEDDisplayUiState *state, 
     double lat = DegD(ourNode->position.latitude_i);
     double lon = DegD(ourNode->position.longitude_i);
 
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     display->clear();
     uint32_t now = millis();
     if (now - lastSwitchTime >= 2000) {

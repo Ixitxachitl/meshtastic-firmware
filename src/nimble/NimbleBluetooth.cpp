@@ -651,15 +651,19 @@ class NimbleBluetoothServerCallback : public NimBLEServerCallbacks
     {
         LOG_INFO("BLE incoming connection %s", connInfo.getAddress().toString().c_str());
 
+        // Store the connection handle for future use
+        nimbleBluetoothConnHandle = connInfo.getConnHandle();
+
 #if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32C6)
         const uint16_t connHandle = connInfo.getConnHandle();
-        int phyResult =
-            ble_gap_set_prefered_le_phy(connHandle, BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_CODED_ANY);
-        if (phyResult == 0) {
-            LOG_INFO("BLE conn %u requested 2M PHY", connHandle);
-        } else {
-            LOG_WARN("Failed to prefer 2M PHY for conn %u, rc=%d", connHandle, phyResult);
-        }
+        // Disable PHY preference to avoid controller assert in llc_phy_upd.c
+        // int phyResult =
+        //     ble_gap_set_prefered_le_phy(connHandle, BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK, 0);
+        // if (phyResult == 0) {
+        //     LOG_INFO("BLE conn %u requested 2M PHY", connHandle);
+        // } else {
+        //     LOG_WARN("Failed to prefer 2M PHY for conn %u, rc=%d", connHandle, phyResult);
+        // }
 
         int dataLenResult = ble_gap_set_data_len(connHandle, kPreferredBleTxOctets, kPreferredBleTxTimeUs);
         if (dataLenResult == 0) {
@@ -671,6 +675,18 @@ class NimbleBluetoothServerCallback : public NimBLEServerCallbacks
         LOG_INFO("BLE conn %u initial MTU %u (target %u)", connHandle, connInfo.getMTU(), kPreferredBleMtu);
         pServer->updateConnParams(connHandle, 6, 12, 0, 200);
 #endif
+
+        // If this is a bonded connection, authentication won't happen again, so close the pairing screen now
+        if (connInfo.isBonded()) {
+            LOG_INFO("BLE bonded connection, closing pairing screen if showing");
+            if (passkeyShowing) {
+                passkeyShowing = false;
+                if (screen)
+                    screen->endAlert();
+            }
+            meshtastic::BluetoothStatus newStatus(meshtastic::BluetoothStatus::ConnectionState::CONNECTED);
+            bluetoothStatus->updateStatus(&newStatus);
+        }
     }
 
     virtual void onDisconnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo, int reason)
@@ -826,12 +842,13 @@ void NimbleBluetooth::setup()
         LOG_WARN("Unable to request MTU %u, rc=%d", kPreferredBleMtu, mtuResult);
     }
 
-    int phyResult = ble_gap_set_prefered_default_le_phy(BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK);
-    if (phyResult == 0) {
-        LOG_INFO("BLE default PHY preference set to 2M");
-    } else {
-        LOG_WARN("Failed to prefer 2M PHY by default, rc=%d", phyResult);
-    }
+    // Disable PHY preference to avoid controller assert in llc_phy_upd.c
+    // int phyResult = ble_gap_set_prefered_default_le_phy(BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK);
+    // if (phyResult == 0) {
+    //     LOG_INFO("BLE default PHY preference set to 2M");
+    // } else {
+    //     LOG_WARN("Failed to prefer 2M PHY by default, rc=%d", phyResult);
+    // }
 
     int dataLenResult = ble_gap_write_sugg_def_data_len(kPreferredBleTxOctets, kPreferredBleTxTimeUs);
     if (dataLenResult == 0) {
