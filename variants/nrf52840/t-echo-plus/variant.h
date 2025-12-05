@@ -226,6 +226,12 @@ External serial flash WP25R1635FZUIL0
 
 #define HAS_RTC 1
 
+// Arduino SPI pin compatibility for SensorLib (must be before closing brace)
+static const uint8_t MOSI = PIN_SPI_MOSI;
+static const uint8_t MISO = PIN_SPI_MISO;
+static const uint8_t SCK = PIN_SPI_SCK;
+static const uint8_t SS = 0xFF; // Not used, dummy value
+
 #ifdef __cplusplus
 }
 #endif

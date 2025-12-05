@@ -2,6 +2,17 @@
 #include "NodeDB.h"
 #include <Wire.h>
 
+// SensorLib is optional - enables RAM-based firmware upload for BHI260AP
+// boards without external SPI flash (boot status 0x18)
+#ifdef HAS_BHI260AP_SENSORLIB
+#include <SensorBHI260AP.hpp>
+
+// Optional: Embedded firmware for automatic programming
+#ifdef HAS_BHI260AP_FIRMWARE_EMBEDDED
+#include "motion/bhi260ap_firmware.h"
+#endif
+#endif
+
 #if !defined(ARCH_STM32WL) && !MESHTASTIC_EXCLUDE_I2C
 
 // BHI260AP I2C Register Definitions (from Bosch BHY2 API)
@@ -90,13 +101,28 @@ bool BHI260APSensor::init()
 
     LOG_INFO("BHI260AP: Attempting to initialize sensor at address 0x%02x", i2cAddress);
 
-    // Check if firmware is already running by reading chip ID first
+    // Read boot status first to understand sensor state
+    uint8_t bootStatus = 0;
+    delay(50); // Give sensor time to stabilize after power-on
+
+    if (!readRegister(wire, i2cAddress, BHI260AP_REG_BOOT_STATUS, &bootStatus, 1)) {
+        LOG_ERROR("BHI260AP: Failed to read boot status - I2C communication error");
+        return false;
+    }
+
+    LOG_INFO("BHI260AP: Boot status: 0x%02x", bootStatus);
+    LOG_INFO("BHI260AP: - Flash detected: %s", (bootStatus & BHI260AP_BST_FLASH_DETECTED) ? "YES" : "NO");
+    LOG_INFO("BHI260AP: - Flash verify done: %s", (bootStatus & BHI260AP_BST_FLASH_VERIFY_DONE) ? "YES" : "NO");
+    LOG_INFO("BHI260AP: - Flash verify error: %s", (bootStatus & BHI260AP_BST_FLASH_VERIFY_ERROR) ? "YES" : "NO");
+    LOG_INFO("BHI260AP: - Host interface ready: %s", (bootStatus & BHI260AP_BST_HOST_INTERFACE_READY) ? "YES" : "NO");
+    LOG_INFO("BHI260AP: - Host FW verify done: %s", (bootStatus & BHI260AP_BST_HOST_FW_VERIFY_DONE) ? "YES" : "NO");
+
+    // Check if firmware is already running by reading chip ID
     uint8_t chipId = 0;
-    delay(10);
     if (readRegister(wire, i2cAddress, BHI260AP_REG_CHIP_ID, &chipId, 1)) {
         LOG_INFO("BHI260AP: Chip ID: 0x%02x (expected 0x%02x)", chipId, BHI260AP_CHIP_ID);
         if (chipId == BHI260AP_CHIP_ID) {
-            LOG_INFO("BHI260AP: Firmware already running! Skipping boot sequence.");
+            LOG_INFO("BHI260AP: ✓ Firmware already running! Sensor ready.");
 
             // Store global instance
             g_bhi260ap_instance = this;
@@ -104,152 +130,167 @@ bool BHI260APSensor::init()
 
             // TODO: Configure virtual sensors (accelerometer, step counter)
             // For now, just try to read any existing step data
-            LOG_INFO("BHI260AP: Sensor initialized (firmware already loaded)");
+            LOG_INFO("BHI260AP: Sensor initialized successfully");
             return true;
         }
+    } else {
+        LOG_WARN("BHI260AP: Failed to read chip ID register");
     }
 
-    // Firmware not running yet - check boot status
-    uint8_t bootStatus = 0;
-    if (!readRegister(wire, i2cAddress, BHI260AP_REG_BOOT_STATUS, &bootStatus, 1)) {
-        LOG_ERROR("BHI260AP: Failed to read initial boot status");
-        return false;
-    }
-
-    LOG_INFO("BHI260AP: Boot status: 0x%02x", bootStatus);
-    LOG_INFO("BHI260AP: - Host interface ready: %s", (bootStatus & BHI260AP_BST_HOST_INTERFACE_READY) ? "YES" : "NO");
-    LOG_INFO("BHI260AP: - Flash detected: %s", (bootStatus & BHI260AP_BST_FLASH_DETECTED) ? "YES" : "NO");
-    LOG_INFO("BHI260AP: - Flash verify done: %s", (bootStatus & BHI260AP_BST_FLASH_VERIFY_DONE) ? "YES" : "NO");
-
+    // If chip ID doesn't match, firmware is not running yet
     // Check if external flash is detected
     if (!(bootStatus & BHI260AP_BST_FLASH_DETECTED)) {
+        LOG_WARN("BHI260AP: No external flash detected (boot status 0x%02x)", bootStatus);
+        LOG_WARN("BHI260AP: Sensor is in HOST DOWNLOAD MODE - requires RAM firmware upload");
+
+#ifdef HAS_BHI260AP_SENSORLIB
+        // Attempt RAM-based firmware upload using SensorLib
+        LOG_INFO("BHI260AP: SensorLib available - attempting RAM firmware upload...");
+        LOG_WARN("BHI260AP: This will take ~30 seconds and must repeat on every boot");
+
+        if (uploadFirmwareToRAM()) {
+            LOG_INFO("BHI260AP: ✓ RAM firmware upload successful!");
+            g_bhi260ap_instance = this;
+            initialized = true;
+            return true;
+        } else {
+            LOG_ERROR("BHI260AP: RAM firmware upload failed");
+            g_bhi260ap_instance = this;
+            initialized = true;
+            return true; // Still return success for UI (will show 0 steps)
+        }
+#else
+        // SensorLib not included - provide helpful error message
         LOG_ERROR("┌──────────────────────────────────────────────────────────────┐");
-        LOG_ERROR("│ BHI260AP FIRMWARE NOT DETECTED                              │");
+        LOG_ERROR("│ BHI260AP: NO EXTERNAL FLASH DETECTED                        │");
         LOG_ERROR("├──────────────────────────────────────────────────────────────┤");
-        LOG_ERROR("│ Boot Status: 0x%02x (FLASH_DETECTED bit NOT set)            │", bootStatus);
+        LOG_ERROR("│ Boot Status: 0x%02x (HOST DOWNLOAD MODE)                    │", bootStatus);
         LOG_ERROR("│                                                              │");
-        LOG_ERROR("│ This sensor requires firmware loaded into its external       │");
-        LOG_ERROR("│ SPI flash chip. Meshtastic cannot include the ~109KB        │");
-        LOG_ERROR("│ firmware due to nRF52840 flash space constraints.           │");
+        LOG_ERROR("│ This board requires firmware uploaded to RAM on every boot.  │");
+        LOG_ERROR("│ Two solutions available:                                     │");
         LOG_ERROR("│                                                              │");
-        LOG_ERROR("│ SOLUTION: Program sensor once using LilyGO's example:       │");
-        LOG_ERROR("│   https://github.com/Xinyuan-LilyGO/T-Echo/blob/main/       │");
-        LOG_ERROR("│   examples/SensorBHI260AP/SensorBHI260AP.ino                │");
+        LOG_ERROR("│ RECOMMENDED: Embed firmware in build (AUTOMATIC)             │");
+        LOG_ERROR("│   1. Download BHI260AP firmware file (~111KB):               │");
+        LOG_ERROR("│      github.com/Xinyuan-LilyGO/T-Echo/raw/main/lib/         │");
+        LOG_ERROR("│      SensorLib/examples/BHI260AP_UpdateFirmware/             │");
+        LOG_ERROR("│      BHI260AP_aux_BMM150_BME280_GPIO-flash.fw               │");
+        LOG_ERROR("│   2. Convert to header:                                      │");
+        LOG_ERROR("│      cd variants/nrf52840/t-echo-plus                        │");
+        LOG_ERROR("│      python3 firmware_to_header.py <firmware.fw>            │");
+        LOG_ERROR("│      cp bhi260ap_firmware.h ../../../src/motion/            │");
+        LOG_ERROR("│   3. Add to platformio.ini build_flags:                      │");
+        LOG_ERROR("│      -DHAS_BHI260AP_FIRMWARE_EMBEDDED                        │");
+        LOG_ERROR("│      -DHAS_BHI260AP_SENSORLIB                                │");
+        LOG_ERROR("│   4. Add to lib_deps: lewisxhe/SensorLib@^0.2.0             │");
+        LOG_ERROR("│   5. Patch SensorLib (see BHI260AP_RAM_UPLOAD_STATUS.md)    │");
+        LOG_ERROR("│   6. Build & flash - sensor auto-programs on first boot!    │");
         LOG_ERROR("│                                                              │");
-        LOG_ERROR("│ See detailed instructions in:                                │");
-        LOG_ERROR("│   variants/nrf52840/t-echo-plus/BHI260AP_FIRMWARE_REQUIRED.md│");
+        LOG_ERROR("│ See: variants/nrf52840/t-echo-plus/firmware_to_header.py    │");
         LOG_ERROR("│                                                              │");
-        LOG_ERROR("│ Step counter will display 0 until sensor is programmed.     │");
+        LOG_ERROR("│ Step counter will display 0 until one solution is used.     │");
         LOG_ERROR("└──────────────────────────────────────────────────────────────┘");
 
         // Store instance anyway for UI (will show 0 steps)
         g_bhi260ap_instance = this;
         initialized = true;
         return true; // Return success so UI still shows (with 0 steps)
+#endif
     }
 
-    // If host interface is ready but firmware not running, try boot from flash
-    if (bootStatus & BHI260AP_BST_HOST_INTERFACE_READY) {
-        LOG_INFO("BHI260AP: Host interface ready, attempting boot from flash...");
+    // If host interface is ready and flash detected, attempt boot
+    if ((bootStatus & BHI260AP_BST_HOST_INTERFACE_READY) && (bootStatus & BHI260AP_BST_FLASH_DETECTED)) {
+        LOG_INFO("BHI260AP: Host interface ready and flash detected, attempting boot...");
 
-        uint32_t startTime = millis();
-        bool flashVerified = false;
+        // If flash verification is already done, proceed to boot
+        if (!(bootStatus & BHI260AP_BST_FLASH_VERIFY_DONE)) {
+            LOG_INFO("BHI260AP: Waiting for flash verification...");
+            uint32_t startTime = millis();
+            bool flashVerified = false;
 
-        LOG_INFO("BHI260AP: Waiting for flash verification...");
-        while ((millis() - startTime) < 3000) { // 3 second timeout
-            if (!readRegister(wire, i2cAddress, BHI260AP_REG_BOOT_STATUS, &bootStatus, 1)) {
-                LOG_ERROR("BHI260AP: Failed to read boot status");
+            while ((millis() - startTime) < 3000) { // 3 second timeout
+                if (!readRegister(wire, i2cAddress, BHI260AP_REG_BOOT_STATUS, &bootStatus, 1)) {
+                    LOG_ERROR("BHI260AP: Failed to read boot status during verification");
+                    return false;
+                }
+
+                LOG_DEBUG("BHI260AP: Boot status: 0x%02x", bootStatus);
+
+                // Check if flash verification is done
+                if (bootStatus & BHI260AP_BST_FLASH_VERIFY_DONE) {
+                    flashVerified = true;
+                    LOG_INFO("BHI260AP: Flash verification completed");
+                    break;
+                }
+
+                // Check for verification error
+                if (bootStatus & BHI260AP_BST_FLASH_VERIFY_ERROR) {
+                    LOG_ERROR("BHI260AP: Flash verification error detected!");
+                    return false;
+                }
+
+                delay(50);
+            }
+
+            if (!flashVerified) {
+                LOG_ERROR("BHI260AP: Timeout waiting for flash verification");
+                LOG_INFO("BHI260AP: Final boot status: 0x%02x", bootStatus);
                 return false;
             }
-
-            LOG_DEBUG("BHI260AP: Boot status during verification: 0x%02x", bootStatus);
-
-            // Check if flash verification is done
-            if (bootStatus & BHI260AP_BST_FLASH_VERIFY_DONE) {
-                flashVerified = true;
-                LOG_INFO("BHI260AP: Flash verification completed");
-                break;
-            }
-
-            // Check for verification error
-            if (bootStatus & BHI260AP_BST_FLASH_VERIFY_ERROR) {
-                LOG_ERROR("BHI260AP: Flash verification error detected");
-                return false;
-            }
-
-            delay(50);
+        } else {
+            LOG_INFO("BHI260AP: Flash already verified (status: 0x%02x)", bootStatus);
         }
 
-        if (!flashVerified) {
-            LOG_ERROR("BHI260AP: Timeout waiting for flash verification");
-            LOG_INFO("BHI260AP: Final boot status: 0x%02x", bootStatus);
+        // Wait a moment for the sensor to stabilize after verification
+        delay(100);
+
+        // Read boot status again to check if firmware is now running
+        if (!readRegister(wire, i2cAddress, BHI260AP_REG_BOOT_STATUS, &bootStatus, 1)) {
+            LOG_ERROR("BHI260AP: Failed to read boot status after verification");
             return false;
         }
 
-        // Step 3: Check host interface is ready
-        if (!(bootStatus & BHI260AP_BST_HOST_INTERFACE_READY)) {
-            LOG_ERROR("BHI260AP: Host interface not ready after flash verification");
-            return false;
-        }
+        LOG_INFO("BHI260AP: Post-verification boot status: 0x%02x", bootStatus);
 
-        // Step 4: Issue boot from flash command
-        LOG_INFO("BHI260AP: Sending boot from flash command...");
-        uint8_t bootCmd = 0x01; // CMD_BOOT_FLASH
-        if (!writeRegister(wire, i2cAddress, BHI260AP_REG_CHAN_CMD, bootCmd)) {
-            LOG_ERROR("BHI260AP: Failed to send boot command");
-            return false;
-        }
-
-        // Step 4: Wait for boot to complete (check for both HOST_INTERFACE_READY and FLASH_VERIFY_DONE)
-        startTime = millis();
-        bool bootComplete = false;
-
-        LOG_INFO("BHI260AP: Waiting for boot completion...");
-        while ((millis() - startTime) < 5000) { // 5 second timeout
-            if (!readRegister(wire, i2cAddress, BHI260AP_REG_BOOT_STATUS, &bootStatus, 1)) {
-                LOG_ERROR("BHI260AP: Failed to read boot status");
-                return false;
-            }
-
-            LOG_DEBUG("BHI260AP: Boot status during boot: 0x%02x", bootStatus);
-
-            // Boot is complete when HOST_INTERFACE_READY is set and no errors
-            if ((bootStatus & BHI260AP_BST_HOST_INTERFACE_READY) && !(bootStatus & BHI260AP_BST_FLASH_VERIFY_ERROR)) {
-                bootComplete = true;
-                LOG_INFO("BHI260AP: Boot completed successfully");
-                break;
-            }
-
-            delay(50);
-        }
-
-        if (!bootComplete) {
-            LOG_ERROR("BHI260AP: Timeout waiting for boot completion");
-            LOG_INFO("BHI260AP: Final boot status: 0x%02x", bootStatus);
-            return false;
-        }
-
-        // Verify chip ID after boot
+        // Check if firmware is now running by reading chip ID
         if (readRegister(wire, i2cAddress, BHI260AP_REG_CHIP_ID, &chipId, 1)) {
-            LOG_INFO("BHI260AP: Chip ID after boot: 0x%02x (expected 0x%02x)", chipId, BHI260AP_CHIP_ID);
-            if (chipId != BHI260AP_CHIP_ID) {
-                LOG_WARN("BHI260AP: Unexpected chip ID - boot may have failed");
-                return false;
+            LOG_INFO("BHI260AP: Chip ID after verification: 0x%02x (expected 0x%02x)", chipId, BHI260AP_CHIP_ID);
+            if (chipId == BHI260AP_CHIP_ID) {
+                LOG_INFO("BHI260AP: ✓ Firmware booted successfully!");
+
+                // Store global instance for renderer access
+                g_bhi260ap_instance = this;
+                initialized = true;
+                return true;
+            } else {
+                LOG_ERROR("BHI260AP: Chip ID mismatch after boot - got 0x%02x", chipId);
             }
+        } else {
+            LOG_ERROR("BHI260AP: Failed to read chip ID after boot");
         }
 
-        LOG_INFO("BHI260AP: Sensor initialized successfully after boot from flash");
-
-        // Store global instance for renderer access
-        g_bhi260ap_instance = this;
-
-        initialized = true;
-        return true;
+        // If we get here, firmware didn't boot properly despite flash being present
+        LOG_ERROR("BHI260AP: Firmware in flash but failed to boot - may need power cycle");
+        LOG_ERROR("BHI260AP: Try disconnecting and reconnecting the device");
+        return false;
     } else {
-        LOG_ERROR("BHI260AP: Host interface not ready and firmware not running");
-        LOG_ERROR("BHI260AP: Boot status: 0x%02x - sensor may need reset or power cycle", bootStatus);
+        LOG_ERROR("BHI260AP: Host interface not ready or flash not detected");
+        LOG_ERROR("BHI260AP: Boot status: 0x%02x", bootStatus);
+        LOG_ERROR("BHI260AP: Possible causes:");
+        LOG_ERROR("BHI260AP:   1. Sensor needs power cycle (disconnect/reconnect USB)");
+        LOG_ERROR("BHI260AP:   2. Flash firmware not uploaded (check PROGRAMMING_GUIDE.md)");
+        LOG_ERROR("BHI260AP:   3. I2C communication issue");
         return false;
     }
+}
+
+// Add helper to decode boot status for debugging
+static const char *decodeBootStatus(uint8_t status)
+{
+    static char buffer[128];
+    snprintf(buffer, sizeof(buffer), "0x%02X [%s%s%s%s%s]", status, (status & 0x01) ? "FLASH_DET " : "",
+             (status & 0x02) ? "VERIFY_DONE " : "", (status & 0x04) ? "VERIFY_ERR " : "", (status & 0x10) ? "HOST_RDY " : "",
+             (status & 0x80) ? "FW_VERIFY_DONE" : "");
+    return buffer;
 }
 
 bool BHI260APSensor::readStepCounterFromFifo()
@@ -286,17 +327,190 @@ bool BHI260APSensor::readStepCounterFromFifo()
     return false;
 }
 
+#ifdef HAS_BHI260AP_SENSORLIB
+
+// Minimal callback to capture step counter data
+static void step_callback(uint8_t sensor_id, uint8_t *data_ptr, uint32_t len, uint64_t *timestamp)
+{
+    if (!g_bhi260ap_instance || len < 4)
+        return;
+
+    // Parse 32-bit step count
+    uint32_t steps = data_ptr[0] | (data_ptr[1] << 8) | (data_ptr[2] << 16) | (data_ptr[3] << 24);
+    if (steps < 1000000) { // Sanity check
+        g_bhi260ap_instance->stepCount = steps;
+    }
+}
+
+static void accel_callback(uint8_t sensor_id, uint8_t *data_ptr, uint32_t len, uint64_t *timestamp)
+{
+    if (!g_bhi260ap_instance)
+        return;
+
+    struct bhy2_data_xyz data;
+    float scale = get_sensor_default_scaling(sensor_id);
+    bhy2_parse_xyz(data_ptr, &data);
+
+    g_bhi260ap_instance->accelX = data.x * scale;
+    g_bhi260ap_instance->accelY = data.y * scale;
+    g_bhi260ap_instance->accelZ = data.z * scale;
+    g_bhi260ap_instance->hasAccelData = true;
+}
+
+static void gyro_callback(uint8_t sensor_id, uint8_t *data_ptr, uint32_t len, uint64_t *timestamp)
+{
+    if (!g_bhi260ap_instance)
+        return;
+
+    struct bhy2_data_xyz data;
+    float scale = get_sensor_default_scaling(sensor_id);
+    bhy2_parse_xyz(data_ptr, &data);
+
+    g_bhi260ap_instance->gyroX = data.x * scale;
+    g_bhi260ap_instance->gyroY = data.y * scale;
+    g_bhi260ap_instance->gyroZ = data.z * scale;
+    g_bhi260ap_instance->hasGyroData = true;
+}
+
+bool BHI260APSensor::uploadFirmwareToRAM()
+{
+    LOG_INFO("BHI260AP: Initializing SensorLib for firmware upload...");
+
+    // Firmware source priority:
+    // 1. Embedded firmware (if HAS_BHI260AP_FIRMWARE_EMBEDDED defined)
+    // 2. Built-in SensorLib minimal firmware
+    const uint8_t *firmwareData = nullptr;
+    size_t firmwareSize = 0;
+    bool writeToFlash = false;
+
+#ifdef HAS_BHI260AP_FIRMWARE_EMBEDDED
+    // Use embedded firmware - will program to external flash permanently
+    firmwareData = bhi260ap_firmware_data;
+    firmwareSize = bhi260ap_firmware_size;
+    writeToFlash = true;
+    LOG_INFO("BHI260AP: Using embedded firmware (%u bytes)", firmwareSize);
+    LOG_INFO("BHI260AP: Will program to external flash chip (one-time operation)");
+#else
+    // Use built-in SensorLib firmware - RAM only
+    firmwareData = bhy2_firmware_image;
+    firmwareSize = sizeof(bhy2_firmware_image);
+    writeToFlash = false;
+    LOG_INFO("BHI260AP: Using built-in SensorLib firmware (%u bytes)", firmwareSize);
+    LOG_WARN("BHI260AP: Firmware will be lost on power cycle (RAM only)");
+#endif
+
+    // Create or reuse persistent SensorLib instance
+    SensorBHI260AP *bhi = nullptr;
+    if (bhiInstance) {
+        bhi = static_cast<SensorBHI260AP *>(bhiInstance);
+    } else {
+        bhi = new SensorBHI260AP();
+        bhiInstance = bhi;
+    }
+
+    // Set reset pin to -1 (not used on T-Echo Plus)
+    bhi->setPins(-1, -1);
+
+    // Configure firmware
+    bhi->setFirmware(firmwareData, firmwareSize, writeToFlash, true); // force_update=true
+    bhi->setBootFromFlash(writeToFlash);
+
+    LOG_INFO("BHI260AP: Uploading firmware (this takes ~30 seconds)...");
+    uint32_t startTime = millis();
+
+    // Upload firmware - init() triggers the upload when firmware is configured
+    if (!bhi->init(*wire, PIN_WIRE_SDA, PIN_WIRE_SCL, BHI260AP_SLAVE_ADDRESS_L)) {
+        LOG_ERROR("BHI260AP: Firmware upload failed after %lu ms", millis() - startTime);
+        LOG_ERROR("BHI260AP: Error code: %d", bhi->getError());
+        if (firmwareData)
+            free(const_cast<void *>(static_cast<const void *>(firmwareData)));
+        return false;
+    }
+
+    LOG_INFO("BHI260AP: Firmware uploaded in %lu ms", millis() - startTime);
+    if (writeToFlash)
+        LOG_INFO("BHI260AP: External flash programmed");
+
+    delay(500);
+
+    uint8_t bootStatus = 0;
+    if (!readRegister(wire, i2cAddress, BHI260AP_REG_BOOT_STATUS, &bootStatus, 1)) {
+        LOG_ERROR("BHI260AP: Boot status read failed");
+        return false;
+    }
+
+    if (!(bootStatus & BHI260AP_BST_HOST_INTERFACE_READY)) {
+        LOG_ERROR("BHI260AP: Not ready (0x%02x)", bootStatus);
+        return false;
+    }
+
+    uint8_t chipId = 0;
+    if (readRegister(wire, i2cAddress, BHI260AP_REG_CHIP_ID, &chipId, 1) && chipId == BHI260AP_CHIP_ID) {
+        LOG_INFO("BHI260AP: Chip ID OK");
+    } else {
+        LOG_WARN("BHI260AP: Chip ID 0x%02x (expected 0x%02x)", chipId, BHI260AP_CHIP_ID);
+    }
+
+    // Enable accelerometer (required for step counter)
+    if (!bhi->configure(SENSOR_ID_ACC_PASS, 10.0, 0)) {
+        LOG_WARN("BHI260AP: Accel config failed");
+    } else {
+        bhi->onResultEvent(SENSOR_ID_ACC_PASS, accel_callback);
+        LOG_INFO("BHI260AP: Accel enabled");
+    }
+
+    // Enable gyroscope
+    if (!bhi->configure(SENSOR_ID_GYRO_PASS, 10.0, 0)) {
+        LOG_WARN("BHI260AP: Gyro config failed");
+    } else {
+        bhi->onResultEvent(SENSOR_ID_GYRO_PASS, gyro_callback);
+        LOG_INFO("BHI260AP: Gyro enabled");
+    }
+
+    if (!bhi->configure(BHI260AP_SENSOR_ID_STEP_COUNTER, 1.0, 0)) {
+        LOG_WARN("BHI260AP: Step counter config failed");
+    } else {
+        bhi->onResultEvent((BhySensorID)BHI260AP_SENSOR_ID_STEP_COUNTER, step_callback);
+        LOG_INFO("BHI260AP: Step counter OK");
+    }
+
+    return true;
+}
+#endif
+
 int32_t BHI260APSensor::runOnce()
 {
     if (!initialized || !wire) {
         return MOTION_SENSOR_CHECK_INTERVAL_MS;
     }
 
-    // Try to read step counter from FIFO
+#ifdef HAS_BHI260AP_SENSORLIB
+    // Update FIFO via SensorLib (processes callbacks)
+    if (bhiInstance) {
+        static_cast<SensorBHI260AP *>(bhiInstance)->update();
+    }
+#else
+    // Fallback: direct FIFO read
     readStepCounterFromFifo();
+#endif
 
-    // Check for motion to wake screen
-    // TODO: Could read accelerometer data for motion detection
+    // Log sensor data every 10 seconds
+    uint32_t now = millis();
+    if (lastLogTime == 0 || (now - lastLogTime) >= 10000) {
+#ifdef HAS_BHI260AP_SENSORLIB
+        if (hasAccelData && hasGyroData) {
+            LOG_INFO("BHI260AP: Accel[%.2f,%.2f,%.2f] Gyro[%.2f,%.2f,%.2f] Steps=%u", accelX, accelY, accelZ, gyroX, gyroY, gyroZ,
+                     stepCount);
+        } else if (hasAccelData) {
+            LOG_INFO("BHI260AP: Accel[%.2f,%.2f,%.2f] Steps=%u", accelX, accelY, accelZ, stepCount);
+        } else {
+            LOG_INFO("BHI260AP: Steps=%u (waiting for sensor data)", stepCount);
+        }
+#else
+        LOG_INFO("BHI260AP: Steps=%u", stepCount);
+#endif
+        lastLogTime = now;
+    }
 
     return MOTION_SENSOR_CHECK_INTERVAL_MS;
 }

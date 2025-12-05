@@ -17,6 +17,15 @@ extern BHI260APSensor *g_bhi260ap_instance;
 
 class BHI260APSensor : public MotionSensor
 {
+  public:
+    uint32_t stepCount = 0; // Public for callback access
+#ifdef HAS_BHI260AP_SENSORLIB
+    float accelX = 0, accelY = 0, accelZ = 0;
+    float gyroX = 0, gyroY = 0, gyroZ = 0;
+    bool hasAccelData = false;
+    bool hasGyroData = false;
+#endif
+
   private:
     TwoWire *wire = nullptr;
     uint8_t i2cAddress = 0x28;
@@ -25,10 +34,16 @@ class BHI260APSensor : public MotionSensor
     float lastAccelY = 0;
     float lastAccelZ = 0;
     uint32_t lastMotionTime = 0;
-    uint32_t stepCount = 0;
+    uint32_t lastLogTime = 0;
 
     // Helper to read step counter from FIFO
     bool readStepCounterFromFifo();
+
+#ifdef HAS_BHI260AP_SENSORLIB
+    // Upload firmware to RAM (for boards without external flash)
+    bool uploadFirmwareToRAM();
+    void *bhiInstance = nullptr; // Persistent SensorBHI260AP pointer
+#endif
 
   public:
     explicit BHI260APSensor(ScanI2C::FoundDevice foundDevice);
