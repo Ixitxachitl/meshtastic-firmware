@@ -73,7 +73,16 @@ static void ensureEmoteLabelsNormalized()
 
 static std::vector<std::string> cachedLines;
 static std::vector<int> cachedHeights;
+
+// Scroll state (file scope so we can reset on new message)
+float scrollY = 0.0f;
+uint32_t lastTime = 0;
+uint32_t scrollStartDelay = 0;
+uint32_t pauseStart = 0;
+bool waitingToReset = false;
+bool scrollStarted = false;
 static bool manualScrolling = false;
+static bool didReset = false;
 
 // Rebuild control
 static bool s_dirty = true; // true = caches must be rebuilt
@@ -81,6 +90,10 @@ static inline void markDirty()
 {
     s_dirty = true;
 }
+
+// Forward declarations for scroll functions (defined after helper functions)
+void scrollUp();
+void scrollDown();
 
 static std::vector<bool> cachedIsHeader;
 static std::vector<bool> cachedIsMine;
@@ -267,42 +280,8 @@ std::string normalizeEmoji(const std::string &s)
     return out;
 }
 
-// Scroll state (file scope so we can reset on new message)
-float scrollY = 0.0f;
-uint32_t lastTime = 0;
-uint32_t scrollStartDelay = 0;
-uint32_t pauseStart = 0;
-bool waitingToReset = false;
-bool scrollStarted = false;
-static bool didReset = false;
-
-void scrollUp()
-{
-    manualScrolling = true;
-    scrollY -= 12;
-    if (scrollY < 0)
-        scrollY = 0;
-}
-
-void scrollDown()
-{
-    manualScrolling = true;
-
-    int totalHeight = 0;
-    for (int h : cachedHeights)
-        totalHeight += h;
-
-    int visibleHeight = screen->getHeight() - (FONT_HEIGHT_SMALL * 2);
-    int maxScroll = totalHeight - visibleHeight;
-    if (maxScroll < 0)
-        maxScroll = 0;
-
-    scrollY += 12;
-    if (scrollY > maxScroll)
-        scrollY = maxScroll;
-}
-
-void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string &line, const Emote *emotes, int emoteCount)
+// Replace unknown 4-byte emoji with upside-down question mark
+std::string replaceUnknownEmoji(const std::string &s, const Emote *emotes, int emoteCount)
 {
     ensureEmoteLabelsNormalized(); // Ensure cache is ready
 
@@ -612,16 +591,6 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
     }
 }
 
-// Scroll state (file scope so we can reset on new message)
-float scrollY = 0.0f;
-uint32_t lastTime = 0;
-uint32_t scrollStartDelay = 0;
-uint32_t pauseStart = 0;
-bool waitingToReset = false;
-bool scrollStarted = false;
-static bool manualScrolling = false;
-static bool didReset = false;
-
 // Reset scroll state when new messages arrive
 void resetScrollState()
 {
@@ -667,6 +636,33 @@ void clearMessageCache()
     // Rebuild from scratch on next draw
     resetScrollState();
     markDirty();
+}
+
+// Manual scroll controls (UP/DOWN)
+void scrollUp()
+{
+    manualScrolling = true;
+    scrollY -= 12;
+    if (scrollY < 0)
+        scrollY = 0;
+}
+
+void scrollDown()
+{
+    manualScrolling = true;
+
+    int totalHeight = 0;
+    for (int h : cachedHeights)
+        totalHeight += h;
+
+    int visibleHeight = screen->getHeight() - (FONT_HEIGHT_SMALL * 2);
+    int maxScroll = totalHeight - visibleHeight;
+    if (maxScroll < 0)
+        maxScroll = 0;
+
+    scrollY += 12;
+    if (scrollY > maxScroll)
+        scrollY = maxScroll;
 }
 
 // Current thread state
@@ -815,22 +811,6 @@ static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &
         }
     }
     return totalWidth;
-}
-
-static void drawMessageScrollbar(OLEDDisplay *display, int visibleHeight, int totalHeight, int scrollOffset, int startY)
-{
-    if (totalHeight <= visibleHeight)
-        return; // no scrollbar needed
-
-    int scrollbarX = display->getWidth() - 2;
-    int scrollbarHeight = visibleHeight;
-    int thumbHeight = std::max(6, (scrollbarHeight * visibleHeight) / totalHeight);
-    int maxScroll = std::max(1, totalHeight - visibleHeight);
-    int thumbY = startY + (scrollbarHeight - thumbHeight) * scrollOffset / maxScroll;
-
-    for (int i = 0; i < thumbHeight; i++) {
-        display->setPixel(scrollbarX, thumbY + i);
-    }
 }
 
 void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
@@ -1702,33 +1682,6 @@ void setThreadFor(const StoredMessage &sm, const meshtastic_MeshPacket &packet)
             setThreadMode(ThreadMode::DIRECT, -1, peer);
         }
     }
-}
-
-// -------- Manual scroll controls (UP/DOWN) ----------
-void scrollUp()
-{
-    manualScrolling = true;
-    scrollY -= 12;
-    if (scrollY < 0)
-        scrollY = 0;
-}
-
-void scrollDown()
-{
-    manualScrolling = true;
-
-    int totalHeight = 0;
-    for (int h : cachedHeights)
-        totalHeight += h;
-
-    int visibleHeight = screen->getHeight() - (FONT_HEIGHT_SMALL * 2);
-    int maxScroll = totalHeight - visibleHeight;
-    if (maxScroll < 0)
-        maxScroll = 0;
-
-    scrollY += 12;
-    if (scrollY > maxScroll)
-        scrollY = maxScroll;
 }
 
 } // namespace MessageRenderer
