@@ -58,6 +58,9 @@ void resetScrollState();
 void scrollUp();
 void scrollDown();
 
+// Determines if a line is a header line
+bool isHeader(const std::string &line);
+
 // Helper to auto-select the correct thread mode from a message
 void setThreadFor(const StoredMessage &sm, const meshtastic_MeshPacket &packet);
 

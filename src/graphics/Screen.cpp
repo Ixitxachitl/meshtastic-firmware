@@ -1554,7 +1554,21 @@ int Screen::handleInputEvent(const InputEvent *event)
         menuHandler::handleMenuSwitch(dispdev);
         return 0;
     }
+    // UP/DOWN in message screen scrolls through message threads
+    if (ui->getUiState()->currentFrame == framesetInfo.positions.textMessage) {
 
+        if (event->inputEvent == INPUT_BROKER_UP) {
+            graphics::MessageRenderer::scrollUp();
+            setFastFramerate(); // match existing behavior
+            return 0;
+        }
+
+        if (event->inputEvent == INPUT_BROKER_DOWN) {
+            graphics::MessageRenderer::scrollDown();
+            setFastFramerate();
+            return 0;
+        }
+    }
     // Use left or right input from a keyboard to move between frames,
     // so long as a mesh module isn't using these events for some other purpose
     if (showingNormalScreen) {
@@ -1568,19 +1582,7 @@ int Screen::handleInputEvent(const InputEvent *event)
 
         // If no modules are using the input, move between frames
         if (!inputIntercepted) {
-            // Handle UP/DOWN for scrolling in messages screen (trackball, touchscreen, keyboard)
-            if (event->inputEvent == INPUT_BROKER_UP || event->inputEvent == INPUT_BROKER_DOWN) {
-                if (graphics::isMessagesScreenActive() && !graphics::isOverlayActive()) {
-                    // When on messages screen, UP/DOWN scroll the message list
-                    if (event->inputEvent == INPUT_BROKER_UP) {
-                        graphics::MessageRenderer::scrollUp();
-                    } else {
-                        graphics::MessageRenderer::scrollDown();
-                    }
-                    return 0; // Consume the event
-                }
-                // Not on messages screen - UP/DOWN do nothing (fall through)
-            } else if (event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_ALT_PRESS) {
+            if (event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_ALT_PRESS) {
                 showFrame(FrameDirection::PREVIOUS);
             } else if (event->inputEvent == INPUT_BROKER_RIGHT || event->inputEvent == INPUT_BROKER_USER_PRESS) {
                 showFrame(FrameDirection::NEXT);

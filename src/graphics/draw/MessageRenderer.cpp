@@ -6,7 +6,6 @@
 #include "MessageStore.h"
 #include "NodeDB.h"
 #include "UIRenderer.h"
-#include "buzz/buzz.h"
 #include "configuration.h"
 #include "gps/RTC.h"
 #include "graphics/Screen.h"
@@ -384,6 +383,22 @@ int getStringWidthWithEmotes(OLEDDisplay *display, const std::string &line, cons
     return totalWidth;
 }
 
+static void drawMessageScrollbar(OLEDDisplay *display, int visibleHeight, int totalHeight, int scrollOffset, int startY)
+{
+    if (totalHeight <= visibleHeight)
+        return; // no scrollbar needed
+
+    int scrollbarX = display->getWidth() - 2;
+    int scrollbarHeight = visibleHeight;
+    int thumbHeight = std::max(6, (scrollbarHeight * visibleHeight) / totalHeight);
+    int maxScroll = std::max(1, totalHeight - visibleHeight);
+    int thumbY = startY + (scrollbarHeight - thumbHeight) * scrollOffset / maxScroll;
+
+    for (int i = 0; i < thumbHeight; i++) {
+        display->setPixel(scrollbarX, thumbY + i);
+    }
+}
+
 void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string &line, const Emote *emotes, int emoteCount,
                           bool isMessageHeader)
 {
@@ -569,10 +584,8 @@ uint32_t scrollStartDelay = 0;
 uint32_t pauseStart = 0;
 bool waitingToReset = false;
 bool scrollStarted = false;
-static bool manualScrollActive = false; // manual override pauses auto-scroll
-static uint32_t lastManualMs = 0;
-static int lastUsableScrollHeight = 0;
-static bool didReset = false; // <-- add here
+static bool manualScrolling = false;
+static bool didReset = false;
 
 // Reset scroll state when new messages arrive
 void resetScrollState()
@@ -581,9 +594,8 @@ void resetScrollState()
     scrollStarted = false;
     waitingToReset = false;
     scrollStartDelay = millis();
-    manualScrollActive = false;
     lastTime = millis();
-
+    manualScrolling = false;
     didReset = false;
 }
 
@@ -775,11 +787,9 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     // Ensure any boot-relative timestamps are upgraded if RTC is valid
     messageStore.upgradeBootRelativeTimestamps();
 
-    bool needsInitialBottomSnap = false;
     if (!didReset) {
         resetScrollState();
         didReset = true;
-        needsInitialBottomSnap = true; // Remember we need to snap to bottom after calculating layout
     }
 
     // Clear the unread message indicator when viewing the message
@@ -1093,52 +1103,34 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     if (!scrollStarted && now - scrollStartDelay > 2000)
         scrollStarted = true;
 
-    // remember last usable height for manual scroll math
-    lastUsableScrollHeight = usableScrollHeight;
-
     // bottom alignment (one text row above bottom)
     int kBottomPadPx = FONT_HEIGHT_SMALL; // One line of spacing from bottom
     int bottomOffsetOneRow = totalHeight - usableScrollHeight + kBottomPadPx;
     if (bottomOffsetOneRow < 0)
         bottomOffsetOneRow = 0; // guard small lists
 
-    // snap to bottom pad when first entering (unless user is manually scrolling)
-    // needsInitialBottomSnap overrides scrollStarted to ensure we always start at bottom
-    if (needsInitialBottomSnap || (!manualScrollActive && !scrollStarted)) {
-        scrollY = bottomOffsetOneRow;
-    }
-
-    // Enable scrolling when content is close to fitting, not just when it overflows
-    // This ensures messages scroll away from the top UI bar even with less content
-    int scrollThreshold = usableScrollHeight - (FONT_HEIGHT_SMALL * 2); // Start scrolling 2 lines early
-    if (totalHeight > scrollThreshold) {
-        // freeze autoscroll briefly after manual input
-        if (manualScrollActive && (now - lastManualMs) < 5000) {
-            lastTime = now; // keep timebase fresh
-        } else {
-            if (manualScrollActive)
-                manualScrollActive = false;
-            if (scrollStarted) {
-                if (!waitingToReset) {
-                    // reverse (bottom->top) sweep
-                    scrollY -= delta * scrollSpeed;
-                    if (scrollY <= 0) {
-                        scrollY = 0;
-                        waitingToReset = true;
-                        pauseStart = lastTime;
-                    }
-                } else if (lastTime - pauseStart > 3000) {
-                    // jump back near bottom and restart
-                    scrollY = bottomOffsetOneRow;
-                    waitingToReset = false;
-                    scrollStarted = false;
-                    scrollStartDelay = lastTime;
+    // Auto-scroll logic when not manually scrolling
+    if (!manualScrolling && totalHeight > usableScrollHeight) {
+        if (scrollStarted) {
+            if (!waitingToReset) {
+                scrollY -= delta * scrollSpeed;
+                if (scrollY <= 0) {
+                    scrollY = 0;
+                    waitingToReset = true;
+                    pauseStart = lastTime;
                 }
+            } else if (lastTime - pauseStart > 3000) {
+                scrollY = bottomOffsetOneRow;
+                waitingToReset = false;
+                scrollStarted = false;
+                scrollStartDelay = lastTime;
             }
+        } else {
+            // Initial position: snap to bottom (newest messages visible)
+            scrollY = bottomOffsetOneRow;
         }
-    } else {
-        // content fits: bottom-align with one-row pad
-        scrollY = bottomOffsetOneRow;
+    } else if (!manualScrolling) {
+        scrollY = 0;
     }
 #else
     // E-Ink: disable autoscroll but anchor to bottom
@@ -1152,8 +1144,8 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     lastTime = millis(); // keep timebase sane
 #endif
 
-    int scrollOffset = static_cast<int>(scrollY);
-    int yOffset = -scrollOffset + getTextPositions(display)[1];
+    int finalScroll = (int)scrollY;
+    int yOffset = -finalScroll + getTextPositions(display)[1];
 
     // Render visible lines (clamp counts defensively)
     const size_t N =
@@ -1212,9 +1204,9 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 static char fullHeaderBuf[128];
                 snprintf(fullHeaderBuf, sizeof(fullHeaderBuf), "%s %s", tbuf, cachedLines[i].c_str());
 
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
                 // Find tallest emoji in header for underline positioning
                 int tallestInHeader = FONT_HEIGHT_SMALL;
-#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
                 // Check if header contains any emoji (avoid normalizing fullHeader string)
                 for (int e = 0; e < numEmotes; ++e) {
                     const std::string &labelNorm = cachedNormalizedEmoteLabels[e];
@@ -1269,7 +1261,11 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             }
         }
     }
+    int totalContentHeight = totalHeight;
+    int visibleHeight = usableHeight;
 
+    // Draw scrollbar
+    drawMessageScrollbar(display, visibleHeight, totalContentHeight, finalScroll, getTextPositions(display)[1]);
     graphics::drawCommonHeader(display, x, y, titleStr);
     graphics::drawCommonFooter(display, x, y);
 }
@@ -1657,51 +1653,30 @@ void setThreadFor(const StoredMessage &sm, const meshtastic_MeshPacket &packet)
 }
 
 // -------- Manual scroll controls (UP/DOWN) ----------
-static int computeMaxScroll()
-{
-    int totalHeight = 0;
-    for (int h : cachedHeights)
-        totalHeight += h;
-    int usableScrollHeight = (lastUsableScrollHeight > 0) ? lastUsableScrollHeight : (FONT_HEIGHT_SMALL * 6);
-    if (cachedHeights.empty())
-        return 0;
-    // bottom-aligned offset so newest sits one row above bottom
-    int kBottomPadPx = FONT_HEIGHT_SMALL;
-    int bottomOffsetOneRow = totalHeight - usableScrollHeight + kBottomPadPx;
-    return std::max(0, bottomOffsetOneRow);
-}
-
 void scrollUp()
 {
-    manualScrollActive = true;
-    lastManualMs = millis();
-    waitingToReset = false;
-    pauseStart = 0;
-    scrollStarted = true;
-    scrollY -= FONT_HEIGHT_SMALL;
+    manualScrolling = true;
+    scrollY -= 12;
     if (scrollY < 0)
         scrollY = 0;
-    lastTime = millis();
-    powerFSM.trigger(EVENT_PRESS);
-    screen->forceDisplay(true);
-    playChirp();
 }
 
 void scrollDown()
 {
-    manualScrollActive = true;
-    lastManualMs = millis();
-    waitingToReset = false;
-    pauseStart = 0;
-    scrollStarted = true;
-    scrollY += FONT_HEIGHT_SMALL;
-    int maxScroll = computeMaxScroll();
+    manualScrolling = true;
+
+    int totalHeight = 0;
+    for (int h : cachedHeights)
+        totalHeight += h;
+
+    int visibleHeight = screen->getHeight() - (FONT_HEIGHT_SMALL * 2);
+    int maxScroll = totalHeight - visibleHeight;
+    if (maxScroll < 0)
+        maxScroll = 0;
+
+    scrollY += 12;
     if (scrollY > maxScroll)
         scrollY = maxScroll;
-    lastTime = millis();
-    powerFSM.trigger(EVENT_PRESS);
-    screen->forceDisplay(true);
-    playChirp();
 }
 
 } // namespace MessageRenderer

@@ -219,8 +219,11 @@ class Screen : public concurrency::OSThread
 
   public:
     OLEDDisplay *getDisplayDevice() { return dispdev; }
-    explicit Screen(ScanI2C::DeviceAddress, meshtastic_Config_DisplayConfig_OledType, OLEDDISPLAY_GEOMETRY);
+    // Screen dimension accessors
+    inline int getHeight() const { return displayHeight; }
+    inline int getWidth() const { return displayWidth; }
     size_t frameCount = 0; // Total number of active frames
+    explicit Screen(ScanI2C::DeviceAddress, meshtastic_Config_DisplayConfig_OledType, OLEDDISPLAY_GEOMETRY);
     ~Screen();
 
     // Which frame we want to be displayed, after we regen the frameset by calling setFrames
