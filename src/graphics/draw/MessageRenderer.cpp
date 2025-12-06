@@ -1678,7 +1678,8 @@ void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const mesht
 
     // Reset scroll for a clean start
     resetScrollState();
-    // Note: markDirty() is called by setThreadFor if thread changes
+    // Always mark dirty when a new message arrives so it appears immediately
+    markDirty();
 }
 
 void setThreadFor(const StoredMessage &sm, const meshtastic_MeshPacket &packet)
