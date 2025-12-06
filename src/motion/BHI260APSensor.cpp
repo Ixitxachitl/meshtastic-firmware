@@ -1,5 +1,6 @@
 #include "BHI260APSensor.h"
 #include "NodeDB.h"
+#include "input/InputBroker.h"
 #include <Wire.h>
 
 // SensorLib is optional - enables RAM-based firmware upload for BHI260AP
@@ -355,6 +356,37 @@ static void accel_callback(uint8_t sensor_id, uint8_t *data_ptr, uint32_t len, u
     g_bhi260ap_instance->accelY = data.y * scale;
     g_bhi260ap_instance->accelZ = data.z * scale;
     g_bhi260ap_instance->hasAccelData = true;
+
+    // Tilt-to-scroll detection using Y-axis (left/right tilt when upright)
+    // When upright: X≈1.0 (gravity), Y≈0.0, Z≈0.0 at rest
+    // Tilt left: Y increases positive (scroll UP)
+    // Tilt right: Y goes negative (scroll DOWN)
+    uint32_t now = millis();
+
+    if (now - g_bhi260ap_instance->lastTiltScrollTime > 800) { // 800ms debounce
+        float yAccel = data.y * scale;
+
+        // Higher threshold to reduce sensitivity (±1.0 m/s²)
+        if (yAccel > 1.0) {
+            LOG_INFO("TILT LEFT Y=%.2f -> scroll UP", yAccel);
+            if (inputBroker) {
+                InputEvent e;
+                e.inputEvent = INPUT_BROKER_UP;
+                e.source = "tilt";
+                inputBroker->queueInputEvent(&e);
+            }
+            g_bhi260ap_instance->lastTiltScrollTime = now;
+        } else if (yAccel < -1.0) {
+            LOG_INFO("TILT RIGHT Y=%.2f -> scroll DOWN", yAccel);
+            if (inputBroker) {
+                InputEvent e;
+                e.inputEvent = INPUT_BROKER_DOWN;
+                e.source = "tilt";
+                inputBroker->queueInputEvent(&e);
+            }
+            g_bhi260ap_instance->lastTiltScrollTime = now;
+        }
+    }
 }
 
 static void gyro_callback(uint8_t sensor_id, uint8_t *data_ptr, uint32_t len, uint64_t *timestamp)
@@ -494,9 +526,9 @@ int32_t BHI260APSensor::runOnce()
     readStepCounterFromFifo();
 #endif
 
-    // Log sensor data every 10 seconds
+    // Log sensor data every 5 seconds (faster updates for display)
     uint32_t now = millis();
-    if (lastLogTime == 0 || (now - lastLogTime) >= 10000) {
+    if (lastLogTime == 0 || (now - lastLogTime) >= 5000) {
 #ifdef HAS_BHI260AP_SENSORLIB
         if (hasAccelData && hasGyroData) {
             LOG_INFO("BHI260AP: Accel[%.2f,%.2f,%.2f] Gyro[%.2f,%.2f,%.2f] Steps=%u", accelX, accelY, accelZ, gyroX, gyroY, gyroZ,
@@ -514,5 +546,28 @@ int32_t BHI260APSensor::runOnce()
 
     return MOTION_SENSOR_CHECK_INTERVAL_MS;
 }
+
+#ifdef HAS_BHI260AP_SENSORLIB
+// Getter function for UI renderer to access IMU data
+extern "C" bool GetBHI260APDataForRenderer(float *accelX, float *accelY, float *accelZ, float *gyroX, float *gyroY, float *gyroZ)
+{
+    if (!g_bhi260ap_instance) {
+        return false;
+    }
+
+    if (!g_bhi260ap_instance->hasAccelData || !g_bhi260ap_instance->hasGyroData) {
+        return false;
+    }
+
+    *accelX = g_bhi260ap_instance->accelX;
+    *accelY = g_bhi260ap_instance->accelY;
+    *accelZ = g_bhi260ap_instance->accelZ;
+    *gyroX = g_bhi260ap_instance->gyroX;
+    *gyroY = g_bhi260ap_instance->gyroY;
+    *gyroZ = g_bhi260ap_instance->gyroZ;
+
+    return true;
+}
+#endif
 
 #endif

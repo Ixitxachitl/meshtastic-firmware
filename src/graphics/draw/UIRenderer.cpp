@@ -26,6 +26,9 @@ extern "C" Quat GetAttitudeForRenderer();
 extern "C" uint32_t GetStepCountForRenderer();
 extern "C" bool HasStepCounterForRenderer();
 #endif
+#ifdef HAS_BHI260AP_SENSORLIB
+extern "C" bool GetBHI260APDataForRenderer(float *accelX, float *accelY, float *accelZ, float *gyroX, float *gyroY, float *gyroZ);
+#endif
 #if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
 static uint32_t lastSwitchTime = 0;
 #endif
@@ -1371,6 +1374,21 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
                 int16_t textWidth = display->getStringWidth(stepText);
                 drawFootprintIcon(display, stepX - textWidth - 15, stepY + 2);
                 display->drawString(stepX, stepY, stepText);
+
+#ifdef HAS_BHI260AP_SENSORLIB
+                // Show IMU data under step counter for t-echo-plus
+                float ax, ay, az, gx, gy, gz;
+                if (GetBHI260APDataForRenderer(&ax, &ay, &az, &gx, &gy, &gz)) {
+                    char imuText[32];
+                    // Show accel on one line
+                    snprintf(imuText, sizeof(imuText), "A:%.1f,%.1f,%.1f", ax, ay, az);
+                    display->drawString(stepX, stepY + 14, imuText);
+                    // Show gyro on next line
+                    snprintf(imuText, sizeof(imuText), "G:%.1f,%.1f,%.1f", gx, gy, gz);
+                    display->drawString(stepX, stepY + 28, imuText);
+                }
+#endif
+
                 display->setTextAlignment(TEXT_ALIGN_LEFT);
             }
 #endif

@@ -24,6 +24,8 @@ class BHI260APSensor : public MotionSensor
     float gyroX = 0, gyroY = 0, gyroZ = 0;
     bool hasAccelData = false;
     bool hasGyroData = false;
+    // Tilt-to-scroll state
+    uint32_t lastTiltScrollTime = 0;
 #endif
 
   private:

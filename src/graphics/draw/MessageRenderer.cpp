@@ -1164,12 +1164,26 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         scrollY = 0;
     }
 #else
-    // E-Ink: disable autoscroll but anchor to bottom
+    // E-Ink: disable autoscroll but allow manual scrolling
     int kBottomPadPx = FONT_HEIGHT_SMALL; // One line of spacing from bottom
     int bottomOffsetOneRow = totalHeight - usableScrollHeight + kBottomPadPx;
     if (bottomOffsetOneRow < 0)
         bottomOffsetOneRow = 0; // guard small lists
-    scrollY = bottomOffsetOneRow;
+
+    // Only reset to bottom if not manually scrolling
+    if (!manualScrolling) {
+        scrollY = bottomOffsetOneRow;
+    }
+
+    // Clamp scroll position
+    int maxScroll = totalHeight - usableScrollHeight;
+    if (maxScroll < 0)
+        maxScroll = 0;
+    if (scrollY < 0)
+        scrollY = 0;
+    if (scrollY > maxScroll)
+        scrollY = maxScroll;
+
     waitingToReset = false;
     scrollStarted = false;
     lastTime = millis();
@@ -1686,4 +1700,5 @@ void setThreadFor(const StoredMessage &sm, const meshtastic_MeshPacket &packet)
 
 } // namespace MessageRenderer
 } // namespace graphics
+
 #endif
