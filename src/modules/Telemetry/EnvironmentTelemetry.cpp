@@ -110,9 +110,9 @@ static void drawIAQRuler(OLEDDisplay *dpy, int x, int y, int w, int iaqValue, co
 }
 
 // keep last N samples per source
-// Use larger buffer to accommodate various screen widths, actual display width determined at runtime
-static constexpr size_t kHistLen = 120; // max samples to keep
-static constexpr int kSparkH = 12;      // pixels tall for standard displays
+// Reduced buffer size to minimize heap usage - 60 samples is sufficient for sparklines
+static constexpr size_t kHistLen = 60; // max samples to keep (reduced from 120)
+static constexpr int kSparkH = 12;     // pixels tall for standard displays
 
 // Large display sparkline settings (SenseCAP Indicator 480x480, T-Deck 320x240)
 static constexpr int kLargeSparkH = 80;      // Double height graphs for large displays
@@ -141,14 +141,29 @@ template <size_t N> struct RingF {
 template <size_t N> struct NodeHist {
     RingF<N> temp, hum, press, gas, voltage, current, lux, whiteLux, weight, distance, radiation;
     RingF<N> windSpeed, windDirection, dewPoint, soilTemp, soilMoisture;
+    uint32_t lastUpdate = 0; // Track when this node was last updated (millis)
 };
 
 // One record per node; no per-sample heap churn
 static std::unordered_map<uint32_t, NodeHist<kHistLen>> s_hist;
-// Cap on maximum nodes to prevent unbounded growth
-static constexpr size_t kMaxHistNodes = 64;
-// (Optional) pre-size if you have a typical node count:
-// static bool s_histReserved = (s_hist.reserve(64), true);
+// Cap on maximum nodes and evict stale ones
+static constexpr size_t kMaxHistNodes = 8;             // Reduced from 64 - only track recent nodes
+static constexpr uint32_t kNodeStaleTimeout = 3600000; // 1 hour - evict nodes not updated in this time
+
+// Clean up stale nodes that haven't been updated recently
+static void cleanupStaleNodes()
+{
+    uint32_t now = millis();
+    for (auto it = s_hist.begin(); it != s_hist.end();) {
+        if (now - it->second.lastUpdate > kNodeStaleTimeout) {
+            LOG_DEBUG("EnvironmentTelemetry: Evicting stale node 0x%08x (last update %lums ago)", it->first,
+                      now - it->second.lastUpdate);
+            it = s_hist.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
 
 // Helper: apply both offsets centrally
 // Overload for fixed-capacity ring
@@ -1330,17 +1345,32 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         // look up per-source history for sparklines (fixed-capacity rings)
         uint32_t from = packetToShow->from;
 
-        // Enforce maximum node limit to prevent unbounded memory growth
+        // Clean up stale nodes first, then enforce maximum node limit
+        static uint32_t lastCleanup = 0;
+        uint32_t now = millis();
+        if (now - lastCleanup > 60000) { // Cleanup every minute
+            cleanupStaleNodes();
+            lastCleanup = now;
+        }
+
+        // Enforce maximum node limit - evict stalest node if full
         if (s_hist.size() >= kMaxHistNodes && s_hist.find(from) == s_hist.end()) {
-            // Map is full and this is a new node - remove oldest entry (arbitrary eviction)
-            auto it = s_hist.begin();
-            if (it != s_hist.end()) {
-                LOG_DEBUG("EnvironmentTelemetry: History map full (%zu nodes), evicting node 0x%08x", s_hist.size(), it->first);
-                s_hist.erase(it);
+            // Find and remove the stalest node (oldest lastUpdate)
+            auto stalest = s_hist.begin();
+            for (auto it = s_hist.begin(); it != s_hist.end(); ++it) {
+                if (it->second.lastUpdate < stalest->second.lastUpdate) {
+                    stalest = it;
+                }
+            }
+            if (stalest != s_hist.end()) {
+                LOG_DEBUG("EnvironmentTelemetry: History map full (%zu nodes), evicting stalest node 0x%08x", s_hist.size(),
+                          stalest->first);
+                s_hist.erase(stalest);
             }
         }
 
         auto &nh = s_hist[from]; // default-constructs empty rings for new nodes
+        nh.lastUpdate = now;     // Update timestamp whenever we access this node's history
 
         // Calculate sparkline width dynamically to use available space
         // Find maximum label width to calculate remaining space
@@ -1627,15 +1657,27 @@ bool EnvironmentTelemetryModule::handleReceivedProtobuf(const meshtastic_MeshPac
         // record per-source history for tiny graphs
         const auto &em = t->variant.environment_metrics;
 
-        // Enforce maximum node limit to prevent unbounded memory growth
+        // Clean up stale nodes and enforce maximum node limit
         if (s_hist.size() >= kMaxHistNodes && s_hist.find(from) == s_hist.end()) {
-            auto it2 = s_hist.begin();
-            if (it2 != s_hist.end()) {
-                s_hist.erase(it2);
+            // Try to evict stale nodes first
+            cleanupStaleNodes();
+
+            // If still full, evict stalest node
+            if (s_hist.size() >= kMaxHistNodes) {
+                auto stalest = s_hist.begin();
+                for (auto it = s_hist.begin(); it != s_hist.end(); ++it) {
+                    if (it->second.lastUpdate < stalest->second.lastUpdate) {
+                        stalest = it;
+                    }
+                }
+                if (stalest != s_hist.end()) {
+                    s_hist.erase(stalest);
+                }
             }
         }
 
         auto &nh2 = s_hist[from];
+        nh2.lastUpdate = millis(); // Update timestamp
         if (em.has_temperature)
             nh2.temp.push(em.temperature);
         if (em.has_relative_humidity)
@@ -1790,6 +1832,7 @@ bool EnvironmentTelemetryModule::sendTelemetry(NodeNum dest, bool phoneOnly)
         lastBySource[self] = packetPool.allocCopy(*p);
         const auto &em = m.variant.environment_metrics;
         auto &selfHist = s_hist[self];
+        selfHist.lastUpdate = millis(); // Update timestamp for own node
         if (em.has_temperature)
             selfHist.temp.push(em.temperature);
         if (em.has_relative_humidity)
