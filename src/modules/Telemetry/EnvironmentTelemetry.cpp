@@ -139,7 +139,8 @@ template <size_t N> struct RingF {
 };
 
 template <size_t N> struct NodeHist {
-    RingF<N> temp, hum, press;
+    RingF<N> temp, hum, press, gas, voltage, current, lux, whiteLux, weight, distance, radiation;
+    RingF<N> windSpeed, windDirection, dewPoint, soilTemp, soilMoisture;
 };
 
 // One record per node; no per-sample heap churn
@@ -779,7 +780,8 @@ int32_t EnvironmentTelemetryModule::runOnce()
         }
 
         // Update screen data independently of mesh/phone broadcasts for immediate display
-        if (moduleConfig.telemetry.environment_screen_enabled &&
+        // Note: Display updates happen when telemetry is sent/received, not on a timer
+        if (false && moduleConfig.telemetry.environment_screen_enabled &&
             ((lastScreenUpdate == 0) || !Throttle::isWithinTimespanMs(lastScreenUpdate, screenUpdateIntervalMs))) {
             LOG_DEBUG("Updating screen telemetry data (lastScreenUpdate=%u)", lastScreenUpdate);
             // Read current sensor data and update display packet
@@ -895,6 +897,10 @@ static struct TelemetryDisplayCache {
     }
 } s_displayCache;
 
+// Scroll state tracking
+static int s_scrollY = 0;
+static bool s_manualScrolling = false;
+
 std::vector<uint32_t> EnvironmentTelemetryModule::getSourcesWithTelemetry() const
 {
     std::vector<uint32_t> out;
@@ -908,6 +914,26 @@ std::vector<uint32_t> EnvironmentTelemetryModule::getSourcesWithTelemetry() cons
 void EnvironmentTelemetryModule::invalidateDisplayCache()
 {
     s_displayCache.markDirty();
+}
+
+void EnvironmentTelemetryModule::scrollUp()
+{
+    s_manualScrolling = true;
+    s_scrollY -= 12; // Scroll by one row (similar to MessageRenderer)
+    if (s_scrollY < 0)
+        s_scrollY = 0;
+}
+
+void EnvironmentTelemetryModule::scrollDown()
+{
+    s_manualScrolling = true;
+    s_scrollY += 12; // Scroll by one row
+}
+
+void EnvironmentTelemetryModule::resetScroll()
+{
+    s_scrollY = 0;
+    s_manualScrolling = false;
 }
 
 void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
@@ -996,47 +1022,57 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
 
         // Temperature
         if (m.has_temperature) {
-            s_displayCache.tempStr = "Tmp: ";
-            s_displayCache.tempStr += (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL)
-                                          ? String(UnitConversions::CelsiusToFahrenheit(m.temperature), 1) + "°F"
-                                          : String(m.temperature, 1) + "°C";
+            char buf[32];
+            if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
+                snprintf(buf, sizeof(buf), "Tmp: %.1f°F", UnitConversions::CelsiusToFahrenheit(m.temperature));
+            } else {
+                snprintf(buf, sizeof(buf), "Tmp: %.1f°C", m.temperature);
+            }
+            s_displayCache.tempStr = buf;
         } else {
             s_displayCache.tempStr = "";
         }
 
         // Humidity
         if (m.has_relative_humidity) {
-            s_displayCache.humStr = "Hum: " + String(m.relative_humidity, 0) + "%";
+            char buf[32];
+            snprintf(buf, sizeof(buf), "Hum: %.0f%%", m.relative_humidity);
+            s_displayCache.humStr = buf;
         } else {
             s_displayCache.humStr = "";
         }
 
         // Pressure
         if (m.barometric_pressure != 0) {
+            char buf[32];
             if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
-                s_displayCache.pressStr =
-                    "Prss: " + String(UnitConversions::HectoPascalToInchesOfMercury(m.barometric_pressure), 2) + " inHg";
+                snprintf(buf, sizeof(buf), "Prss: %.2f inHg",
+                         UnitConversions::HectoPascalToInchesOfMercury(m.barometric_pressure));
             } else {
-                s_displayCache.pressStr = "Prss: " + String(m.barometric_pressure, 0) + " hPa";
+                snprintf(buf, sizeof(buf), "Prss: %.0f hPa", m.barometric_pressure);
             }
+            s_displayCache.pressStr = buf;
         } else {
             s_displayCache.pressStr = "";
         }
 
         // Build entries vector for other metrics
         s_displayCache.entries.clear();
+        s_displayCache.entries.reserve(15); // Pre-allocate to prevent reallocation during push_back
 
 #if !defined(M5STACK_UNITC6L)
         // Dew point
         if (m.has_temperature && m.has_relative_humidity && m.relative_humidity > 0.0f) {
             const float dpC = dewPointC(m.temperature, m.relative_humidity);
             if (!isnan(dpC)) {
+                char buf[32];
                 if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
                     const float dpF = dpC * 9.0f / 5.0f + 32.0f;
-                    s_displayCache.entries.push_back("Dew: " + String(dpF, 1) + "°F");
+                    snprintf(buf, sizeof(buf), "Dew: %.1f°F", dpF);
                 } else {
-                    s_displayCache.entries.push_back("Dew: " + String(dpC, 1) + "°C");
+                    snprintf(buf, sizeof(buf), "Dew: %.1f°C", dpC);
                 }
+                s_displayCache.entries.push_back(buf);
             }
         }
 
@@ -1045,51 +1081,64 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         constexpr float kMaxGasKOhm = 1000.0f;
         if ((m.has_gas_resistance || m.gas_resistance != 0) &&
             (m.gas_resistance >= kMinGasKOhm && m.gas_resistance <= kMaxGasKOhm)) {
-            s_displayCache.entries.push_back("Gas: " + String(m.gas_resistance, 2) + " kOhm");
+            char buf[32];
+            snprintf(buf, sizeof(buf), "Gas: %.2f kOhm", m.gas_resistance);
+            s_displayCache.entries.push_back(buf);
         }
 #endif
 
         // Other metrics
-        if (m.voltage != 0 || m.current != 0)
-            s_displayCache.entries.push_back(String(m.voltage, 1) + "V / " + String(m.current, 0) + "mA");
-        if (m.lux != 0)
-            s_displayCache.entries.push_back("Light: " + String(m.lux, 0) + "lx");
-        if (m.white_lux != 0)
-            s_displayCache.entries.push_back("White: " + String(m.white_lux, 0) + "lx");
+        if (m.voltage != 0 || m.current != 0) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%.1fV / %.0fmA", m.voltage, m.current);
+            s_displayCache.entries.push_back(buf);
+        }
+        if (m.lux != 0) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "Light: %.0flx", m.lux);
+            s_displayCache.entries.push_back(buf);
+        }
+        if (m.white_lux != 0) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "White: %.0flx", m.white_lux);
+            s_displayCache.entries.push_back(buf);
+        }
         if (m.weight != 0) {
+            char buf[32];
             if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
-                s_displayCache.entries.push_back("Weight: " + String(m.weight * 2.20462f, 1) + " lbs");
+                snprintf(buf, sizeof(buf), "Weight: %.1f lbs", m.weight * 2.20462f);
             } else {
-                s_displayCache.entries.push_back("Weight: " + String(m.weight, 0) + " kg");
+                snprintf(buf, sizeof(buf), "Weight: %.0f kg", m.weight);
             }
+            s_displayCache.entries.push_back(buf);
         }
         if (m.distance != 0) {
+            char buf[32];
             if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
-                s_displayCache.entries.push_back("Level: " + String(m.distance * 0.03937f, 2) + " in");
+                snprintf(buf, sizeof(buf), "Level: %.2f in", m.distance * 0.03937f);
             } else {
-                s_displayCache.entries.push_back("Level: " + String(m.distance, 0) + " mm");
+                snprintf(buf, sizeof(buf), "Level: %.0f mm", m.distance);
             }
+            s_displayCache.entries.push_back(buf);
         }
-        if (m.radiation != 0)
-            s_displayCache.entries.push_back("Rad: " + String(m.radiation, 2) + " µR/h");
+        if (m.radiation != 0) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "Rad: %.2f µR/h", m.radiation);
+            s_displayCache.entries.push_back(buf);
+        }
 
         // IAQ string
         if (m.iaq != 0) {
-            s_displayCache.iaqStr = "IAQ: " + String(m.iaq);
-            if (m.iaq <= 25)
-                s_displayCache.iaqStr += " (Excellent)";
-            else if (m.iaq <= 50)
-                s_displayCache.iaqStr += " (Good)";
-            else if (m.iaq <= 100)
-                s_displayCache.iaqStr += " (Moderate)";
-            else if (m.iaq <= 150)
-                s_displayCache.iaqStr += " (Poor)";
-            else if (m.iaq <= 200)
-                s_displayCache.iaqStr += " (Unhealthy)";
-            else if (m.iaq <= 300)
-                s_displayCache.iaqStr += " (Very Unhealthy)";
-            else
-                s_displayCache.iaqStr += " (Hazardous)";
+            char buf[64];
+            const char *rating = (m.iaq <= 25)    ? " (Excellent)"
+                                 : (m.iaq <= 50)  ? " (Good)"
+                                 : (m.iaq <= 100) ? " (Moderate)"
+                                 : (m.iaq <= 150) ? " (Poor)"
+                                 : (m.iaq <= 200) ? " (Unhealthy)"
+                                 : (m.iaq <= 300) ? " (Very Unhealthy)"
+                                                  : " (Hazardous)";
+            snprintf(buf, sizeof(buf), "IAQ: %d%s", m.iaq, rating);
+            s_displayCache.iaqStr = buf;
         } else {
             s_displayCache.iaqStr = "";
         }
@@ -1098,13 +1147,27 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         s_displayCache.leftStr = String(getSenderLongName(*packetToShow));
     }
 
-    // === Build timestamp string (updates every frame) ===
+    // === Build timestamp string (cached, only updates when time changes) ===
+    static uint32_t lastAgoSecs = UINT32_MAX;
+    static String cachedDisplayStr;
     uint32_t agoSecs = service->GetTimeSinceMeshPacket(packetToShow);
-    String agoStr = (agoSecs > 864000) ? "?"
-                    : (agoSecs > 3600) ? String(agoSecs / 3600) + "h"
-                    : (agoSecs > 60)   ? String(agoSecs / 60) + "m"
-                                       : String(agoSecs) + "s";
-    String displayStr = s_displayCache.leftStr + " (" + agoStr + ")";
+
+    // Only rebuild timestamp string when seconds change
+    if (agoSecs != lastAgoSecs || s_displayCache.dirty) {
+        lastAgoSecs = agoSecs;
+        char agoBuf[16];
+        if (agoSecs > 864000) {
+            snprintf(agoBuf, sizeof(agoBuf), "?");
+        } else if (agoSecs > 3600) {
+            snprintf(agoBuf, sizeof(agoBuf), "%luh", (unsigned long)(agoSecs / 3600));
+        } else if (agoSecs > 60) {
+            snprintf(agoBuf, sizeof(agoBuf), "%lum", (unsigned long)(agoSecs / 60));
+        } else {
+            snprintf(agoBuf, sizeof(agoBuf), "%lus", (unsigned long)agoSecs);
+        }
+        cachedDisplayStr = s_displayCache.leftStr + " (" + agoBuf + ")";
+    }
+    String displayStr = cachedDisplayStr;
 
     // Clear stale IAQ data if reading is too old (> 1 hour)
     // Note: We don't check m.iaq == 0 here because that could mean:
@@ -1171,64 +1234,68 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
 
         // Temperature graph with full unabbreviated label above
         if (m.has_temperature && nh.temp.len >= 2) {
-            String tempLabel = "Temperature: ";
+            char buf[64];
             if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
-                tempLabel += String(UnitConversions::CelsiusToFahrenheit(m.temperature), 1) + "°F";
+                snprintf(buf, sizeof(buf), "Temperature: %.1f°F", UnitConversions::CelsiusToFahrenheit(m.temperature));
             } else {
-                tempLabel += String(m.temperature, 1) + "°C";
+                snprintf(buf, sizeof(buf), "Temperature: %.1f°C", m.temperature);
             }
-            display->drawString(x, currentY, tempLabel);
+            display->drawString(x, currentY, buf);
             currentY += labelRowHeight;
             bool isImperial = (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL);
             String tempUnit = isImperial ? "°F" : "°C";
             drawLargeSparkBoxed(display, x, currentY, graphW, graphH, nh.temp, tempUnit, isImperial);
             currentY += graphH + 4;
         } else if (m.has_temperature) {
-            String tempLabel = "Temperature: ";
+            char buf[64];
             if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
-                tempLabel += String(UnitConversions::CelsiusToFahrenheit(m.temperature), 1) + "°F";
+                snprintf(buf, sizeof(buf), "Temperature: %.1f°F", UnitConversions::CelsiusToFahrenheit(m.temperature));
             } else {
-                tempLabel += String(m.temperature, 1) + "°C";
+                snprintf(buf, sizeof(buf), "Temperature: %.1f°C", m.temperature);
             }
-            display->drawString(x, currentY, tempLabel);
+            display->drawString(x, currentY, buf);
             currentY += labelRowHeight;
         }
 
         // Humidity graph with full unabbreviated label above
         if (m.has_relative_humidity && nh.hum.len >= 2) {
-            String humLabel = "Humidity: " + String(m.relative_humidity, 0) + "%";
-            display->drawString(x, currentY, humLabel);
+            char buf[64];
+            snprintf(buf, sizeof(buf), "Humidity: %.0f%%", m.relative_humidity);
+            display->drawString(x, currentY, buf);
             currentY += labelRowHeight;
             drawLargeSparkBoxed(display, x, currentY, graphW, graphH, nh.hum, "%");
             currentY += graphH + 4;
         } else if (m.has_relative_humidity) {
-            String humLabel = "Humidity: " + String(m.relative_humidity, 0) + "%";
-            display->drawString(x, currentY, humLabel);
+            char buf[64];
+            snprintf(buf, sizeof(buf), "Humidity: %.0f%%", m.relative_humidity);
+            display->drawString(x, currentY, buf);
             currentY += labelRowHeight;
         }
 
         // Pressure graph with full unabbreviated label above
         if (m.barometric_pressure != 0 && nh.press.len >= 2) {
-            String pressLabel = "Pressure: ";
+            char buf[64];
             if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
-                pressLabel += String(UnitConversions::HectoPascalToInchesOfMercury(m.barometric_pressure), 2) + " inHg";
+                snprintf(buf, sizeof(buf), "Pressure: %.2f inHg",
+                         UnitConversions::HectoPascalToInchesOfMercury(m.barometric_pressure));
             } else {
-                pressLabel += String(m.barometric_pressure, 0) + " hPa";
+                snprintf(buf, sizeof(buf), "Pressure: %.0f hPa", m.barometric_pressure);
             }
-            display->drawString(x, currentY, pressLabel);
+            display->drawString(x, currentY, buf);
             currentY += labelRowHeight;
             bool isPressImperial = (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL);
             String pressUnit = isPressImperial ? "inHg" : "hPa";
             drawLargeSparkBoxed(display, x, currentY, graphW, graphH, nh.press, pressUnit, false, isPressImperial);
             currentY += graphH + 4;
         } else if (m.barometric_pressure != 0) {
-            String pressLabel = "Pressure: ";
+            char buf[64];
             if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
-                pressLabel += String(UnitConversions::HectoPascalToInchesOfMercury(m.barometric_pressure), 2) + " inHg";
+                snprintf(buf, sizeof(buf), "Pressure: %.2f inHg",
+                         UnitConversions::HectoPascalToInchesOfMercury(m.barometric_pressure));
             } else {
-                pressLabel += String(m.barometric_pressure, 0) + " hPa";
+                snprintf(buf, sizeof(buf), "Pressure: %.0f hPa", m.barometric_pressure);
             }
-            display->drawString(x, currentY, pressLabel);
+            display->drawString(x, currentY, buf);
             currentY += labelRowHeight;
         }
 
@@ -1247,10 +1314,12 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
             }
         }
     } else if (graphics::isHighResolution) {
-        // === STANDARD HIGH-RES LAYOUT (Original compact with inline graphs) ===
-        // Show sender/timestamp on first row
-        graphics::MessageRenderer::drawStringWithEmotes(display, x, currentY, displayStr.c_str(), emotes, numEmotes);
-        currentY += rowHeight;
+        // === SCROLLABLE HIGH-RES LAYOUT with sparklines for all metrics ===
+
+        // Calculate available scroll area (starts right after header)
+        int scrollTop = currentY;
+        int scrollBottom = SCREEN_HEIGHT;
+        int visibleHeight = scrollBottom - scrollTop;
 
         // look up per-source history for sparklines (fixed-capacity rings)
         uint32_t from = packetToShow->from;
@@ -1267,8 +1336,8 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
 
         auto &nh = s_hist[from]; // default-constructs empty rings for new nodes
 
-        // Calculate sparkline width dynamically based on the width of the text labels
-        // Find the maximum width of the three main metric strings
+        // Calculate sparkline width dynamically to use available space
+        // Find maximum label width to calculate remaining space
         int maxLabelWidth = 0;
         if (s_displayCache.tempStr.length() != 0) {
             int w = display->getStringWidth(s_displayCache.tempStr);
@@ -1285,53 +1354,144 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
             if (w > maxLabelWidth)
                 maxLabelWidth = w;
         }
-
-        // Calculate sparkline width: remaining space minus padding
-        const int kPadding = 4;                                                            // space between label and graph
-        const int kSparkW = std::max(50, SCREEN_WIDTH - maxLabelWidth - kPadding - x - 2); // at least 50px
-        const int graphX = SCREEN_WIDTH - (kSparkW + 2);
-
-        // === Temperature row (Tmp) with sparkline ===
-        if (s_displayCache.tempStr.length() != 0) {
-            display->drawString(x, currentY, s_displayCache.tempStr);
-            drawMiniSparkBoxed(display, graphX, currentY, kSparkW, rowHeight, nh.temp);
-            currentY += rowHeight;
-        }
-
-        // === Humidity row (Hum) with sparkline ===
-        if (s_displayCache.humStr.length() != 0) {
-            display->drawString(x, currentY, s_displayCache.humStr);
-            drawMiniSparkBoxed(display, graphX, currentY, kSparkW, rowHeight, nh.hum);
-            currentY += rowHeight;
-        }
-
-        // === Pressure row (Prss) with sparkline ===
-        if (s_displayCache.pressStr.length() != 0) {
-            display->drawString(x, currentY, s_displayCache.pressStr);
-            drawMiniSparkBoxed(display, graphX, currentY, kSparkW, rowHeight, nh.press);
-            currentY += rowHeight;
-        }
-
-        // === Draw remaining entries in 2-column format (dew, gas, voltage, etc.) ===
-#if defined(M5STACK_UNITC6L)
         for (const auto &entry : s_displayCache.entries) {
-            display->drawString(x, currentY, entry);
-            currentY += rowHeight;
+            int w = display->getStringWidth(entry);
+            if (w > maxLabelWidth)
+                maxLabelWidth = w;
         }
-#else
-        static constexpr int kSplitShift = 14;
-        const int splitX = (SCREEN_WIDTH / 2) - kSplitShift;
 
-        for (size_t i = 0; i < s_displayCache.entries.size(); i += 2) {
-            display->drawString(x, currentY, s_displayCache.entries[i]);
+        // Sparkline width: remaining space minus padding and scrollbar
+        const int kPadding = 6; // space between label and graph
+        const int kScrollbarWidth = 3;
+        const int kSparkW = std::max(50, SCREEN_WIDTH - maxLabelWidth - kPadding - x - kScrollbarWidth - 2);
+        const int graphX = SCREEN_WIDTH - kSparkW - kScrollbarWidth - 2;
 
-            if (i + 1 < s_displayCache.entries.size()) {
-                display->drawString(splitX, currentY, s_displayCache.entries[i + 1]);
+        // Build list of all metric rows with sparklines
+        struct MetricRow {
+            String label;
+            const RingF<kHistLen> *hist;
+        };
+        std::vector<MetricRow> metricRows;
+
+        // Add sender/timestamp as first scrollable row
+        metricRows.push_back({displayStr, nullptr});
+
+        // Add all metrics that have data
+        if (s_displayCache.tempStr.length() != 0)
+            metricRows.push_back({s_displayCache.tempStr, &nh.temp});
+        if (s_displayCache.humStr.length() != 0)
+            metricRows.push_back({s_displayCache.humStr, &nh.hum});
+        if (s_displayCache.pressStr.length() != 0)
+            metricRows.push_back({s_displayCache.pressStr, &nh.press});
+
+        // Add entries from cache with corresponding history data
+        for (size_t i = 0; i < s_displayCache.entries.size(); i++) {
+            const String &entry = s_displayCache.entries[i];
+            const RingF<kHistLen> *histPtr = nullptr;
+
+            // Match entries to history data by checking metric type
+            if (entry.startsWith("Dew:"))
+                histPtr = (nh.dewPoint.len >= 2) ? &nh.dewPoint : nullptr;
+            else if (entry.startsWith("Gas:"))
+                histPtr = (nh.gas.len >= 2) ? &nh.gas : nullptr;
+            else if (entry.indexOf("V /") >= 0) {
+                // Voltage/Current line - use voltage history
+                histPtr = (nh.voltage.len >= 2) ? &nh.voltage : nullptr;
+            } else if (entry.startsWith("Light:"))
+                histPtr = (nh.lux.len >= 2) ? &nh.lux : nullptr;
+            else if (entry.startsWith("White:"))
+                histPtr = (nh.whiteLux.len >= 2) ? &nh.whiteLux : nullptr;
+            else if (entry.startsWith("Weight:"))
+                histPtr = (nh.weight.len >= 2) ? &nh.weight : nullptr;
+            else if (entry.startsWith("Level:"))
+                histPtr = (nh.distance.len >= 2) ? &nh.distance : nullptr;
+            else if (entry.startsWith("Rad:"))
+                histPtr = (nh.radiation.len >= 2) ? &nh.radiation : nullptr;
+            else if (entry.startsWith("Wind:"))
+                histPtr = (nh.windSpeed.len >= 2) ? &nh.windSpeed : nullptr;
+            else if (entry.startsWith("Dir:"))
+                histPtr = (nh.windDirection.len >= 2) ? &nh.windDirection : nullptr;
+            else if (entry.startsWith("Soil T:"))
+                histPtr = (nh.soilTemp.len >= 2) ? &nh.soilTemp : nullptr;
+            else if (entry.startsWith("Soil M:"))
+                histPtr = (nh.soilMoisture.len >= 2) ? &nh.soilMoisture : nullptr;
+
+            metricRows.push_back({entry, histPtr});
+        }
+
+        // Add IAQ as last scrollable row (no sparkline) - only if we actually have IAQ data
+        // Note: Don't rely on cached string alone since it may be cleared for stale data
+        bool hasIAQRow = false;
+        if (m.iaq != 0) {
+            // Use cached string if available, otherwise create temporary label
+            String iaqLabel = s_displayCache.iaqStr.length() > 0 ? s_displayCache.iaqStr : String("IAQ: ") + String(m.iaq);
+            metricRows.push_back({iaqLabel, nullptr});
+            hasIAQRow = true;
+        }
+
+        // Calculate total content height accounting for variable row heights
+        int totalContentHeight = 0;
+        for (size_t i = 0; i < metricRows.size(); i++) {
+            bool isIAQRow = hasIAQRow && (i == metricRows.size() - 1);
+            int rowHeightForCalc = isIAQRow ? (kRulerBaselineOfs + kNeedleH + FONT_HEIGHT_SMALL + 4) : rowHeight;
+            totalContentHeight += rowHeightForCalc;
+        }
+
+        // Clamp scroll position
+        int maxScroll = totalContentHeight - visibleHeight;
+        if (maxScroll < 0)
+            maxScroll = 0;
+        if (s_scrollY < 0)
+            s_scrollY = 0;
+        if (s_scrollY > maxScroll)
+            s_scrollY = maxScroll;
+
+        // Render visible metric rows with offset
+        // Calculate IAQ ruler actual height
+        const int iaqRulerHeight = kRulerBaselineOfs + kNeedleH + FONT_HEIGHT_SMALL + 4;
+
+        int yOffset = scrollTop - s_scrollY;
+        int cumulativeY = 0; // Track actual Y position accounting for variable row heights
+
+        for (size_t i = 0; i < metricRows.size(); i++) {
+            // Check if this is the IAQ row (last one if IAQ was added)
+            bool isIAQRow = hasIAQRow && (i == metricRows.size() - 1);
+
+            // Calculate row position and height
+            int rowY = yOffset + cumulativeY;
+            int actualRowHeight = isIAQRow ? iaqRulerHeight : rowHeight;
+
+            // Draw if any part of the row is visible (allow partial rendering)
+            if (rowY < scrollBottom && rowY + actualRowHeight > scrollTop) {
+                if (isIAQRow) {
+                    // Draw IAQ ruler instead of text+sparkline
+                    const int rulerW = SCREEN_WIDTH - 2 * x;
+                    drawIAQRuler(display, x, rowY, rulerW, m.iaq, s_displayCache.iaqStr);
+                } else {
+                    display->drawString(x, rowY, metricRows[i].label);
+
+                    // Draw sparkline if history data exists (no offset, 1px gap comes from rowHeight spacing)
+                    if (metricRows[i].hist && metricRows[i].hist->len >= 2) {
+                        drawMiniSparkBoxed(display, graphX, rowY, kSparkW, rowHeight - 1, *metricRows[i].hist);
+                    }
+                }
             }
 
-            currentY += rowHeight;
+            // Advance cumulative position by actual row height
+            cumulativeY += actualRowHeight;
         }
-#endif
+
+        // Draw scrollbar if content exceeds visible area
+        if (totalContentHeight > visibleHeight) {
+            int scrollbarX = SCREEN_WIDTH - 2;
+            int scrollbarHeight = visibleHeight;
+            int thumbHeight = std::max(6, (scrollbarHeight * visibleHeight) / totalContentHeight);
+            int thumbY = scrollTop + (scrollbarHeight - thumbHeight) * s_scrollY / maxScroll;
+
+            for (int i = 0; i < thumbHeight; i++) {
+                display->setPixel(scrollbarX, thumbY + i);
+            }
+        }
     } else {
         // Simple display for low-resolution screens (like develop branch)
         // Build all metrics into a single vector
@@ -1382,8 +1542,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
 #endif
     }
 
-    // === IAQ display ===
-    // Only show IAQ if both the cache has a string AND the current packet has IAQ data
+    // === IAQ alert logic (banner/beep for dangerous levels) ===
     if (s_displayCache.iaqStr.length() != 0 && m.iaq != 0) {
         const char *bannerMsg = nullptr;
         if (m.iaq > 200 && m.iaq <= 300)
@@ -1393,29 +1552,6 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         else if (m.iaq > 150)
             bannerMsg = "Unhealthy IAQ";
 
-        if (graphics::isHighResolution) {
-            // Advanced: Full-row gauge/ruler (high-res only)
-            const int gMargin = 2;
-            const int gX = x;
-            const int gW = SCREEN_WIDTH - gX - gMargin;
-            const int gH = rowHeight + 6;
-
-            // If there's not enough vertical room, nudge it up so it fits
-            if (currentY + gH > SCREEN_HEIGHT) {
-                currentY = SCREEN_HEIGHT - gH;
-                if (currentY < 0)
-                    currentY = 0;
-            }
-
-            drawIAQRuler(display, gX, currentY, gW, (int)m.iaq, s_displayCache.iaqStr);
-            currentY += gH;
-        } else {
-            // Simple: Just display IAQ as text (low-res screens)
-            display->drawString(x, currentY, s_displayCache.iaqStr);
-            currentY += rowHeight;
-        }
-
-        // Keep your existing IAQ alert logic (banner/beep) exactly as before:
         static uint32_t lastAlertTime = 0;
         static bool inBanner = false;
         uint32_t now = millis();
@@ -1488,6 +1624,36 @@ bool EnvironmentTelemetryModule::handleReceivedProtobuf(const meshtastic_MeshPac
             nh2.hum.push(em.relative_humidity);
         if (em.barometric_pressure)
             nh2.press.push(em.barometric_pressure);
+        if (em.has_gas_resistance || em.gas_resistance != 0)
+            nh2.gas.push(em.gas_resistance);
+        if (em.voltage != 0)
+            nh2.voltage.push(em.voltage);
+        if (em.current != 0)
+            nh2.current.push(em.current);
+        if (em.lux != 0)
+            nh2.lux.push(em.lux);
+        if (em.white_lux != 0)
+            nh2.whiteLux.push(em.white_lux);
+        if (em.weight != 0)
+            nh2.weight.push(em.weight);
+        if (em.distance != 0)
+            nh2.distance.push(em.distance);
+        if (em.radiation != 0)
+            nh2.radiation.push(em.radiation);
+        if (em.wind_speed != 0)
+            nh2.windSpeed.push(em.wind_speed);
+        if (em.wind_direction != 0)
+            nh2.windDirection.push(em.wind_direction);
+        if (em.soil_temperature != 0)
+            nh2.soilTemp.push(em.soil_temperature);
+        if (em.soil_moisture != 0)
+            nh2.soilMoisture.push(em.soil_moisture);
+        // Calculate dew point if we have temp and humidity
+        if (em.has_temperature && em.has_relative_humidity && em.relative_humidity > 0.0f) {
+            float dpC = dewPointC(em.temperature, em.relative_humidity);
+            if (!isnan(dpC))
+                nh2.dewPoint.push(dpC);
+        }
 
         // Mark display cache dirty so strings are rebuilt on next draw
         s_displayCache.markDirty();
@@ -1612,6 +1778,36 @@ bool EnvironmentTelemetryModule::sendTelemetry(NodeNum dest, bool phoneOnly)
             selfHist.hum.push(em.relative_humidity);
         if (em.barometric_pressure)
             selfHist.press.push(em.barometric_pressure);
+        if (em.has_gas_resistance || em.gas_resistance != 0)
+            selfHist.gas.push(em.gas_resistance);
+        if (em.voltage != 0)
+            selfHist.voltage.push(em.voltage);
+        if (em.current != 0)
+            selfHist.current.push(em.current);
+        if (em.lux != 0)
+            selfHist.lux.push(em.lux);
+        if (em.white_lux != 0)
+            selfHist.whiteLux.push(em.white_lux);
+        if (em.weight != 0)
+            selfHist.weight.push(em.weight);
+        if (em.distance != 0)
+            selfHist.distance.push(em.distance);
+        if (em.radiation != 0)
+            selfHist.radiation.push(em.radiation);
+        if (em.wind_speed != 0)
+            selfHist.windSpeed.push(em.wind_speed);
+        if (em.wind_direction != 0)
+            selfHist.windDirection.push(em.wind_direction);
+        if (em.soil_temperature != 0)
+            selfHist.soilTemp.push(em.soil_temperature);
+        if (em.soil_moisture != 0)
+            selfHist.soilMoisture.push(em.soil_moisture);
+        // Calculate dew point if we have temp and humidity
+        if (em.has_temperature && em.has_relative_humidity && em.relative_humidity > 0.0f) {
+            float dpC = dewPointC(em.temperature, em.relative_humidity);
+            if (!isnan(dpC))
+                selfHist.dewPoint.push(dpC);
+        }
 
         // Mark display cache dirty so screen updates with new data
         s_displayCache.markDirty();

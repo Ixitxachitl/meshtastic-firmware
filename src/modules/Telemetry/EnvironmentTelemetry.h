@@ -51,6 +51,11 @@ class EnvironmentTelemetryModule : private concurrency::OSThread,
 
     void invalidateDisplayCache(); // Force redraw with new units
 
+    // Scrolling support
+    static void scrollUp();
+    static void scrollDown();
+    static void resetScroll();
+
     MeshModule *asMesh() { return this; }
     std::vector<uint32_t> getSourcesWithTelemetry() const;
 

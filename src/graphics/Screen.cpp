@@ -1569,6 +1569,23 @@ int Screen::handleInputEvent(const InputEvent *event)
             return 0;
         }
     }
+
+    // UP/DOWN in environment telemetry screen scrolls through metrics
+    if (ui->getUiState()->currentFrame == framesetInfo.positions.environment) {
+
+        if (event->inputEvent == INPUT_BROKER_UP) {
+            EnvironmentTelemetryModule::scrollUp();
+            setFastFramerate();
+            return 0;
+        }
+
+        if (event->inputEvent == INPUT_BROKER_DOWN) {
+            EnvironmentTelemetryModule::scrollDown();
+            setFastFramerate();
+            return 0;
+        }
+    }
+
     // Use left or right input from a keyboard to move between frames,
     // so long as a mesh module isn't using these events for some other purpose
     if (showingNormalScreen) {
