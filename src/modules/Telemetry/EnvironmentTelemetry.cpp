@@ -44,7 +44,7 @@ static constexpr int kRulerBaselineOfs = 8; // baseline = y + this
 static constexpr int kLabelGap = -1;        // pixels below triangle base
 
 // IAQ "ruler": |-----▲-----| with danger ticks and filled up-triangle below baseline
-static void drawIAQRuler(OLEDDisplay *dpy, int x, int y, int w, int iaqValue, const String &label)
+static void drawIAQRuler(OLEDDisplay *dpy, int x, int y, int w, int iaqValue, const char *label)
 {
     // inner rect after padding
     int ix = x + kRulerPadLR;
@@ -870,13 +870,18 @@ bool EnvironmentTelemetryModule::wantUIFrame()
 #if HAS_SCREEN
 
 // Cache for formatted display strings to avoid recreating on every frame
+// Use fixed buffers instead of String to reduce heap fragmentation
 static struct TelemetryDisplayCache {
-    std::vector<String> entries;
-    String leftStr;
-    String tempStr;
-    String humStr;
-    String pressStr;
-    String iaqStr;
+    static constexpr size_t MAX_ENTRIES = 15;
+    static constexpr size_t BUF_SIZE = 48;
+
+    char entries[MAX_ENTRIES][BUF_SIZE];
+    size_t entryCount = 0;
+    char leftStr[BUF_SIZE];
+    char tempStr[BUF_SIZE];
+    char humStr[BUF_SIZE];
+    char pressStr[BUF_SIZE];
+    char iaqStr[BUF_SIZE];
     uint32_t lastSender = 0;
     const meshtastic_MeshPacket *lastPacket = nullptr;
     bool dirty = true;
@@ -884,16 +889,24 @@ static struct TelemetryDisplayCache {
     void markDirty() { dirty = true; }
     void clear()
     {
-        entries.clear();
-        entries.shrink_to_fit();
-        leftStr = "";
-        tempStr = "";
-        humStr = "";
-        pressStr = "";
-        iaqStr = "";
+        entryCount = 0;
+        leftStr[0] = '\0';
+        tempStr[0] = '\0';
+        humStr[0] = '\0';
+        pressStr[0] = '\0';
+        iaqStr[0] = '\0';
         lastSender = 0;
         lastPacket = nullptr;
         dirty = true;
+    }
+
+    void addEntry(const char *str)
+    {
+        if (entryCount < MAX_ENTRIES) {
+            strncpy(entries[entryCount], str, BUF_SIZE - 1);
+            entries[entryCount][BUF_SIZE - 1] = '\0';
+            entryCount++;
+        }
     }
 } s_displayCache;
 
@@ -1022,57 +1035,51 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
 
         // Temperature
         if (m.has_temperature) {
-            char buf[32];
             if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
-                snprintf(buf, sizeof(buf), "Tmp: %.1f°F", UnitConversions::CelsiusToFahrenheit(m.temperature));
+                snprintf(s_displayCache.tempStr, sizeof(s_displayCache.tempStr), "Tmp: %.1f°F",
+                         UnitConversions::CelsiusToFahrenheit(m.temperature));
             } else {
-                snprintf(buf, sizeof(buf), "Tmp: %.1f°C", m.temperature);
+                snprintf(s_displayCache.tempStr, sizeof(s_displayCache.tempStr), "Tmp: %.1f°C", m.temperature);
             }
-            s_displayCache.tempStr = buf;
         } else {
-            s_displayCache.tempStr = "";
+            s_displayCache.tempStr[0] = '\0';
         }
 
         // Humidity
         if (m.has_relative_humidity) {
-            char buf[32];
-            snprintf(buf, sizeof(buf), "Hum: %.0f%%", m.relative_humidity);
-            s_displayCache.humStr = buf;
+            snprintf(s_displayCache.humStr, sizeof(s_displayCache.humStr), "Hum: %.0f%%", m.relative_humidity);
         } else {
-            s_displayCache.humStr = "";
+            s_displayCache.humStr[0] = '\0';
         }
 
         // Pressure
         if (m.barometric_pressure != 0) {
-            char buf[32];
             if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
-                snprintf(buf, sizeof(buf), "Prss: %.2f inHg",
+                snprintf(s_displayCache.pressStr, sizeof(s_displayCache.pressStr), "Prss: %.2f inHg",
                          UnitConversions::HectoPascalToInchesOfMercury(m.barometric_pressure));
             } else {
-                snprintf(buf, sizeof(buf), "Prss: %.0f hPa", m.barometric_pressure);
+                snprintf(s_displayCache.pressStr, sizeof(s_displayCache.pressStr), "Prss: %.0f hPa", m.barometric_pressure);
             }
-            s_displayCache.pressStr = buf;
         } else {
-            s_displayCache.pressStr = "";
+            s_displayCache.pressStr[0] = '\0';
         }
 
-        // Build entries vector for other metrics
-        s_displayCache.entries.clear();
-        s_displayCache.entries.reserve(15); // Pre-allocate to prevent reallocation during push_back
+        // Build entries array for other metrics
+        s_displayCache.entryCount = 0;
 
 #if !defined(M5STACK_UNITC6L)
         // Dew point
         if (m.has_temperature && m.has_relative_humidity && m.relative_humidity > 0.0f) {
             const float dpC = dewPointC(m.temperature, m.relative_humidity);
             if (!isnan(dpC)) {
-                char buf[32];
+                char buf[48];
                 if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
                     const float dpF = dpC * 9.0f / 5.0f + 32.0f;
                     snprintf(buf, sizeof(buf), "Dew: %.1f°F", dpF);
                 } else {
                     snprintf(buf, sizeof(buf), "Dew: %.1f°C", dpC);
                 }
-                s_displayCache.entries.push_back(buf);
+                s_displayCache.addEntry(buf);
             }
         }
 
@@ -1081,55 +1088,54 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         constexpr float kMaxGasKOhm = 1000.0f;
         if ((m.has_gas_resistance || m.gas_resistance != 0) &&
             (m.gas_resistance >= kMinGasKOhm && m.gas_resistance <= kMaxGasKOhm)) {
-            char buf[32];
+            char buf[48];
             snprintf(buf, sizeof(buf), "Gas: %.2f kOhm", m.gas_resistance);
-            s_displayCache.entries.push_back(buf);
+            s_displayCache.addEntry(buf);
         }
 #endif
 
         // Other metrics
         if (m.voltage != 0 || m.current != 0) {
-            char buf[32];
+            char buf[48];
             snprintf(buf, sizeof(buf), "%.1fV / %.0fmA", m.voltage, m.current);
-            s_displayCache.entries.push_back(buf);
+            s_displayCache.addEntry(buf);
         }
         if (m.lux != 0) {
-            char buf[32];
+            char buf[48];
             snprintf(buf, sizeof(buf), "Light: %.0flx", m.lux);
-            s_displayCache.entries.push_back(buf);
+            s_displayCache.addEntry(buf);
         }
         if (m.white_lux != 0) {
-            char buf[32];
+            char buf[48];
             snprintf(buf, sizeof(buf), "White: %.0flx", m.white_lux);
-            s_displayCache.entries.push_back(buf);
+            s_displayCache.addEntry(buf);
         }
         if (m.weight != 0) {
-            char buf[32];
+            char buf[48];
             if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
                 snprintf(buf, sizeof(buf), "Weight: %.1f lbs", m.weight * 2.20462f);
             } else {
                 snprintf(buf, sizeof(buf), "Weight: %.0f kg", m.weight);
             }
-            s_displayCache.entries.push_back(buf);
+            s_displayCache.addEntry(buf);
         }
         if (m.distance != 0) {
-            char buf[32];
+            char buf[48];
             if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
                 snprintf(buf, sizeof(buf), "Level: %.2f in", m.distance * 0.03937f);
             } else {
                 snprintf(buf, sizeof(buf), "Level: %.0f mm", m.distance);
             }
-            s_displayCache.entries.push_back(buf);
+            s_displayCache.addEntry(buf);
         }
         if (m.radiation != 0) {
-            char buf[32];
+            char buf[48];
             snprintf(buf, sizeof(buf), "Rad: %.2f µR/h", m.radiation);
-            s_displayCache.entries.push_back(buf);
+            s_displayCache.addEntry(buf);
         }
 
         // IAQ string
         if (m.iaq != 0) {
-            char buf[64];
             const char *rating = (m.iaq <= 25)    ? " (Excellent)"
                                  : (m.iaq <= 50)  ? " (Good)"
                                  : (m.iaq <= 100) ? " (Moderate)"
@@ -1137,19 +1143,19 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
                                  : (m.iaq <= 200) ? " (Unhealthy)"
                                  : (m.iaq <= 300) ? " (Very Unhealthy)"
                                                   : " (Hazardous)";
-            snprintf(buf, sizeof(buf), "IAQ: %d%s", m.iaq, rating);
-            s_displayCache.iaqStr = buf;
+            snprintf(s_displayCache.iaqStr, sizeof(s_displayCache.iaqStr), "IAQ: %d%s", m.iaq, rating);
         } else {
-            s_displayCache.iaqStr = "";
+            s_displayCache.iaqStr[0] = '\0';
         }
 
         // Cache sender name (only changes when sender changes)
-        s_displayCache.leftStr = String(getSenderLongName(*packetToShow));
+        strncpy(s_displayCache.leftStr, getSenderLongName(*packetToShow), sizeof(s_displayCache.leftStr) - 1);
+        s_displayCache.leftStr[sizeof(s_displayCache.leftStr) - 1] = '\0';
     }
 
     // === Build timestamp string (cached, only updates when time changes) ===
     static uint32_t lastAgoSecs = UINT32_MAX;
-    static String cachedDisplayStr;
+    static char cachedDisplayStr[64];
     uint32_t agoSecs = service->GetTimeSinceMeshPacket(packetToShow);
 
     // Only rebuild timestamp string when seconds change
@@ -1165,16 +1171,16 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         } else {
             snprintf(agoBuf, sizeof(agoBuf), "%lus", (unsigned long)agoSecs);
         }
-        cachedDisplayStr = s_displayCache.leftStr + " (" + agoBuf + ")";
+        snprintf(cachedDisplayStr, sizeof(cachedDisplayStr), "%s (%s)", s_displayCache.leftStr, agoBuf);
     }
-    String displayStr = cachedDisplayStr;
+    const char *displayStr = cachedDisplayStr;
 
     // Clear stale IAQ data if reading is too old (> 1 hour)
     // Note: We don't check m.iaq == 0 here because that could mean:
     // 1. IAQ sensor still calibrating (should show "IAQ: 0 (Excellent)" as feedback)
     // 2. No IAQ sensor (iaqStr will already be empty from cache rebuild)
     if (agoSecs > 3600) {
-        s_displayCache.iaqStr = "";
+        s_displayCache.iaqStr[0] = '\0';
     }
 
     // === Now render ===
@@ -1188,7 +1194,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     if (graphics::isHighResolution && isLargeDisplay) {
         // === LARGE DISPLAY LAYOUT (Single column, tall graphs with annotations) ===
         // Show sender/timestamp on first row with uptime on the right
-        graphics::MessageRenderer::drawStringWithEmotes(display, x, currentY, displayStr.c_str(), emotes, numEmotes);
+        graphics::MessageRenderer::drawStringWithEmotes(display, x, currentY, displayStr, emotes, numEmotes);
 
         // Add uptime on top right (formatted like home screen)
         uint32_t uptimeMillis = millis();
@@ -1303,11 +1309,11 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         display->setFont(FONT_SMALL);
 
         // Remaining metrics in 2-column format (if space allows)
-        if (!s_displayCache.entries.empty()) {
+        if (s_displayCache.entryCount > 0) {
             const int splitX = SCREEN_WIDTH / 2;
-            for (size_t i = 0; i < s_displayCache.entries.size(); i += 2) {
+            for (size_t i = 0; i < s_displayCache.entryCount; i += 2) {
                 display->drawString(x, currentY, s_displayCache.entries[i]);
-                if (i + 1 < s_displayCache.entries.size()) {
+                if (i + 1 < s_displayCache.entryCount) {
                     display->drawString(splitX, currentY, s_displayCache.entries[i + 1]);
                 }
                 currentY += rowHeight;
@@ -1339,23 +1345,23 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         // Calculate sparkline width dynamically to use available space
         // Find maximum label width to calculate remaining space
         int maxLabelWidth = 0;
-        if (s_displayCache.tempStr.length() != 0) {
+        if (s_displayCache.tempStr[0] != '\0') {
             int w = display->getStringWidth(s_displayCache.tempStr);
             if (w > maxLabelWidth)
                 maxLabelWidth = w;
         }
-        if (s_displayCache.humStr.length() != 0) {
+        if (s_displayCache.humStr[0] != '\0') {
             int w = display->getStringWidth(s_displayCache.humStr);
             if (w > maxLabelWidth)
                 maxLabelWidth = w;
         }
-        if (s_displayCache.pressStr.length() != 0) {
+        if (s_displayCache.pressStr[0] != '\0') {
             int w = display->getStringWidth(s_displayCache.pressStr);
             if (w > maxLabelWidth)
                 maxLabelWidth = w;
         }
-        for (const auto &entry : s_displayCache.entries) {
-            int w = display->getStringWidth(entry);
+        for (size_t i = 0; i < s_displayCache.entryCount; i++) {
+            int w = display->getStringWidth(s_displayCache.entries[i]);
             if (w > maxLabelWidth)
                 maxLabelWidth = w;
         }
@@ -1366,73 +1372,82 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         const int kSparkW = std::max(50, SCREEN_WIDTH - maxLabelWidth - kPadding - x - kScrollbarWidth - 2);
         const int graphX = SCREEN_WIDTH - kSparkW - kScrollbarWidth - 2;
 
-        // Build list of all metric rows with sparklines
+        // Build list of all metric rows with sparklines (use fixed array to avoid heap allocation)
         struct MetricRow {
-            String label;
+            const char *label;
             const RingF<kHistLen> *hist;
         };
-        std::vector<MetricRow> metricRows;
+        static constexpr size_t MAX_METRIC_ROWS = 20;
+        MetricRow metricRows[MAX_METRIC_ROWS];
+        size_t metricRowCount = 0;
 
         // Add sender/timestamp as first scrollable row
-        metricRows.push_back({displayStr, nullptr});
+        if (metricRowCount < MAX_METRIC_ROWS)
+            metricRows[metricRowCount++] = {displayStr, nullptr};
 
         // Add all metrics that have data
-        if (s_displayCache.tempStr.length() != 0)
-            metricRows.push_back({s_displayCache.tempStr, &nh.temp});
-        if (s_displayCache.humStr.length() != 0)
-            metricRows.push_back({s_displayCache.humStr, &nh.hum});
-        if (s_displayCache.pressStr.length() != 0)
-            metricRows.push_back({s_displayCache.pressStr, &nh.press});
+        if (s_displayCache.tempStr[0] != '\0' && metricRowCount < MAX_METRIC_ROWS)
+            metricRows[metricRowCount++] = {s_displayCache.tempStr, &nh.temp};
+        if (s_displayCache.humStr[0] != '\0' && metricRowCount < MAX_METRIC_ROWS)
+            metricRows[metricRowCount++] = {s_displayCache.humStr, &nh.hum};
+        if (s_displayCache.pressStr[0] != '\0' && metricRowCount < MAX_METRIC_ROWS)
+            metricRows[metricRowCount++] = {s_displayCache.pressStr, &nh.press};
 
         // Add entries from cache with corresponding history data
-        for (size_t i = 0; i < s_displayCache.entries.size(); i++) {
-            const String &entry = s_displayCache.entries[i];
+        for (size_t i = 0; i < s_displayCache.entryCount && metricRowCount < MAX_METRIC_ROWS; i++) {
+            const char *entry = s_displayCache.entries[i];
             const RingF<kHistLen> *histPtr = nullptr;
 
             // Match entries to history data by checking metric type
-            if (entry.startsWith("Dew:"))
+            if (strncmp(entry, "Dew:", 4) == 0)
                 histPtr = (nh.dewPoint.len >= 2) ? &nh.dewPoint : nullptr;
-            else if (entry.startsWith("Gas:"))
+            else if (strncmp(entry, "Gas:", 4) == 0)
                 histPtr = (nh.gas.len >= 2) ? &nh.gas : nullptr;
-            else if (entry.indexOf("V /") >= 0) {
-                // Voltage/Current line - use voltage history
+            else if (strstr(entry, "V /") != nullptr)
                 histPtr = (nh.voltage.len >= 2) ? &nh.voltage : nullptr;
-            } else if (entry.startsWith("Light:"))
+            else if (strncmp(entry, "Light:", 6) == 0)
                 histPtr = (nh.lux.len >= 2) ? &nh.lux : nullptr;
-            else if (entry.startsWith("White:"))
+            else if (strncmp(entry, "White:", 6) == 0)
                 histPtr = (nh.whiteLux.len >= 2) ? &nh.whiteLux : nullptr;
-            else if (entry.startsWith("Weight:"))
+            else if (strncmp(entry, "Weight:", 7) == 0)
                 histPtr = (nh.weight.len >= 2) ? &nh.weight : nullptr;
-            else if (entry.startsWith("Level:"))
+            else if (strncmp(entry, "Level:", 6) == 0)
                 histPtr = (nh.distance.len >= 2) ? &nh.distance : nullptr;
-            else if (entry.startsWith("Rad:"))
+            else if (strncmp(entry, "Rad:", 4) == 0)
                 histPtr = (nh.radiation.len >= 2) ? &nh.radiation : nullptr;
-            else if (entry.startsWith("Wind:"))
+            else if (strncmp(entry, "Wind:", 5) == 0)
                 histPtr = (nh.windSpeed.len >= 2) ? &nh.windSpeed : nullptr;
-            else if (entry.startsWith("Dir:"))
+            else if (strncmp(entry, "Dir:", 4) == 0)
                 histPtr = (nh.windDirection.len >= 2) ? &nh.windDirection : nullptr;
-            else if (entry.startsWith("Soil T:"))
+            else if (strncmp(entry, "Soil T:", 7) == 0)
                 histPtr = (nh.soilTemp.len >= 2) ? &nh.soilTemp : nullptr;
-            else if (entry.startsWith("Soil M:"))
+            else if (strncmp(entry, "Soil M:", 7) == 0)
                 histPtr = (nh.soilMoisture.len >= 2) ? &nh.soilMoisture : nullptr;
 
-            metricRows.push_back({entry, histPtr});
+            metricRows[metricRowCount++] = {entry, histPtr};
         }
 
         // Add IAQ as last scrollable row (no sparkline) - only if we actually have IAQ data
         // Note: Don't rely on cached string alone since it may be cleared for stale data
         bool hasIAQRow = false;
-        if (m.iaq != 0) {
+        static char iaqFallbackLabel[48];
+        if (m.iaq != 0 && metricRowCount < MAX_METRIC_ROWS) {
             // Use cached string if available, otherwise create temporary label
-            String iaqLabel = s_displayCache.iaqStr.length() > 0 ? s_displayCache.iaqStr : String("IAQ: ") + String(m.iaq);
-            metricRows.push_back({iaqLabel, nullptr});
+            const char *iaqLabel;
+            if (s_displayCache.iaqStr[0] != '\0') {
+                iaqLabel = s_displayCache.iaqStr;
+            } else {
+                snprintf(iaqFallbackLabel, sizeof(iaqFallbackLabel), "IAQ: %d", m.iaq);
+                iaqLabel = iaqFallbackLabel;
+            }
+            metricRows[metricRowCount++] = {iaqLabel, nullptr};
             hasIAQRow = true;
         }
 
         // Calculate total content height accounting for variable row heights
         int totalContentHeight = 0;
-        for (size_t i = 0; i < metricRows.size(); i++) {
-            bool isIAQRow = hasIAQRow && (i == metricRows.size() - 1);
+        for (size_t i = 0; i < metricRowCount; i++) {
+            bool isIAQRow = hasIAQRow && (i == metricRowCount - 1);
             int rowHeightForCalc = isIAQRow ? (kRulerBaselineOfs + kNeedleH + FONT_HEIGHT_SMALL + 4) : rowHeight;
             totalContentHeight += rowHeightForCalc;
         }
@@ -1453,9 +1468,9 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         int yOffset = scrollTop - s_scrollY;
         int cumulativeY = 0; // Track actual Y position accounting for variable row heights
 
-        for (size_t i = 0; i < metricRows.size(); i++) {
+        for (size_t i = 0; i < metricRowCount; i++) {
             // Check if this is the IAQ row (last one if IAQ was added)
-            bool isIAQRow = hasIAQRow && (i == metricRows.size() - 1);
+            bool isIAQRow = hasIAQRow && (i == metricRowCount - 1);
 
             // Calculate row position and height
             int rowY = yOffset + cumulativeY;
@@ -1466,7 +1481,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
                 if (isIAQRow) {
                     // Draw IAQ ruler instead of text+sparkline
                     const int rulerW = SCREEN_WIDTH - 2 * x;
-                    drawIAQRuler(display, x, rowY, rulerW, m.iaq, s_displayCache.iaqStr);
+                    drawIAQRuler(display, x, rowY, rulerW, m.iaq, metricRows[i].label);
                 } else {
                     display->drawString(x, rowY, metricRows[i].label);
 
@@ -1494,46 +1509,49 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         }
     } else {
         // Simple display for low-resolution screens (like develop branch)
-        // Build all metrics into a single vector
-        std::vector<String> allMetrics;
-        if (s_displayCache.tempStr.length() != 0)
-            allMetrics.push_back(s_displayCache.tempStr);
-        if (s_displayCache.humStr.length() != 0)
-            allMetrics.push_back(s_displayCache.humStr);
-        if (s_displayCache.pressStr.length() != 0)
-            allMetrics.push_back(s_displayCache.pressStr);
+        // Build all metrics list using fixed array
+        const char *allMetrics[20];
+        size_t metricCount = 0;
+
+        if (s_displayCache.tempStr[0] != '\0')
+            allMetrics[metricCount++] = s_displayCache.tempStr;
+        if (s_displayCache.humStr[0] != '\0')
+            allMetrics[metricCount++] = s_displayCache.humStr;
+        if (s_displayCache.pressStr[0] != '\0')
+            allMetrics[metricCount++] = s_displayCache.pressStr;
 
         // Add all other entries
-        for (const auto &entry : s_displayCache.entries) {
-            allMetrics.push_back(entry);
+        for (size_t i = 0; i < s_displayCache.entryCount; i++) {
+            allMetrics[metricCount++] = s_displayCache.entries[i];
         }
 
         // First row: sender/time on left, first metric right-aligned on right (if available)
-        graphics::MessageRenderer::drawStringWithEmotes(display, x, currentY, displayStr.c_str(), emotes, numEmotes);
+        graphics::MessageRenderer::drawStringWithEmotes(display, x, currentY, displayStr, emotes, numEmotes);
 
 #if defined(M5STACK_UNITC6L)
         // For M5STACK_UNITC6L only: put sender/time on first line, then all metrics on separate lines
         currentY += rowHeight;
-        for (const auto &metric : allMetrics) {
-            display->drawString(x, currentY, metric);
+        for (size_t i = 0; i < metricCount; i++) {
+            display->drawString(x, currentY, allMetrics[i]);
             currentY += rowHeight;
         }
 #else
-        if (!allMetrics.empty()) {
-            int rightX = SCREEN_WIDTH - display->getStringWidth(allMetrics[0].c_str());
+        size_t startIdx = 0;
+        if (metricCount > 0) {
+            int rightX = SCREEN_WIDTH - display->getStringWidth(allMetrics[0]);
             display->drawString(rightX, currentY, allMetrics[0]);
-            allMetrics.erase(allMetrics.begin()); // Remove first metric
+            startIdx = 1;
         }
         currentY += rowHeight;
 
         // Remaining metrics in 2-column format
         const int splitX = SCREEN_WIDTH / 2;
-        for (size_t i = 0; i < allMetrics.size(); i += 2) {
+        for (size_t i = startIdx; i < metricCount; i += 2) {
             // Left column
             display->drawString(x, currentY, allMetrics[i]);
 
             // Right column
-            if (i + 1 < allMetrics.size()) {
+            if (i + 1 < metricCount) {
                 display->drawString(splitX, currentY, allMetrics[i + 1]);
             }
 
@@ -1543,7 +1561,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     }
 
     // === IAQ alert logic (banner/beep for dangerous levels) ===
-    if (s_displayCache.iaqStr.length() != 0 && m.iaq != 0) {
+    if (s_displayCache.iaqStr[0] != '\0' && m.iaq != 0) {
         const char *bannerMsg = nullptr;
         if (m.iaq > 200 && m.iaq <= 300)
             bannerMsg = "Very Unhealthy IAQ";
