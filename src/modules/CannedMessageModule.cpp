@@ -490,15 +490,13 @@ int CannedMessageModule::handleInputEvent(const InputEvent *event)
 bool CannedMessageModule::isUpEvent(const InputEvent *event)
 {
     return event->inputEvent == INPUT_BROKER_UP ||
-           ((runState == CANNED_MESSAGE_RUN_STATE_ACTIVE || runState == CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER ||
-             runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION) &&
+           ((runState == CANNED_MESSAGE_RUN_STATE_ACTIVE || runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION) &&
             (event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_ALT_PRESS));
 }
 bool CannedMessageModule::isDownEvent(const InputEvent *event)
 {
     return event->inputEvent == INPUT_BROKER_DOWN ||
-           ((runState == CANNED_MESSAGE_RUN_STATE_ACTIVE || runState == CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER ||
-             runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION) &&
+           ((runState == CANNED_MESSAGE_RUN_STATE_ACTIVE || runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION) &&
             (event->inputEvent == INPUT_BROKER_RIGHT || event->inputEvent == INPUT_BROKER_USER_PRESS));
 }
 bool CannedMessageModule::isSelectEvent(const InputEvent *event)
@@ -1026,36 +1024,95 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
 
 int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
 {
-    int numEmotes = graphics::numEmotes;
-
-    // Override isDown and isSelect ONLY for emote picker behavior
-    bool isUp = isUpEvent(event);
-    bool isDown = isDownEvent(event);
-    bool isSelect = isSelectEvent(event);
-    if (runState == CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER) {
-        if (event->inputEvent == INPUT_BROKER_USER_PRESS) {
-            isDown = true;
-        } else if (event->inputEvent == INPUT_BROKER_SELECT) {
-            isSelect = true;
+    // Build deduplicated count (matches drawEmotePickerScreen logic)
+    static int numUniqueEmotes = 0;
+    static bool needsCount = true;
+    if (needsCount) {
+        numUniqueEmotes = 0;
+        for (int i = 0; i < graphics::numEmotes; ++i) {
+            const unsigned char *bitmap = graphics::emotes[i].bitmap;
+            bool isDuplicate = false;
+            for (int j = 0; j < i; ++j) {
+                if (graphics::emotes[j].bitmap == bitmap) {
+                    isDuplicate = true;
+                    break;
+                }
+            }
+            if (!isDuplicate)
+                numUniqueEmotes++;
         }
+        needsCount = false;
     }
 
-    // Scroll emote list
-    if (isUp && emotePickerIndex > 0) {
+    // Calculate grid dimensions (same as draw function)
+    const int headerFontHeight = FONT_HEIGHT_SMALL;
+    const int headerMargin = 2;
+    const int cellPadding = 2;
+    const int emoteSize = 16;
+    const int cellSize = emoteSize + cellPadding * 2;
+    int gridTop = headerFontHeight + headerMargin;
+    int availableHeight = screen->getHeight() - gridTop - 2;
+    int availableWidth = screen->getWidth() - 4;
+    int cols = availableWidth / cellSize;
+    int rows = availableHeight / cellSize;
+
+    // Navigation keys
+    bool isUp = isUpEvent(event);
+    bool isDown = isDownEvent(event);
+    bool isLeft = (event->inputEvent == INPUT_BROKER_LEFT);
+    bool isRight = (event->inputEvent == INPUT_BROKER_RIGHT);
+    bool isSelect = isSelectEvent(event);
+
+    // Grid navigation with row/col boundary checks
+    int currentRow = emotePickerIndex / cols;
+    int currentCol = emotePickerIndex % cols;
+
+    if (isUp && emotePickerIndex >= cols) {
+        emotePickerIndex -= cols;
+        screen->forceDisplay();
+        return 1;
+    }
+    if (isDown && emotePickerIndex + cols < numUniqueEmotes) {
+        emotePickerIndex += cols;
+        screen->forceDisplay();
+        return 1;
+    }
+    if (isLeft && currentCol > 0) {
         emotePickerIndex--;
         screen->forceDisplay();
         return 1;
     }
-    if (isDown && emotePickerIndex < numEmotes - 1) {
+    if (isRight && currentCol < cols - 1 && emotePickerIndex < numUniqueEmotes - 1) {
         emotePickerIndex++;
         screen->forceDisplay();
         return 1;
     }
 
-    // Select emote: insert into freetext at cursor and return to freetext
+    // Select emote: find the unique emote and insert its label
     if (isSelect) {
-        String label = graphics::emotes[emotePickerIndex].label;
-        String emoteInsert = label; // Just the text label, e.g., ":thumbsup:"
+        // Map emotePickerIndex (unique index) back to actual emote
+        int uniqueIdx = 0;
+        int actualEmoteIdx = 0;
+        for (int i = 0; i < graphics::numEmotes; ++i) {
+            const unsigned char *bitmap = graphics::emotes[i].bitmap;
+            bool isDuplicate = false;
+            for (int j = 0; j < i; ++j) {
+                if (graphics::emotes[j].bitmap == bitmap) {
+                    isDuplicate = true;
+                    break;
+                }
+            }
+            if (!isDuplicate) {
+                if (uniqueIdx == emotePickerIndex) {
+                    actualEmoteIdx = i;
+                    break;
+                }
+                uniqueIdx++;
+            }
+        }
+
+        String label = graphics::emotes[actualEmoteIdx].label;
+        String emoteInsert = label;
         if (cursor == freetext.length()) {
             freetext += emoteInsert;
         } else {
@@ -1407,13 +1464,36 @@ int32_t CannedMessageModule::runOnce()
             case 0x08: // backspace
                 if (this->freetext.length() > 0) {
                     if (this->cursor > 0) {
+                        // Find start of UTF-8 character before cursor
+                        int deletePos = this->cursor - 1;
+                        // Walk backwards while we're in the middle of a UTF-8 sequence
+                        // UTF-8 continuation bytes start with bits 10xxxxxx (0x80-0xBF)
+                        while (deletePos > 0 && (this->freetext[deletePos] & 0xC0) == 0x80) {
+                            deletePos--;
+                        }
+
+                        // Check if the character before this is a variation selector base
+                        // If we just deleted a variation selector (U+FE0F, U+FE0E, etc: 0xEF 0xB8 0x8E-0x8F)
+                        // check if there's a base character before it that should also be deleted
+                        if (deletePos >= 3 && (unsigned char)this->freetext[deletePos] == 0xEF &&
+                            (unsigned char)this->freetext[deletePos + 1] == 0xB8 &&
+                            ((unsigned char)this->freetext[deletePos + 2] == 0x8E ||
+                             (unsigned char)this->freetext[deletePos + 2] == 0x8F)) {
+                            // This is a variation selector - delete the base char before it too
+                            int baseEnd = deletePos - 1;
+                            while (baseEnd > 0 && (this->freetext[baseEnd] & 0xC0) == 0x80) {
+                                baseEnd--;
+                            }
+                            deletePos = baseEnd;
+                        }
+
                         if (this->cursor == this->freetext.length()) {
-                            this->freetext = this->freetext.substring(0, this->freetext.length() - 1);
+                            this->freetext = this->freetext.substring(0, deletePos);
                         } else {
-                            this->freetext = this->freetext.substring(0, this->cursor - 1) +
+                            this->freetext = this->freetext.substring(0, deletePos) +
                                              this->freetext.substring(this->cursor, this->freetext.length());
                         }
-                        this->cursor--;
+                        this->cursor = deletePos;
                     }
                 } else {
                 }
@@ -1892,83 +1972,105 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
 
 void CannedMessageModule::drawEmotePickerScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-    const int headerFontHeight = FONT_HEIGHT_SMALL; // Make sure this matches your actual small font height
-    const int headerMargin = 2;                     // Extra pixels below header
-    const int labelGap = 6;
-    const int bitmapGapX = 4;
+    const int headerFontHeight = FONT_HEIGHT_SMALL;
+    const int headerMargin = 2;
+    const int cellPadding = 2;
+    const int emoteSize = 16; // All emotes are 16x16
+    const int cellSize = emoteSize + cellPadding * 2;
 
-    // Find max emote height (assume all same, or precalculated)
-    int maxEmoteHeight = 0;
-    for (int i = 0; i < graphics::numEmotes; ++i)
-        if (graphics::emotes[i].height > maxEmoteHeight)
-            maxEmoteHeight = graphics::emotes[i].height;
+    // Build deduplicated list (only first occurrence of each bitmap)
+    static int uniqueEmotes[256]; // indices into graphics::emotes
+    static int numUniqueEmotes = 0;
+    static bool needsRebuild = true;
 
-    const int rowHeight = maxEmoteHeight + 2;
+    if (needsRebuild) {
+        numUniqueEmotes = 0;
+        for (int i = 0; i < graphics::numEmotes; ++i) {
+            const unsigned char *bitmap = graphics::emotes[i].bitmap;
+            bool isDuplicate = false;
+            for (int j = 0; j < numUniqueEmotes; ++j) {
+                if (graphics::emotes[uniqueEmotes[j]].bitmap == bitmap) {
+                    isDuplicate = true;
+                    break;
+                }
+            }
+            if (!isDuplicate) {
+                uniqueEmotes[numUniqueEmotes++] = i;
+            }
+        }
+        needsRebuild = false;
+    }
 
-    // Place header at top, then compute start of emote list
+    // Calculate grid dimensions
     int headerY = y;
-    int listTop = headerY + headerFontHeight + headerMargin;
+    int gridTop = headerY + headerFontHeight + headerMargin;
+    int availableHeight = display->getHeight() - gridTop - 2;
+    int availableWidth = display->getWidth() - 4;
 
-    int _visibleRows = (display->getHeight() - listTop - 2) / rowHeight;
-    int numEmotes = graphics::numEmotes;
+    int cols = availableWidth / cellSize;
+    int rows = availableHeight / cellSize;
 
-    // keep member variable in sync
-    this->visibleRows = _visibleRows;
-
-    // Clamp highlight index
+    // Clamp selection
     if (emotePickerIndex < 0)
         emotePickerIndex = 0;
-    if (emotePickerIndex >= numEmotes)
-        emotePickerIndex = numEmotes - 1;
+    if (emotePickerIndex >= numUniqueEmotes)
+        emotePickerIndex = numUniqueEmotes - 1;
 
-    // Determine which emote is at the top
-    int topIndex = emotePickerIndex - _visibleRows / 2;
-    if (topIndex < 0)
-        topIndex = 0;
-    if (topIndex > numEmotes - _visibleRows)
-        topIndex = std::max(0, numEmotes - _visibleRows);
+    // Calculate scroll position to keep selected item visible (smooth scrolling)
+    int selectedRow = emotePickerIndex / cols;
+    int topRow = selectedRow - rows / 2;
+    if (topRow < 0)
+        topRow = 0;
+    int maxTopRow = (numUniqueEmotes + cols - 1) / cols - rows;
+    if (topRow > maxTopRow && maxTopRow >= 0)
+        topRow = maxTopRow;
 
-    // Draw header/title
+    int firstVisibleIdx = topRow * cols;
+
+    // Draw header
     display->setFont(FONT_SMALL);
     display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->drawString(display->getWidth() / 2, headerY, "Select Emote");
+    char headerText[32];
+    snprintf(headerText, sizeof(headerText), "Emotes (%d/%d)", emotePickerIndex + 1, numUniqueEmotes);
+    display->drawString(display->getWidth() / 2, headerY, headerText);
 
-    // Draw emote rows
-    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    // Draw grid
+    for (int row = 0; row < rows; ++row) {
+        for (int col = 0; col < cols; ++col) {
+            int idx = firstVisibleIdx + row * cols + col;
+            if (idx >= numUniqueEmotes)
+                break;
 
-    for (int vis = 0; vis < _visibleRows; ++vis) {
-        int emoteIdx = topIndex + vis;
-        if (emoteIdx >= numEmotes)
-            break;
-        const graphics::Emote &emote = graphics::emotes[emoteIdx];
-        int rowY = listTop + vis * rowHeight;
+            int emoteIdx = uniqueEmotes[idx];
+            const graphics::Emote &emote = graphics::emotes[emoteIdx];
 
-        // Draw highlight box 2px taller than emote (1px margin above and below)
-        if (emoteIdx == emotePickerIndex) {
-            display->fillRect(x, rowY, display->getWidth() - 8, emote.height + 2);
-            display->setColor(BLACK);
+            int cellX = x + 2 + col * cellSize;
+            int cellY = gridTop + row * cellSize;
+
+            // Highlight selected emote with filled rect
+            if (idx == emotePickerIndex) {
+                display->fillRect(cellX, cellY, cellSize, cellSize);
+                display->setColor(BLACK);
+            }
+
+            // Center emote in cell
+            int emoteX = cellX + (cellSize - emote.width) / 2;
+            int emoteY = cellY + (cellSize - emote.height) / 2;
+            display->drawXbm(emoteX, emoteY, emote.width, emote.height, emote.bitmap);
+
+            if (idx == emotePickerIndex)
+                display->setColor(WHITE);
         }
-
-        // Emote bitmap (left), 1px margin from highlight bar top
-        int emoteY = rowY + 1;
-        display->drawXbm(x + bitmapGapX, emoteY, emote.width, emote.height, emote.bitmap);
-
-        // Emote label (right of bitmap)
-        display->setFont(FONT_MEDIUM);
-        int labelY = rowY + ((rowHeight - FONT_HEIGHT_MEDIUM) / 2);
-        display->drawString(x + bitmapGapX + emote.width + labelGap, labelY, emote.label);
-
-        if (emoteIdx == emotePickerIndex)
-            display->setColor(WHITE);
     }
 
     // Draw scrollbar if needed
-    if (numEmotes > _visibleRows) {
-        int scrollbarHeight = _visibleRows * rowHeight;
+    int totalRows = (numUniqueEmotes + cols - 1) / cols;
+    if (totalRows > rows) {
+        int scrollbarHeight = rows * cellSize;
         int scrollTrackX = display->getWidth() - 6;
-        display->drawRect(scrollTrackX, listTop, 4, scrollbarHeight);
-        int scrollBarLen = std::max(6, (scrollbarHeight * _visibleRows) / numEmotes);
-        int scrollBarPos = listTop + (scrollbarHeight * topIndex) / numEmotes;
+        display->drawRect(scrollTrackX, gridTop, 4, scrollbarHeight);
+        int scrollBarLen = std::max(6, (scrollbarHeight * rows) / totalRows);
+        int scrollBarPos = gridTop + (scrollbarHeight * topRow) / totalRows;
         display->fillRect(scrollTrackX, scrollBarPos, 4, scrollBarLen);
     }
 }

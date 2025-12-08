@@ -354,6 +354,10 @@ int32_t KbI2cBase::runOnce()
                 e.inputEvent = INPUT_BROKER_ANYKEY;
                 e.kbchar = INPUT_BROKER_MSG_TAB;
                 break;
+            case 0x8F: // fn+e - emote picker
+                e.inputEvent = INPUT_BROKER_ANYKEY;
+                e.kbchar = INPUT_BROKER_MSG_EMOTE_LIST;
+                break;
             default:
                 if (nextEvent > 127) {
                     e.inputEvent = INPUT_BROKER_NONE;

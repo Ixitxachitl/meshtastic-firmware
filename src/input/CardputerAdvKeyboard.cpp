@@ -45,7 +45,7 @@ static unsigned char CardputerAdvTapMap[_TCA8418_NUM_KEYS][3] = {{'`', '~', Key:
                                                                  {'a', 'A', 0x00},
                                                                  {0x00, 0x00, 0x00}, // alt
                                                                  {'3', '#', 0x00},
-                                                                 {'e', 'E', 0x00},
+                                                                 {'e', 'E', 0x8F}, // fn+e = emote picker
                                                                  {'s', 'S', 0x00},
                                                                  {'z', 'Z', 0x00},
                                                                  {'4', '$', 0x00},
