@@ -430,6 +430,16 @@ int32_t KbI2cBase::runOnce()
                     e.kbchar = c;
                 }
                 break;
+            case 0x65: // letter e. Modifier makes it open emote picker
+                if (is_sym) {
+                    is_sym = false;
+                    e.inputEvent = INPUT_BROKER_ANYKEY;
+                    e.kbchar = 0x8F; // INPUT_BROKER_MSG_EMOTE_LIST
+                } else {
+                    e.inputEvent = INPUT_BROKER_ANYKEY;
+                    e.kbchar = c;
+                }
+                break;
             case 0x6d: // letter m. Modifier makes it mute notifications
                 if (is_sym) {
                     is_sym = false;
