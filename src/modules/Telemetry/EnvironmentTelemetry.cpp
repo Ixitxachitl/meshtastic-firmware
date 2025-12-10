@@ -142,6 +142,10 @@ template <size_t N> struct NodeHist {
     RingF<N> temp, hum, press, gas, voltage, current, lux, whiteLux, weight, distance, radiation;
     RingF<N> windSpeed, windDirection, dewPoint, soilTemp, soilMoisture;
     uint32_t lastUpdate = 0; // Track when this node was last updated (millis)
+
+    // Store latest telemetry values directly instead of packet copies
+    meshtastic_EnvironmentMetrics lastMetrics = meshtastic_EnvironmentMetrics_init_zero;
+    uint32_t rxTime = 0; // When we received this data (for "ago" display)
 };
 
 // One record per node; no per-sample heap churn
@@ -150,7 +154,10 @@ static std::unordered_map<uint32_t, NodeHist<kHistLen>> s_hist;
 static constexpr size_t kMaxHistNodes = 8;             // Reduced from 64 - only track recent nodes
 static constexpr uint32_t kNodeStaleTimeout = 3600000; // 1 hour - evict nodes not updated in this time
 
-// Clean up stale nodes that haven't been updated recently
+// Track most recent telemetry source for "auto" mode display
+static uint32_t s_lastSource = 0;
+
+// Clean up stale nodes from s_hist that haven't been updated recently
 static void cleanupStaleNodes()
 {
     uint32_t now = millis();
@@ -413,11 +420,11 @@ template <size_t N> static void drawMiniSparkBoxed(OLEDDisplay *dpy, int x, int 
 
 // Prefer long_name when available (and width allows), else short_name, else hex id.
 // Mirrors the selection logic used by MessageRenderer.
-static inline const char *getSenderLongName(const meshtastic_MeshPacket &mp)
+static inline const char *getSenderName(uint32_t nodeNum)
 {
     static char buf[64];
 
-    const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(mp.from);
+    const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(nodeNum);
     if (node && node->has_user) {
         const char *ln = node->user.long_name;
         const char *sn = node->user.short_name;
@@ -440,7 +447,7 @@ static inline const char *getSenderLongName(const meshtastic_MeshPacket &mp)
     }
 
     // Fallback: hex node id like "ABCDEF12"
-    snprintf(buf, sizeof(buf), "%08x", (unsigned int)mp.from);
+    snprintf(buf, sizeof(buf), "%08x", (unsigned int)nodeNum);
     return buf;
 }
 
@@ -794,65 +801,6 @@ int32_t EnvironmentTelemetryModule::runOnce()
             }
         }
 
-        // Update screen data independently of mesh/phone broadcasts for immediate display
-        // Note: Display updates happen when telemetry is sent/received, not on a timer
-        if (false && moduleConfig.telemetry.environment_screen_enabled &&
-            ((lastScreenUpdate == 0) || !Throttle::isWithinTimespanMs(lastScreenUpdate, screenUpdateIntervalMs))) {
-            LOG_DEBUG("Updating screen telemetry data (lastScreenUpdate=%u)", lastScreenUpdate);
-            // Read current sensor data and update display packet
-            meshtastic_Telemetry m = meshtastic_Telemetry_init_zero;
-            m.which_variant = meshtastic_Telemetry_environment_metrics_tag;
-            if (getEnvironmentTelemetry(&m)) {
-                LOG_INFO("Screen telemetry data acquired successfully");
-                meshtastic_MeshPacket tempPacket = meshtastic_MeshPacket_init_zero;
-                tempPacket.from = nodeDB->getNodeNum();
-                tempPacket.to = NODENUM_BROADCAST;
-                tempPacket.which_payload_variant = meshtastic_MeshPacket_decoded_tag;
-                tempPacket.rx_time = getTime(); // Set current time so "ago" display works
-
-                // Release old packet
-                if (lastMeasurementPacket != nullptr)
-                    packetPool.release(lastMeasurementPacket);
-
-                // Encode telemetry data properly
-                tempPacket.decoded.portnum = meshtastic_PortNum_TELEMETRY_APP;
-                size_t encodedSize = pb_encode_to_bytes(tempPacket.decoded.payload.bytes,
-                                                        sizeof(tempPacket.decoded.payload.bytes), &meshtastic_Telemetry_msg, &m);
-                if (encodedSize == 0) {
-                    LOG_ERROR("Failed to encode telemetry for screen display");
-                    lastScreenUpdate = millis() - screenUpdateIntervalMs + 5000; // Retry in 5s
-                } else {
-                    tempPacket.decoded.payload.size = encodedSize;
-
-                    lastMeasurementPacket = packetPool.allocCopy(tempPacket);
-
-                    // Update local history for display
-                    uint32_t self = nodeDB->getNodeNum();
-                    auto it = lastBySource.find(self);
-                    if (it != lastBySource.end() && it->second) {
-                        packetPool.release(it->second);
-                    }
-                    lastBySource[self] = packetPool.allocCopy(tempPacket);
-
-                    const auto &em = m.variant.environment_metrics;
-                    auto &selfHist = s_hist[self];
-                    if (em.has_temperature)
-                        selfHist.temp.push(em.temperature);
-                    if (em.has_relative_humidity)
-                        selfHist.hum.push(em.relative_humidity);
-                    if (em.barometric_pressure)
-                        selfHist.press.push(em.barometric_pressure);
-
-                    lastScreenUpdate = millis();
-                    LOG_DEBUG("lastMeasurementPacket updated for screen, next update in %ums", screenUpdateIntervalMs);
-                }
-            } else {
-                LOG_WARN("getEnvironmentTelemetry returned false - sensors may not be ready yet, will retry in 5s");
-                // Don't update lastScreenUpdate so we'll retry soon, but mark it non-zero to prevent immediate retry
-                lastScreenUpdate = millis() - screenUpdateIntervalMs + 5000; // Retry in 5 seconds
-            }
-        }
-
         // Check if it's time to broadcast to mesh (respecting initial stagger delay)
         bool timeForMeshBroadcast =
             (lastSentToMesh == 0 && millis() >= meshBroadcastStartTime) ||
@@ -932,11 +880,18 @@ static bool s_manualScrolling = false;
 std::vector<uint32_t> EnvironmentTelemetryModule::getSourcesWithTelemetry() const
 {
     std::vector<uint32_t> out;
-    out.reserve(lastBySource.size());
-    for (const auto &kv : lastBySource)
+    out.reserve(s_hist.size());
+    for (const auto &kv : s_hist)
         out.push_back(kv.first);
     std::sort(out.begin(), out.end()); // nice to have
     return out;
+}
+
+void EnvironmentTelemetryModule::clearEnvCache()
+{
+    s_hist.clear();
+    s_lastSource = 0;
+    s_displayCache.markDirty();
 }
 
 void EnvironmentTelemetryModule::invalidateDisplayCache()
@@ -987,24 +942,33 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
 #endif
     int currentY = graphics::getTextPositions(display)[line++];
 
-    // === Determine which packet to show ===
-    const meshtastic_MeshPacket *packetToShow = nullptr;
+    // === Determine which node's telemetry to show ===
+    uint32_t sourceNode = 0;
+    const NodeHist<kHistLen> *histToShow = nullptr;
 
     if (selectedSource != 0) {
         // Show specific source
-        auto it = lastBySource.find(selectedSource);
-        if (it != lastBySource.end())
-            packetToShow = it->second;
+        auto it = s_hist.find(selectedSource);
+        if (it != s_hist.end()) {
+            sourceNode = selectedSource;
+            histToShow = &it->second;
+        }
     } else {
-        // Auto mode: show most recent from any source
-        packetToShow = lastMeasurementPacket;
+        // Auto mode: show most recent source
+        if (s_lastSource != 0) {
+            auto it = s_hist.find(s_lastSource);
+            if (it != s_hist.end()) {
+                sourceNode = s_lastSource;
+                histToShow = &it->second;
+            }
+        }
     }
 
     // === Handle no telemetry data case ===
-    if (!packetToShow) {
+    if (!histToShow) {
         bool hasSensors = !sensors.empty() || ina219Sensor.hasSensor() || ina260Sensor.hasSensor() || ina3221Sensor.hasSensor() ||
                           max17048Sensor.hasSensor();
-        bool hasRemoteData = !lastBySource.empty();
+        bool hasRemoteData = !s_hist.empty();
 
         if (!hasSensors && !hasRemoteData) {
             display->drawString(x, currentY, "No sensors detected");
@@ -1014,20 +978,9 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         return;
     }
 
-    if (!packetToShow) {
-        display->drawString(x, currentY, "No Telemetry");
-        return;
-    }
-
-    // Decode the telemetry message from the latest received packet
-    const meshtastic_Data &p = packetToShow->decoded;
-    meshtastic_Telemetry telemetry;
-    if (!pb_decode_from_bytes(p.payload.bytes, p.payload.size, &meshtastic_Telemetry_msg, &telemetry)) {
-        display->drawString(x, currentY, "Decode Error");
-        return;
-    }
-
-    const auto &m = telemetry.variant.environment_metrics;
+    // Get the stored metrics directly (no decode needed!)
+    const auto &m = histToShow->lastMetrics;
+    const auto &nh = *histToShow;
 
     // Check if any telemetry field has valid data
     bool hasAny = m.has_temperature || m.has_relative_humidity || m.barometric_pressure != 0 || m.iaq != 0 ||
@@ -1040,12 +993,10 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     }
 
     // Check if we need to rebuild the cached strings
-    uint32_t currentSender = packetToShow->from;
-    bool senderChanged = (s_displayCache.lastSender != currentSender);
+    bool senderChanged = (s_displayCache.lastSender != sourceNode);
 
-    if (s_displayCache.dirty || s_displayCache.lastPacket != packetToShow || senderChanged) {
-        s_displayCache.lastPacket = packetToShow;
-        s_displayCache.lastSender = currentSender;
+    if (s_displayCache.dirty || senderChanged) {
+        s_displayCache.lastSender = sourceNode;
         s_displayCache.dirty = false;
 
         // Temperature
@@ -1164,14 +1115,15 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         }
 
         // Cache sender name (only changes when sender changes)
-        strncpy(s_displayCache.leftStr, getSenderLongName(*packetToShow), sizeof(s_displayCache.leftStr) - 1);
+        strncpy(s_displayCache.leftStr, getSenderName(sourceNode), sizeof(s_displayCache.leftStr) - 1);
         s_displayCache.leftStr[sizeof(s_displayCache.leftStr) - 1] = '\0';
     }
 
     // === Build timestamp string (cached, only updates when time changes) ===
     static uint32_t lastAgoSecs = UINT32_MAX;
     static char cachedDisplayStr[64];
-    uint32_t agoSecs = service->GetTimeSinceMeshPacket(packetToShow);
+    // Calculate time since telemetry was received using stored rxTime
+    uint32_t agoSecs = (histToShow->rxTime > 0) ? (millis() - histToShow->rxTime) / 1000 : 0;
 
     // Only rebuild timestamp string when seconds change
     if (agoSecs != lastAgoSecs || s_displayCache.dirty) {
@@ -1226,19 +1178,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
 
         currentY += rowHeight + 2;
 
-        // look up per-source history for sparklines
-        uint32_t from = packetToShow->from;
-
-        // Enforce maximum node limit
-        if (s_hist.size() >= kMaxHistNodes && s_hist.find(from) == s_hist.end()) {
-            auto it = s_hist.begin();
-            if (it != s_hist.end()) {
-                LOG_DEBUG("EnvironmentTelemetry: History map full (%zu nodes), evicting node 0x%08x", s_hist.size(), it->first);
-                s_hist.erase(it);
-            }
-        }
-
-        auto &nh = s_hist[from];
+        // We already have nh from histToShow above - no need to look up again
 
         // Full-width graphs spanning to screen edge
         const int graphW = SCREEN_WIDTH - x - 2;
@@ -1342,35 +1282,8 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         int scrollBottom = SCREEN_HEIGHT;
         int visibleHeight = scrollBottom - scrollTop;
 
-        // look up per-source history for sparklines (fixed-capacity rings)
-        uint32_t from = packetToShow->from;
-
-        // Clean up stale nodes first, then enforce maximum node limit
-        static uint32_t lastCleanup = 0;
-        uint32_t now = millis();
-        if (now - lastCleanup > 60000) { // Cleanup every minute
-            cleanupStaleNodes();
-            lastCleanup = now;
-        }
-
-        // Enforce maximum node limit - evict stalest node if full
-        if (s_hist.size() >= kMaxHistNodes && s_hist.find(from) == s_hist.end()) {
-            // Find and remove the stalest node (oldest lastUpdate)
-            auto stalest = s_hist.begin();
-            for (auto it = s_hist.begin(); it != s_hist.end(); ++it) {
-                if (it->second.lastUpdate < stalest->second.lastUpdate) {
-                    stalest = it;
-                }
-            }
-            if (stalest != s_hist.end()) {
-                LOG_DEBUG("EnvironmentTelemetry: History map full (%zu nodes), evicting stalest node 0x%08x", s_hist.size(),
-                          stalest->first);
-                s_hist.erase(stalest);
-            }
-        }
-
-        auto &nh = s_hist[from]; // default-constructs empty rings for new nodes
-        nh.lastUpdate = now;     // Update timestamp whenever we access this node's history
+        // Use nh from histToShow (already set up earlier in drawFrame)
+        // No need to look up again - sourceNode and nh are already available
 
         // Calculate sparkline width dynamically to use available space
         // Find maximum label width to calculate remaining space
@@ -1604,7 +1517,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         static bool inBanner = false;
         uint32_t now = millis();
         bool isCooldownOver = (now - lastAlertTime > 60000);
-        bool isOwnTelemetry = packetToShow->from == nodeDB->getNodeNum();
+        bool isOwnTelemetry = sourceNode == nodeDB->getNodeNum();
         if (!inBanner && isOwnTelemetry && bannerMsg && isCooldownOver) {
             inBanner = true;
             lastAlertTime = now;
@@ -1641,43 +1554,41 @@ bool EnvironmentTelemetryModule::handleReceivedProtobuf(const meshtastic_MeshPac
         LOG_INFO("(Received from %s): radiation=%fµR/h", sender, t->variant.environment_metrics.radiation);
 
 #endif
-        // release previous packet before occupying a new spot
-        if (lastMeasurementPacket != nullptr)
-            packetPool.release(lastMeasurementPacket);
-
-        lastMeasurementPacket = packetPool.allocCopy(mp);
-
-        // NEW: track per-source
-        uint32_t from = mp.from; // (sender nodenum)
-        auto it = lastBySource.find(from);
-        if (it != lastBySource.end() && it->second) {
-            packetPool.release(it->second);
-        }
-        lastBySource[from] = packetPool.allocCopy(mp);
-        // record per-source history for tiny graphs
+        // Track per-source telemetry
+        uint32_t from = mp.from;
         const auto &em = t->variant.environment_metrics;
 
-        // Clean up stale nodes and enforce maximum node limit
-        if (s_hist.size() >= kMaxHistNodes && s_hist.find(from) == s_hist.end()) {
-            // Try to evict stale nodes first
+        // Enforce maximum node limit to prevent memory exhaustion
+        // If this is a new node and we're at capacity, evict the stalest
+        bool isNewNode = (s_hist.find(from) == s_hist.end());
+        if (isNewNode && s_hist.size() >= kMaxHistNodes) {
+            // First try cleaning up stale nodes
             cleanupStaleNodes();
 
-            // If still full, evict stalest node
+            // Find stalest node if still at capacity
             if (s_hist.size() >= kMaxHistNodes) {
-                auto stalest = s_hist.begin();
-                for (auto it = s_hist.begin(); it != s_hist.end(); ++it) {
-                    if (it->second.lastUpdate < stalest->second.lastUpdate) {
-                        stalest = it;
+                uint32_t stalestNode = 0;
+                uint32_t stalestTime = UINT32_MAX;
+                for (const auto &kv : s_hist) {
+                    if (kv.second.lastUpdate < stalestTime) {
+                        stalestTime = kv.second.lastUpdate;
+                        stalestNode = kv.first;
                     }
                 }
-                if (stalest != s_hist.end()) {
-                    s_hist.erase(stalest);
+
+                // Evict stalest node
+                if (stalestNode != 0 && stalestNode != from) {
+                    LOG_DEBUG("EnvironmentTelemetry: Evicting node 0x%08x to make room for new node", stalestNode);
+                    s_hist.erase(stalestNode);
                 }
             }
         }
 
+        // Store metrics and history
         auto &nh2 = s_hist[from];
-        nh2.lastUpdate = millis(); // Update timestamp
+        nh2.lastUpdate = millis();
+        nh2.rxTime = millis(); // For "ago" display
+        nh2.lastMetrics = em;  // Store full metrics for display
         if (em.has_temperature)
             nh2.temp.push(em.temperature);
         if (em.has_relative_humidity)
@@ -1715,8 +1626,13 @@ bool EnvironmentTelemetryModule::handleReceivedProtobuf(const meshtastic_MeshPac
                 nh2.dewPoint.push(dpC);
         }
 
-        // Mark display cache dirty so strings are rebuilt on next draw
+        // Track most recent source for auto-display and mark cache dirty
+        s_lastSource = from;
         s_displayCache.markDirty();
+
+        // Force screen refresh if telemetry screen is currently showing
+        if (moduleConfig.telemetry.environment_screen_enabled && screen)
+            screen->forceDisplay();
     }
 
     return false; // Let others look at this message also if they want
@@ -1819,20 +1735,14 @@ bool EnvironmentTelemetryModule::sendTelemetry(NodeNum dest, bool phoneOnly)
             p->priority = meshtastic_MeshPacket_Priority_RELIABLE;
         else
             p->priority = meshtastic_MeshPacket_Priority_BACKGROUND;
-        // release previous packet before occupying a new spot
-        if (lastMeasurementPacket != nullptr)
-            packetPool.release(lastMeasurementPacket);
 
-        lastMeasurementPacket = packetPool.allocCopy(*p);
+        // Store own metrics in s_hist (no packet storage needed)
         uint32_t self = nodeDB->getNodeNum();
-        auto it = lastBySource.find(self);
-        if (it != lastBySource.end() && it->second) {
-            packetPool.release(it->second);
-        }
-        lastBySource[self] = packetPool.allocCopy(*p);
         const auto &em = m.variant.environment_metrics;
         auto &selfHist = s_hist[self];
-        selfHist.lastUpdate = millis(); // Update timestamp for own node
+        selfHist.lastUpdate = millis();
+        selfHist.rxTime = millis(); // For "ago" display
+        selfHist.lastMetrics = em;  // Store full metrics for display
         if (em.has_temperature)
             selfHist.temp.push(em.temperature);
         if (em.has_relative_humidity)
@@ -1870,8 +1780,13 @@ bool EnvironmentTelemetryModule::sendTelemetry(NodeNum dest, bool phoneOnly)
                 selfHist.dewPoint.push(dpC);
         }
 
-        // Mark display cache dirty so screen updates with new data
+        // Track most recent source for auto-display and mark cache dirty
+        s_lastSource = self;
         s_displayCache.markDirty();
+
+        // Force screen refresh if telemetry screen is currently showing
+        if (moduleConfig.telemetry.environment_screen_enabled && screen)
+            screen->forceDisplay();
 
         if (phoneOnly) {
             LOG_INFO("Send packet to phone");

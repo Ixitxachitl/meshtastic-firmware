@@ -28,7 +28,6 @@ class EnvironmentTelemetryModule : private concurrency::OSThread,
         : concurrency::OSThread("EnvironmentTelemetry"), ScanI2CConsumer(),
           ProtobufModule("EnvironmentTelemetry", meshtastic_PortNum_TELEMETRY_APP, &meshtastic_Telemetry_msg)
     {
-        lastMeasurementPacket = nullptr;
         nodeStatusObserver.observe(&nodeStatus->onNewStatus);
         setIntervalFromNow(10 * 1000);
     }
@@ -41,13 +40,7 @@ class EnvironmentTelemetryModule : private concurrency::OSThread,
 
     void setEnvDisplaySource(uint32_t nodenum) { selectedSource = nodenum; } // 0 = Auto
 
-    void clearEnvCache()
-    {
-        for (auto &kv : lastBySource)
-            if (kv.second)
-                packetPool.release(kv.second);
-        lastBySource.clear();
-    }
+    void clearEnvCache(); // Clears telemetry history cache
 
     void invalidateDisplayCache(); // Force redraw with new units
 
@@ -84,7 +77,6 @@ class EnvironmentTelemetryModule : private concurrency::OSThread,
 
   private:
     bool firstTime = 1;
-    meshtastic_MeshPacket *lastMeasurementPacket;
     uint32_t sendToPhoneIntervalMs = SECONDS_IN_MINUTE * 1000;  // Send to phone every minute
     uint32_t screenUpdateIntervalMs = SECONDS_IN_MINUTE * 1000; // Update screen data every minute
     uint32_t lastSentToMesh = 0;
@@ -92,7 +84,6 @@ class EnvironmentTelemetryModule : private concurrency::OSThread,
     uint32_t lastScreenUpdate = 0;
     uint32_t meshBroadcastStartTime = 0; // When mesh broadcasts should start (after stagger delay)
     uint32_t sensor_read_error_count = 0;
-    std::unordered_map<uint32_t, meshtastic_MeshPacket *> lastBySource;
     uint32_t selectedSource = 0; // 0 = Auto (most recent), otherwise a nodenum
 };
 
