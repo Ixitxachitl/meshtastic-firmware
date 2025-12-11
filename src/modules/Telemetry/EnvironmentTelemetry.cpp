@@ -110,8 +110,8 @@ static void drawIAQRuler(OLEDDisplay *dpy, int x, int y, int w, int iaqValue, co
 }
 
 // keep last N samples per source
-// Reduced buffer size to minimize heap usage - 60 samples is sufficient for sparklines
-static constexpr size_t kHistLen = 60; // max samples to keep (reduced from 120)
+// Reduced buffer size to minimize heap usage - 20 samples balances memory with visual quality
+static constexpr size_t kHistLen = 30; // max samples to keep (reduced from 120→60→30)
 static constexpr int kSparkH = 12;     // pixels tall for standard displays
 
 // Large display sparkline settings (SenseCAP Indicator 480x480, T-Deck 320x240)
@@ -151,8 +151,11 @@ template <size_t N> struct NodeHist {
 // One record per node; no per-sample heap churn
 static std::unordered_map<uint32_t, NodeHist<kHistLen>> s_hist;
 // Cap on maximum nodes and evict stale ones
-static constexpr size_t kMaxHistNodes = 8;             // Reduced from 64 - only track recent nodes
+static constexpr size_t kMaxHistNodes = 5;             // Reduced from 64→8→5 - conservative limit for high traffic
 static constexpr uint32_t kNodeStaleTimeout = 3600000; // 1 hour - evict nodes not updated in this time
+
+// Reserve map capacity on first use to avoid dynamic reallocation
+static bool s_histReserved = false;
 
 // Track most recent telemetry source for "auto" mode display
 static uint32_t s_lastSource = 0;
@@ -1554,6 +1557,12 @@ bool EnvironmentTelemetryModule::handleReceivedProtobuf(const meshtastic_MeshPac
         LOG_INFO("(Received from %s): radiation=%fµR/h", sender, t->variant.environment_metrics.radiation);
 
 #endif
+        // Reserve map capacity on first use to prevent reallocation during traffic
+        if (!s_histReserved) {
+            s_hist.reserve(kMaxHistNodes);
+            s_histReserved = true;
+        }
+
         // Track per-source telemetry
         uint32_t from = mp.from;
         const auto &em = t->variant.environment_metrics;
@@ -1630,9 +1639,7 @@ bool EnvironmentTelemetryModule::handleReceivedProtobuf(const meshtastic_MeshPac
         s_lastSource = from;
         s_displayCache.markDirty();
 
-        // Force screen refresh if telemetry screen is currently showing
-        if (moduleConfig.telemetry.environment_screen_enabled && screen)
-            screen->forceDisplay();
+        // Screen will refresh on next UI cycle - no need to force
     }
 
     return false; // Let others look at this message also if they want
@@ -1783,10 +1790,7 @@ bool EnvironmentTelemetryModule::sendTelemetry(NodeNum dest, bool phoneOnly)
         // Track most recent source for auto-display and mark cache dirty
         s_lastSource = self;
         s_displayCache.markDirty();
-
-        // Force screen refresh if telemetry screen is currently showing
-        if (moduleConfig.telemetry.environment_screen_enabled && screen)
-            screen->forceDisplay();
+        // Screen will refresh on next UI cycle
 
         if (phoneOnly) {
             LOG_INFO("Send packet to phone");
