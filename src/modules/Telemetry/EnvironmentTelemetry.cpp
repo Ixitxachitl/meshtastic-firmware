@@ -1568,33 +1568,54 @@ bool EnvironmentTelemetryModule::handleReceivedProtobuf(const meshtastic_MeshPac
         const auto &em = t->variant.environment_metrics;
 
         // Enforce maximum node limit to prevent memory exhaustion
-        // If this is a new node and we're at capacity, evict the stalest
-        bool isNewNode = (s_hist.find(from) == s_hist.end());
+        // CRITICAL: Clean up stale nodes first, THEN check capacity
+        cleanupStaleNodes();
+
+        // Check if this is a new node
+        auto it = s_hist.find(from);
+        bool isNewNode = (it == s_hist.end());
+
+        // If new node and at capacity, evict stalest to make room
         if (isNewNode && s_hist.size() >= kMaxHistNodes) {
-            // First try cleaning up stale nodes
-            cleanupStaleNodes();
-
-            // Find stalest node if still at capacity
-            if (s_hist.size() >= kMaxHistNodes) {
-                uint32_t stalestNode = 0;
-                uint32_t stalestTime = UINT32_MAX;
-                for (const auto &kv : s_hist) {
-                    if (kv.second.lastUpdate < stalestTime) {
-                        stalestTime = kv.second.lastUpdate;
-                        stalestNode = kv.first;
-                    }
+            uint32_t stalestNode = 0;
+            uint32_t stalestTime = UINT32_MAX;
+            for (const auto &kv : s_hist) {
+                if (kv.second.lastUpdate < stalestTime) {
+                    stalestTime = kv.second.lastUpdate;
+                    stalestNode = kv.first;
                 }
+            }
 
-                // Evict stalest node
-                if (stalestNode != 0 && stalestNode != from) {
-                    LOG_DEBUG("EnvironmentTelemetry: Evicting node 0x%08x to make room for new node", stalestNode);
-                    s_hist.erase(stalestNode);
-                }
+            // Evict stalest node (must succeed to make room)
+            if (stalestNode != 0 && stalestNode != from) {
+                LOG_DEBUG("EnvironmentTelemetry: Evicting node 0x%08x to make room for new node 0x%08x", stalestNode, from);
+                s_hist.erase(stalestNode);
+                it = s_hist.end(); // Invalidate iterator after erase
+            } else {
+                // Cannot evict - likely all nodes are current node, skip this telemetry
+                LOG_WARN("EnvironmentTelemetry: Cannot add node 0x%08x - map full and no node to evict", from);
+                return false;
             }
         }
 
-        // Store metrics and history
-        auto &nh2 = s_hist[from];
+        // Get or create NodeHist entry - check heap before attempting allocation
+        if (isNewNode) {
+            // Check minimum heap before attempting allocation (need ~2KB for NodeHist + map overhead)
+            if (ESP.getFreeHeap() < 8192) {
+                LOG_WARN("EnvironmentTelemetry: Insufficient heap (%u bytes) to add node 0x%08x", ESP.getFreeHeap(), from);
+                return false;
+            }
+            // Use emplace to construct in-place, check if it succeeded
+            auto result = s_hist.emplace(from, NodeHist<kHistLen>());
+            if (!result.second) {
+                LOG_ERROR("EnvironmentTelemetry: Failed to allocate NodeHist for node 0x%08x", from);
+                return false;
+            }
+            it = result.first;
+        }
+
+        // Store metrics and history - safe now because we made room
+        NodeHist<kHistLen> &nh2 = it->second;
         nh2.lastUpdate = millis();
         nh2.rxTime = millis(); // For "ago" display
         nh2.lastMetrics = em;  // Store full metrics for display
