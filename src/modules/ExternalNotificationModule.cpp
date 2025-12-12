@@ -168,7 +168,7 @@ int32_t ExternalNotificationModule::runOnce()
             delay = EXT_NOTIFICATION_FAST_THREAD_MS;
 #endif
 
-#if defined(T_WATCH_S3) || defined(TTGO_T_ECHO_PLUS)
+#if defined(T_WATCH_S3) || defined(T_LORA_PAGER) || defined(TTGO_T_ECHO_PLUS)
             drv.go();
 #endif
         }
@@ -290,7 +290,7 @@ void ExternalNotificationModule::setExternalState(uint8_t index, bool on)
 #ifdef UNPHONE
     unphone.rgb(red, green, blue);
 #endif
-#if defined(T_WATCH_S3) || defined(TTGO_T_ECHO_PLUS)
+#if defined(T_WATCH_S3) || defined(T_LORA_PAGER) || defined(TTGO_T_ECHO_PLUS)
     if (on) {
         drv.go();
     } else {
@@ -317,8 +317,7 @@ void ExternalNotificationModule::stopNow()
     rtttl::stop();
 #ifdef HAS_I2S
     LOG_INFO("Stop audioThread playback");
-    if (audioThread->isPlaying())
-        audioThread->stop();
+    audioThread->stop();
 #endif
     // Turn off all outputs
     LOG_INFO("Turning off setExternalStates");
@@ -327,7 +326,7 @@ void ExternalNotificationModule::stopNow()
         externalTurnedOn[i] = 0;
     }
     setIntervalFromNow(0);
-#ifdef T_WATCH_S3
+#if defined(T_WATCH_S3) || defined(T_LORA_PAGER) || defined(TTGO_T_ECHO_PLUS)
     drv.stop();
 #endif
 
@@ -458,7 +457,7 @@ ExternalNotificationModule::ExternalNotificationModule()
 ProcessMessage ExternalNotificationModule::handleReceived(const meshtastic_MeshPacket &mp)
 {
     if (moduleConfig.external_notification.enabled && !isSilenced) {
-#if defined(T_WATCH_S3) || defined(TTGO_T_ECHO_PLUS)
+#if defined(T_WATCH_S3) || defined(T_LORA_PAGER) || defined(TTGO_T_ECHO_PLUS)
         drv.setWaveform(0, 75);
         drv.setWaveform(1, 56);
         drv.setWaveform(2, 0);
@@ -556,6 +555,19 @@ ProcessMessage ExternalNotificationModule::handleReceived(const meshtastic_MeshP
                     (!isBroadcast(mp.to) && isToUs(&mp))) {
                     // Buzz if buzzer mode is not in DIRECT_MSG_ONLY or is DM to us
                     isNagging = true;
+#ifdef T_LORA_PAGER
+                    if (canBuzz()) {
+                        drv.setWaveform(0, 16); // Long buzzer 100%
+                        drv.setWaveform(1, 0);  // Pause
+                        drv.setWaveform(2, 16);
+                        drv.setWaveform(3, 0);
+                        drv.setWaveform(4, 16);
+                        drv.setWaveform(5, 0);
+                        drv.setWaveform(6, 16);
+                        drv.setWaveform(7, 0);
+                        drv.go();
+                    }
+#endif
                     if (!moduleConfig.external_notification.use_pwm && !moduleConfig.external_notification.use_i2s_as_buzzer) {
                         setExternalState(2, true);
                     } else {

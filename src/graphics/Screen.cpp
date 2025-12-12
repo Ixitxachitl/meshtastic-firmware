@@ -225,24 +225,9 @@ void Screen::showTextInput(const char *header, const char *initialText, uint32_t
 {
     LOG_INFO("showTextInput called with header='%s', durationMs=%d", header ? header : "NULL", durationMs);
 
-    if (NotificationRenderer::virtualKeyboard) {
-        delete NotificationRenderer::virtualKeyboard;
-        NotificationRenderer::virtualKeyboard = nullptr;
-    }
-
-    NotificationRenderer::textInputCallback = nullptr;
-
-    NotificationRenderer::virtualKeyboard = new VirtualKeyboard();
-    if (header) {
-        NotificationRenderer::virtualKeyboard->setHeader(header);
-    }
-    if (initialText) {
-        NotificationRenderer::virtualKeyboard->setInputText(initialText);
-    }
-
-    // Set up callback with safer cleanup mechanism
+    // Start OnScreenKeyboardModule session (non-touch variant)
+    OnScreenKeyboardModule::instance().start(header, initialText, durationMs, textCallback);
     NotificationRenderer::textInputCallback = textCallback;
-    NotificationRenderer::virtualKeyboard->setCallback([textCallback](const std::string &text) { textCallback(text); });
 
     // Store the message and set the expiration timestamp (use same pattern as other notifications)
     strncpy(NotificationRenderer::alertBannerMessage, header ? header : "Text Input", 255);
@@ -1068,10 +1053,15 @@ void Screen::setFrames(FrameFocus focus)
     indicatorIcons.push_back(icon_mail);
 
 #ifndef USE_EINK
-    if (!hiddenFrames.nodelist) {
-        fsi.positions.nodelist = numframes;
-        normalFrames[numframes++] = graphics::NodeListRenderer::drawDynamicNodeListScreen;
+    if (!hiddenFrames.nodelist_nodes) {
+        fsi.positions.nodelist_nodes = numframes;
+        normalFrames[numframes++] = graphics::NodeListRenderer::drawDynamicListScreen_Nodes;
         indicatorIcons.push_back(icon_nodes);
+    }
+    if (!hiddenFrames.nodelist_location) {
+        fsi.positions.nodelist_location = numframes;
+        normalFrames[numframes++] = graphics::NodeListRenderer::drawDynamicListScreen_Location;
+        indicatorIcons.push_back(icon_list);
     }
 #endif
 
@@ -1094,11 +1084,13 @@ void Screen::setFrames(FrameFocus focus)
     }
 #endif
 #if HAS_GPS
+#ifdef USE_EINK
     if (!hiddenFrames.nodelist_bearings) {
         fsi.positions.nodelist_bearings = numframes;
         normalFrames[numframes++] = graphics::NodeListRenderer::drawNodeListWithCompasses;
         indicatorIcons.push_back(icon_list);
     }
+#endif
     if (!hiddenFrames.gps) {
         fsi.positions.gps = numframes;
         normalFrames[numframes++] = graphics::UIRenderer::drawCompassAndLocationScreen;
@@ -1270,8 +1262,11 @@ void Screen::setFrameImmediateDraw(FrameCallback *drawFrames)
 void Screen::toggleFrameVisibility(const std::string &frameName)
 {
 #ifndef USE_EINK
-    if (frameName == "nodelist") {
-        hiddenFrames.nodelist = !hiddenFrames.nodelist;
+    if (frameName == "nodelist_nodes") {
+        hiddenFrames.nodelist_nodes = !hiddenFrames.nodelist_nodes;
+    }
+    if (frameName == "nodelist_location") {
+        hiddenFrames.nodelist_location = !hiddenFrames.nodelist_location;
     }
 #endif
 #ifdef USE_EINK
@@ -1286,9 +1281,11 @@ void Screen::toggleFrameVisibility(const std::string &frameName)
     }
 #endif
 #if HAS_GPS
+#ifdef USE_EINK
     if (frameName == "nodelist_bearings") {
         hiddenFrames.nodelist_bearings = !hiddenFrames.nodelist_bearings;
     }
+#endif
     if (frameName == "gps") {
         hiddenFrames.gps = !hiddenFrames.gps;
     }
@@ -1310,8 +1307,10 @@ void Screen::toggleFrameVisibility(const std::string &frameName)
 bool Screen::isFrameHidden(const std::string &frameName) const
 {
 #ifndef USE_EINK
-    if (frameName == "nodelist")
-        return hiddenFrames.nodelist;
+    if (frameName == "nodelist_nodes")
+        return hiddenFrames.nodelist_nodes;
+    if (frameName == "nodelist_location")
+        return hiddenFrames.nodelist_location;
 #endif
 #ifdef USE_EINK
     if (frameName == "nodelist_lastheard")
@@ -1322,8 +1321,10 @@ bool Screen::isFrameHidden(const std::string &frameName) const
         return hiddenFrames.nodelist_distance;
 #endif
 #if HAS_GPS
+#ifdef USE_EINK
     if (frameName == "nodelist_bearings")
         return hiddenFrames.nodelist_bearings;
+#endif
     if (frameName == "gps")
         return hiddenFrames.gps;
 #endif
@@ -1453,6 +1454,7 @@ int Screen::handleStatusUpdate(const meshtastic::Status *arg)
     return 0;
 }
 
+// Handles when message is received; will jump to text message frame.
 int Screen::handleTextMessage(const meshtastic_MeshPacket *packet)
 {
     if (showingNormalScreen) {
@@ -1468,16 +1470,116 @@ int Screen::handleTextMessage(const meshtastic_MeshPacket *packet)
             // Incoming message
             devicestate.has_rx_text_message = true; // Needed to include the message frame
             hasUnreadMessage = true;                // Enables mail icon in the header
-            setFrames(FOCUS_PRESERVE);              // Refresh frame list without switching view
+            setFrames(FOCUS_PRESERVE);              // Refresh frame list without switching view (no-op during text_input)
 
-            // Only wake (do not switch tabs) if the configuration allows it
+            // Only wake/force display if the configuration allows it
             if (shouldWakeOnReceivedMessage()) {
-                screen->setOn(true); // wake the display
-                setFastFramerate();  // draw ASAP so the banner appears promptly
-                forceDisplay(true);  // commit a frame if we were idling
+                setOn(true);    // Wake up the screen first
+                forceDisplay(); // Forces screen redraw
             }
-            // Note: Banner notification is handled by MessageRenderer::handleNewMessage()
-            // which provides more detailed context (channel/DM info)
+            // === Prepare banner/popup content ===
+            const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(packet->from);
+            const meshtastic_Channel channel =
+                channels.getByIndex(packet->channel ? packet->channel : channels.getPrimaryIndex());
+            const char *longName = (node && node->has_user) ? node->user.long_name : nullptr;
+
+            const char *msgRaw = reinterpret_cast<const char *>(packet->decoded.payload.bytes);
+
+            char banner[256];
+
+            bool isAlert = false;
+
+            if (moduleConfig.external_notification.alert_bell || moduleConfig.external_notification.alert_bell_vibra ||
+                moduleConfig.external_notification.alert_bell_buzzer)
+                // Check for bell character to determine if this message is an alert
+                for (size_t i = 0; i < packet->decoded.payload.size && i < 100; i++) {
+                    if (msgRaw[i] == ASCII_BELL) {
+                        isAlert = true;
+                        break;
+                    }
+                }
+
+            // Unlike generic messages, alerts (when enabled via the ext notif module) ignore any
+            // 'mute' preferences set to any specific node or channel.
+            // If on-screen keyboard is active, show a transient popup over keyboard instead of interrupting it
+            if (NotificationRenderer::current_notification_type == notificationTypeEnum::text_input) {
+                // Wake and force redraw so popup is visible immediately
+                if (shouldWakeOnReceivedMessage()) {
+                    setOn(true);
+                    forceDisplay();
+                }
+
+                // Build popup: title = message source name, content = message text (sanitized)
+                // Title
+                char titleBuf[64] = {0};
+                if (longName && longName[0]) {
+                    // Sanitize sender name
+                    std::string t = sanitizeString(longName);
+                    strncpy(titleBuf, t.c_str(), sizeof(titleBuf) - 1);
+                } else {
+                    strncpy(titleBuf, "Message", sizeof(titleBuf) - 1);
+                }
+
+                // Content: payload bytes may not be null-terminated, remove ASCII_BELL and sanitize
+                char content[256] = {0};
+                {
+                    std::string raw;
+                    raw.reserve(packet->decoded.payload.size);
+                    for (size_t i = 0; i < packet->decoded.payload.size; ++i) {
+                        char c = msgRaw[i];
+                        if (c == ASCII_BELL)
+                            continue; // strip bell
+                        raw.push_back(c);
+                    }
+                    std::string sanitized = sanitizeString(raw);
+                    strncpy(content, sanitized.c_str(), sizeof(content) - 1);
+                }
+
+                NotificationRenderer::showKeyboardMessagePopupWithTitle(titleBuf, content, 3000);
+
+// Maintain existing buzzer behavior on M5 if applicable
+#if defined(M5STACK_UNITC6L)
+                if (config.device.buzzer_mode != meshtastic_Config_DeviceConfig_BuzzerMode_DIRECT_MSG_ONLY ||
+                    (isAlert && moduleConfig.external_notification.alert_bell_buzzer) ||
+                    (!isBroadcast(packet->to) && isToUs(packet))) {
+                    playLongBeep();
+                }
+#endif
+            } else {
+                // No keyboard active: use regular banner flow, respecting mute settings
+                if (isAlert) {
+                    if (longName && longName[0]) {
+                        snprintf(banner, sizeof(banner), "Alert Received from\n%s", longName);
+                    } else {
+                        strcpy(banner, "Alert Received");
+                    }
+                    screen->showSimpleBanner(banner, 3000);
+                } else if (!channel.settings.has_module_settings || !channel.settings.module_settings.is_muted) {
+                    if (longName && longName[0]) {
+#if defined(M5STACK_UNITC6L)
+                        strcpy(banner, "New Message");
+#else
+                        snprintf(banner, sizeof(banner), "New Message from\n%s", longName);
+#endif
+                    } else {
+                        strcpy(banner, "New Message");
+                    }
+#if defined(M5STACK_UNITC6L)
+                    screen->setOn(true);
+                    screen->showSimpleBanner(banner, 1500);
+                    if (config.device.buzzer_mode != meshtastic_Config_DeviceConfig_BuzzerMode_DIRECT_MSG_ONLY ||
+                        (isAlert && moduleConfig.external_notification.alert_bell_buzzer) ||
+                        (!isBroadcast(packet->to) && isToUs(packet))) {
+                        // Beep if not in DIRECT_MSG_ONLY mode or if in DIRECT_MSG_ONLY mode and either
+                        // - packet contains an alert and alert bell buzzer is enabled
+                        // - packet is a non-broadcast that is addressed to this node
+                        playLongBeep();
+                    }
+#else
+                    screen->showSimpleBanner(banner, 3000);
+#endif
+                }
+            }
         }
     }
 
@@ -1558,13 +1660,41 @@ int Screen::handleInputEvent(const InputEvent *event)
     if (ui->getUiState()->currentFrame == framesetInfo.positions.textMessage) {
 
         if (event->inputEvent == INPUT_BROKER_UP) {
-            graphics::MessageRenderer::scrollUp();
-            setFastFramerate(); // match existing behavior
+            if (messageStore.getMessages().empty()) {
+                cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST);
+            } else {
+                graphics::MessageRenderer::scrollUp();
+                setFastFramerate(); // match existing behavior
+                return 0;
+            }
+        }
+
+        if (event->inputEvent == INPUT_BROKER_DOWN) {
+            if (messageStore.getMessages().empty()) {
+                cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST);
+            } else {
+                graphics::MessageRenderer::scrollDown();
+                setFastFramerate();
+                return 0;
+            }
+        }
+    }
+    // UP/DOWN in node list screens scrolls through node pages
+    if (ui->getUiState()->currentFrame == framesetInfo.positions.nodelist_nodes ||
+        ui->getUiState()->currentFrame == framesetInfo.positions.nodelist_location ||
+        ui->getUiState()->currentFrame == framesetInfo.positions.nodelist_lastheard ||
+        ui->getUiState()->currentFrame == framesetInfo.positions.nodelist_hopsignal ||
+        ui->getUiState()->currentFrame == framesetInfo.positions.nodelist_distance ||
+        ui->getUiState()->currentFrame == framesetInfo.positions.nodelist_bearings)
+    {
+        if (event->inputEvent == INPUT_BROKER_UP) {
+            graphics::NodeListRenderer::scrollUp();
+            setFastFramerate();
             return 0;
         }
 
         if (event->inputEvent == INPUT_BROKER_DOWN) {
-            graphics::MessageRenderer::scrollDown();
+            graphics::NodeListRenderer::scrollDown();
             setFastFramerate();
             return 0;
         }
@@ -1599,10 +1729,39 @@ int Screen::handleInputEvent(const InputEvent *event)
 
         // If no modules are using the input, move between frames
         if (!inputIntercepted) {
+#if defined(INPUTDRIVER_ENCODER_TYPE) && INPUTDRIVER_ENCODER_TYPE == 2
+            bool handledEncoderScroll = false;
+            const bool isTextMessageFrame = (framesetInfo.positions.textMessage != 255 &&
+                                             this->ui->getUiState()->currentFrame == framesetInfo.positions.textMessage &&
+                                             !messageStore.getMessages().empty());
+            if (isTextMessageFrame) {
+                if (event->inputEvent == INPUT_BROKER_UP_LONG) {
+                    graphics::MessageRenderer::nudgeScroll(-1);
+                    handledEncoderScroll = true;
+                } else if (event->inputEvent == INPUT_BROKER_DOWN_LONG) {
+                    graphics::MessageRenderer::nudgeScroll(1);
+                    handledEncoderScroll = true;
+                }
+            }
+
+            if (handledEncoderScroll) {
+                setFastFramerate();
+                return 0;
+            }
+#endif
             if (event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_ALT_PRESS) {
                 showFrame(FrameDirection::PREVIOUS);
             } else if (event->inputEvent == INPUT_BROKER_RIGHT || event->inputEvent == INPUT_BROKER_USER_PRESS) {
                 showFrame(FrameDirection::NEXT);
+            } else if (event->inputEvent == INPUT_BROKER_UP_LONG) {
+                // Long press up button for fast frame switching
+                showPrevFrame();
+            } else if (event->inputEvent == INPUT_BROKER_DOWN_LONG) {
+                // Long press down button for fast frame switching
+                showNextFrame();
+            } else if ((event->inputEvent == INPUT_BROKER_UP || event->inputEvent == INPUT_BROKER_DOWN) &&
+                       this->ui->getUiState()->currentFrame == framesetInfo.positions.home) {
+                cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST);
             } else if (event->inputEvent == INPUT_BROKER_SELECT) {
                 if (this->ui->getUiState()->currentFrame == framesetInfo.positions.home) {
                     menuHandler::homeBaseMenu();
@@ -1636,7 +1795,8 @@ int Screen::handleInputEvent(const InputEvent *event)
                            this->ui->getUiState()->currentFrame >= framesetInfo.positions.firstFavorite &&
                            this->ui->getUiState()->currentFrame <= framesetInfo.positions.lastFavorite) {
                     menuHandler::favoriteBaseMenu();
-                } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.nodelist ||
+                } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.nodelist_nodes ||
+                           this->ui->getUiState()->currentFrame == framesetInfo.positions.nodelist_location ||
                            this->ui->getUiState()->currentFrame == framesetInfo.positions.nodelist_lastheard ||
                            this->ui->getUiState()->currentFrame == framesetInfo.positions.nodelist_hopsignal ||
                            this->ui->getUiState()->currentFrame == framesetInfo.positions.nodelist_distance ||

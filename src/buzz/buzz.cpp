@@ -459,13 +459,24 @@ void playLongBeep()
 
 void playGPSEnableBeep()
 {
+#if defined(R1_NEO) || defined(MUZI_BASE)
+    ToneDuration melody[] = {
+        {NOTE_F5, DURATION_1_2}, {NOTE_G6, DURATION_1_8}, {NOTE_E7, DURATION_1_4}, {NOTE_SILENT, DURATION_1_2}};
+#else
     ToneDuration melody[] = {{NOTE_C3, DURATION_1_8}, {NOTE_FS3, DURATION_1_4}, {NOTE_CS4, DURATION_1_4}};
+#endif
     playMelody(melody, sizeof(melody) / sizeof(ToneDuration), "gpson");
 }
 
 void playGPSDisableBeep()
 {
+#if defined(R1_NEO) || defined(MUZI_BASE)
+    ToneDuration melody[] = {{NOTE_B4, DURATION_1_16}, {NOTE_B4, DURATION_1_16},   {NOTE_SILENT, DURATION_1_8},
+                             {NOTE_F3, DURATION_1_16}, {NOTE_F3, DURATION_1_16},   {NOTE_SILENT, DURATION_1_8},
+                             {NOTE_C3, DURATION_1_1},  {NOTE_SILENT, DURATION_1_1}};
+#else
     ToneDuration melody[] = {{NOTE_CS4, DURATION_1_8}, {NOTE_FS3, DURATION_1_4}, {NOTE_C3, DURATION_1_4}};
+#endif
     playMelody(melody, sizeof(melody) / sizeof(ToneDuration), "gpsoff");
 }
 

@@ -580,6 +580,7 @@ class Screen : public concurrency::OSThread
 
     // Handle observer events
     int handleStatusUpdate(const meshtastic::Status *arg);
+    int handleTextMessage(const meshtastic_MeshPacket *packet);
     int handleUIFrameEvent(const UIFrameEvent *arg);
     int handleInputEvent(const InputEvent *arg);
     int handleAdminMessage(AdminModule_ObserverData *arg);
@@ -658,7 +659,8 @@ class Screen : public concurrency::OSThread
             uint8_t compass = 255;
             uint8_t home = 255;
             uint8_t textMessage = 255;
-            uint8_t nodelist = 255;
+            uint8_t nodelist_nodes = 255;
+            uint8_t nodelist_location = 255;
             uint8_t nodelist_lastheard = 255;
             uint8_t nodelist_hopsignal = 255;
             uint8_t nodelist_distance = 255;
@@ -682,7 +684,8 @@ class Screen : public concurrency::OSThread
         bool home = false;
         bool clock = false;
 #ifndef USE_EINK
-        bool nodelist = false;
+        bool nodelist_nodes = false;
+        bool nodelist_location = false;
 #endif
 #ifdef USE_EINK
         bool nodelist_lastheard = false;
@@ -690,7 +693,9 @@ class Screen : public concurrency::OSThread
         bool nodelist_distance = false;
 #endif
 #if HAS_GPS
+#ifdef USE_EINK
         bool nodelist_bearings = false;
+#endif
         bool gps = false;
 #endif
         bool lora = false;

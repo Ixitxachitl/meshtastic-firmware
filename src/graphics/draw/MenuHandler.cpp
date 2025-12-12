@@ -14,6 +14,8 @@
 #include "graphics/draw/MessageRenderer.h"
 #include "graphics/draw/UIRenderer.h"
 #include "main.h"
+#include "mesh/Default.h"
+#include "mesh/MeshTypes.h"
 #include "modules/AdminModule.h"
 #include "modules/CannedMessageModule.h"
 #include "modules/KeyVerificationModule.h"
@@ -1096,20 +1098,31 @@ void menuHandler::positionBaseMenu()
 
 void menuHandler::nodeListMenu()
 {
-    enum optionsNumbers { Back, Favorite, TraceRoute, Verify, Reset, enumEnd };
-#if defined(M5STACK_UNITC6L)
-    static const char *optionsArray[] = {"Back", "Add Favorite", "Reset Node"};
-#else
-    static const char *optionsArray[] = {"Back", "Add Favorite", "Trace Route", "Key Verification", "Reset NodeDB"};
+    enum optionsNumbers { Back, Favorite, TraceRoute, Verify, Reset, NodeNameLength, enumEnd };
+    static const char *optionsArray[enumEnd] = {"Back"};
+    static int optionsEnumArray[enumEnd] = {Back};
+    int options = 1;
+
+    optionsArray[options] = "Add Favorite";
+    optionsEnumArray[options++] = Favorite;
+    optionsArray[options] = "Trace Route";
+    optionsEnumArray[options++] = TraceRoute;
+
+#if !defined(M5STACK_UNITC6L)
+    optionsArray[options] = "Key Verification";
+    optionsEnumArray[options++] = Verify;
 #endif
+
+    optionsArray[options] = "Show Long/Short Name";
+    optionsEnumArray[options++] = NodeNameLength;
+    optionsArray[options] = "Reset NodeDB";
+    optionsEnumArray[options++] = Reset;
+
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = "Node Action";
     bannerOptions.optionsArrayPtr = optionsArray;
-#if defined(M5STACK_UNITC6L)
-    bannerOptions.optionsCount = 3;
-#else
-    bannerOptions.optionsCount = 5;
-#endif
+    bannerOptions.optionsCount = options;
+    bannerOptions.optionsEnumPtr = optionsEnumArray;
     bannerOptions.bannerCallback = [](int selected) -> void {
         if (selected == Favorite) {
             menuQueue = add_favorite;
@@ -1122,6 +1135,9 @@ void menuHandler::nodeListMenu()
             screen->runNow();
         } else if (selected == TraceRoute) {
             menuQueue = trace_route_menu;
+            screen->runNow();
+        } else if (selected == NodeNameLength) {
+            menuHandler::menuQueue = menuHandler::node_name_length_menu;
             screen->runNow();
         }
     };
@@ -1403,12 +1419,13 @@ void menuHandler::switchToMUIMenu()
 
 void menuHandler::TFTColorPickerMenu(OLEDDisplay *display)
 {
-    static const char *optionsArray[] = {"Back", "Default", "Meshtastic Green", "Yellow", "Red", "Orange", "Purple", "Teal",
-                                         "Pink", "White"};
+    static const char *optionsArray[] = {
+        "Back",  "Default", "Meshtastic Green", "Yellow", "Red", "Orange", "Purple", "Blue", "Teal", "Cyan", "Ice", "Pink",
+        "White", "Gray"};
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = "Select Screen Color";
     bannerOptions.optionsArrayPtr = optionsArray;
-    bannerOptions.optionsCount = 10;
+    bannerOptions.optionsCount = 14;
     bannerOptions.bannerCallback = [display](int selected) -> void {
 #if defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190) || defined(T_DECK) || defined(T_LORA_PAGER) ||          \
     defined(M5STACK_CARDPUTER_ADV) || HAS_TFT || defined(HACKADAY_COMMUNICATOR)
@@ -1444,20 +1461,40 @@ void menuHandler::TFTColorPickerMenu(OLEDDisplay *display)
             TFT_MESH_g = 153;
             TFT_MESH_b = 255;
         } else if (selected == 7) {
-            LOG_INFO("Setting color to Teal");
-            TFT_MESH_r = 64;
-            TFT_MESH_g = 224;
-            TFT_MESH_b = 208;
+            LOG_INFO("Setting color to Blue");
+            TFT_MESH_r = 0;
+            TFT_MESH_g = 0;
+            TFT_MESH_b = 255;
         } else if (selected == 8) {
+            LOG_INFO("Setting color to Teal");
+            TFT_MESH_r = 16;
+            TFT_MESH_g = 102;
+            TFT_MESH_b = 102;
+        } else if (selected == 9) {
+            LOG_INFO("Setting color to Cyan");
+            TFT_MESH_r = 0;
+            TFT_MESH_g = 255;
+            TFT_MESH_b = 255;
+        } else if (selected == 10) {
+            LOG_INFO("Setting color to Ice");
+            TFT_MESH_r = 173;
+            TFT_MESH_g = 216;
+            TFT_MESH_b = 230;
+        } else if (selected == 11) {
             LOG_INFO("Setting color to Pink");
             TFT_MESH_r = 255;
             TFT_MESH_g = 105;
             TFT_MESH_b = 180;
-        } else if (selected == 9) {
+        } else if (selected == 12) {
             LOG_INFO("Setting color to White");
             TFT_MESH_r = 255;
             TFT_MESH_g = 255;
             TFT_MESH_b = 255;
+        } else if (selected == 13) {
+            LOG_INFO("Setting color to Gray");
+            TFT_MESH_r = 128;
+            TFT_MESH_g = 128;
+            TFT_MESH_b = 128;
         } else {
             menuQueue = system_base_menu;
             screen->runNow();
@@ -1721,15 +1758,10 @@ void menuHandler::screenOptionsMenu()
     hasSupportBrightness = false;
 #endif
 
-    enum optionsNumbers { Back, NodeNameLength, Brightness, ScreenColor, FrameToggles, DisplayUnits };
+    enum optionsNumbers { Back, Brightness, ScreenColor, FrameToggles, DisplayUnits };
     static const char *optionsArray[5] = {"Back"};
     static int optionsEnumArray[5] = {Back};
     int options = 1;
-
-#if defined(T_DECK) || defined(T_LORA_PAGER) || defined(HACKADAY_COMMUNICATOR)
-    optionsArray[options] = "Show Long/Short Name";
-    optionsEnumArray[options++] = NodeNameLength;
-#endif
 
     // Only show brightness for B&W displays
     if (hasSupportBrightness) {
@@ -1761,9 +1793,6 @@ void menuHandler::screenOptionsMenu()
             screen->runNow();
         } else if (selected == ScreenColor) {
             menuHandler::menuQueue = menuHandler::tftcolormenupicker;
-            screen->runNow();
-        } else if (selected == NodeNameLength) {
-            menuHandler::menuQueue = menuHandler::node_name_length_menu;
             screen->runNow();
         } else if (selected == FrameToggles) {
             menuHandler::menuQueue = menuHandler::FrameToggles;
@@ -1861,7 +1890,8 @@ void menuHandler::FrameToggles_menu()
 {
     enum optionsNumbers {
         Finish,
-        nodelist,
+        nodelist_nodes,
+        nodelist_location,
         nodelist_lastheard,
         nodelist_hopsignal,
         nodelist_distance,
@@ -1882,20 +1912,25 @@ void menuHandler::FrameToggles_menu()
     static int lastSelectedIndex = 0;
 
 #ifndef USE_EINK
-    optionsArray[options] = screen->isFrameHidden("nodelist") ? "Show Node List" : "Hide Node List";
-    optionsEnumArray[options++] = nodelist;
-#endif
-#ifdef USE_EINK
+    optionsArray[options] = screen->isFrameHidden("nodelist_nodes") ? "Show Node List" : "Hide Node List";
+    optionsEnumArray[options++] = nodelist_nodes;
+#else
     optionsArray[options] = screen->isFrameHidden("nodelist_lastheard") ? "Show NL - Last Heard" : "Hide NL - Last Heard";
     optionsEnumArray[options++] = nodelist_lastheard;
     optionsArray[options] = screen->isFrameHidden("nodelist_hopsignal") ? "Show NL - Hops/Signal" : "Hide NL - Hops/Signal";
     optionsEnumArray[options++] = nodelist_hopsignal;
+#endif
+
+#if HAS_GPS
+#ifndef USE_EINK
+    optionsArray[options] = screen->isFrameHidden("nodelist_location") ? "Show Node Location List" : "Hide Node Location List";
+    optionsEnumArray[options++] = nodelist_location;
+#else
     optionsArray[options] = screen->isFrameHidden("nodelist_distance") ? "Show NL - Distance" : "Hide NL - Distance";
     optionsEnumArray[options++] = nodelist_distance;
-#endif
-#if HAS_GPS
-    optionsArray[options] = screen->isFrameHidden("nodelist_bearings") ? "Show Bearings" : "Hide Bearings";
+    optionsArray[options] = screen->isFrameHidden("nodelist_bearings") ? "Show NL - Bearings" : "Hide NL - Bearings";
     optionsEnumArray[options++] = nodelist_bearings;
+#endif
 
     optionsArray[options] = screen->isFrameHidden("gps") ? "Show Position" : "Hide Position";
     optionsEnumArray[options++] = gps;
@@ -1934,8 +1969,12 @@ void menuHandler::FrameToggles_menu()
 
         if (selected == Finish) {
             screen->setFrames(Screen::FOCUS_DEFAULT);
-        } else if (selected == nodelist) {
-            screen->toggleFrameVisibility("nodelist");
+        } else if (selected == nodelist_nodes) {
+            screen->toggleFrameVisibility("nodelist_nodes");
+            menuHandler::menuQueue = menuHandler::FrameToggles;
+            screen->runNow();
+        } else if (selected == nodelist_location) {
+            screen->toggleFrameVisibility("nodelist_location");
             menuHandler::menuQueue = menuHandler::FrameToggles;
             screen->runNow();
         } else if (selected == nodelist_lastheard) {
