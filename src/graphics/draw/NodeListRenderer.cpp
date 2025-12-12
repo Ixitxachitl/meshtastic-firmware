@@ -49,6 +49,15 @@ void drawScaledXBitmap16x16(int x, int y, int width, int height, const uint8_t *
 static ListMode_Node currentMode_Nodes = MODE_LAST_HEARD;
 static ListMode_Location currentMode_Location = MODE_DISTANCE;
 static int scrollIndex = 0;
+// Popup overlay state
+static uint32_t popupTime = 0;
+static int popupTotal = 0;
+static int popupStart = 0;
+static int popupEnd = 0;
+static int popupPage = 1;
+static int popupMaxPage = 1;
+
+static const uint32_t POPUP_DURATION_MS = 1000; // 1 second visible
 
 // =============================
 // Scrolling Logic
@@ -57,6 +66,8 @@ void scrollUp()
 {
     if (scrollIndex > 0)
         scrollIndex--;
+
+    popupTime = millis(); // show popup
 }
 
 void scrollDown()
@@ -80,6 +91,8 @@ void scrollDown()
 
     if (scrollIndex < maxScroll)
         scrollIndex++;
+
+    popupTime = millis();
 }
 
 // =============================
@@ -480,19 +493,23 @@ void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
     // Space below header
     y += COMMON_HEADER_HEIGHT;
 
-#if defined(M5STACK_UNITC6L)
-    int totalColumns = 1;
-#elif defined(T_LORA_PAGER)
-    int totalColumns = 3;
+    int totalColumns = 1; // Default to 1 column
+
     if (config.display.use_long_node_name) {
-        totalColumns = 2;
+        if (SCREEN_WIDTH <= 240) {
+            totalColumns = 1;
+        } else if (SCREEN_WIDTH > 240) {
+            totalColumns = 2;
+        }
+    } else {
+        if (SCREEN_WIDTH <= 64) {
+            totalColumns = 1;
+        } else if (SCREEN_WIDTH > 64 && SCREEN_WIDTH <= 240) {
+            totalColumns = 2;
+        } else {
+            totalColumns = 3;
+        }
     }
-#else
-    int totalColumns = 2;
-    if (config.display.use_long_node_name) {
-        totalColumns = 1;
-    }
-#endif
 
     int columnWidth = display->getWidth() / totalColumns;
 
@@ -500,30 +517,41 @@ void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
     int totalRowsAvailable = (display->getHeight() - y) / rowYOffset;
     int numskipped = 0;
     int visibleNodeRows = totalRowsAvailable;
-    int startIndex = scrollIndex * visibleNodeRows * totalColumns;
-    if (nodeDB->getMeshNodeByIndex(startIndex)->num == nodeDB->getNodeNum()) {
-        startIndex++; // skip own node
-    }
-    int endIndex = std::min(startIndex + visibleNodeRows * totalColumns, totalEntries);
 
+    // Build filtered + ordered list
+    std::vector<int> drawList;
+    drawList.reserve(totalEntries);
+    for (int i = 0; i < totalEntries; i++) {
+        auto *n = nodeDB->getMeshNodeByIndex(i);
+
+        if (!n)
+            continue;
+        if (n->num == nodeDB->getNodeNum())
+            continue;
+        if (locationScreen && !n->has_position)
+            continue;
+
+        drawList.push_back(n->num);
+    }
+    totalEntries = drawList.size();
+    int startIndex = scrollIndex * visibleNodeRows * totalColumns;
+    int endIndex = std::min(startIndex + visibleNodeRows * totalColumns, totalEntries);
     int yOffset = 0;
     int col = 0;
     int lastNodeY = y;
     int shownCount = 0;
     int rowCount = 0;
 
-    for (int i = startIndex; i < endIndex; ++i) {
-        if (locationScreen && !nodeDB->getMeshNodeByIndex(i)->has_position) {
-            numskipped++;
-            continue;
-        }
+    for (int idx = startIndex; idx < endIndex; idx++) {
+        uint32_t nodeNum = drawList[idx];
+        auto *node = nodeDB->getMeshNode(nodeNum);
         int xPos = x + (col * columnWidth);
         int yPos = y + yOffset;
-        renderer(display, nodeDB->getMeshNodeByIndex(i), xPos, yPos, columnWidth);
 
-        if (extras) {
-            extras(display, nodeDB->getMeshNodeByIndex(i), xPos, yPos, columnWidth, heading, lat, lon);
-        }
+        renderer(display, node, xPos, yPos, columnWidth);
+
+        if (extras)
+            extras(display, node, xPos, yPos, columnWidth, heading, lat, lon);
 
         lastNodeY = std::max(lastNodeY, yPos + FONT_HEIGHT_SMALL);
         yOffset += rowYOffset;
@@ -555,6 +583,62 @@ void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
     const int scrollStartY = y + 3;
     drawScrollbar(display, visibleNodeRows, totalEntries, scrollIndex, 2, scrollStartY);
     graphics::drawCommonFooter(display, x, y);
+
+    // Scroll Popup Overlay
+    if (millis() - popupTime < POPUP_DURATION_MS) {
+        popupTotal = totalEntries;
+
+        int perPage = visibleNodeRows * totalColumns;
+
+        popupStart = startIndex + 1;
+        popupEnd = std::min(startIndex + perPage, totalEntries);
+
+        popupPage = (scrollIndex + 1);
+        popupMaxPage = std::max(1, (totalEntries + perPage - 1) / perPage);
+
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%d-%d/%d  Pg %d/%d", popupStart, popupEnd, popupTotal, popupPage, popupMaxPage);
+
+        display->setTextAlignment(TEXT_ALIGN_LEFT);
+
+        // Box padding
+        int padding = 2;
+        int textW = display->getStringWidth(buf);
+        int textH = FONT_HEIGHT_SMALL;
+        int boxWidth = textW + padding * 3;
+        int boxHeight = textH + padding * 2;
+
+        // Center of usable screen area:
+        int headerHeight = FONT_HEIGHT_SMALL - 1;
+        int footerHeight = FONT_HEIGHT_SMALL + 2;
+
+        int usableTop = headerHeight;
+        int usableBottom = display->getHeight() - footerHeight;
+        int usableHeight = usableBottom - usableTop;
+
+        // Center point inside usable area
+        int boxLeft = (display->getWidth() - boxWidth) / 2;
+        int boxTop = usableTop + (usableHeight - boxHeight) / 2;
+
+        // Draw Box
+        display->setColor(BLACK);
+        display->fillRect(boxLeft - 1, boxTop - 1, boxWidth + 2, boxHeight + 2);
+        display->fillRect(boxLeft, boxTop - 2, boxWidth, 1);
+        display->fillRect(boxLeft, boxTop + boxHeight + 1, boxWidth, 1);
+        display->fillRect(boxLeft - 2, boxTop, 1, boxHeight);
+        display->fillRect(boxLeft + boxWidth + 1, boxTop, 1, boxHeight);
+        display->setColor(WHITE);
+        display->drawRect(boxLeft, boxTop, boxWidth, boxHeight);
+        display->setColor(BLACK);
+        display->fillRect(boxLeft, boxTop, 1, 1);
+        display->fillRect(boxLeft + boxWidth - 1, boxTop, 1, 1);
+        display->fillRect(boxLeft, boxTop + boxHeight - 1, 1, 1);
+        display->fillRect(boxLeft + boxWidth - 1, boxTop + boxHeight - 1, 1, 1);
+        display->setColor(WHITE);
+
+        // Text
+        display->drawString(boxLeft + padding, boxTop + padding, buf);
+    }
 }
 
 // =============================
