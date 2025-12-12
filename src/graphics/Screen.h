@@ -225,7 +225,7 @@ class Screen : public concurrency::OSThread
     inline int getHeight() const { return displayHeight; }
     inline int getWidth() const { return displayWidth; }
     size_t frameCount = 0; // Total number of active frames
-    
+
     ~Screen();
 
     // Which frame we want to be displayed, after we regen the frameset by calling setFrames
@@ -584,7 +584,6 @@ class Screen : public concurrency::OSThread
     int handleUIFrameEvent(const UIFrameEvent *arg);
     int handleInputEvent(const InputEvent *arg);
     int handleAdminMessage(AdminModule_ObserverData *arg);
-    int handleTextMessage(const meshtastic_MeshPacket *packet);
 
     /// Used to force (super slow) eink displays to draw critical frames
     void forceDisplay(bool forceUiUpdate = false);
