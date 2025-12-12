@@ -46,16 +46,49 @@ void drawScaledXBitmap16x16(int x, int y, int width, int height, const uint8_t *
 }
 
 // Static variables for dynamic cycling
-static NodeListMode currentMode = MODE_LAST_HEARD;
+static ListMode_Node currentMode_Nodes = MODE_LAST_HEARD;
+static ListMode_Location currentMode_Location = MODE_DISTANCE;
 static int scrollIndex = 0;
+
+// =============================
+// Scrolling Logic
+// =============================
+void scrollUp()
+{
+    if (scrollIndex > 0)
+        scrollIndex--;
+}
+
+void scrollDown()
+{
+    int totalEntries = nodeDB->getNumMeshNodes();
+
+    const int COMMON_HEADER_HEIGHT = FONT_HEIGHT_SMALL - 1;
+    const int rowYOffset = FONT_HEIGHT_SMALL - 3;
+
+    int screenHeight = screen->getHeight();
+    int visibleRows = (screenHeight - COMMON_HEADER_HEIGHT) / rowYOffset;
+
+    int totalColumns = 2;
+#if defined(T_LORA_PAGER)
+    totalColumns = 3;
+#endif
+    if (config.display.use_long_node_name)
+        totalColumns = 1;
+
+    int maxScroll = std::max(0, (totalEntries - 1) / (visibleRows * totalColumns));
+
+    if (scrollIndex < maxScroll)
+        scrollIndex++;
+}
 
 // =============================
 // Utility Functions
 // =============================
 
-const char *getSafeNodeName(OLEDDisplay *display, meshtastic_NodeInfoLite *node)
+const char *getSafeNodeName(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int columnWidth)
 {
-    static char nodeName[16]; // single static buffer we return
+    static char nodeName[25]; // single static buffer we return
     nodeName[0] = '\0';
 
     auto writeFallbackId = [&] {
@@ -81,7 +114,7 @@ const char *getSafeNodeName(OLEDDisplay *display, meshtastic_NodeInfoLite *node)
 
     // 4) Width-based truncation + ellipsis (long-name mode only)
     if (config.display.use_long_node_name && display) {
-        int availWidth = (SCREEN_WIDTH / 2) - 65;
+        int availWidth = columnWidth - (isHighResolution ? 65 : 38);
         if (availWidth < 0)
             availWidth = 0;
 
@@ -109,9 +142,9 @@ const char *getSafeNodeName(OLEDDisplay *display, meshtastic_NodeInfoLite *node)
     return nodeName;
 }
 
-const char *getCurrentModeTitle(int screenWidth)
+const char *getCurrentModeTitle_Nodes(int screenWidth)
 {
-    switch (currentMode) {
+    switch (currentMode_Nodes) {
     case MODE_LAST_HEARD:
         return "Last Heard";
     case MODE_HOP_SIGNAL:
@@ -120,8 +153,18 @@ const char *getCurrentModeTitle(int screenWidth)
 #else
         return (isHighResolution) ? "Hops/Signal" : "Hops/Sig";
 #endif
+    default:
+        return "Nodes";
+    }
+}
+
+const char *getCurrentModeTitle_Location(int screenWidth)
+{
+    switch (currentMode_Location) {
     case MODE_DISTANCE:
         return "Distance";
+    case MODE_BEARING:
+        return "Bearings";
     default:
         return "Nodes";
     }
@@ -140,10 +183,8 @@ int calculateMaxScroll(int totalEntries, int visibleRows)
 
 void drawColumnSeparator(OLEDDisplay *display, int16_t x, int16_t yStart, int16_t yEnd)
 {
-    int columnWidth = display->getWidth() / 2;
-    int separatorX = x + columnWidth - 2;
     for (int y = yStart; y <= yEnd; y += 2) {
-        display->setPixel(separatorX, y);
+        display->setPixel(x, y);
     }
 }
 
@@ -172,7 +213,7 @@ void drawEntryLastHeard(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int
     bool isLeftCol = (x < SCREEN_WIDTH / 2);
     int timeOffset = (isHighResolution) ? (isLeftCol ? 7 : 10) : (isLeftCol ? 3 : 7);
 
-    const char *nodeName = getSafeNodeName(display, node);
+    const char *nodeName = getSafeNodeName(display, node, columnWidth);
 
     char timeStr[10];
     uint32_t seconds = sinceLastSeen(node);
@@ -217,7 +258,7 @@ void drawEntryHopSignal(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int
 
     int barsXOffset = columnWidth - barsOffset;
 
-    const char *nodeName = getSafeNodeName(display, node);
+    const char *nodeName = getSafeNodeName(display, node, columnWidth);
 
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
@@ -261,7 +302,7 @@ void drawNodeDistance(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
     bool isLeftCol = (x < SCREEN_WIDTH / 2);
     int nameMaxWidth = columnWidth - (isHighResolution ? (isLeftCol ? 25 : 28) : (isLeftCol ? 20 : 22));
 
-    const char *nodeName = getSafeNodeName(display, node);
+    const char *nodeName = getSafeNodeName(display, node, columnWidth);
     char distStr[10] = "";
 
     meshtastic_NodeInfoLite *ourNode = nodeDB->getMeshNode(nodeDB->getNodeNum());
@@ -332,17 +373,14 @@ void drawNodeDistance(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
     }
 }
 
-void drawEntryDynamic(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16_t x, int16_t y, int columnWidth)
+void drawEntryDynamic_Nodes(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16_t x, int16_t y, int columnWidth)
 {
-    switch (currentMode) {
+    switch (currentMode_Nodes) {
     case MODE_LAST_HEARD:
         drawEntryLastHeard(display, node, x, y, columnWidth);
         break;
     case MODE_HOP_SIGNAL:
         drawEntryHopSignal(display, node, x, y, columnWidth);
-        break;
-    case MODE_DISTANCE:
-        drawNodeDistance(display, node, x, y, columnWidth);
         break;
     default:
         break;
@@ -356,7 +394,7 @@ void drawEntryCompass(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
     // Adjust max text width depending on column and screen width
     int nameMaxWidth = columnWidth - (isHighResolution ? (isLeftCol ? 25 : 28) : (isLeftCol ? 20 : 22));
 
-    const char *nodeName = getSafeNodeName(display, node);
+    const char *nodeName = getSafeNodeName(display, node, columnWidth);
 
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
@@ -434,11 +472,6 @@ void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
         locationScreen = true;
     else if (strcmp(title, "Distance") == 0)
         locationScreen = true;
-#if defined(M5STACK_UNITC6L)
-    int columnWidth = display->getWidth();
-#else
-    int columnWidth = display->getWidth() / 2;
-#endif
     display->clear();
 
     // Draw the battery/time header
@@ -447,15 +480,26 @@ void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
     // Space below header
     y += COMMON_HEADER_HEIGHT;
 
+#if defined(M5STACK_UNITC6L)
+    int totalColumns = 1;
+#elif defined(T_LORA_PAGER)
+    int totalColumns = 3;
+    if (config.display.use_long_node_name) {
+        totalColumns = 2;
+    }
+#else
+    int totalColumns = 2;
+    if (config.display.use_long_node_name) {
+        totalColumns = 1;
+    }
+#endif
+
+    int columnWidth = display->getWidth() / totalColumns;
+
     int totalEntries = nodeDB->getNumMeshNodes();
     int totalRowsAvailable = (display->getHeight() - y) / rowYOffset;
     int numskipped = 0;
     int visibleNodeRows = totalRowsAvailable;
-#if defined(M5STACK_UNITC6L)
-    int totalColumns = 1;
-#else
-    int totalColumns = 2;
-#endif
     int startIndex = scrollIndex * visibleNodeRows * totalColumns;
     if (nodeDB->getMeshNodeByIndex(startIndex)->num == nodeDB->getNodeNum()) {
         startIndex++; // skip own node
@@ -502,7 +546,9 @@ void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
     // Draw column separator
     if (shownCount > 0) {
         const int firstNodeY = y + 3;
-        drawColumnSeparator(display, x, firstNodeY, lastNodeY);
+        for (int horizontal_offset = 1; horizontal_offset < totalColumns; horizontal_offset++) {
+            drawColumnSeparator(display, columnWidth * horizontal_offset, firstNodeY, lastNodeY);
+        }
     }
 
 #endif
@@ -516,10 +562,11 @@ void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
 // =============================
 
 #ifndef USE_EINK
-void drawDynamicNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
+// Node list for Last Heard and Hop Signal views
+void drawDynamicListScreen_Nodes(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     // Static variables to track mode and duration
-    static NodeListMode lastRenderedMode = MODE_COUNT;
+    static ListMode_Node lastRenderedMode = MODE_COUNT_NODE;
     static unsigned long modeStartTime = 0;
 
     unsigned long now = millis();
@@ -532,23 +579,65 @@ void drawDynamicNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, 
     }
 #endif
     // On very first call (on boot or state enter)
-    if (lastRenderedMode == MODE_COUNT) {
-        currentMode = MODE_LAST_HEARD;
+    if (lastRenderedMode == MODE_COUNT_NODE) {
+        currentMode_Nodes = MODE_LAST_HEARD;
         modeStartTime = now;
     }
 
     // Time to switch to next mode?
     if (now - modeStartTime >= getModeCycleIntervalMs()) {
-        currentMode = static_cast<NodeListMode>((currentMode + 1) % MODE_COUNT);
+        currentMode_Nodes = static_cast<ListMode_Node>((currentMode_Nodes + 1) % MODE_COUNT_NODE);
         modeStartTime = now;
     }
 
     // Render screen based on currentMode
-    const char *title = getCurrentModeTitle(display->getWidth());
-    drawNodeListScreen(display, state, x, y, title, drawEntryDynamic);
+    const char *title = getCurrentModeTitle_Nodes(display->getWidth());
+    drawNodeListScreen(display, state, x, y, title, drawEntryDynamic_Nodes);
 
     // Track the last mode to avoid reinitializing modeStartTime
-    lastRenderedMode = currentMode;
+    lastRenderedMode = currentMode_Nodes;
+}
+
+// Node list for Distance and Bearings views
+void drawDynamicListScreen_Location(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
+{
+    // Static variables to track mode and duration
+    static ListMode_Location lastRenderedMode = MODE_COUNT_LOCATION;
+    static unsigned long modeStartTime = 0;
+
+    unsigned long now = millis();
+
+#if defined(M5STACK_UNITC6L)
+    display->clear();
+    if (now - lastSwitchTime >= 3000) {
+        display->display();
+        lastSwitchTime = now;
+    }
+#endif
+    // On very first call (on boot or state enter)
+    if (lastRenderedMode == MODE_COUNT_LOCATION) {
+        currentMode_Location = MODE_DISTANCE;
+        modeStartTime = now;
+    }
+
+    // Time to switch to next mode?
+    if (now - modeStartTime >= getModeCycleIntervalMs()) {
+        currentMode_Location = static_cast<ListMode_Location>((currentMode_Location + 1) % MODE_COUNT_LOCATION);
+        modeStartTime = now;
+    }
+
+    // Render screen based on currentMode
+    const char *title = getCurrentModeTitle_Location(display->getWidth());
+
+    // Render screen based on currentMode_Location
+    if (currentMode_Location == MODE_DISTANCE) {
+        drawNodeListScreen(display, state, x, y, title, drawNodeDistance);
+    } else if (currentMode_Location == MODE_BEARING) {
+        drawNodeListWithCompasses(display, state, x, y);
+    }
+
+    // Track the last mode to avoid reinitializing modeStartTime
+    lastRenderedMode = currentMode_Location;
 }
 #endif
 
@@ -569,14 +658,12 @@ void drawHopSignalScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_
 #endif
     drawNodeListScreen(display, state, x, y, title, drawEntryHopSignal);
 }
-
 void drawDistanceScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     const char *title = "Distance";
     drawNodeListScreen(display, state, x, y, title, drawNodeDistance);
 }
 #endif
-
 void drawNodeListWithCompasses(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     float heading = 0;
