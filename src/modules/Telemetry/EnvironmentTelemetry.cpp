@@ -1162,26 +1162,12 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
 
     // Use advanced display with sparklines only on high-resolution screens
     if (graphics::isHighResolution && isLargeDisplay) {
-        // === LARGE DISPLAY LAYOUT (Single column, tall graphs with annotations) ===
-        // Show sender/timestamp on first row with uptime on the right
-        graphics::MessageRenderer::drawStringWithEmotes(display, x, currentY, displayStr, emotes, numEmotes);
+        // === LARGE DISPLAY SCROLLABLE LAYOUT with graphs for all metrics ===
 
-        // Add uptime on top right (formatted like home screen)
-        uint32_t uptimeMillis = millis();
-        uint32_t seconds = uptimeMillis / 1000;
-        uint32_t minutes = seconds / 60;
-        uint32_t hours = minutes / 60;
-        uint32_t days = hours / 24;
-        // Note: drawTimeDelta expects total values, not modulo
-
-        std::string uptimeValue = graphics::UIRenderer::drawTimeDelta(days, hours, minutes, seconds);
-        std::string uptimeStr = "Up: " + uptimeValue;
-        int uptimeWidth = display->getStringWidth(uptimeStr.c_str());
-        display->drawString(SCREEN_WIDTH - uptimeWidth - 2, currentY, uptimeStr.c_str());
-
-        currentY += rowHeight + 2;
-
-        // We already have nh from histToShow above - no need to look up again
+        // Calculate available scroll area (starts right after header)
+        int scrollTop = currentY;
+        int scrollBottom = SCREEN_HEIGHT;
+        int visibleHeight = scrollBottom - scrollTop;
 
         // Full-width graphs spanning to screen edge
         const int graphW = SCREEN_WIDTH - x - 2;
@@ -1196,85 +1182,193 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         display->setFont(FONT_SMALL);
         const int labelRowHeight = FONT_HEIGHT_SMALL;
 
-        // Temperature graph with full unabbreviated label above
-        if (m.has_temperature && nh.temp.len >= 2) {
-            char buf[64];
-            if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
-                snprintf(buf, sizeof(buf), "Temperature: %.1f°F", UnitConversions::CelsiusToFahrenheit(m.temperature));
-            } else {
-                snprintf(buf, sizeof(buf), "Temperature: %.1f°C", m.temperature);
-            }
-            display->drawString(x, currentY, buf);
-            currentY += labelRowHeight;
+        // Build list of all metric rows with graphs (use fixed array to avoid heap allocation)
+        struct MetricRow {
+            char label[64];
+            const RingF<kHistLen> *hist;
+            int height; // custom height for this row
+            bool isImperial;
+            bool isPressure;
+            String unit;
+        };
+        static constexpr size_t MAX_METRIC_ROWS = 25;
+        MetricRow metricRows[MAX_METRIC_ROWS];
+        size_t metricRowCount = 0;
+
+        // Add sender/timestamp as first scrollable row (text-only, no graph)
+        if (metricRowCount < MAX_METRIC_ROWS) {
+            strncpy(metricRows[metricRowCount].label, displayStr, sizeof(metricRows[metricRowCount].label) - 1);
+            metricRows[metricRowCount].hist = nullptr;
+            metricRows[metricRowCount].height = labelRowHeight + 2;
+            metricRows[metricRowCount].isImperial = false;
+            metricRows[metricRowCount].isPressure = false;
+            metricRowCount++;
+        }
+
+        // Temperature with graph
+        if (m.has_temperature && metricRowCount < MAX_METRIC_ROWS) {
             bool isImperial = (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL);
-            String tempUnit = isImperial ? "°F" : "°C";
-            drawLargeSparkBoxed(display, x, currentY, graphW, graphH, nh.temp, tempUnit, isImperial);
-            currentY += graphH + 4;
-        } else if (m.has_temperature) {
-            char buf[64];
-            if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
-                snprintf(buf, sizeof(buf), "Temperature: %.1f°F", UnitConversions::CelsiusToFahrenheit(m.temperature));
+            if (isImperial) {
+                snprintf(metricRows[metricRowCount].label, sizeof(metricRows[metricRowCount].label), "Temperature: %.1f°F",
+                         UnitConversions::CelsiusToFahrenheit(m.temperature));
             } else {
-                snprintf(buf, sizeof(buf), "Temperature: %.1f°C", m.temperature);
+                snprintf(metricRows[metricRowCount].label, sizeof(metricRows[metricRowCount].label), "Temperature: %.1f°C",
+                         m.temperature);
             }
-            display->drawString(x, currentY, buf);
-            currentY += labelRowHeight;
+            metricRows[metricRowCount].hist = (nh.temp.len >= 2) ? &nh.temp : nullptr;
+            metricRows[metricRowCount].height =
+                labelRowHeight + (nh.temp.len >= 2 ? (graphH + 4) : 0); // label + graph (if available)
+            metricRows[metricRowCount].isImperial = isImperial;
+            metricRows[metricRowCount].isPressure = false;
+            metricRows[metricRowCount].unit = isImperial ? "°F" : "°C";
+            metricRowCount++;
         }
 
-        // Humidity graph with full unabbreviated label above
-        if (m.has_relative_humidity && nh.hum.len >= 2) {
-            char buf[64];
-            snprintf(buf, sizeof(buf), "Humidity: %.0f%%", m.relative_humidity);
-            display->drawString(x, currentY, buf);
-            currentY += labelRowHeight;
-            drawLargeSparkBoxed(display, x, currentY, graphW, graphH, nh.hum, "%");
-            currentY += graphH + 4;
-        } else if (m.has_relative_humidity) {
-            char buf[64];
-            snprintf(buf, sizeof(buf), "Humidity: %.0f%%", m.relative_humidity);
-            display->drawString(x, currentY, buf);
-            currentY += labelRowHeight;
+        // Humidity with graph
+        if (m.has_relative_humidity && metricRowCount < MAX_METRIC_ROWS) {
+            snprintf(metricRows[metricRowCount].label, sizeof(metricRows[metricRowCount].label), "Humidity: %.0f%%",
+                     m.relative_humidity);
+            metricRows[metricRowCount].hist = (nh.hum.len >= 2) ? &nh.hum : nullptr;
+            metricRows[metricRowCount].height = labelRowHeight + (nh.hum.len >= 2 ? (graphH + 4) : 0);
+            metricRows[metricRowCount].isImperial = false;
+            metricRows[metricRowCount].isPressure = false;
+            metricRows[metricRowCount].unit = "%";
+            metricRowCount++;
         }
 
-        // Pressure graph with full unabbreviated label above
-        if (m.barometric_pressure != 0 && nh.press.len >= 2) {
-            char buf[64];
-            if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
-                snprintf(buf, sizeof(buf), "Pressure: %.2f inHg",
-                         UnitConversions::HectoPascalToInchesOfMercury(m.barometric_pressure));
-            } else {
-                snprintf(buf, sizeof(buf), "Pressure: %.0f hPa", m.barometric_pressure);
-            }
-            display->drawString(x, currentY, buf);
-            currentY += labelRowHeight;
+        // Pressure with graph
+        if (m.barometric_pressure != 0 && metricRowCount < MAX_METRIC_ROWS) {
             bool isPressImperial = (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL);
-            String pressUnit = isPressImperial ? "inHg" : "hPa";
-            drawLargeSparkBoxed(display, x, currentY, graphW, graphH, nh.press, pressUnit, false, isPressImperial);
-            currentY += graphH + 4;
-        } else if (m.barometric_pressure != 0) {
-            char buf[64];
-            if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
-                snprintf(buf, sizeof(buf), "Pressure: %.2f inHg",
+            if (isPressImperial) {
+                snprintf(metricRows[metricRowCount].label, sizeof(metricRows[metricRowCount].label), "Pressure: %.2f inHg",
                          UnitConversions::HectoPascalToInchesOfMercury(m.barometric_pressure));
             } else {
-                snprintf(buf, sizeof(buf), "Pressure: %.0f hPa", m.barometric_pressure);
+                snprintf(metricRows[metricRowCount].label, sizeof(metricRows[metricRowCount].label), "Pressure: %.0f hPa",
+                         m.barometric_pressure);
             }
-            display->drawString(x, currentY, buf);
-            currentY += labelRowHeight;
+            metricRows[metricRowCount].hist = (nh.press.len >= 2) ? &nh.press : nullptr;
+            metricRows[metricRowCount].height = labelRowHeight + (nh.press.len >= 2 ? (graphH + 4) : 0);
+            metricRows[metricRowCount].isImperial = false;
+            metricRows[metricRowCount].isPressure = isPressImperial;
+            metricRows[metricRowCount].unit = isPressImperial ? "inHg" : "hPa";
+            metricRowCount++;
         }
 
-        // Reset to smaller font for remaining entries
-        display->setFont(FONT_SMALL);
+        // Add all other metrics with graphs where available
+        for (size_t i = 0; i < s_displayCache.entryCount && metricRowCount < MAX_METRIC_ROWS; i++) {
+            const char *entry = s_displayCache.entries[i];
+            const RingF<kHistLen> *histPtr = nullptr;
 
-        // Remaining metrics in 2-column format (if space allows)
-        if (s_displayCache.entryCount > 0) {
-            const int splitX = SCREEN_WIDTH / 2;
-            for (size_t i = 0; i < s_displayCache.entryCount; i += 2) {
-                display->drawString(x, currentY, s_displayCache.entries[i]);
-                if (i + 1 < s_displayCache.entryCount) {
-                    display->drawString(splitX, currentY, s_displayCache.entries[i + 1]);
+            // Match entries to history data by checking metric type
+            if (strncmp(entry, "Dew:", 4) == 0)
+                histPtr = (nh.dewPoint.len >= 2) ? &nh.dewPoint : nullptr;
+            else if (strncmp(entry, "Gas:", 4) == 0)
+                histPtr = (nh.gas.len >= 2) ? &nh.gas : nullptr;
+            else if (strstr(entry, "V /") != nullptr)
+                histPtr = (nh.voltage.len >= 2) ? &nh.voltage : nullptr;
+            else if (strncmp(entry, "Light:", 6) == 0)
+                histPtr = (nh.lux.len >= 2) ? &nh.lux : nullptr;
+            else if (strncmp(entry, "White:", 6) == 0)
+                histPtr = (nh.whiteLux.len >= 2) ? &nh.whiteLux : nullptr;
+            else if (strncmp(entry, "Weight:", 7) == 0)
+                histPtr = (nh.weight.len >= 2) ? &nh.weight : nullptr;
+            else if (strncmp(entry, "Level:", 6) == 0)
+                histPtr = (nh.distance.len >= 2) ? &nh.distance : nullptr;
+            else if (strncmp(entry, "Rad:", 4) == 0)
+                histPtr = (nh.radiation.len >= 2) ? &nh.radiation : nullptr;
+            else if (strncmp(entry, "Wind:", 5) == 0)
+                histPtr = (nh.windSpeed.len >= 2) ? &nh.windSpeed : nullptr;
+            else if (strncmp(entry, "Dir:", 4) == 0)
+                histPtr = (nh.windDirection.len >= 2) ? &nh.windDirection : nullptr;
+            else if (strncmp(entry, "Soil T:", 7) == 0)
+                histPtr = (nh.soilTemp.len >= 2) ? &nh.soilTemp : nullptr;
+            else if (strncmp(entry, "Soil M:", 7) == 0)
+                histPtr = (nh.soilMoisture.len >= 2) ? &nh.soilMoisture : nullptr;
+
+            strncpy(metricRows[metricRowCount].label, entry, sizeof(metricRows[metricRowCount].label) - 1);
+            metricRows[metricRowCount].hist = histPtr;
+            metricRows[metricRowCount].height = labelRowHeight + (histPtr ? (graphH + 4) : 0);
+            metricRows[metricRowCount].isImperial = false;
+            metricRows[metricRowCount].isPressure = false;
+            metricRows[metricRowCount].unit = "";
+            metricRowCount++;
+        }
+
+        // Add IAQ as last scrollable row with ruler (no sparkline)
+        bool hasIAQRow = false;
+        const int iaqRulerHeight = kRulerBaselineOfs + kNeedleH + FONT_HEIGHT_SMALL + 4;
+        if (m.iaq != 0 && metricRowCount < MAX_METRIC_ROWS) {
+            // Use cached string if available, otherwise create temporary label
+            if (s_displayCache.iaqStr[0] != '\0') {
+                strncpy(metricRows[metricRowCount].label, s_displayCache.iaqStr, sizeof(metricRows[metricRowCount].label) - 1);
+            } else {
+                snprintf(metricRows[metricRowCount].label, sizeof(metricRows[metricRowCount].label), "IAQ: %d", m.iaq);
+            }
+            metricRows[metricRowCount].hist = nullptr; // No sparkline for IAQ, will use ruler
+            metricRows[metricRowCount].height = iaqRulerHeight;
+            metricRows[metricRowCount].isImperial = false;
+            metricRows[metricRowCount].isPressure = false;
+            hasIAQRow = true;
+            metricRowCount++;
+        }
+
+        // Calculate total content height
+        int totalContentHeight = 0;
+        for (size_t i = 0; i < metricRowCount; i++) {
+            totalContentHeight += metricRows[i].height;
+        }
+
+        // Clamp scroll position
+        int maxScroll = totalContentHeight - visibleHeight;
+        if (maxScroll < 0)
+            maxScroll = 0;
+        if (s_scrollY < 0)
+            s_scrollY = 0;
+        if (s_scrollY > maxScroll)
+            s_scrollY = maxScroll;
+
+        // Render visible metric rows with offset
+        int yOffset = scrollTop - s_scrollY;
+        int cumulativeY = 0;
+
+        for (size_t i = 0; i < metricRowCount; i++) {
+            bool isIAQRow = hasIAQRow && (i == metricRowCount - 1);
+            int rowY = yOffset + cumulativeY;
+            int actualRowHeight = metricRows[i].height;
+
+            // Draw if any part of the row is visible
+            if (rowY < scrollBottom && rowY + actualRowHeight > scrollTop) {
+                if (isIAQRow) {
+                    // Draw IAQ ruler instead of text+graph
+                    const int rulerW = SCREEN_WIDTH - 2 * x;
+                    drawIAQRuler(display, x, rowY, rulerW, m.iaq, metricRows[i].label);
+                } else {
+                    // Draw label
+                    display->drawString(x, rowY, metricRows[i].label);
+
+                    // Draw graph if history data exists
+                    if (metricRows[i].hist && metricRows[i].hist->len >= 2) {
+                        int graphY = rowY + labelRowHeight;
+                        drawLargeSparkBoxed(display, x, graphY, graphW, graphH, *metricRows[i].hist, metricRows[i].unit,
+                                            metricRows[i].isImperial, metricRows[i].isPressure);
+                    }
                 }
-                currentY += rowHeight;
+            }
+
+            cumulativeY += actualRowHeight;
+        }
+
+        // Draw scrollbar if content exceeds visible area
+        const int kScrollbarWidth = 3;
+        if (totalContentHeight > visibleHeight) {
+            int scrollbarX = SCREEN_WIDTH - kScrollbarWidth;
+            int scrollbarHeight = visibleHeight;
+            int thumbHeight = std::max(6, (scrollbarHeight * visibleHeight) / totalContentHeight);
+            int thumbY = scrollTop + (scrollbarHeight - thumbHeight) * s_scrollY / maxScroll;
+
+            for (int i = 0; i < thumbHeight; i++) {
+                display->setPixel(scrollbarX, thumbY + i);
+                display->setPixel(scrollbarX + 1, thumbY + i);
             }
         }
     } else if (graphics::isHighResolution) {
@@ -1530,6 +1624,12 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
             inBanner = false;
         }
     }
+
+    // Redraw header on top of scrollable content to prevent scrolled items from appearing over it
+    if (graphics::isHighResolution) {
+        graphics::drawCommonHeader(display, x, y, titleStr);
+    }
+
     graphics::drawCommonFooter(display, x, y);
 }
 #endif
