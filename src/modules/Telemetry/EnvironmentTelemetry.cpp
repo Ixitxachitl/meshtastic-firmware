@@ -183,8 +183,11 @@ static constexpr int kSparkXOffset = -2; // shift left
 static constexpr int kSparkYOffset = 1;  // shift down
 
 // Large display sparkline with min/max labels and better visibility
-// convertTemp: convert Celsius to Fahrenheit for display
-// convertPress: convert hPa to inHg for display
+// Unit conversion modes for graph min/max display:
+// - convertTemp: convert Celsius to Fahrenheit
+// - convertPress: convert hPa to inHg
+// Data in ring buffers is always stored in metric units (C, hPa, kg, mm, m/s, etc)
+// This function converts for display only based on the unit string
 template <size_t N>
 static void drawLargeSparkBoxed(OLEDDisplay *dpy, int x, int y, int w, int h, const RingF<N> &hist, const String &unit = "",
                                 bool convertTemp = false, bool convertPress = false)
@@ -278,13 +281,25 @@ static void drawLargeSparkBoxed(OLEDDisplay *dpy, int x, int y, int w, int h, co
     dpy->setTextAlignment(TEXT_ALIGN_RIGHT);
     float maxVal = hi2;
     float minVal = lo2;
-    // Convert units if needed (data is stored in metric: Celsius, hPa)
+    // Convert units if needed (data is stored in metric: Celsius, hPa, kg, mm, m/s)
     if (convertTemp) {
         maxVal = maxVal * 9.0f / 5.0f + 32.0f; // C to F
         minVal = minVal * 9.0f / 5.0f + 32.0f;
     } else if (convertPress) {
         maxVal = maxVal * 0.02953f; // hPa to inHg
         minVal = minVal * 0.02953f;
+    } else if (unit == "lbs") {
+        // Weight: kg to lbs
+        maxVal = maxVal * 2.20462f;
+        minVal = minVal * 2.20462f;
+    } else if (unit == "in") {
+        // Distance: mm to inches
+        maxVal = maxVal * 0.03937f;
+        minVal = minVal * 0.03937f;
+    } else if (unit == "mph") {
+        // Wind speed: m/s to mph
+        maxVal = maxVal * 2.23694f;
+        minVal = minVal * 2.23694f;
     }
     String maxStr = String(maxVal, 1) + unit;
     String minStr = String(minVal, 1) + unit;
@@ -1186,28 +1201,29 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         struct MetricRow {
             char label[64];
             const RingF<kHistLen> *hist;
-            int height; // custom height for this row
-            bool isImperial;
-            bool isPressure;
+            int height;        // custom height for this row
+            bool convertTemp;  // convert Celsius to Fahrenheit
+            bool convertPress; // convert hPa to inHg
             String unit;
         };
         static constexpr size_t MAX_METRIC_ROWS = 25;
         MetricRow metricRows[MAX_METRIC_ROWS];
         size_t metricRowCount = 0;
+        bool isImperial = (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL);
 
         // Add sender/timestamp as first scrollable row (text-only, no graph)
         if (metricRowCount < MAX_METRIC_ROWS) {
             strncpy(metricRows[metricRowCount].label, displayStr, sizeof(metricRows[metricRowCount].label) - 1);
             metricRows[metricRowCount].hist = nullptr;
             metricRows[metricRowCount].height = labelRowHeight + 2;
-            metricRows[metricRowCount].isImperial = false;
-            metricRows[metricRowCount].isPressure = false;
+            metricRows[metricRowCount].convertTemp = false;
+            metricRows[metricRowCount].convertPress = false;
+            metricRows[metricRowCount].unit = "";
             metricRowCount++;
         }
 
         // Temperature with graph
         if (m.has_temperature && metricRowCount < MAX_METRIC_ROWS) {
-            bool isImperial = (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL);
             if (isImperial) {
                 snprintf(metricRows[metricRowCount].label, sizeof(metricRows[metricRowCount].label), "Temperature: %.1f°F",
                          UnitConversions::CelsiusToFahrenheit(m.temperature));
@@ -1218,8 +1234,8 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
             metricRows[metricRowCount].hist = (nh.temp.len >= 2) ? &nh.temp : nullptr;
             metricRows[metricRowCount].height =
                 labelRowHeight + (nh.temp.len >= 2 ? (graphH + 4) : 0); // label + graph (if available)
-            metricRows[metricRowCount].isImperial = isImperial;
-            metricRows[metricRowCount].isPressure = false;
+            metricRows[metricRowCount].convertTemp = isImperial;
+            metricRows[metricRowCount].convertPress = false;
             metricRows[metricRowCount].unit = isImperial ? "°F" : "°C";
             metricRowCount++;
         }
@@ -1230,16 +1246,15 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
                      m.relative_humidity);
             metricRows[metricRowCount].hist = (nh.hum.len >= 2) ? &nh.hum : nullptr;
             metricRows[metricRowCount].height = labelRowHeight + (nh.hum.len >= 2 ? (graphH + 4) : 0);
-            metricRows[metricRowCount].isImperial = false;
-            metricRows[metricRowCount].isPressure = false;
+            metricRows[metricRowCount].convertTemp = false;
+            metricRows[metricRowCount].convertPress = false;
             metricRows[metricRowCount].unit = "%";
             metricRowCount++;
         }
 
         // Pressure with graph
         if (m.barometric_pressure != 0 && metricRowCount < MAX_METRIC_ROWS) {
-            bool isPressImperial = (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL);
-            if (isPressImperial) {
+            if (isImperial) {
                 snprintf(metricRows[metricRowCount].label, sizeof(metricRows[metricRowCount].label), "Pressure: %.2f inHg",
                          UnitConversions::HectoPascalToInchesOfMercury(m.barometric_pressure));
             } else {
@@ -1248,9 +1263,9 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
             }
             metricRows[metricRowCount].hist = (nh.press.len >= 2) ? &nh.press : nullptr;
             metricRows[metricRowCount].height = labelRowHeight + (nh.press.len >= 2 ? (graphH + 4) : 0);
-            metricRows[metricRowCount].isImperial = false;
-            metricRows[metricRowCount].isPressure = isPressImperial;
-            metricRows[metricRowCount].unit = isPressImperial ? "inHg" : "hPa";
+            metricRows[metricRowCount].convertTemp = false;
+            metricRows[metricRowCount].convertPress = isImperial;
+            metricRows[metricRowCount].unit = isImperial ? "inHg" : "hPa";
             metricRowCount++;
         }
 
@@ -1258,39 +1273,56 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         for (size_t i = 0; i < s_displayCache.entryCount && metricRowCount < MAX_METRIC_ROWS; i++) {
             const char *entry = s_displayCache.entries[i];
             const RingF<kHistLen> *histPtr = nullptr;
+            bool needsTempConv = false;
+            String unitStr = "";
 
-            // Match entries to history data by checking metric type
-            if (strncmp(entry, "Dew:", 4) == 0)
+            // Match entries to history data by checking metric type and set units
+            if (strncmp(entry, "Dew:", 4) == 0) {
                 histPtr = (nh.dewPoint.len >= 2) ? &nh.dewPoint : nullptr;
-            else if (strncmp(entry, "Gas:", 4) == 0)
+                needsTempConv = isImperial;
+                unitStr = isImperial ? "°F" : "°C";
+            } else if (strncmp(entry, "Gas:", 4) == 0) {
                 histPtr = (nh.gas.len >= 2) ? &nh.gas : nullptr;
-            else if (strstr(entry, "V /") != nullptr)
+                unitStr = "kΩ";
+            } else if (strstr(entry, "V /") != nullptr) {
                 histPtr = (nh.voltage.len >= 2) ? &nh.voltage : nullptr;
-            else if (strncmp(entry, "Light:", 6) == 0)
+                unitStr = "V";
+            } else if (strncmp(entry, "Light:", 6) == 0) {
                 histPtr = (nh.lux.len >= 2) ? &nh.lux : nullptr;
-            else if (strncmp(entry, "White:", 6) == 0)
+                unitStr = "lx";
+            } else if (strncmp(entry, "White:", 6) == 0) {
                 histPtr = (nh.whiteLux.len >= 2) ? &nh.whiteLux : nullptr;
-            else if (strncmp(entry, "Weight:", 7) == 0)
+                unitStr = "lx";
+            } else if (strncmp(entry, "Weight:", 7) == 0) {
                 histPtr = (nh.weight.len >= 2) ? &nh.weight : nullptr;
-            else if (strncmp(entry, "Level:", 6) == 0)
+                unitStr = isImperial ? "lbs" : "kg";
+            } else if (strncmp(entry, "Level:", 6) == 0) {
                 histPtr = (nh.distance.len >= 2) ? &nh.distance : nullptr;
-            else if (strncmp(entry, "Rad:", 4) == 0)
+                unitStr = isImperial ? "in" : "mm";
+            } else if (strncmp(entry, "Rad:", 4) == 0) {
                 histPtr = (nh.radiation.len >= 2) ? &nh.radiation : nullptr;
-            else if (strncmp(entry, "Wind:", 5) == 0)
+                unitStr = "µR/h";
+            } else if (strncmp(entry, "Wind:", 5) == 0) {
                 histPtr = (nh.windSpeed.len >= 2) ? &nh.windSpeed : nullptr;
-            else if (strncmp(entry, "Dir:", 4) == 0)
+                unitStr = isImperial ? "mph" : "m/s";
+            } else if (strncmp(entry, "Dir:", 4) == 0) {
                 histPtr = (nh.windDirection.len >= 2) ? &nh.windDirection : nullptr;
-            else if (strncmp(entry, "Soil T:", 7) == 0)
+                unitStr = "°";
+            } else if (strncmp(entry, "Soil T:", 7) == 0) {
                 histPtr = (nh.soilTemp.len >= 2) ? &nh.soilTemp : nullptr;
-            else if (strncmp(entry, "Soil M:", 7) == 0)
+                needsTempConv = isImperial;
+                unitStr = isImperial ? "°F" : "°C";
+            } else if (strncmp(entry, "Soil M:", 7) == 0) {
                 histPtr = (nh.soilMoisture.len >= 2) ? &nh.soilMoisture : nullptr;
+                unitStr = "%";
+            }
 
             strncpy(metricRows[metricRowCount].label, entry, sizeof(metricRows[metricRowCount].label) - 1);
             metricRows[metricRowCount].hist = histPtr;
             metricRows[metricRowCount].height = labelRowHeight + (histPtr ? (graphH + 4) : 0);
-            metricRows[metricRowCount].isImperial = false;
-            metricRows[metricRowCount].isPressure = false;
-            metricRows[metricRowCount].unit = "";
+            metricRows[metricRowCount].convertTemp = needsTempConv;
+            metricRows[metricRowCount].convertPress = false;
+            metricRows[metricRowCount].unit = unitStr;
             metricRowCount++;
         }
 
@@ -1306,8 +1338,9 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
             }
             metricRows[metricRowCount].hist = nullptr; // No sparkline for IAQ, will use ruler
             metricRows[metricRowCount].height = iaqRulerHeight;
-            metricRows[metricRowCount].isImperial = false;
-            metricRows[metricRowCount].isPressure = false;
+            metricRows[metricRowCount].convertTemp = false;
+            metricRows[metricRowCount].convertPress = false;
+            metricRows[metricRowCount].unit = "";
             hasIAQRow = true;
             metricRowCount++;
         }
@@ -1350,7 +1383,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
                     if (metricRows[i].hist && metricRows[i].hist->len >= 2) {
                         int graphY = rowY + labelRowHeight;
                         drawLargeSparkBoxed(display, x, graphY, graphW, graphH, *metricRows[i].hist, metricRows[i].unit,
-                                            metricRows[i].isImperial, metricRows[i].isPressure);
+                                            metricRows[i].convertTemp, metricRows[i].convertPress);
                     }
                 }
             }
