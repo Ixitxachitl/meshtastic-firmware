@@ -1734,8 +1734,8 @@ bool EnvironmentTelemetryModule::handleReceivedProtobuf(const meshtastic_MeshPac
         // Get or create NodeHist entry - check heap before attempting allocation
         if (isNewNode) {
             // Check minimum heap before attempting allocation (need ~2KB for NodeHist + map overhead)
-            if (ESP.getFreeHeap() < 8192) {
-                LOG_WARN("EnvironmentTelemetry: Insufficient heap (%u bytes) to add node 0x%08x", ESP.getFreeHeap(), from);
+            if (memGet.getFreeHeap() < 8192) {
+                LOG_WARN("EnvironmentTelemetry: Insufficient heap (%u bytes) to add node 0x%08x", memGet.getFreeHeap(), from);
                 return false;
             }
             // Use emplace to construct in-place, check if it succeeded
