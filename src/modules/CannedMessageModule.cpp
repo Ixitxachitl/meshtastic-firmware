@@ -939,7 +939,7 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
     if (event->kbchar == INPUT_BROKER_MSG_EMOTE_LIST) {
         runState = CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER;
         requestFocus();
-        screen->forceDisplay();
+        screen->forceDisplay(true);
         return true;
     }
     // Confirm select (Enter)
@@ -1069,22 +1069,26 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
 
     if (isUp && emotePickerIndex >= cols) {
         emotePickerIndex -= cols;
-        screen->forceDisplay();
+        requestFocus();
+        screen->forceDisplay(true);
         return 1;
     }
     if (isDown && emotePickerIndex + cols < numUniqueEmotes) {
         emotePickerIndex += cols;
-        screen->forceDisplay();
+        requestFocus();
+        screen->forceDisplay(true);
         return 1;
     }
     if (isLeft && currentCol > 0) {
         emotePickerIndex--;
-        screen->forceDisplay();
+        requestFocus();
+        screen->forceDisplay(true);
         return 1;
     }
     if (isRight && currentCol < cols - 1 && emotePickerIndex < numUniqueEmotes - 1) {
         emotePickerIndex++;
-        screen->forceDisplay();
+        requestFocus();
+        screen->forceDisplay(true);
         return 1;
     }
 
@@ -1120,14 +1124,16 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
         }
         cursor += emoteInsert.length();
         runState = CANNED_MESSAGE_RUN_STATE_FREETEXT;
-        screen->forceDisplay();
+        requestFocus();
+        screen->forceDisplay(true);
         return 1;
     }
 
     // Cancel returns to freetext
     if (event->inputEvent == INPUT_BROKER_CANCEL || event->inputEvent == INPUT_BROKER_ALT_LONG) {
         runState = CANNED_MESSAGE_RUN_STATE_FREETEXT;
-        screen->forceDisplay();
+        requestFocus();
+        screen->forceDisplay(true);
         return 1;
     }
 
