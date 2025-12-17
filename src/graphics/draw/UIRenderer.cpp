@@ -339,6 +339,9 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
     meshtastic_NodeInfoLite *node = favoritedNodes[nodeIndex];
     if (!node || node->num == nodeDB->getNodeNum() || !node->is_favorite)
         return;
+
+    currentFavoriteNodeNum = node->num;
+
     display->clear();
 #if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     uint32_t now = millis();
@@ -348,7 +351,6 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
         lastSwitchTime = now;
     }
 #endif
-    currentFavoriteNodeNum = node->num;
     // === Create the shortName and title string ===
     const char *shortName = (node->has_user && haveGlyphs(node->user.short_name)) ? node->user.short_name : "Node";
     char titlestr[32] = {0};

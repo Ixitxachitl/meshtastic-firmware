@@ -1234,14 +1234,7 @@ void Screen::setFrames(FrameFocus focus)
         break;
 
     case FOCUS_PRESERVE:
-        //  No more adjustment — force stay on same index
-        if (previousFrameCount > fsi.frameCount) {
-            ui->switchToFrame(originalPosition - 1);
-        } else if (previousFrameCount < fsi.frameCount) {
-            ui->switchToFrame(originalPosition + 1);
-        } else {
-            ui->switchToFrame(originalPosition);
-        }
+        ui->switchToFrame(originalPosition);
         break;
     }
 
