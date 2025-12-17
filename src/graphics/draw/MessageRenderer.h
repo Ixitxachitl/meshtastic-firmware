@@ -62,6 +62,10 @@ void scrollDown();
 // Manual scroll control for encoder-style inputs
 void nudgeScroll(int8_t direction);
 
+// Message ordering preference (false = old on top/new on bottom, true = new on top/old on bottom)
+bool getMessageOrderNewestFirst();
+void setMessageOrderNewestFirst(bool newestFirst);
+
 // Helper to auto-select the correct thread mode from a message
 void setThreadFor(const StoredMessage &sm, const meshtastic_MeshPacket &packet);
 

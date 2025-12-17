@@ -412,7 +412,7 @@ void menuHandler::clockMenu()
 }
 void menuHandler::messageResponseMenu()
 {
-    enum optionsNumbers { Back = 0, ViewMode, DeleteAll, DeleteOldest, ReplyMenu, Aloud, enumEnd };
+    enum optionsNumbers { Back = 0, ViewMode, DeleteAll, DeleteOldest, ReplyMenu, Aloud, MessageOrder, enumEnd };
 
     static const char *optionsArray[enumEnd];
     static int optionsEnumArray[enumEnd];
@@ -427,6 +427,9 @@ void menuHandler::messageResponseMenu()
 
     optionsArray[options] = "View Chats";
     optionsEnumArray[options++] = ViewMode;
+
+    optionsArray[options] = "Message Order";
+    optionsEnumArray[options++] = MessageOrder;
 
     // Delete submenu
     optionsArray[options] = "Delete";
@@ -455,17 +458,19 @@ void menuHandler::messageResponseMenu()
 
         LOG_DEBUG("[ReplyCtx] mode=%d ch=%d peer=0x%08x", (int)mode, ch, (unsigned int)peer);
 
-        if (selected == ViewMode) {
+        if (selected == 0) { // Back
+            // Do nothing - close menu
+        } else if (selected == 1) { // ViewMode
             menuHandler::menuQueue = menuHandler::message_viewmode_menu;
             screen->runNow();
-
-            // Reply submenu
-        } else if (selected == ReplyMenu) {
+        } else if (selected == 4) { // ReplyMenu
             menuHandler::menuQueue = menuHandler::reply_menu;
             screen->runNow();
-
-            // Delete submenu
-        } else if (selected == 900) {
+        } else if (selected == 6) { // MessageOrder
+            LOG_DEBUG("MessageOrder selected, setting menu queue");
+            menuHandler::menuQueue = menuHandler::message_order_menu;
+            screen->runNow();
+        } else if (selected == 900) { // Delete submenu
             menuHandler::menuQueue = menuHandler::delete_messages_menu;
             screen->runNow();
 
@@ -575,6 +580,38 @@ void menuHandler::replyMenu()
     };
     screen->showOverlayBanner(bannerOptions);
 }
+void menuHandler::messageOrderMenu()
+{
+    enum optionsNumbers { Back = 0, NewOnTop, OldOnTop };
+    static const char *optionsArray[] = {"Back", "New on Top", "Old on Top"};
+
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = "Message Order";
+    bannerOptions.optionsArrayPtr = optionsArray;
+    bannerOptions.optionsCount = 3;
+    bannerOptions.InitialSelected = graphics::MessageRenderer::getMessageOrderNewestFirst() ? 1 : 2;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        switch (selected) {
+        case Back:
+            // Return to message response menu
+            break;
+        case NewOnTop:
+            if (!graphics::MessageRenderer::getMessageOrderNewestFirst()) {
+                graphics::MessageRenderer::setMessageOrderNewestFirst(true);
+                screen->setFrames(Screen::FOCUS_PRESERVE); // Stay on current screen
+            }
+            break;
+        case OldOnTop:
+            if (graphics::MessageRenderer::getMessageOrderNewestFirst()) {
+                graphics::MessageRenderer::setMessageOrderNewestFirst(false);
+                screen->setFrames(Screen::FOCUS_PRESERVE); // Stay on current screen
+            }
+            break;
+        }
+    };
+    screen->showOverlayBanner(bannerOptions);
+}
+
 void menuHandler::deleteMessagesMenu()
 {
     enum optionsNumbers { Back = 0, DeleteOldest, DeleteThis, DeleteAll, enumEnd };
@@ -2332,6 +2369,9 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
         break;
     case reply_menu:
         replyMenu();
+        break;
+    case message_order_menu:
+        messageOrderMenu();
         break;
     case delete_messages_menu:
         deleteMessagesMenu();
