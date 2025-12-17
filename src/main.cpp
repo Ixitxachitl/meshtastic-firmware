@@ -450,8 +450,9 @@ void setup()
 
     LOG_INFO("\n\n//\\ E S H T /\\ S T / C\n");
 
-#if defined(ARCH_ESP32) && defined(BOARD_HAS_PSRAM)
+#if defined(ARCH_ESP32) && defined(BOARD_HAS_PSRAM) && !defined(HAS_TFT)
     // use PSRAM for malloc calls > 256 bytes
+    // NOTE: Disabled for TFT devices as TFT_eSPI DMA requires internal RAM buffers
     heap_caps_malloc_extmem_enable(256);
 #endif
 

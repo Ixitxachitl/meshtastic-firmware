@@ -1513,8 +1513,8 @@ bool TFTDisplay::connect()
     tft->init();
 #endif
 
-    // Apply saved brightness immediately after init to prevent flash at full brightness
-    // This is especially important for devices like T-Deck
+        // Apply saved brightness immediately after init to prevent flash at full brightness
+        // This is especially important for devices like T-Deck
 #if defined(ST7789_CS)
     extern meshtastic_DeviceUIConfig uiconfig;
     uint8_t initialBrightness = uiconfig.screen_brightness;
@@ -1546,7 +1546,13 @@ bool TFTDisplay::connect()
     tft->fillScreen(TFT_BLACK);
 
     if (this->linePixelBuffer == NULL) {
+#if defined(ARCH_ESP32) && defined(BOARD_HAS_PSRAM)
+        // Allocate TFT line buffer in internal RAM for DMA compatibility
+        this->linePixelBuffer =
+            (uint16_t *)heap_caps_malloc(sizeof(uint16_t) * displayWidth, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+#else
         this->linePixelBuffer = (uint16_t *)malloc(sizeof(uint16_t) * displayWidth);
+#endif
 
         if (!this->linePixelBuffer) {
             LOG_ERROR("Not enough memory to create TFT line buffer\n");
