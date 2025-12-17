@@ -901,6 +901,26 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
             payload = 0x00;
             charSet = (charSet == 0 ? 1 : 0);
             valid = true;
+        } else if (keyTapped == "BACK") {
+            // Exit freetext mode (back button)
+            graphics::setOverlayActive(false);
+            runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
+            screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
+            freetext = "";
+            cursor = 0;
+            payload = 0;
+            currentMessageIndex = -1;
+            UIFrameEvent e;
+            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+            notifyObservers(&e);
+            screen->forceDisplay();
+            return true;
+        } else if (keyTapped == "Emotes") {
+            // Open emote picker
+            runState = CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER;
+            requestFocus();
+            screen->forceDisplay(true);
+            return true;
         } else if (keyTapped == " ") {
 #ifndef RAK14014
             highlight = keyTapped[0];
@@ -1063,8 +1083,71 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
     bool isRight = (event->inputEvent == INPUT_BROKER_RIGHT);
     bool isSelect = isSelectEvent(event);
 
+    // Touch input handling for emote picker
+    if ((event->touchX != 0 || event->touchY != 0)) {
+        // Calculate which emote was touched based on grid layout
+        int gridX = 2; // Left margin matches drawEmotePickerScreen
+        int touchCol = (event->touchX - gridX) / cellSize;
+        int touchRow = (event->touchY - gridTop) / cellSize;
+
+        // Validate touch is within grid bounds
+        if (touchCol >= 0 && touchCol < cols && touchRow >= 0 && touchRow < rows) {
+            // Calculate scroll position (matches drawEmotePickerScreen logic)
+            int selectedRow = emotePickerIndex / cols;
+            int topRow = selectedRow - rows / 2;
+            if (topRow < 0)
+                topRow = 0;
+            int maxTopRow = (numUniqueEmotes + cols - 1) / cols - rows;
+            if (topRow > maxTopRow && maxTopRow >= 0)
+                topRow = maxTopRow;
+            int firstVisibleIdx = topRow * cols;
+
+            int touchedIdx = firstVisibleIdx + touchRow * cols + touchCol;
+
+            // Validate touched emote exists
+            if (touchedIdx >= 0 && touchedIdx < numUniqueEmotes) {
+                // Map touchedIdx (unique index) back to actual emote
+                int uniqueIdx = 0;
+                int actualEmoteIdx = 0;
+                for (int i = 0; i < graphics::numEmotes; ++i) {
+                    const unsigned char *bitmap = graphics::emotes[i].bitmap;
+                    bool isDuplicate = false;
+                    for (int j = 0; j < i; ++j) {
+                        if (graphics::emotes[j].bitmap == bitmap) {
+                            isDuplicate = true;
+                            break;
+                        }
+                    }
+                    if (!isDuplicate) {
+                        if (uniqueIdx == touchedIdx) {
+                            actualEmoteIdx = i;
+                            break;
+                        }
+                        uniqueIdx++;
+                    }
+                }
+
+                // Insert the touched emote
+                String label = graphics::emotes[actualEmoteIdx].label;
+                String emoteInsert = label;
+                LOG_DEBUG("Touch selected emote: label='%s', index=%d, touchedIdx=%d, cursor=%d", label.c_str(), actualEmoteIdx,
+                          touchedIdx, cursor);
+                if (cursor == freetext.length()) {
+                    freetext += emoteInsert;
+                } else {
+                    freetext = freetext.substring(0, cursor) + emoteInsert + freetext.substring(cursor);
+                }
+                cursor += emoteInsert.length();
+                LOG_DEBUG("After touch insert: freetext='%s', cursor=%d", freetext.c_str(), cursor);
+                runState = CANNED_MESSAGE_RUN_STATE_FREETEXT;
+                requestFocus();
+                screen->forceDisplay(true);
+                return 1;
+            }
+        }
+    }
+
     // Grid navigation with row/col boundary checks
-    int currentRow = emotePickerIndex / cols;
     int currentCol = emotePickerIndex % cols;
 
     if (isUp && emotePickerIndex >= cols) {
@@ -1117,12 +1200,14 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
 
         String label = graphics::emotes[actualEmoteIdx].label;
         String emoteInsert = label;
+        LOG_DEBUG("Selected emote: label='%s', index=%d, cursor=%d", label.c_str(), actualEmoteIdx, cursor);
         if (cursor == freetext.length()) {
             freetext += emoteInsert;
         } else {
             freetext = freetext.substring(0, cursor) + emoteInsert + freetext.substring(cursor);
         }
         cursor += emoteInsert.length();
+        LOG_DEBUG("After insert: freetext='%s', cursor=%d", freetext.c_str(), cursor);
         runState = CANNED_MESSAGE_RUN_STATE_FREETEXT;
         requestFocus();
         screen->forceDisplay(true);
@@ -1638,8 +1723,10 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
 
     display->setColor(OLEDDISPLAY_COLOR::WHITE);
 
-    display->drawStringMaxWidth(0, 0, display->getWidth(),
-                                cannedMessageModule->drawWithCursor(cannedMessageModule->freetext, cannedMessageModule->cursor));
+    // Use drawStringWithEmotes to render emojis as bitmaps
+    String displayText = cannedMessageModule->drawWithCursor(cannedMessageModule->freetext, cannedMessageModule->cursor);
+    graphics::MessageRenderer::drawStringWithEmotes(display, 0, 0, displayText.c_str(), graphics::emotes, graphics::numEmotes,
+                                                    display->getWidth());
 
     display->setFont(FONT_MEDIUM);
 
@@ -1712,6 +1799,14 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
                 display->drawRect(xOffset, yOffset, cellWidth, cellHeight);
 
                 drawEnterIcon(display, xOffset + characterOffset, yOffset + yCorrection + 5, 1.7);
+            } else if (letter.character == "BACK") {
+                // Draw BACK button with border like other action keys
+                display->drawRect(xOffset, yOffset, cellWidth, cellHeight);
+                display->drawString(xOffset + characterOffset, yOffset + yCorrection, "BACK");
+            } else if (letter.character == "Emotes") {
+                // Draw emote button with border
+                display->drawRect(xOffset, yOffset, cellWidth, cellHeight);
+                display->drawString(xOffset + characterOffset, yOffset + yCorrection, "Emotes");
             } else {
                 if (this->highlight == letter.character[0]) {
                     display->fillRect(xOffset, yOffset, cellWidth, cellHeight);
