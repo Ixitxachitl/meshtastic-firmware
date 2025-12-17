@@ -1064,11 +1064,13 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
         needsCount = false;
     }
 
-    // Calculate grid dimensions (same as draw function)
+    // Calculate grid dimensions (same as draw function with scaling)
     const int headerFontHeight = FONT_HEIGHT_SMALL;
     const int headerMargin = 2;
     const int cellPadding = 2;
-    const int emoteSize = 16;
+    const bool isLargeScreen = screen->getWidth() > 128;
+    const int emoteScale = isLargeScreen ? 4 : 1;
+    const int emoteSize = 16 * emoteScale; // Must match drawEmotePickerScreen scaling
     const int cellSize = emoteSize + cellPadding * 2;
     int gridTop = headerFontHeight + headerMargin;
     int availableHeight = screen->getHeight() - gridTop - 2;
@@ -1076,7 +1078,7 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
     int cols = availableWidth / cellSize;
     int rows = availableHeight / cellSize;
 
-    // Navigation keys
+    // Navigation keys and swipe gestures
     bool isUp = isUpEvent(event);
     bool isDown = isDownEvent(event);
     bool isLeft = (event->inputEvent == INPUT_BROKER_LEFT);
@@ -1084,7 +1086,10 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
     bool isSelect = isSelectEvent(event);
 
     // Touch input handling for emote picker
-    if ((event->touchX != 0 || event->touchY != 0)) {
+    // Tap highlights emote, long press/select inserts it (prevents accidental selection)
+    // Don't process tap if it's actually a select/long press event
+    if ((event->touchX != 0 || event->touchY != 0) && !isUp && !isDown && !isLeft && !isRight && !isSelect &&
+        event->inputEvent != INPUT_BROKER_SELECT_LONG) {
         // Calculate which emote was touched based on grid layout
         int gridX = 2; // Left margin matches drawEmotePickerScreen
         int touchCol = (event->touchX - gridX) / cellSize;
@@ -1106,40 +1111,9 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
 
             // Validate touched emote exists
             if (touchedIdx >= 0 && touchedIdx < numUniqueEmotes) {
-                // Map touchedIdx (unique index) back to actual emote
-                int uniqueIdx = 0;
-                int actualEmoteIdx = 0;
-                for (int i = 0; i < graphics::numEmotes; ++i) {
-                    const unsigned char *bitmap = graphics::emotes[i].bitmap;
-                    bool isDuplicate = false;
-                    for (int j = 0; j < i; ++j) {
-                        if (graphics::emotes[j].bitmap == bitmap) {
-                            isDuplicate = true;
-                            break;
-                        }
-                    }
-                    if (!isDuplicate) {
-                        if (uniqueIdx == touchedIdx) {
-                            actualEmoteIdx = i;
-                            break;
-                        }
-                        uniqueIdx++;
-                    }
-                }
-
-                // Insert the touched emote
-                String label = graphics::emotes[actualEmoteIdx].label;
-                String emoteInsert = label;
-                LOG_DEBUG("Touch selected emote: label='%s', index=%d, touchedIdx=%d, cursor=%d", label.c_str(), actualEmoteIdx,
-                          touchedIdx, cursor);
-                if (cursor == freetext.length()) {
-                    freetext += emoteInsert;
-                } else {
-                    freetext = freetext.substring(0, cursor) + emoteInsert + freetext.substring(cursor);
-                }
-                cursor += emoteInsert.length();
-                LOG_DEBUG("After touch insert: freetext='%s', cursor=%d", freetext.c_str(), cursor);
-                runState = CANNED_MESSAGE_RUN_STATE_FREETEXT;
+                // Tap: just highlight the emote (move cursor to it)
+                emotePickerIndex = touchedIdx;
+                LOG_DEBUG("Touch highlighted emote index=%d", touchedIdx);
                 requestFocus();
                 screen->forceDisplay(true);
                 return 1;
@@ -1156,8 +1130,23 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
         screen->forceDisplay(true);
         return 1;
     }
-    if (isDown && emotePickerIndex + cols < numUniqueEmotes) {
-        emotePickerIndex += cols;
+    if (isDown) {
+        int targetIdx = emotePickerIndex + cols;
+        // If moving down would go past the last emote, try to find an emote in the same column on the next row
+        if (targetIdx >= numUniqueEmotes) {
+            // Check if there's any emote below in the same column
+            int nextRowStart = ((emotePickerIndex / cols) + 1) * cols;
+            int targetInSameCol = nextRowStart + currentCol;
+            if (targetInSameCol < numUniqueEmotes) {
+                emotePickerIndex = targetInSameCol;
+            } else if (nextRowStart < numUniqueEmotes) {
+                // Move to the last emote if the same column doesn't exist
+                emotePickerIndex = numUniqueEmotes - 1;
+            }
+            // else: already on last row, don't move
+        } else {
+            emotePickerIndex = targetIdx;
+        }
         requestFocus();
         screen->forceDisplay(true);
         return 1;
@@ -1176,7 +1165,34 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
     }
 
     // Select emote: find the unique emote and insert its label
-    if (isSelect) {
+    // Triggered by: button press, encoder press, or long tap on touchscreen
+    if (isSelect || event->inputEvent == INPUT_BROKER_SELECT_LONG) {
+        // If this is a long press with touch coordinates, first update selection to the touched emote
+        if ((event->touchX != 0 || event->touchY != 0)) {
+            int gridX = 2;
+            int touchCol = (event->touchX - gridX) / cellSize;
+            int touchRow = (event->touchY - gridTop) / cellSize;
+
+            if (touchCol >= 0 && touchCol < cols && touchRow >= 0 && touchRow < rows) {
+                int selectedRow = emotePickerIndex / cols;
+                int topRow = selectedRow - rows / 2;
+                if (topRow < 0)
+                    topRow = 0;
+                int maxTopRow = (numUniqueEmotes + cols - 1) / cols - rows;
+                if (topRow > maxTopRow && maxTopRow >= 0)
+                    topRow = maxTopRow;
+                int firstVisibleIdx = topRow * cols;
+
+                int touchedIdx = firstVisibleIdx + touchRow * cols + touchCol;
+
+                if (touchedIdx >= 0 && touchedIdx < numUniqueEmotes) {
+                    emotePickerIndex = touchedIdx;
+                    LOG_DEBUG("Long press updated selection to index=%d", touchedIdx);
+                }
+            }
+        }
+
+        // Now insert the currently selected emote
         // Map emotePickerIndex (unique index) back to actual emote
         int uniqueIdx = 0;
         int actualEmoteIdx = 0;
@@ -2071,7 +2087,11 @@ void CannedMessageModule::drawEmotePickerScreen(OLEDDisplay *display, OLEDDispla
     const int headerFontHeight = FONT_HEIGHT_SMALL;
     const int headerMargin = 2;
     const int cellPadding = 2;
-    const int emoteSize = 16; // All emotes are 16x16
+
+    // Scale emotes on larger screens for better visibility and touch targeting
+    const bool isLargeScreen = display->getWidth() > 128;
+    const int emoteScale = isLargeScreen ? 4 : 1;
+    const int emoteSize = 16 * emoteScale; // Base 16x16, scale to 64x64 on large screens
     const int cellSize = emoteSize + cellPadding * 2;
 
     // Build deduplicated list (only first occurrence of each bitmap)
@@ -2149,10 +2169,30 @@ void CannedMessageModule::drawEmotePickerScreen(OLEDDisplay *display, OLEDDispla
                 display->setColor(BLACK);
             }
 
-            // Center emote in cell
-            int emoteX = cellX + (cellSize - emote.width) / 2;
-            int emoteY = cellY + (cellSize - emote.height) / 2;
-            display->drawXbm(emoteX, emoteY, emote.width, emote.height, emote.bitmap);
+            // Center emote in cell, accounting for scale
+            int emoteX = cellX + (cellSize - emoteSize) / 2;
+            int emoteY = cellY + (cellSize - emoteSize) / 2;
+
+            // Draw with scaling on large screens
+            if (emoteScale > 1) {
+                // Draw scaled blocks (4x4 for 4x scaling)
+                for (int sy = 0; sy < emote.height; sy++) {
+                    for (int sx = 0; sx < emote.width; sx++) {
+                        int byteIdx = sy * ((emote.width + 7) / 8) + sx / 8;
+                        int bitIdx = sx % 8;
+                        if (emote.bitmap[byteIdx] & (1 << bitIdx)) {
+                            // Draw emoteScale x emoteScale pixel block for each source pixel
+                            for (int dy = 0; dy < emoteScale; dy++) {
+                                for (int dx = 0; dx < emoteScale; dx++) {
+                                    display->setPixel(emoteX + sx * emoteScale + dx, emoteY + sy * emoteScale + dy);
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                display->drawXbm(emoteX, emoteY, emote.width, emote.height, emote.bitmap);
+            }
 
             if (idx == emotePickerIndex)
                 display->setColor(WHITE);

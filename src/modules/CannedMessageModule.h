@@ -65,6 +65,11 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
     // === Emote Picker navigation ===
     int emotePickerIndex = 0; // Tracks currently selected emote in the picker
 
+    // Touch tracking for swipe detection
+    uint16_t emoteTouchStartX = 0;
+    uint16_t emoteTouchStartY = 0;
+    bool emoteTouchActive = false;
+
     // === Message navigation ===
     const char *getCurrentMessage();
     const char *getPrevMessage();
