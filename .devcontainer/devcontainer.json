@@ -25,8 +25,16 @@
     }
   },
 
-  // Use "--device=" to make a local device available inside the container.
-  "runArgs": ["--device=/dev/ttyACM0", "--group-add=dialout"],
+  // Use device cgroup rules to allow access to serial devices without requiring them at startup
+  "runArgs": [
+    "--device-cgroup-rule=c 166:* rmw", // ttyACM* devices
+    "--device-cgroup-rule=c 188:* rmw", // ttyUSB* devices
+    "--group-add=dialout",
+    "--privileged" // Required for WSL device forwarding
+  ],
+
+  // Mount host /dev to access devices attached after container start
+  "mounts": ["type=bind,source=/dev,target=/dev"],
 
   // Expose ports from the container to all network interfaces
   "appPort": ["4403:4403"],

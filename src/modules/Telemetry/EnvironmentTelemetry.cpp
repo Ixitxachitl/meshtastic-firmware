@@ -947,7 +947,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     int line = 1;
 
     // === Set Title
-    const char *titleStr = (graphics::isHighResolution) ? "Environment" : "Env.";
+    const char *titleStr = (graphics::currentResolution == graphics::ScreenResolution::High) ? "Environment" : "Env.";
 
     // === Header ===
     graphics::drawCommonHeader(display, x, y, titleStr);
@@ -1176,7 +1176,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
 #endif
 
     // Use advanced display with sparklines only on high-resolution screens
-    if (graphics::isHighResolution && isLargeDisplay) {
+    if (graphics::isHighResolution() && isLargeDisplay) {
         // === LARGE DISPLAY SCROLLABLE LAYOUT with graphs for all metrics ===
 
         // Calculate available scroll area (starts right after header)
@@ -1404,7 +1404,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
                 display->setPixel(scrollbarX + 1, thumbY + i);
             }
         }
-    } else if (graphics::isHighResolution) {
+    } else if (graphics::isHighResolution()) {
         // === SCROLLABLE HIGH-RES LAYOUT with sparklines for all metrics ===
 
         // Calculate available scroll area (starts right after header)
@@ -1659,7 +1659,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     }
 
     // Redraw header on top of scrollable content to prevent scrolled items from appearing over it
-    if (graphics::isHighResolution) {
+    if (graphics::isHighResolution()) {
         graphics::drawCommonHeader(display, x, y, titleStr);
     }
 

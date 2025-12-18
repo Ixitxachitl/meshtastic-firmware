@@ -46,9 +46,9 @@ static inline void drawSatelliteIcon(OLEDDisplay *display, int16_t x, int16_t y)
 #if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     int yOffset = -2;
 #else
-    int yOffset = (isHighResolution) ? -5 : 1;
+    int yOffset = (currentResolution == ScreenResolution::High) ? -5 : 1;
 #endif
-    if (isHighResolution) {
+    if (currentResolution == ScreenResolution::High) {
         NodeListRenderer::drawScaledXBitmap16x16(x, y + yOffset, imgSatellite_width, imgSatellite_height, imgSatellite, display);
     } else {
         display->drawXbm(x + 1, y + yOffset, imgSatellite_width, imgSatellite_height, imgSatellite);
@@ -95,10 +95,10 @@ void UIRenderer::drawGps(OLEDDisplay *display, int16_t x, int16_t y, const mesht
 #if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     int yOffset = -2;
 #else
-    int yOffset = (isHighResolution) ? -2 : 1;
+    int yOffset = (currentResolution == ScreenResolution::High) ? -2 : 1;
 #endif
     // Draw satellite image
-    if (isHighResolution) {
+    if (currentResolution == ScreenResolution::High) {
         NodeListRenderer::drawScaledXBitmap16x16(x, y + yOffset, imgSatellite_width, imgSatellite_height, imgSatellite, display);
     } else {
         display->drawXbm(x + 1, y + yOffset, imgSatellite_width, imgSatellite_height, imgSatellite);
@@ -118,7 +118,7 @@ void UIRenderer::drawGps(OLEDDisplay *display, int16_t x, int16_t y, const mesht
     } else {
         snprintf(textString, sizeof(textString), "%u sats", gps->getNumSatellites());
     }
-    if (isHighResolution) {
+    if (currentResolution == ScreenResolution::High) {
         display->drawString(x + 18, y, textString);
     } else {
         display->drawString(x + 11, y, textString);
@@ -303,13 +303,13 @@ void UIRenderer::drawNodes(OLEDDisplay *display, int16_t x, int16_t y, const mes
      defined(HACKADAY_COMMUNICATOR) || defined(USE_ST7796)) &&                                                                   \
     !defined(DISPLAY_FORCE_SMALL_FONTS)
 
-    if (isHighResolution) {
+    if (currentResolution == ScreenResolution::High) {
         NodeListRenderer::drawScaledXBitmap16x16(x, y - 1, 8, 8, imgUser, display);
     } else {
         display->drawFastImage(x, y + 3, 8, 8, imgUser);
     }
 #else
-    if (isHighResolution) {
+    if (currentResolution == ScreenResolution::High) {
         NodeListRenderer::drawScaledXBitmap16x16(x, y - 1, 8, 8, imgUser, display);
     } else {
 #if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
@@ -319,7 +319,7 @@ void UIRenderer::drawNodes(OLEDDisplay *display, int16_t x, int16_t y, const mes
 #endif
     }
 #endif
-    int string_offset = (isHighResolution) ? 9 : 0;
+    int string_offset = (currentResolution == ScreenResolution::High) ? 9 : 0;
     display->drawString(x + 10 + string_offset, y - 2, usersString);
 }
 
@@ -371,10 +371,15 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
     int line = 1; // which slot to use next
     std::string usernameStr;
     // === 1. Long Name (always try to show first) ===
+    const char *username;
 #if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
-    const char *username = (node->has_user && node->user.long_name[0]) ? node->user.short_name : nullptr;
+    username = (node->has_user && node->user.long_name[0]) ? node->user.short_name : nullptr;
 #else
-    const char *username = (node->has_user && node->user.long_name[0]) ? node->user.long_name : nullptr;
+    if (currentResolution == ScreenResolution::UltraLow) {
+        username = (node->has_user && node->user.long_name[0]) ? node->user.short_name : nullptr;
+    } else {
+        username = (node->has_user && node->user.long_name[0]) ? node->user.long_name : nullptr;
+    }
 #endif
 
     if (username) {
@@ -548,7 +553,7 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
 
             // Render compass based on display resolution and type
 #if !defined(USE_EINK)
-            if (isHighResolution) {
+            if (isHighResolution()) {
                 // 3D spherical compass + 3D-aware rim chevron toward favorite node
 #if !MESHTASTIC_EXCLUDE_BMI270
                 const Quat att = GetAttitudeForRenderer();
@@ -580,7 +585,7 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
             const int margin = 4;
 // --------- PATCH FOR EINK NAV BAR (ONLY CHANGE BELOW) -----------
 #if defined(USE_EINK)
-            const int iconSize = (isHighResolution) ? 16 : 8;
+            const int iconSize = (currentResolution == ScreenResolution::High) ? 16 : 8;
             const int navBarHeight = iconSize + 6;
 #else
             const int navBarHeight = 0;
@@ -634,7 +639,7 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
             float elevRad = (fabsf(groundM) > 0.5f) ? atanf(dzM / groundM) : 0.0f;
 
 #if !defined(USE_EINK)
-            if (isHighResolution) {
+            if (isHighResolution()) {
 #if !MESHTASTIC_EXCLUDE_BMI270
                 const Quat att = GetAttitudeForRenderer();
 #else
@@ -670,11 +675,11 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
     meshtastic_NodeInfoLite *ourNode = nodeDB->getMeshNode(nodeDB->getNodeNum());
 
     // === Header ===
-#if defined(M5STACK_UNITC6L)
-    graphics::drawCommonHeader(display, x, y, "Home");
-#else
-    graphics::drawCommonHeader(display, x, y, "");
-#endif
+    if (currentResolution == ScreenResolution::UltraLow) {
+        graphics::drawCommonHeader(display, x, y, "Home");
+    } else {
+        graphics::drawCommonHeader(display, x, y, "");
+    }
 
     // === Content below header ===
 
@@ -697,9 +702,15 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
     uint32_t hours = (uptime % 86400) / 3600;
     uint32_t mins = (uptime % 3600) / 60;
 #else
-    drawNodes(display, x + 1, getTextPositions(display)[line] + 2, nodeStatus, -1, false, "online");
+    if (currentResolution == ScreenResolution::UltraLow) {
+        drawNodes(display, x, getTextPositions(display)[line] + 2, nodeStatus, -1, false, "online");
+    } else {
+        drawNodes(display, x + 1, getTextPositions(display)[line] + 2, nodeStatus, -1, false, "online");
+    }
     char uptimeStr[32] = "";
-    getUptimeStr(millis(), "Up", uptimeStr, sizeof(uptimeStr));
+    if (currentResolution != ScreenResolution::UltraLow) {
+        getUptimeStr(millis(), "Up", uptimeStr, sizeof(uptimeStr));
+    }
     display->drawString(SCREEN_WIDTH - display->getStringWidth(uptimeStr), getTextPositions(display)[line++], uptimeStr);
 #endif
 
@@ -715,7 +726,7 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
             displayLine = config.position.gps_mode == meshtastic_Config_PositionConfig_GpsMode_NOT_PRESENT ? "No GPS" : "GPS off";
         }
         drawSatelliteIcon(display, x, getTextPositions(display)[line]);
-        int xOffset = (isHighResolution) ? 6 : 0;
+        int xOffset = (currentResolution == ScreenResolution::High) ? 6 : 0;
         display->drawString(x + 11 + xOffset, getTextPositions(display)[line], displayLine);
     } else {
         UIRenderer::drawGps(display, 0, getTextPositions(display)[line], gpsStatus);
@@ -785,25 +796,26 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
     char chUtilPercentage[10];
     snprintf(chUtilPercentage, sizeof(chUtilPercentage), "%2.0f%%", airTime->channelUtilizationPercent());
 
-    int chUtil_x = (isHighResolution) ? display->getStringWidth(chUtil) + 10 : display->getStringWidth(chUtil) + 5;
+    int chUtil_x = (currentResolution == ScreenResolution::High) ? display->getStringWidth(chUtil) + 10
+                                                                 : display->getStringWidth(chUtil) + 5;
 #if defined(USE_TINY_FONT)
     int chUtil_y = getTextPositions(display)[line] - 1;
 #else
     int chUtil_y = getTextPositions(display)[line] + 3;
 #endif
 
-    int chutil_bar_width = (isHighResolution) ? 100 : 50;
+    int chutil_bar_width = (currentResolution == ScreenResolution::High) ? 100 : 50;
     if (!config.bluetooth.enabled) {
 #if defined(USE_EINK)
-        chutil_bar_width = (isHighResolution) ? 50 : 30;
+        chutil_bar_width = (currentResolution == ScreenResolution::High) ? 50 : 30;
 #else
-        chutil_bar_width = (isHighResolution) ? 80 : 40;
+        chutil_bar_width = (currentResolution == ScreenResolution::High) ? 80 : 40;
 #endif
     }
-    int chutil_bar_height = (isHighResolution) ? 12 : 7;
-    int extraoffset = (isHighResolution) ? 6 : 3;
+    int chutil_bar_height = (currentResolution == ScreenResolution::High) ? 12 : 7;
+    int extraoffset = (currentResolution == ScreenResolution::High) ? 6 : 3;
     if (!config.bluetooth.enabled) {
-        extraoffset = (isHighResolution) ? 6 : 1;
+        extraoffset = (currentResolution == ScreenResolution::High) ? 6 : 1;
     }
     int chutil_percent = airTime->channelUtilizationPercent();
 
@@ -863,7 +875,7 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
     // === Fourth & Fifth Rows: Node Identity ===
     int textWidth = 0;
     int nameX = 0;
-    int yOffset = (isHighResolution) ? 0 : 5;
+    int yOffset = (currentResolution == ScreenResolution::High) ? 0 : 5;
     std::string longNameStr;
 
     if (ourNode && ourNode->has_user && strlen(ourNode->user.long_name) > 0) {
@@ -1136,7 +1148,7 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
             displayLine = config.position.gps_mode == meshtastic_Config_PositionConfig_GpsMode_NOT_PRESENT ? "No GPS" : "GPS off";
         }
         drawSatelliteIcon(display, x, getTextPositions(display)[line]);
-        int xOffset = (isHighResolution) ? 6 : 0;
+        int xOffset = (currentResolution == ScreenResolution::High) ? 6 : 0;
         display->drawString(x + 11 + xOffset, getTextPositions(display)[line++], displayLine);
     } else {
         // Onboard GPS
@@ -1284,7 +1296,7 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
                 CompassRenderer::drawCompassSphere(display, compassX, compassY, compassRadius);
 
 #if !defined(USE_EINK)
-                if (isHighResolution) {
+                if (isHighResolution()) {
                     // High-res OLED: show fixed cardinal labels around the ring
                     const uint16_t rDraw = (uint16_t)std::max<int>(1, (int)(compassRadius));
                     const int16_t cxShift = (int16_t)(compassX - (int)(rDraw * 0.14f));
@@ -1318,7 +1330,7 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
             } else {
                 // DYNAMIC/FREEZE_HEADING
 #if !defined(USE_EINK)
-                if (isHighResolution) {
+                if (isHighResolution()) {
                     // Normal 3D compass with gravity
                     CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, -heading);
                     CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, needleHeading, 0.0f);
@@ -1418,7 +1430,7 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
                 CompassRenderer::drawCompassSphere(display, compassX, compassY, compassRadius, Quat::identity());
 
 #if !defined(USE_EINK)
-                if (isHighResolution) {
+                if (isHighResolution()) {
                     // High-res OLED: show fixed cardinal direction labels
                     const uint16_t rDraw = (uint16_t)std::max<int>(1, (int)(compassRadius));
                     const int16_t cxShift = (int16_t)(compassX - (int)(rDraw * 0.14f));
@@ -1451,7 +1463,7 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
             } else {
                 // DYNAMIC/FREEZE_HEADING
 #if !defined(USE_EINK)
-                if (isHighResolution) {
+                if (isHighResolution()) {
                     // Normal 3D compass with gravity
                     CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, -heading);
                     CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, needleHeading, 0.0f);
@@ -1620,7 +1632,7 @@ void UIRenderer::drawCompassScreen(OLEDDisplay *display, OLEDDisplayUiState *sta
 void UIRenderer::drawOEMIconScreen(const char *upperMsg, OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     static const uint8_t xbm[] = USERPREFS_OEM_IMAGE_DATA;
-    if (isHighResolution) {
+    if (currentResolution == ScreenResolution::High) {
         display->drawXbm(x + (SCREEN_WIDTH - USERPREFS_OEM_IMAGE_WIDTH) / 2,
                          y + (SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM - USERPREFS_OEM_IMAGE_HEIGHT) / 2 + 2, USERPREFS_OEM_IMAGE_WIDTH,
                          USERPREFS_OEM_IMAGE_HEIGHT, xbm);
@@ -1645,7 +1657,7 @@ void UIRenderer::drawOEMIconScreen(const char *upperMsg, OLEDDisplay *display, O
 
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     const char *title = USERPREFS_OEM_TEXT;
-    if (isHighResolution) {
+    if (currentResolution == ScreenResolution::High) {
         display->drawString(x + getStringCenteredX(title), y + SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM, title);
     }
     display->setFont(FONT_SMALL);
@@ -1693,15 +1705,15 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
         graphics::setMessagesScreenActive(state->currentFrame == msgIdx);
     }
 
-    const int iconSize = isHighResolution ? 16 : 8;
-    const int spacing = isHighResolution ? 8 : 4;
-    const int bigOffset = isHighResolution ? 1 : 0;
+    const int iconSize = (currentResolution == ScreenResolution::High) ? 16 : 8;
+    const int spacing = (currentResolution == ScreenResolution::High) ? 8 : 4;
+    const int bigOffset = (currentResolution == ScreenResolution::High) ? 1 : 0;
 
     const size_t totalIcons = screen->indicatorIcons.size();
     if (totalIcons == 0)
         return;
 
-    const int navPadding = isHighResolution ? 24 : 12; // padding per side
+    const int navPadding = (currentResolution == ScreenResolution::High) ? 24 : 12; // padding per side
 
     int usableWidth = SCREEN_WIDTH - (navPadding * 2);
     if (usableWidth < iconSize)
@@ -1768,7 +1780,7 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
             display->setColor(BLACK);
         }
 
-        if (isHighResolution) {
+        if (currentResolution == ScreenResolution::High) {
             NodeListRenderer::drawScaledXBitmap16x16(x, y, 8, 8, icon, display);
         } else {
             display->drawXbm(x, y, iconSize, iconSize, icon);
@@ -1783,7 +1795,7 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
     auto drawArrow = [&](bool rightSide) {
         display->setColor(WHITE);
 
-        const int offset = isHighResolution ? 3 : 1;
+        const int offset = (currentResolution == ScreenResolution::High) ? 3 : 1;
         const int halfH = rectHeight / 2;
 
         const int top = (y - 2) + (rectHeight - halfH) / 2;

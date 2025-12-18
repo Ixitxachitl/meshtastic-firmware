@@ -330,7 +330,7 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
         }
         if (i == curSelected) {
             selectedNodenum = nodeDB->getMeshNodeByIndex(i + 1)->num;
-            if (isHighResolution) {
+            if (currentResolution == ScreenResolution::High) {
                 strncpy(scratchLineBuffer[scratchLineNum], "> ", 3);
                 strncpy(scratchLineBuffer[scratchLineNum] + 2, temp_name, 36);
                 strncpy(scratchLineBuffer[scratchLineNum] + strlen(temp_name) + 2, " <", 3);
@@ -462,7 +462,7 @@ void NotificationRenderer::drawAlertBannerOverlay(OLEDDisplay *display, OLEDDisp
 
     for (int i = firstOptionToShow; i < alertBannerOptions && linesShown < visibleTotalLines; i++, linesShown++) {
         if (i == curSelected) {
-            if (isHighResolution) {
+            if (currentResolution == ScreenResolution::High) {
                 strncpy(lineBuffer, "> ", 3);
                 strncpy(lineBuffer + 2, optionsArrayPtr[i], 36);
                 strncpy(lineBuffer + strlen(optionsArrayPtr[i]) + 2, " <", 3);
@@ -546,9 +546,9 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
     uint16_t boxWidth = hPadding * 2 + maxWidth;
 
     if (needs_bell) {
-        if (isHighResolution && boxWidth <= 150)
+        if ((currentResolution == ScreenResolution::High) && boxWidth <= 150)
             boxWidth += 26;
-        if (!isHighResolution && boxWidth <= 100)
+        if ((currentResolution == ScreenResolution::Low || currentResolution == ScreenResolution::UltraLow) && boxWidth <= 100)
             boxWidth += 20;
     }
 
@@ -562,15 +562,27 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
     uint16_t contentHeight = visibleTotalLines * effectiveLineHeight;
     uint16_t boxHeight = contentHeight + vPadding * 2;
     if (visibleTotalLines == 1) {
-        boxHeight += (isHighResolution) ? 4 : 3;
+        boxHeight += (currentResolution == ScreenResolution::High) ? 4 : 3;
     }
 
     int16_t boxLeft = (display->width() / 2) - (boxWidth / 2);
     if (totalLines > visibleTotalLines) {
-        boxWidth += (isHighResolution) ? 4 : 2;
+        boxWidth += (currentResolution == ScreenResolution::High) ? 4 : 2;
     }
     int16_t boxTop = (display->height() / 2) - (boxHeight / 2);
-    boxHeight += (isHighResolution) ? 2 : 1;
+    boxHeight += (currentResolution == ScreenResolution::High) ? 2 : 1;
+#if defined(M5STACK_UNITC6L)
+    if (visibleTotalLines == 1) {
+        boxTop += 25;
+    }
+    if (alertBannerOptions < 3) {
+        int missingLines = 3 - alertBannerOptions;
+        int moveUp = missingLines * (effectiveLineHeight / 2);
+        boxTop -= moveUp;
+        if (boxTop < 0)
+            boxTop = 0;
+    }
+#endif
 
     // Draw Box
     display->setColor(BLACK);

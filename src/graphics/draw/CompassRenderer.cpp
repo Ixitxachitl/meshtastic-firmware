@@ -514,7 +514,7 @@ void drawCompassNorth(OLEDDisplay *display, int16_t compassX, int16_t compassY, 
 {
     // Simple compass north indicator (works on all display types)
 #if !defined(USE_EINK)
-    if (isHighResolution) {
+    if (currentResolution == ScreenResolution::High) {
         radius += 4;
     }
 #endif
@@ -527,7 +527,7 @@ void drawCompassNorth(OLEDDisplay *display, int16_t compassX, int16_t compassY, 
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     display->setColor(BLACK);
 #if !defined(USE_EINK)
-    if (isHighResolution) {
+    if (currentResolution == ScreenResolution::High) {
         display->fillRect(north.x - 8, north.y - 1, display->getStringWidth("N") + 3, FONT_HEIGHT_SMALL - 6);
     } else
 #endif
@@ -541,7 +541,7 @@ void drawCompassNorth(OLEDDisplay *display, int16_t compassX, int16_t compassY, 
 void drawNodeHeading(OLEDDisplay *display, int16_t compassX, int16_t compassY, uint16_t compassDiam, float headingRadian)
 {
 #if !defined(USE_EINK)
-    if (isHighResolution) {
+    if (isHighResolution()) {
         // Use 3D compass for high-resolution displays (OLEDs)
         const Quat attitude = GetAttitudeForRenderer();
         const uint16_t radius = compassDiam / 2;
@@ -673,7 +673,7 @@ void setTopDownView(bool enable)
 void drawCompassSphere(OLEDDisplay *display, int16_t cx, int16_t cy, uint16_t radius)
 {
 #if !defined(USE_EINK)
-    if (isHighResolution) {
+    if (isHighResolution()) {
         // Use 3D sphere for high-resolution displays (OLEDs)
         const Quat attitude = GetAttitudeForRenderer();
         drawCompassSphere(display, cx, cy, radius, attitude);
@@ -688,7 +688,7 @@ void drawCompassSphere(OLEDDisplay *display, int16_t cx, int16_t cy, uint16_t ra
 void drawCenterNeedle3D(OLEDDisplay *display, int16_t cx, int16_t cy, uint16_t radius, float bearingRad, float elevRad)
 {
 #if !defined(USE_EINK)
-    if (isHighResolution) {
+    if (isHighResolution()) {
         // Use 3D needle for high-resolution displays (OLEDs)
         const Quat attitude = GetAttitudeForRenderer();
         drawCenterNeedle3D(display, cx, cy, radius, attitude, bearingRad, elevRad);

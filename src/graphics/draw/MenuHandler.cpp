@@ -22,12 +22,41 @@
 #include "modules/Telemetry/EnvironmentTelemetry.h"
 
 #include "modules/TraceRouteModule.h"
+#include <algorithm>
+#include <array>
 #include <functional>
+#include <utility>
 
 extern uint16_t TFT_MESH;
 
 namespace graphics
 {
+
+namespace
+{
+
+// Caller must ensure the provided options array outlives the banner callback.
+template <typename T, size_t N, typename Callback>
+BannerOverlayOptions createStaticBannerOptions(const char *message, const MenuOption<T> (&options)[N],
+                                               std::array<const char *, N> &labels, Callback &&onSelection)
+{
+    for (size_t i = 0; i < N; ++i) {
+        labels[i] = options[i].label;
+    }
+
+    const MenuOption<T> *optionsPtr = options;
+    auto callback = std::function<void(const MenuOption<T> &, int)>(std::forward<Callback>(onSelection));
+
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = message;
+    bannerOptions.optionsArrayPtr = labels.data();
+    bannerOptions.optionsCount = static_cast<uint8_t>(N);
+    bannerOptions.bannerCallback = [optionsPtr, callback](int selected) -> void { callback(optionsPtr[selected], selected); };
+    return bannerOptions;
+}
+
+} // namespace
+
 menuHandler::screenMenus menuHandler::menuQueue = menu_none;
 bool test_enabled = false;
 uint8_t test_count = 0;
@@ -108,11 +137,10 @@ void menuHandler::LoraRegionPicker(uint32_t duration)
                                          "NP_865",
                                          "BR_902"};
     BannerOverlayOptions bannerOptions;
-#if defined(M5STACK_UNITC6L)
-    bannerOptions.message = "LoRa Region";
-#else
     bannerOptions.message = "Set the LoRa region";
-#endif
+    if (currentResolution == ScreenResolution::UltraLow) {
+        bannerOptions.message = "LoRa Region";
+    }
     bannerOptions.durationMs = duration;
     bannerOptions.optionsArrayPtr = optionsArray;
     bannerOptions.optionsCount = 27;
@@ -200,48 +228,38 @@ void menuHandler::DeviceRolePicker()
 
 void menuHandler::RadioPresetPicker()
 {
-    static const char *optionsArray[] = {"Back",       "LongSlow",  "LongModerate", "LongFast",  "MediumSlow",
-                                         "MediumFast", "ShortSlow", "ShortFast",    "ShortTurbo"};
-    enum optionsNumbers {
-        Back = 0,
-        radiopreset_LongSlow = 1,
-        radiopreset_LongModerate = 2,
-        radiopreset_LongFast = 3,
-        radiopreset_MediumSlow = 4,
-        radiopreset_MediumFast = 5,
-        radiopreset_ShortSlow = 6,
-        radiopreset_ShortFast = 7,
-        radiopreset_ShortTurbo = 8
+    static const RadioPresetOption presetOptions[] = {
+        {"Back", OptionsAction::Back},
+        {"LongTurbo", OptionsAction::Select, meshtastic_Config_LoRaConfig_ModemPreset_LONG_TURBO},
+        {"LongModerate", OptionsAction::Select, meshtastic_Config_LoRaConfig_ModemPreset_LONG_MODERATE},
+        {"LongFast", OptionsAction::Select, meshtastic_Config_LoRaConfig_ModemPreset_LONG_FAST},
+        {"MediumSlow", OptionsAction::Select, meshtastic_Config_LoRaConfig_ModemPreset_MEDIUM_SLOW},
+        {"MediumFast", OptionsAction::Select, meshtastic_Config_LoRaConfig_ModemPreset_MEDIUM_FAST},
+        {"ShortSlow", OptionsAction::Select, meshtastic_Config_LoRaConfig_ModemPreset_SHORT_SLOW},
+        {"ShortFast", OptionsAction::Select, meshtastic_Config_LoRaConfig_ModemPreset_SHORT_FAST},
+        {"ShortTurbo", OptionsAction::Select, meshtastic_Config_LoRaConfig_ModemPreset_SHORT_TURBO},
     };
-    BannerOverlayOptions bannerOptions;
-    bannerOptions.message = "Radio Preset";
-    bannerOptions.optionsArrayPtr = optionsArray;
-    bannerOptions.optionsCount = 9;
-    bannerOptions.bannerCallback = [](int selected) -> void {
-        if (selected == Back) {
-            menuHandler::menuQueue = menuHandler::lora_Menu;
-            screen->runNow();
-            return;
-        } else if (selected == radiopreset_LongSlow) {
-            config.lora.modem_preset = meshtastic_Config_LoRaConfig_ModemPreset_LONG_SLOW;
-        } else if (selected == radiopreset_LongModerate) {
-            config.lora.modem_preset = meshtastic_Config_LoRaConfig_ModemPreset_LONG_MODERATE;
-        } else if (selected == radiopreset_LongFast) {
-            config.lora.modem_preset = meshtastic_Config_LoRaConfig_ModemPreset_LONG_FAST;
-        } else if (selected == radiopreset_MediumSlow) {
-            config.lora.modem_preset = meshtastic_Config_LoRaConfig_ModemPreset_MEDIUM_SLOW;
-        } else if (selected == radiopreset_MediumFast) {
-            config.lora.modem_preset = meshtastic_Config_LoRaConfig_ModemPreset_MEDIUM_FAST;
-        } else if (selected == radiopreset_ShortSlow) {
-            config.lora.modem_preset = meshtastic_Config_LoRaConfig_ModemPreset_SHORT_SLOW;
-        } else if (selected == radiopreset_ShortFast) {
-            config.lora.modem_preset = meshtastic_Config_LoRaConfig_ModemPreset_SHORT_FAST;
-        } else if (selected == radiopreset_ShortTurbo) {
-            config.lora.modem_preset = meshtastic_Config_LoRaConfig_ModemPreset_SHORT_TURBO;
-        }
-        service->reloadConfig(SEGMENT_CONFIG);
-        rebootAtMsec = (millis() + DEFAULT_REBOOT_SECONDS * 1000);
-    };
+
+    constexpr size_t presetCount = sizeof(presetOptions) / sizeof(presetOptions[0]);
+    static std::array<const char *, presetCount> presetLabels{};
+
+    auto bannerOptions =
+        createStaticBannerOptions("Radio Preset", presetOptions, presetLabels, [](const RadioPresetOption &option, int) -> void {
+            if (option.action == OptionsAction::Back) {
+                menuHandler::menuQueue = menuHandler::lora_Menu;
+                screen->runNow();
+                return;
+            }
+
+            if (!option.hasValue) {
+                return;
+            }
+
+            config.lora.modem_preset = option.value;
+            service->reloadConfig(SEGMENT_CONFIG);
+            rebootAtMsec = (millis() + DEFAULT_REBOOT_SECONDS * 1000);
+        });
+
     screen->showOverlayBanner(bannerOptions);
 }
 
@@ -441,11 +459,11 @@ void menuHandler::messageResponseMenu()
 #endif
 
     BannerOverlayOptions bannerOptions;
-#if defined(M5STACK_UNITC6L)
-    bannerOptions.message = "Message";
-#else
-    bannerOptions.message = "Message Action";
-#endif
+    if (currentResolution == ScreenResolution::UltraLow) {
+        bannerOptions.message = "Message";
+    } else {
+        bannerOptions.message = "Message Action";
+    }
     bannerOptions.optionsArrayPtr = optionsArray;
     bannerOptions.optionsEnumPtr = optionsEnumArray;
     bannerOptions.optionsCount = options;
@@ -633,11 +651,11 @@ void menuHandler::deleteMessagesMenu()
         optionsArray[options] = "Delete This Chat";
         optionsEnumArray[options++] = DeleteThis;
     }
-#if defined(M5STACK_UNITC6L)
-    optionsArray[options] = "Delete All";
-#else
-    optionsArray[options] = "Delete All Chats";
-#endif
+    if (currentResolution == ScreenResolution::UltraLow) {
+        optionsArray[options] = "Delete All";
+    } else {
+        optionsArray[options] = "Delete All Chats";
+    }
     optionsEnumArray[options++] = DeleteAll;
 
     BannerOverlayOptions bannerOptions;
@@ -870,11 +888,10 @@ void menuHandler::homeBaseMenu()
     optionsEnumArray[options++] = Position;
 
     BannerOverlayOptions bannerOptions;
-#if defined(M5STACK_UNITC6L)
-    bannerOptions.message = "Home";
-#else
     bannerOptions.message = "Home Action";
-#endif
+    if (currentResolution == ScreenResolution::UltraLow) {
+        bannerOptions.message = "Home";
+    }
     bannerOptions.optionsArrayPtr = optionsArray;
     bannerOptions.optionsEnumPtr = optionsEnumArray;
     bannerOptions.optionsCount = options;
@@ -959,21 +976,22 @@ void menuHandler::systemBaseMenu()
     optionsArray[options] = "Display Options";
     optionsEnumArray[options++] = ScreenOptions;
 
-#if defined(M5STACK_UNITC6L)
-    optionsArray[options] = "Bluetooth";
-#else
-    optionsArray[options] = "Bluetooth Toggle";
-#endif
+    if (currentResolution == ScreenResolution::UltraLow) {
+        optionsArray[options] = "Bluetooth";
+    } else {
+        optionsArray[options] = "Bluetooth Toggle";
+    }
     optionsEnumArray[options++] = Bluetooth;
 #if HAS_WIFI && !defined(ARCH_PORTDUINO)
     optionsArray[options] = "WiFi Toggle";
     optionsEnumArray[options++] = WiFiToggle;
 #endif
-#if defined(M5STACK_UNITC6L)
-    optionsArray[options] = "Power";
-#else
-    optionsArray[options] = "Reboot/Shutdown";
-#endif
+
+    if (currentResolution == ScreenResolution::UltraLow) {
+        optionsArray[options] = "Power";
+    } else {
+        optionsArray[options] = "Reboot/Shutdown";
+    }
     optionsEnumArray[options++] = PowerMenu;
 
     if (test_enabled) {
@@ -982,11 +1000,10 @@ void menuHandler::systemBaseMenu()
     }
 
     BannerOverlayOptions bannerOptions;
-#if defined(M5STACK_UNITC6L)
-    bannerOptions.message = "System";
-#else
     bannerOptions.message = "System Action";
-#endif
+    if (currentResolution == ScreenResolution::UltraLow) {
+        bannerOptions.message = "System";
+    }
     bannerOptions.optionsArrayPtr = optionsArray;
     bannerOptions.optionsCount = options;
     bannerOptions.optionsEnumPtr = optionsEnumArray;
@@ -1042,11 +1059,11 @@ void menuHandler::favoriteBaseMenu()
         optionsArray[options] = "Go To Chat";
         optionsEnumArray[options++] = GoToChat;
     }
-#if defined(M5STACK_UNITC6L)
-    optionsArray[options] = "New Preset";
-#else
-    optionsArray[options] = "New Preset Msg";
-#endif
+    if (currentResolution == ScreenResolution::UltraLow) {
+        optionsArray[options] = "New Preset";
+    } else {
+        optionsArray[options] = "New Preset Msg";
+    }
     optionsEnumArray[options++] = Preset;
 
     if (kb_found) {
@@ -1054,19 +1071,18 @@ void menuHandler::favoriteBaseMenu()
         optionsEnumArray[options++] = Freetext;
     }
 
-#if !defined(M5STACK_UNITC6L)
-    optionsArray[options] = "Trace Route";
-    optionsEnumArray[options++] = TraceRoute;
-#endif
+    if (currentResolution != ScreenResolution::UltraLow) {
+        optionsArray[options] = "Trace Route";
+        optionsEnumArray[options++] = TraceRoute;
+    }
     optionsArray[options] = "Remove Favorite";
     optionsEnumArray[options++] = Remove;
 
     BannerOverlayOptions bannerOptions;
-#if defined(M5STACK_UNITC6L)
-    bannerOptions.message = "Favorites";
-#else
     bannerOptions.message = "Favorites Action";
-#endif
+    if (currentResolution == ScreenResolution::UltraLow) {
+        bannerOptions.message = "Favorites";
+    }
     bannerOptions.optionsArrayPtr = optionsArray;
     bannerOptions.optionsEnumPtr = optionsEnumArray;
     bannerOptions.optionsCount = options;
@@ -1145,13 +1161,15 @@ void menuHandler::nodeListMenu()
     optionsArray[options] = "Trace Route";
     optionsEnumArray[options++] = TraceRoute;
 
-#if !defined(M5STACK_UNITC6L)
-    optionsArray[options] = "Key Verification";
-    optionsEnumArray[options++] = Verify;
-#endif
+    if (currentResolution != ScreenResolution::UltraLow) {
+        optionsArray[options] = "Key Verification";
+        optionsEnumArray[options++] = Verify;
+    }
 
-    optionsArray[options] = "Show Long/Short Name";
-    optionsEnumArray[options++] = NodeNameLength;
+    if (currentResolution != ScreenResolution::UltraLow) {
+        optionsArray[options] = "Show Long/Short Name";
+        optionsEnumArray[options++] = NodeNameLength;
+    }
     optionsArray[options] = "Reset NodeDB";
     optionsEnumArray[options++] = Reset;
 
@@ -1303,13 +1321,14 @@ void menuHandler::GPSFormatMenu()
 {
 
     static const char *optionsArray[] = {"Back",
-                                         isHighResolution ? "Decimal Degrees" : "DEC",
-                                         isHighResolution ? "Degrees Minutes Seconds" : "DMS",
-                                         isHighResolution ? "Universal Transverse Mercator" : "UTM",
-                                         isHighResolution ? "Military Grid Reference System" : "MGRS",
-                                         isHighResolution ? "Open Location Code" : "OLC",
-                                         isHighResolution ? "Ordnance Survey Grid Ref" : "OSGR",
-                                         isHighResolution ? "Maidenhead Locator" : "MLS"};
+                                         (currentResolution == ScreenResolution::High) ? "Decimal Degrees" : "DEC",
+                                         (currentResolution == ScreenResolution::High) ? "Degrees Minutes Seconds" : "DMS",
+                                         (currentResolution == ScreenResolution::High) ? "Universal Transverse Mercator" : "UTM",
+                                         (currentResolution == ScreenResolution::High) ? "Military Grid Reference System"
+                                                                                       : "MGRS",
+                                         (currentResolution == ScreenResolution::High) ? "Open Location Code" : "OLC",
+                                         (currentResolution == ScreenResolution::High) ? "Ordnance Survey Grid Ref" : "OSGR",
+                                         (currentResolution == ScreenResolution::High) ? "Maidenhead Locator" : "MLS"};
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = "GPS Format";
     bannerOptions.optionsArrayPtr = optionsArray;
@@ -1357,11 +1376,10 @@ void menuHandler::BluetoothToggleMenu()
 {
     static const char *optionsArray[] = {"Back", "Enabled", "Disabled"};
     BannerOverlayOptions bannerOptions;
-#if defined(M5STACK_UNITC6L)
-    bannerOptions.message = "Bluetooth";
-#else
     bannerOptions.message = "Toggle Bluetooth";
-#endif
+    if (currentResolution == ScreenResolution::UltraLow) {
+        bannerOptions.message = "Bluetooth";
+    }
     bannerOptions.optionsArrayPtr = optionsArray;
     bannerOptions.optionsCount = 3;
     bannerOptions.bannerCallback = [](int selected) -> void {
@@ -1577,11 +1595,10 @@ void menuHandler::rebootMenu()
 {
     static const char *optionsArray[] = {"Back", "Confirm"};
     BannerOverlayOptions bannerOptions;
-#if defined(M5STACK_UNITC6L)
-    bannerOptions.message = "Reboot";
-#else
     bannerOptions.message = "Reboot Device?";
-#endif
+    if (currentResolution == ScreenResolution::UltraLow) {
+        bannerOptions.message = "Reboot";
+    }
     bannerOptions.optionsArrayPtr = optionsArray;
     bannerOptions.optionsCount = 2;
     bannerOptions.bannerCallback = [](int selected) -> void {
@@ -1602,11 +1619,10 @@ void menuHandler::shutdownMenu()
 {
     static const char *optionsArray[] = {"Back", "Confirm"};
     BannerOverlayOptions bannerOptions;
-#if defined(M5STACK_UNITC6L)
-    bannerOptions.message = "Shutdown";
-#else
     bannerOptions.message = "Shutdown Device?";
-#endif
+    if (currentResolution == ScreenResolution::UltraLow) {
+        bannerOptions.message = "Shutdown";
+    }
     bannerOptions.optionsArrayPtr = optionsArray;
     bannerOptions.optionsCount = 2;
     bannerOptions.bannerCallback = [](int selected) -> void {
@@ -1624,12 +1640,13 @@ void menuHandler::shutdownMenu()
 void menuHandler::addFavoriteMenu()
 {
     graphics::setOverlayActive(true);
-#if defined(M5STACK_UNITC6L)
-    screen->showNodePicker("Node Favorite", 30000, [](uint32_t nodenum) -> void {
-#else
-    screen->showNodePicker("Node To Favorite", 30000, [](uint32_t nodenum) -> void {
-
-#endif
+    const char *NODE_PICKER_TITLE;
+    if (currentResolution == ScreenResolution::UltraLow) {
+        NODE_PICKER_TITLE = "Node Favorite";
+    } else {
+        NODE_PICKER_TITLE = "Node To Favorite";
+    }
+    screen->showNodePicker(NODE_PICKER_TITLE, 30000, [](uint32_t nodenum) -> void {
         LOG_WARN("Nodenum: %u", nodenum);
         nodeDB->set_favorite(true, nodenum);
         graphics::setOverlayActive(false);
@@ -1869,11 +1886,10 @@ void menuHandler::powerMenu()
 #endif
 
     BannerOverlayOptions bannerOptions;
-#if defined(M5STACK_UNITC6L)
-    bannerOptions.message = "Power";
-#else
     bannerOptions.message = "Reboot / Shutdown";
-#endif
+    if (currentResolution == ScreenResolution::UltraLow) {
+        bannerOptions.message = "Power";
+    }
     bannerOptions.optionsArrayPtr = optionsArray;
     bannerOptions.optionsCount = options;
     bannerOptions.optionsEnumPtr = optionsEnumArray;

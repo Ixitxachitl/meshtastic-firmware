@@ -21,21 +21,30 @@ using graphics::Emote;
 using graphics::emotes;
 using graphics::numEmotes;
 
-void determineResolution(int16_t screenheight, int16_t screenwidth)
+ScreenResolution determineScreenResolution(int16_t screenheight, int16_t screenwidth)
 {
 
 #ifdef FORCE_LOW_RES
-    isHighResolution = false;
-    return;
-#endif
-
-    if (screenwidth > 128) {
-        isHighResolution = true;
+    return ScreenResolution::Low;
+#else
+    // Unit C6L and other ultra low res screens
+    if (screenwidth <= 64 || screenheight <= 48) {
+        return ScreenResolution::UltraLow;
     }
 
+    // Standard OLED screens
     if (screenwidth > 128 && screenheight <= 64) {
-        isHighResolution = false;
+        return ScreenResolution::Low;
     }
+
+    // High Resolutions screens like T114, TDeck, TLora Pager, etc
+    if (screenwidth > 128) {
+        return ScreenResolution::High;
+    }
+
+    // Default to low resolution
+    return ScreenResolution::Low;
+#endif
 }
 
 void decomposeTime(uint32_t rtc_sec, int &hour, int &minute, int &second)
@@ -54,7 +63,7 @@ void decomposeTime(uint32_t rtc_sec, int &hour, int &minute, int &second)
 // === Shared External State ===
 bool hasUnreadMessage = false;
 bool isMuted = false;
-bool isHighResolution = false;
+ScreenResolution currentResolution = ScreenResolution::Low;
 
 static volatile bool s_overlayActive = false;
 void setOverlayActive(bool active)
@@ -157,7 +166,7 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
             display->setColor(BLACK);
             display->fillRect(0, 0, screenW, highlightHeight + 2);
             display->setColor(WHITE);
-            if (isHighResolution) {
+            if (currentResolution == ScreenResolution::High) {
                 display->drawLine(0, 20, screenW, 20);
             } else {
                 display->drawLine(0, 14, screenW, 14);
@@ -205,7 +214,7 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
     }
 #endif
 
-    bool useHorizontalBattery = (isHighResolution && screenW >= screenH);
+    bool useHorizontalBattery = (currentResolution == ScreenResolution::High && screenW >= screenH);
 #if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     const int textY = y + (highlightHeight - FONT_HEIGHT_SMALL) / 2 + 1; // Skip first padding row
 #else
@@ -251,7 +260,7 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
     if (usbPowered && !isCharging) { // This is a basic check to determine USB Powered is flagged but not charging
         batteryX += 1;
         batteryY += 2;
-        if (isHighResolution) {
+        if (currentResolution == ScreenResolution::High) {
             display->drawXbm(batteryX, batteryY, 19, 12, imgUSB_HighResolution);
             batteryX += 20; // Icon + 1 pixel
         } else {
@@ -331,7 +340,7 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
         UIRenderer::formatDateTime(datetimeStr, sizeof(datetimeStr), rtc_sec, display, false);
         char dateLine[40];
 
-        if (isHighResolution) {
+        if (currentResolution == ScreenResolution::High) {
             snprintf(dateLine, sizeof(dateLine), "%s", datetimeStr);
         } else {
             if (hasUnreadMessage) {
@@ -436,7 +445,7 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
                 display->drawXbm(iconX, iconY, mail_width, mail_height, mail);
             }
         } else if (isMuted) {
-            if (isHighResolution) {
+            if (currentResolution == ScreenResolution::High) {
                 int iconX = iconRightEdge - mute_symbol_big_width;
                 int iconY = textY + (FONT_HEIGHT_SMALL - mute_symbol_big_height) / 2;
 
@@ -521,7 +530,7 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
                 display->drawXbm(iconX, iconY, mail_width, mail_height, mail);
             }
         } else if (isMuted) {
-            if (isHighResolution) {
+            if (currentResolution == ScreenResolution::High) {
                 int iconX = iconRightEdge - mute_symbol_big_width;
                 int iconY = textY + (FONT_HEIGHT_SMALL - mute_symbol_big_height) / 2;
                 display->drawXbm(iconX, iconY, mute_symbol_big_width, mute_symbol_big_height, mute_symbol_big);
@@ -549,7 +558,7 @@ const int *getTextPositions(OLEDDisplay *display)
     textPositions[5] = textFifthLine_unitc6l;
     textPositions[6] = textSixthLine_unitc6l;
 #else
-    if (isHighResolution) {
+    if (currentResolution == ScreenResolution::High) {
         textPositions[0] = textZeroLine;
         textPositions[1] = textFirstLine_medium;
         textPositions[2] = textSecondLine_medium;
@@ -583,12 +592,12 @@ void drawCommonFooter(OLEDDisplay *display, int16_t x, int16_t y)
     }
 
     if (drawConnectionState) {
-        const int scale = isHighResolution ? 2 : 1;
+        const int scale = (currentResolution == ScreenResolution::High) ? 2 : 1;
         display->setColor(BLACK);
         display->fillRect(0, SCREEN_HEIGHT - (1 * scale) - (connection_icon_height * scale), (connection_icon_width * scale),
                           (connection_icon_height * scale) + (2 * scale));
         display->setColor(WHITE);
-        if (isHighResolution) {
+        if (currentResolution == ScreenResolution::High) {
             const int bytesPerRow = (connection_icon_width + 7) / 8;
             int iconX = 0;
             int iconY = SCREEN_HEIGHT - (connection_icon_height * 2);

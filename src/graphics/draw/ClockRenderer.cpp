@@ -209,9 +209,10 @@ void drawDigitalClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int1
     const float step = 0.05f; // Step increment per iteration
 
     // Reserve space for header/footer and small labels below time
-    const int headerReserve = FONT_HEIGHT_SMALL + 2;                          // header highlight + padding
-    const int bottomReserve = FONT_HEIGHT_SMALL + (isHighResolution ? 8 : 6); // seconds/am-pm + footer line/icon
-    const int target_width = display->getWidth() - 2;                         // small horizontal margin
+    const int headerReserve = FONT_HEIGHT_SMALL + 2; // header highlight + padding
+    const int bottomReserve =
+        FONT_HEIGHT_SMALL + ((currentResolution == ScreenResolution::High) ? 8 : 6); // seconds/am-pm + footer line/icon
+    const int target_width = display->getWidth() - 2;                                // small horizontal margin
     const int target_height = display->getHeight() - (headerReserve + bottomReserve);
 
     // Use widest possible time format for consistent sizing (23:59 for 24h or 12:59 for 12h)
@@ -287,9 +288,16 @@ void drawDigitalClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int1
 
     // draw seconds string + AM/PM
     display->setFont(FONT_SMALL);
-    int xOffset = (isHighResolution) ? 0 : -1;
+    int xOffset = -1;
+    if (currentResolution == ScreenResolution::High) {
+        xOffset = 0;
+    }
     if (hour >= 10) {
-        xOffset += (isHighResolution) ? 32 : 18;
+        if (currentResolution == ScreenResolution::High) {
+            xOffset += 32;
+        } else {
+            xOffset += 18;
+        }
     }
 
 #if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
@@ -303,7 +311,7 @@ void drawDigitalClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int1
     }
 
 #ifndef USE_EINK
-    xOffset = (isHighResolution) ? 18 : 10;
+    xOffset = (currentResolution == ScreenResolution::High) ? 18 : 10;
     if (scale >= 2.0f) {
         xOffset -= (int)(4.5f * scale);
     }
@@ -342,8 +350,8 @@ void drawAnalogClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     // tick mark outer y coordinate; (first nested circle)
     int16_t tickMarkOuterNoonY = secondHandNoonY;
 
-    double secondsTickMarkInnerNoonY = noonY + (isHighResolution ? 8 : 4);
-    double hoursTickMarkInnerNoonY = noonY + (isHighResolution ? 16 : 6);
+    double secondsTickMarkInnerNoonY = noonY + ((currentResolution == ScreenResolution::High) ? 8 : 4);
+    double hoursTickMarkInnerNoonY = noonY + ((currentResolution == ScreenResolution::High) ? 16 : 6);
 
     // minute hand y coordinate
     int16_t minuteHandNoonY = secondsTickMarkInnerNoonY + 4;
@@ -353,7 +361,7 @@ void drawAnalogClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 
     // hour hand radius and y coordinate
     int16_t hourHandRadius = radius * 0.35;
-    if (isHighResolution) {
+    if (currentResolution == ScreenResolution::High) {
         hourHandRadius = radius * 0.55;
     }
     int16_t hourHandNoonY = centerY - hourHandRadius;
@@ -369,7 +377,7 @@ void drawAnalogClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         if (config.display.use_12h_clock) {
             bool isPM = hour >= 12;
             display->setFont(FONT_SMALL);
-            int yOffset = isHighResolution ? 1 : 0;
+            int yOffset = (currentResolution == ScreenResolution::High) ? 1 : 0;
 #ifdef USE_EINK
             yOffset += 3;
 #endif
@@ -460,12 +468,13 @@ void drawAnalogClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 display->drawStringf(hourStringX, hourStringY, buffer, "%d", hourInt);
 #else
 #ifdef USE_EINK
-                if (isHighResolution) {
+                if (currentResolution == ScreenResolution::High) {
                     // draw hour number
                     display->drawStringf(hourStringX, hourStringY, buffer, "%d", hourInt);
                 }
 #else
-                if (isHighResolution && (hourInt == 3 || hourInt == 6 || hourInt == 9 || hourInt == 12)) {
+                if (currentResolution == ScreenResolution::High &&
+                    (hourInt == 3 || hourInt == 6 || hourInt == 9 || hourInt == 12)) {
                     // draw hour number
                     display->drawStringf(hourStringX, hourStringY, buffer, "%d", hourInt);
                 }
@@ -477,7 +486,7 @@ void drawAnalogClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 double startX = sineAngleInRadians * (secondsTickMarkInnerNoonY - centerY) + noonX;
                 double startY = cosineAngleInRadians * (secondsTickMarkInnerNoonY - centerY) + centerY;
 
-                if (isHighResolution) {
+                if (currentResolution == ScreenResolution::High) {
                     // draw minute tick mark
                     display->drawLine(startX, startY, endX, endY);
                 }

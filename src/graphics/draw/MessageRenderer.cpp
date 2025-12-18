@@ -979,7 +979,13 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     const int navHeight = FONT_HEIGHT_SMALL;
     const int scrollBottom = SCREEN_HEIGHT - navHeight;
     const int usableHeight = scrollBottom;
-    const int textWidth = SCREEN_WIDTH;
+    constexpr int LEFT_MARGIN = 2;
+    constexpr int RIGHT_MARGIN = 2;
+    constexpr int SCROLLBAR_WIDTH = 3;
+
+    const int leftTextWidth = SCREEN_WIDTH - LEFT_MARGIN - RIGHT_MARGIN;
+
+    const int rightTextWidth = SCREEN_WIDTH - LEFT_MARGIN - RIGHT_MARGIN - SCROLLBAR_WIDTH;
 
     // Title string depending on mode
     static char titleBuf[32];
@@ -1167,7 +1173,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 // Body lines - use message text directly to avoid allocations
                 const char *msgText = MessageStore::getText(m);
 
-                std::vector<std::string> wrapped = generateLines(display, "", msgText, textWidth);
+                std::vector<std::string> wrapped = generateLines(display, "", msgText, (mine ? rightTextWidth : leftTextWidth));
 
                 // Cap per-message wrapped lines so one long message can't explode memory.
                 if (wrapped.size() > kMaxLinesPerMessage) {
@@ -1301,7 +1307,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 // Body lines - use message text directly to avoid allocations
                 const char *msgText = MessageStore::getText(m);
 
-                std::vector<std::string> wrapped = generateLines(display, "", msgText, textWidth);
+                std::vector<std::string> wrapped = generateLines(display, "", msgText, (mine ? rightTextWidth : leftTextWidth));
 
                 // Cap per-message wrapped lines so one long message can't explode memory.
                 if (wrapped.size() > kMaxLinesPerMessage) {
@@ -1578,8 +1584,10 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 if (cachedIsMine[i]) {
                     // Calculate actual rendered width including emotes
                     int renderedWidth = getRenderedLineWidth(display, cachedLines[i], emotes, numEmotes);
-                    constexpr int SCROLLBAR_WIDTH = 3;
-                    int rightX = SCREEN_WIDTH - renderedWidth - SCROLLBAR_WIDTH - 2;
+                    int rightX = SCREEN_WIDTH - renderedWidth - SCROLLBAR_WIDTH - RIGHT_MARGIN;
+                    if (rightX < LEFT_MARGIN)
+                        rightX = LEFT_MARGIN;
+
                     drawStringWithEmotes(display, rightX, lineY, cachedLines[i], emotes, numEmotes);
                 } else {
                     drawStringWithEmotes(display, x, lineY, cachedLines[i], emotes, numEmotes);
@@ -1872,7 +1880,7 @@ void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const mesht
             snprintf(longName, sizeof(longName), "(%08x)", packet.from);
         }
 #endif
-        int availWidth = display->getWidth() - (isHighResolution ? 40 : 20);
+        int availWidth = display->getWidth() - ((currentResolution == ScreenResolution::High) ? 40 : 20);
         if (availWidth < 0)
             availWidth = 0;
 
@@ -1910,7 +1918,11 @@ void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const mesht
                 return;
 
             if (longName && longName[0]) {
-                snprintf(banner, sizeof(banner), "New Message from\n%s", longName);
+                if (currentResolution == ScreenResolution::UltraLow) {
+                    strcpy(banner, "New Message");
+                } else {
+                    snprintf(banner, sizeof(banner), "New Message from\n%s", longName);
+                }
             } else
                 strcpy(banner, "New Message");
         }
