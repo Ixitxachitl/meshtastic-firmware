@@ -1068,9 +1068,13 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
     const int headerFontHeight = FONT_HEIGHT_SMALL;
     const int headerMargin = 2;
     const int cellPadding = 2;
-    // Scale based on screen size: 1x for small (<128), 2x for medium (320x240 T-Deck), 4x for large (480x480 Indicator)
+    // Scale based on screen size for touchscreen devices, 1x for non-touch
     const int screenWidth = screen->getWidth();
-    const int emoteScale = (screenWidth >= 400) ? 4 : (screenWidth > 128) ? 2 : 1;
+#if HAS_TOUCHSCREEN
+    const int emoteScale = (screenWidth >= 400) ? 4 : 2;
+#else
+    const int emoteScale = 1;
+#endif
     const int emoteSize = 16 * emoteScale; // Must match drawEmotePickerScreen scaling
     const int cellSize = emoteSize + cellPadding * 2;
     int gridTop = headerFontHeight + headerMargin;
@@ -1092,12 +1096,14 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
     if ((event->touchX != 0 || event->touchY != 0) && !isUp && !isDown && !isLeft && !isRight && !isSelect &&
         event->inputEvent != INPUT_BROKER_SELECT_LONG) {
         // Calculate which emote was touched based on grid layout
-        int gridX = 2; // Left margin matches drawEmotePickerScreen
+        // Account for frame offsets stored from draw function
+        int gridX = emoteFrameX + 2; // Left margin matches drawEmotePickerScreen
+        int touchGridTop = emoteFrameY + headerFontHeight + headerMargin;
         int touchCol = (event->touchX - gridX) / cellSize;
-        int touchRow = (event->touchY - gridTop) / cellSize;
+        int touchRow = (event->touchY - touchGridTop) / cellSize;
 
-        LOG_DEBUG("Touch: raw x=%d y=%d (no transform), gridTop=%d, cellSize=%d, emoteScale=%d", event->touchX, event->touchY,
-                  gridTop, cellSize, emoteScale);
+        LOG_DEBUG("Touch: raw x=%d y=%d, frameX=%d frameY=%d, gridX=%d touchGridTop=%d, cellSize=%d", event->touchX,
+                  event->touchY, emoteFrameX, emoteFrameY, gridX, touchGridTop, cellSize);
 
         // Validate touch is within grid bounds
         if (touchCol >= 0 && touchCol < cols && touchRow >= 0 && touchRow < rows) {
@@ -2089,14 +2095,23 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
 
 void CannedMessageModule::drawEmotePickerScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
+    // Store frame offsets for touch coordinate translation
+    emoteFrameX = x;
+    emoteFrameY = y;
+
     const int headerFontHeight = FONT_HEIGHT_SMALL;
     const int headerMargin = 2;
     const int cellPadding = 2;
 
     // Scale emotes on larger screens for better visibility and touch targeting
-    // 1x for small (<128), 2x for medium (320x240 T-Deck), 4x for large (480x480 Indicator)
+    // Touchscreens: 4x for large (480x480 Indicator), 2x for medium (320x240 T-Deck)
+    // Non-touch: 1x for encoder/button navigation
     const int screenWidth = display->getWidth();
-    const int emoteScale = (screenWidth >= 400) ? 4 : (screenWidth > 128) ? 2 : 1;
+#if HAS_TOUCHSCREEN
+    const int emoteScale = (screenWidth >= 400) ? 4 : 2;
+#else
+    const int emoteScale = 1;
+#endif
     const int emoteSize = 16 * emoteScale; // Base 16x16, scale up based on screen size
     const int cellSize = emoteSize + cellPadding * 2;
 
@@ -2157,6 +2172,12 @@ void CannedMessageModule::drawEmotePickerScreen(OLEDDisplay *display, OLEDDispla
     display->drawString(display->getWidth() / 2, headerY, headerText);
 
     // Draw grid
+    static bool debugOnce = true;
+    if (debugOnce) {
+        LOG_DEBUG("DRAW: x=%d y=%d, gridTop=%d, cellSize=%d, cols=%d, screenW=%d screenH=%d", x, y, gridTop, cellSize, cols,
+                  display->getWidth(), display->getHeight());
+        debugOnce = false;
+    }
     for (int row = 0; row < rows; ++row) {
         for (int col = 0; col < cols; ++col) {
             int idx = firstVisibleIdx + row * cols + col;

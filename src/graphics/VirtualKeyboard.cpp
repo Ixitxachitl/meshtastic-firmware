@@ -427,7 +427,7 @@ void VirtualKeyboard::drawKey(OLEDDisplay *display, const VirtualKey &key, bool 
                   : (key.type == VK_ENTER)   ? "ENTER"
                   : (key.type == VK_SPACE)   ? "SPACE"
                   : (key.type == VK_ESC)     ? "ESC"
-                  : (key.type == VK_EMOTE)   ? "EMOTE"
+                  : (key.type == VK_EMOTE)   ? "E"
                                              : "";
     } else {
         char c = getCharForKey(key, false);

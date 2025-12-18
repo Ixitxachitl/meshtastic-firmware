@@ -2,6 +2,12 @@
 #include "main.h"
 #if USE_TFTDISPLAY
 
+#if defined(T_DECK)
+#include <bb_captouch.h>
+static BBCapTouch bbct;
+static bool bbctInitialized = false;
+#endif
+
 #if ARCH_PORTDUINO
 #include "platform/portduino/PortduinoGlue.h"
 #endif
@@ -1468,6 +1474,20 @@ bool TFTDisplay::getTouch(int16_t *x, int16_t *y)
     } else {
         return false;
     }
+#elif defined(T_DECK)
+    // Use bb_captouch like device-ui does for proper coordinate handling
+    if (!bbctInitialized) {
+        bbct.init(I2C_SDA, I2C_SCL, -1, SCREEN_TOUCH_INT);
+        bbct.setOrientation(90, 320, 240);
+        bbctInitialized = true;
+    }
+    TOUCHINFO ti;
+    if (bbct.getSamples(&ti)) {
+        *x = ti.x[0];
+        *y = ti.y[0] - 90; // Offset needed with setOrientation(90,...) - matches device-ui
+        return true;
+    }
+    return false;
 #elif !defined(M5STACK) && !defined(HACKADAY_COMMUNICATOR)
     return tft->getTouch(x, y);
 #else
