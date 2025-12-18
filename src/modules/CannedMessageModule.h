@@ -167,6 +167,7 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
     char *messages[CANNED_MESSAGE_MODULE_MESSAGE_MAX_COUNT];
     int messagesCount = 0;
     int currentMessageIndex = -1;
+    bool presetsOnly = false; // When true, hide [Select Destination] and [-- Free Text --] from list
 
     // === Routing & Acknowledgment ===
     NodeNum dest = NODENUM_BROADCAST;     // Destination node for outgoing messages (default: broadcast)

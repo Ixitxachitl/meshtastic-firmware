@@ -162,15 +162,12 @@ void CannedMessageModule::LaunchWithDestination(NodeNum newDest, uint8_t newChan
     lastChannel = channel;
     lastDestSet = true;
 
-    // Upon activation, highlight "[Select Destination]"
-    int selectDestination = 0;
-    for (int i = 0; i < messagesCount; ++i) {
-        if (strcmp(messages[i], "[Select Destination]") == 0) {
-            selectDestination = i;
-            break;
-        }
-    }
-    currentMessageIndex = selectDestination;
+    // When launched with a specific destination, show presets only (no Select Destination or Free Text)
+    presetsOnly = true;
+    splitConfiguredMessages(); // Rebuild list without destination/freetext options
+
+    // Start at first actual preset message
+    currentMessageIndex = 0;
 
     // This triggers the canned message list
     runState = CANNED_MESSAGE_RUN_STATE_ACTIVE;
@@ -247,16 +244,21 @@ int CannedMessageModule::splitConfiguredMessages()
     // Temporary array to allow for insertion
     const char *tempMessages[CANNED_MESSAGE_MODULE_MESSAGE_MAX_COUNT + 3] = {0};
     int tempCount = 0;
-    // Insert at position 0 (top)
+
+    // Insert [Select Destination] at position 0 (top)
     tempMessages[tempCount++] = "[Select Destination]";
+
+    // Only show Free Text option when not in presets-only mode
+    if (!presetsOnly) {
 #if defined(USE_VIRTUAL_KEYBOARD)
-    // Add a "Free Text" entry at the top if using a touch screen virtual keyboard
-    tempMessages[tempCount++] = "[-- Free Text --]";
-#else
-    if (osk_found && screen) {
+        // Add a "Free Text" entry at the top if using a touch screen virtual keyboard
         tempMessages[tempCount++] = "[-- Free Text --]";
-    }
+#else
+        if (osk_found && screen) {
+            tempMessages[tempCount++] = "[-- Free Text --]";
+        }
 #endif
+    }
 
     // First message always starts at buffer start
     tempMessages[tempCount++] = this->messageBuffer;
@@ -746,6 +748,8 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
             graphics::setOverlayActive(false);
             runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
             currentMessageIndex = -1;
+            presetsOnly = false;
+            splitConfiguredMessages(); // Rebuild list with all options for next time
             screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
 
             // Notify UI to regenerate frame set and redraw
@@ -1469,6 +1473,8 @@ int32_t CannedMessageModule::runOnce()
                 this->currentMessageIndex = -1;
                 this->freetext = "";
                 this->cursor = 0;
+                this->presetsOnly = false;
+                splitConfiguredMessages(); // Rebuild list with all options for next time
 
                 // Tell Screen to jump straight to the TextMessage frame
                 UIFrameEvent e;
@@ -1482,6 +1488,8 @@ int32_t CannedMessageModule::runOnce()
             } else {
                 this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
                 screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
+                this->presetsOnly = false;
+                splitConfiguredMessages(); // Rebuild list with all options for next time
             }
         } else {
             if (strcmp(this->messages[this->currentMessageIndex], "[Select Destination]") == 0) {
@@ -1498,6 +1506,8 @@ int32_t CannedMessageModule::runOnce()
                     this->currentMessageIndex = -1;
                     this->freetext = "";
                     this->cursor = 0;
+                    this->presetsOnly = false;
+                    splitConfiguredMessages(); // Rebuild list with all options for next time
 
                     // Tell Screen to jump straight to the TextMessage frame
                     UIFrameEvent e;
