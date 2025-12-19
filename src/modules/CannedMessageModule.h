@@ -236,7 +236,7 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
                                    {"M", 17, 0, 0, 0, 0},
                                    {"⌫", 20, 0, 0, 0, 0},
                                    {"", 0, 0, 0, 0, 0}},
-                                  {{"Emotes", 42, 0, 0, 0, 0},
+                                  {{"😊", 42, 0, 0, 0, 0},
                                    {" ", 32, 0, 0, 0, 0},
                                    {"↵", 28, 0, 0, 0, 0},
                                    {"BACK", 38, 0, 0, 0, 0},

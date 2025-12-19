@@ -919,7 +919,7 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
             notifyObservers(&e);
             screen->forceDisplay();
             return true;
-        } else if (keyTapped == "Emotes") {
+        } else if (keyTapped == "😊") {
             // Open emote picker
             runState = CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER;
             requestFocus();
@@ -1745,13 +1745,50 @@ String CannedMessageModule::keyForCoordinates(uint x, uint y)
     return "";
 }
 
+// Helper function to draw a rounded rectangle outline
+void drawRoundedRect(OLEDDisplay *display, int x, int y, int w, int h, int r)
+{
+    // Draw straight lines
+    display->drawHorizontalLine(x + r, y, w - 2 * r);         // Top
+    display->drawHorizontalLine(x + r, y + h - 1, w - 2 * r); // Bottom
+    display->drawVerticalLine(x, y + r, h - 2 * r);           // Left
+    display->drawVerticalLine(x + w - 1, y + r, h - 2 * r);   // Right
+
+    // Draw corners (approximate with pixels)
+    display->setPixel(x + r, y + 1);
+    display->setPixel(x + 1, y + r);
+    display->setPixel(x + w - r - 1, y + 1);
+    display->setPixel(x + w - 2, y + r);
+    display->setPixel(x + r, y + h - 2);
+    display->setPixel(x + 1, y + h - r - 1);
+    display->setPixel(x + w - r - 1, y + h - 2);
+    display->setPixel(x + w - 2, y + h - r - 1);
+}
+
+// Helper function to draw a filled rounded rectangle
+void fillRoundedRect(OLEDDisplay *display, int x, int y, int w, int h, int r)
+{
+    // Fill main rectangle body
+    display->fillRect(x + r, y, w - 2 * r, h);
+    display->fillRect(x, y + r, r, h - 2 * r);
+    display->fillRect(x + w - r, y + r, r, h - 2 * r);
+
+    // Fill corner pixels
+    display->setPixel(x + r, y + 1);
+    display->setPixel(x + 1, y + r);
+    display->setPixel(x + w - r - 1, y + 1);
+    display->setPixel(x + w - 2, y + r);
+    display->setPixel(x + r, y + h - 2);
+    display->setPixel(x + 1, y + h - r - 1);
+    display->setPixel(x + w - r - 1, y + h - 2);
+    display->setPixel(x + w - 2, y + h - r - 1);
+}
+
 void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     int outerSize = *(&this->keyboard[this->charSet] + 1) - this->keyboard[this->charSet];
 
     int xOffset = 0;
-
-    int yOffset = 56;
 
     display->setTextAlignment(TEXT_ALIGN_LEFT);
 
@@ -1759,16 +1796,37 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
 
     display->setColor(OLEDDISPLAY_COLOR::WHITE);
 
-    // Use drawStringWithEmotes to render emojis as bitmaps
+    // Draw destination header at the top
+    char headerBuffer[64];
+    if (this->dest == NODENUM_BROADCAST) {
+        snprintf(headerBuffer, sizeof(headerBuffer), "To: #%s", channels.getName(this->channel));
+    } else {
+        snprintf(headerBuffer, sizeof(headerBuffer), "To: %s", getNodeName(this->dest));
+    }
+    display->drawString(0, 0, headerBuffer);
+
+    // Draw input text area with cursor - positioned below header
+    int textAreaY = FONT_HEIGHT_SMALL + 2;
     String displayText = cannedMessageModule->drawWithCursor(cannedMessageModule->freetext, cannedMessageModule->cursor);
-    graphics::MessageRenderer::drawStringWithEmotes(display, 0, 0, displayText.c_str(), graphics::emotes, graphics::numEmotes,
-                                                    display->getWidth());
+    graphics::MessageRenderer::drawStringWithEmotes(display, 0, textAreaY, displayText.c_str(), graphics::emotes,
+                                                    graphics::numEmotes, display->getWidth());
+
+    // Start keyboard at ~50% of screen height for cleaner layout
+    int yOffset = display->height() / 2 + 10;
 
     display->setFont(FONT_MEDIUM);
 
-    int cellHeight = round((display->height() - 64) / outerSize);
+    // Calculate keyboard height to fit within available space (reduce height to prevent cutoff)
+    int availableHeight = display->height() - yOffset - 4; // Leave 4px bottom margin
+    int cellHeight = availableHeight / outerSize;
+    if (cellHeight < 20)
+        cellHeight = 20; // Minimum height
+    if (cellHeight > 40)
+        cellHeight = 40; // Maximum height
 
     int yCorrection = 8;
+    const int buttonPadding = 2; // Padding around buttons
+    const int buttonRadius = 3;  // Rounded corner radius
 
     for (int8_t outerIndex = 0; outerIndex < outerSize; outerIndex++) {
         yOffset += outerIndex > 0 ? cellHeight : 0;
@@ -1803,7 +1861,8 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
 
             if (letter.character == "⇧") {
                 if (this->shift) {
-                    display->fillRect(xOffset, yOffset, cellWidth, cellHeight);
+                    fillRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
+                                    cellHeight - buttonPadding * 2, buttonRadius);
 
                     display->setColor(OLEDDISPLAY_COLOR::BLACK);
 
@@ -1811,13 +1870,15 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
 
                     display->setColor(OLEDDISPLAY_COLOR::WHITE);
                 } else {
-                    display->drawRect(xOffset, yOffset, cellWidth, cellHeight);
+                    drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
+                                    cellHeight - buttonPadding * 2, buttonRadius);
 
                     drawShiftIcon(display, xOffset + characterOffset, yOffset + yCorrection + 5, 1.2);
                 }
             } else if (letter.character == "⌫") {
                 if (this->highlight == letter.character[0]) {
-                    display->fillRect(xOffset, yOffset, cellWidth, cellHeight);
+                    fillRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
+                                    cellHeight - buttonPadding * 2, buttonRadius);
 
                     display->setColor(OLEDDISPLAY_COLOR::BLACK);
 
@@ -1827,25 +1888,38 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
 
                     setIntervalFromNow(0);
                 } else {
-                    display->drawRect(xOffset, yOffset, cellWidth, cellHeight);
+                    drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
+                                    cellHeight - buttonPadding * 2, buttonRadius);
 
                     drawBackspaceIcon(display, xOffset + characterOffset, yOffset + yCorrection + 5, 1.2);
                 }
             } else if (letter.character == "↵") {
-                display->drawRect(xOffset, yOffset, cellWidth, cellHeight);
+                drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
+                                cellHeight - buttonPadding * 2, buttonRadius);
 
                 drawEnterIcon(display, xOffset + characterOffset, yOffset + yCorrection + 5, 1.7);
             } else if (letter.character == "BACK") {
                 // Draw BACK button with border like other action keys
-                display->drawRect(xOffset, yOffset, cellWidth, cellHeight);
+                drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
+                                cellHeight - buttonPadding * 2, buttonRadius);
                 display->drawString(xOffset + characterOffset, yOffset + yCorrection, "BACK");
-            } else if (letter.character == "Emotes") {
-                // Draw emote button with border
-                display->drawRect(xOffset, yOffset, cellWidth, cellHeight);
-                display->drawString(xOffset + characterOffset, yOffset + yCorrection, "Emotes");
+            } else if (letter.character == "😊") {
+                // Draw emote button with smiley emoji bitmap
+                drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
+                                cellHeight - buttonPadding * 2, buttonRadius);
+                // Find and draw the Smiling_Eyes emoji bitmap
+                for (int i = 0; i < graphics::numEmotes; i++) {
+                    if (strcmp(graphics::emotes[i].label, "\U0001F60A") == 0) {
+                        int emojiX = xOffset + (cellWidth - Smiling_Eyes_width) / 2;
+                        int emojiY = yOffset + (cellHeight - Smiling_Eyes_height) / 2;
+                        display->drawXbm(emojiX, emojiY, Smiling_Eyes_width, Smiling_Eyes_height, graphics::emotes[i].bitmap);
+                        break;
+                    }
+                }
             } else {
                 if (this->highlight == letter.character[0]) {
-                    display->fillRect(xOffset, yOffset, cellWidth, cellHeight);
+                    fillRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
+                                    cellHeight - buttonPadding * 2, buttonRadius);
 
                     display->setColor(OLEDDISPLAY_COLOR::BLACK);
 
@@ -1856,7 +1930,8 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
 
                     setIntervalFromNow(0);
                 } else {
-                    display->drawRect(xOffset, yOffset, cellWidth, cellHeight);
+                    drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
+                                    cellHeight - buttonPadding * 2, buttonRadius);
 
                     display->drawString(xOffset + characterOffset, yOffset + yCorrection,
                                         letter.character == " " ? "space" : letter.character);
