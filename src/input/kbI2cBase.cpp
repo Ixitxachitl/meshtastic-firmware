@@ -411,10 +411,11 @@ int32_t KbI2cBase::runOnce()
             e.inputEvent = INPUT_BROKER_NONE;
             e.source = this->_originName;
             switch (c) {
-            case 0x71: // This is the button q. If modifier and q pressed, it cancels the input
+            case 0x71: // This is the button q. If modifier and q pressed, it reboots the device
                 if (is_sym) {
                     is_sym = false;
-                    e.inputEvent = INPUT_BROKER_CANCEL;
+                    e.inputEvent = INPUT_BROKER_ANYKEY;
+                    e.kbchar = INPUT_BROKER_MSG_REBOOT;
                 } else {
                     e.inputEvent = INPUT_BROKER_ANYKEY;
                     e.kbchar = c;
