@@ -187,7 +187,7 @@ void Screen::showNodePicker(const char *message, uint32_t durationMs, std::funct
     NotificationRenderer::alertBannerUntil = (durationMs == 0) ? 0 : millis() + durationMs;
     NotificationRenderer::alertBannerCallback = bannerCallback;
     NotificationRenderer::pauseBanner = false;
-    NotificationRenderer::curSelected = 0;
+    NotificationRenderer::curSelected = 1; // Start on first node (index 0 is "Back")
     NotificationRenderer::current_notification_type = notificationTypeEnum::node_picker;
 
     static OverlayCallback overlays[] = {graphics::UIRenderer::drawNavigationBar, NotificationRenderer::drawBannercallback};

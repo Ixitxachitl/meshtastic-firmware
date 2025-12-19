@@ -369,7 +369,8 @@ int getStringWidthWithEmotes(OLEDDisplay *display, const std::string &line, cons
 {
     ensureEmoteLabelsNormalized(); // Ensure cache is ready
 
-    const std::string normLine = normalizeEmoji(line);
+    // Use same replacement logic as drawStringWithEmotes for consistent width calculation
+    const std::string normLine = replaceUnknownEmoji(line, emotes, emoteCount);
     int totalWidth = 0;
 
     for (size_t i = 0; i < normLine.length();) {
@@ -419,8 +420,8 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
 {
     ensureEmoteLabelsNormalized(); // Ensure cache is ready
 
-    // Normalize the incoming line so variation selectors and skin tones don't render as stray glyphs
-    const std::string normLine = normalizeEmoji(line);
+    // Normalize and replace unknown emoji with placeholder so they don't render as blank
+    const std::string normLine = replaceUnknownEmoji(line, emotes, emoteCount);
     int cursorX = x;
     const int fontHeight = FONT_HEIGHT_SMALL;
 
