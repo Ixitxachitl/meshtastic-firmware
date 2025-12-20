@@ -968,7 +968,83 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
 #ifndef RAK14014
             highlight = keyTapped[0];
 #endif
-            payload = shift ? keyTapped[0] : std::tolower(keyTapped[0]);
+            // Apply shift mapping for symbols
+            char c = keyTapped[0];
+            if (shift && charSet == 0) {
+                // ABC keyboard with shift - apply symbol variants
+                switch (c) {
+                case '1':
+                    payload = '!';
+                    break;
+                case '2':
+                    payload = '@';
+                    break;
+                case '3':
+                    payload = '#';
+                    break;
+                case '4':
+                    payload = '$';
+                    break;
+                case '5':
+                    payload = '%';
+                    break;
+                case '6':
+                    payload = '^';
+                    break;
+                case '7':
+                    payload = '&';
+                    break;
+                case '8':
+                    payload = '*';
+                    break;
+                case '9':
+                    payload = '(';
+                    break;
+                case '0':
+                    payload = ')';
+                    break;
+                case ';':
+                    payload = ':';
+                    break;
+                case '-':
+                    payload = '_';
+                    break;
+                case '=':
+                    payload = '+';
+                    break;
+                case '[':
+                    payload = '{';
+                    break;
+                case ']':
+                    payload = '}';
+                    break;
+                case '\\':
+                    payload = '|';
+                    break;
+                case '\'':
+                    payload = '"';
+                    break;
+                case ',':
+                    payload = '<';
+                    break;
+                case '.':
+                    payload = '>';
+                    break;
+                case '/':
+                    payload = '?';
+                    break;
+                case '`':
+                    payload = '~';
+                    break;
+                default:
+                    // For letters, keep uppercase if shift pressed
+                    payload = (c >= 'A' && c <= 'Z') ? c : keyTapped[0];
+                    break;
+                }
+            } else {
+                // No shift or 123 keyboard - letters go lowercase, symbols as-is
+                payload = (c >= 'A' && c <= 'Z') ? std::tolower(c) : c;
+            }
             shift = false;
             valid = true;
         }
