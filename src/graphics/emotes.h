@@ -349,6 +349,18 @@ extern const unsigned char wrapped_gift[] PROGMEM;
 #define menorah_width 16
 #define menorah_height 16
 extern const unsigned char menorah[] PROGMEM;
+
+#define latin_cross_width 16
+#define latin_cross_height 16
+extern const unsigned char latin_cross[] PROGMEM;
+
+#define star_of_david_width 16
+#define star_of_david_height 16
+extern const unsigned char star_of_david[] PROGMEM;
+
+#define snow_man_width 16
+#define snow_man_height 16
+extern const unsigned char snow_man[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
 } // namespace graphics
