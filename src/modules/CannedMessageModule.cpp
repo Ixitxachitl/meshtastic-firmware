@@ -2071,9 +2071,9 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
                 // Find and draw the Smiling_Eyes emoji bitmap
                 for (int i = 0; i < graphics::numEmotes; i++) {
                     if (strcmp(graphics::emotes[i].label, "\U0001F60A") == 0) {
-                        int emojiX = xOffset + (cellWidth - Smiling_Eyes_width) / 2;
-                        int emojiY = yOffset + (cellHeight - Smiling_Eyes_height) / 2;
-                        display->drawXbm(emojiX, emojiY, Smiling_Eyes_width, Smiling_Eyes_height, graphics::emotes[i].bitmap);
+                        int emojiX = xOffset + (cellWidth - smiling_eyes_width) / 2;
+                        int emojiY = yOffset + (cellHeight - smiling_eyes_height) / 2;
+                        display->drawXbm(emojiX, emojiY, smiling_eyes_width, smiling_eyes_height, graphics::emotes[i].bitmap);
                         break;
                     }
                 }
