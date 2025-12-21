@@ -457,7 +457,7 @@ void setup()
 
     LOG_INFO("\n\n//\\ E S H T /\\ S T / C\n");
 
-#if defined(ARCH_ESP32) && defined(BOARD_HAS_PSRAM) && !defined(HAS_TFT)
+#if defined(ARCH_ESP32) && defined(BOARD_HAS_PSRAM)
 #ifndef SENSECAP_INDICATOR
     // use PSRAM for malloc calls > 256 bytes
     // NOTE: Disabled for TFT devices as TFT_eSPI DMA requires internal RAM buffers
