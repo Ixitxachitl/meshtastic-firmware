@@ -247,10 +247,16 @@ void drawDigitalClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int1
     const char *maxWidthTime = config.display.use_12h_clock ? "12:59" : "23:59";
     size_t maxLen = strlen(maxWidthTime);
 
-    // Spacing for ultra-low resolution displays
-    int digitSpacing = (currentResolution == ScreenResolution::UltraLow) ? 2 : 6;
-    int interCharSpacing = (currentResolution == ScreenResolution::UltraLow) ? 2 : 7;
-    int colonSpacing = (currentResolution == ScreenResolution::UltraLow) ? 2 : 10;
+    // Spacing based on display resolution
+    int digitSpacing = (currentResolution == ScreenResolution::UltraLow) ? 2
+                       : (currentResolution == ScreenResolution::High)   ? 6
+                                                                         : 3;
+    int interCharSpacing = (currentResolution == ScreenResolution::UltraLow) ? 2
+                           : (currentResolution == ScreenResolution::High)   ? 7
+                                                                             : 4;
+    int colonSpacing = (currentResolution == ScreenResolution::UltraLow) ? 2
+                       : (currentResolution == ScreenResolution::High)   ? 10
+                                                                         : 5;
     int preColonSpacing = (currentResolution == ScreenResolution::UltraLow) ? 2 : 1; // spacing before colon
 
     uint16_t maxTimeStringWidth = 0;
