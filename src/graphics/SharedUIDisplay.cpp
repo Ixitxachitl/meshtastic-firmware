@@ -325,7 +325,7 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
 
     // === Time and Right-aligned Icons ===
     uint32_t rtc_sec = getValidTime(RTCQuality::RTCQualityDevice, true);
-    char timeStr[10] = "--:--";                          // Fallback display
+    char timeStr[10] = "";                               // Fallback display
     int timeStrWidth = display->getStringWidth("12:34"); // Default alignment
     int timeX = screenW - xOffset - timeStrWidth + 4;
 

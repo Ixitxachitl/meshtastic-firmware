@@ -72,18 +72,21 @@ void drawSegmentedDisplayCharacter(OLEDDisplay *display, int x, int y, uint8_t n
     uint16_t segmentWidth = SEGMENT_WIDTH * scale;
     uint16_t segmentHeight = SEGMENT_HEIGHT * scale;
 
+    // Spacing between segments within a digit - tighter for UltraLow
+    int segGap = (currentResolution == ScreenResolution::UltraLow) ? 1 : 2;
+
     // Precompute segment positions
-    uint16_t segmentOneX = x + segmentHeight + 2;
+    uint16_t segmentOneX = x + segmentHeight + segGap;
     uint16_t segmentOneY = y;
 
-    uint16_t segmentTwoX = segmentOneX + segmentWidth + 2;
-    uint16_t segmentTwoY = segmentOneY + segmentHeight + 2;
+    uint16_t segmentTwoX = segmentOneX + segmentWidth + segGap;
+    uint16_t segmentTwoY = segmentOneY + segmentHeight + segGap;
 
     uint16_t segmentThreeX = segmentTwoX;
-    uint16_t segmentThreeY = segmentTwoY + segmentWidth + 2 + segmentHeight + 2;
+    uint16_t segmentThreeY = segmentTwoY + segmentWidth + segGap + segmentHeight + segGap;
 
     uint16_t segmentFourX = segmentOneX;
-    uint16_t segmentFourY = segmentThreeY + segmentWidth + 2;
+    uint16_t segmentFourY = segmentThreeY + segmentWidth + segGap;
 
     uint16_t segmentFiveX = x;
     uint16_t segmentFiveY = segmentThreeY;
@@ -92,7 +95,7 @@ void drawSegmentedDisplayCharacter(OLEDDisplay *display, int x, int y, uint8_t n
     uint16_t segmentSixY = segmentTwoY;
 
     uint16_t segmentSevenX = segmentOneX;
-    uint16_t segmentSevenY = segmentTwoY + segmentWidth + 2;
+    uint16_t segmentSevenY = segmentTwoY + segmentWidth + segGap;
 
     // Draw only the active segments
     if (seg[0])
@@ -118,10 +121,20 @@ void drawHorizontalSegment(OLEDDisplay *display, int x, int y, int width, int he
     // draw central rectangle
     display->fillRect(x, y, width, height);
 
-    // draw end triangles
-    display->fillTriangle(x, y, x, y + height - 1, x - halfHeight, y + halfHeight);
+    // draw end triangles (skip on UltraLow as they degenerate to single pixels)
+    if (currentResolution != ScreenResolution::UltraLow) {
+        display->fillTriangle(x, y, x, y + height - 1, x - halfHeight, y + halfHeight);
+        display->fillTriangle(x + width, y, x + width + halfHeight, y + halfHeight, x + width, y + height - 1);
+    }
 
-    display->fillTriangle(x + width, y, x + width + halfHeight, y + halfHeight, x + width, y + height - 1);
+    // Add extra thickness for UltraLow resolution displays, 1 pixel shorter on each end for pointed shape
+    if (currentResolution == ScreenResolution::UltraLow && width > 2) {
+        int extraWidth = width - 2;
+        if (extraWidth > 0) {
+            display->fillRect(x + 1, y + height, extraWidth, 1);
+            display->fillRect(x + 1, y - 1, extraWidth, 1);
+        }
+    }
 }
 
 void drawVerticalSegment(OLEDDisplay *display, int x, int y, int width, int height)
@@ -131,10 +144,20 @@ void drawVerticalSegment(OLEDDisplay *display, int x, int y, int width, int heig
     // draw central rectangle
     display->fillRect(x, y, height, width);
 
-    // draw end triangles
-    display->fillTriangle(x + halfHeight, y - halfHeight, x + height - 1, y, x, y);
+    // draw end triangles (skip on UltraLow as they degenerate to single pixels)
+    if (currentResolution != ScreenResolution::UltraLow) {
+        display->fillTriangle(x + halfHeight, y - halfHeight, x + height - 1, y, x, y);
+        display->fillTriangle(x, y + width, x + height - 1, y + width, x + halfHeight, y + width + halfHeight);
+    }
 
-    display->fillTriangle(x, y + width, x + height - 1, y + width, x + halfHeight, y + width + halfHeight);
+    // Add extra thickness for UltraLow resolution displays, 1 pixel shorter on each end for pointed shape
+    if (currentResolution == ScreenResolution::UltraLow && width > 2) {
+        int extraLength = width - 2;
+        if (extraLength > 0) {
+            display->fillRect(x + height, y + 1, 1, extraLength);
+            display->fillRect(x - 1, y + 1, 1, extraLength);
+        }
+    }
 }
 
 void drawDigitalClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
@@ -177,113 +200,120 @@ void drawDigitalClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int1
     char secondString[8];
     snprintf(secondString, sizeof(secondString), "%02d", second);
 
-    // Helper lambdas to precisely measure layout based on current scale and time string
-    auto measureCellHeight = [](float s) -> uint16_t {
-        uint16_t segW = static_cast<uint16_t>(SEGMENT_WIDTH * s);
-        uint16_t segH = static_cast<uint16_t>(SEGMENT_HEIGHT * s);
-        return static_cast<uint16_t>((segW * 2) + (segH * 3) + 8);
-    };
-    auto measureTimeWidth = [&](float s, const char *ts) -> uint16_t {
-        uint16_t segW = static_cast<uint16_t>(SEGMENT_WIDTH * s);
-        uint16_t segH = static_cast<uint16_t>(SEGMENT_HEIGHT * s);
-        // Tighter spacing: scale-aware minimal gaps
-        int interCharSpacing = std::max(1, static_cast<int>(roundf(1.5f * s)));
-        int colonGap = std::max(2, static_cast<int>(roundf(3.0f * s)));
-        uint16_t width = 0;
-        const size_t lenLocal = strlen(ts);
-        for (size_t i = 0; i < lenLocal; ++i) {
-            char c = ts[i];
-            if (c == ':') {
-                width += segH + colonGap;
-            } else {
-                width += segW + (segH * 2) + 4;
+    static bool scaleInitialized = false;
+    static float scale = (currentResolution == ScreenResolution::UltraLow) ? 0.50f : 0.75f;
+    static float segmentWidth = SEGMENT_WIDTH * scale;
+    static float segmentHeight = SEGMENT_HEIGHT * scale;
+
+    if (!scaleInitialized) {
+        float screenwidth_target_ratio = (currentResolution == ScreenResolution::UltraLow) ? 0.85f : 0.80f;
+        float max_scale = 3.5f; // Safety limit to avoid runaway scaling
+        float step = 0.05f;     // Step increment per iteration
+
+        float target_width = display->getWidth() * screenwidth_target_ratio;
+        float target_height = display->getHeight() - ((currentResolution == ScreenResolution::High) ? 46
+                                                      : (currentResolution == ScreenResolution::UltraLow)
+                                                          ? 20
+                                                          : 33); // UltraLow needs less reserve space
+
+        float calculated_width_size = 0.0f;
+        float calculated_height_size = 0.0f;
+
+        while (true) {
+            segmentWidth = SEGMENT_WIDTH * scale;
+            segmentHeight = SEGMENT_HEIGHT * scale;
+
+            calculated_width_size = segmentHeight + ((segmentWidth + (segmentHeight * 2) + 4) * 4);
+            calculated_height_size = segmentHeight + ((segmentHeight + (segmentHeight * 2) + 4) * 2);
+
+            if (calculated_width_size >= target_width || calculated_height_size >= target_height || scale >= max_scale) {
+                break;
             }
-            width += interCharSpacing; // spacing applied after each character in draw loop
+
+            scale += step;
         }
-        return width;
-    };
 
-    // Compute scale every frame to fit current screen/time content exactly
-    float scale = 0.40f; // conservative starting scale for small displays
-    const float max_scale = 3.5f;
-    const float step = 0.05f; // Step increment per iteration
+        // If we overshot width, back off one step and recompute segment sizes
+        if (calculated_width_size > target_width || calculated_height_size > target_height) {
+            scale -= step;
+            segmentWidth = SEGMENT_WIDTH * scale;
+            segmentHeight = SEGMENT_HEIGHT * scale;
+        }
 
-    // Reserve space for header/footer and small labels below time
-    const int headerReserve = FONT_HEIGHT_SMALL + 2; // header highlight + padding
-    const int bottomReserve =
-        FONT_HEIGHT_SMALL + ((currentResolution == ScreenResolution::High) ? 8 : 6); // seconds/am-pm + footer line/icon
-    const int target_width = display->getWidth() - 2;                                // small horizontal margin
-    const int target_height = display->getHeight() - (headerReserve + bottomReserve);
+        scaleInitialized = true;
+    }
 
-    // Use widest possible time format for consistent sizing (23:59 for 24h or 12:59 for 12h)
+    // Always calculate width based on max format (12:59 or 23:59) for LCD-style fixed positioning
     const char *maxWidthTime = config.display.use_12h_clock ? "12:59" : "23:59";
+    size_t maxLen = strlen(maxWidthTime);
 
-    uint16_t calcW = 0;
-    uint16_t calcH = 0;
-    while (true) {
-        calcW = measureTimeWidth(scale, maxWidthTime);
-        calcH = measureCellHeight(scale);
-        if (calcW >= target_width || calcH >= target_height || scale >= max_scale) {
-            break;
+    // Spacing for ultra-low resolution displays
+    int digitSpacing = (currentResolution == ScreenResolution::UltraLow) ? 2 : 6;
+    int interCharSpacing = (currentResolution == ScreenResolution::UltraLow) ? 2 : 7;
+    int colonSpacing = (currentResolution == ScreenResolution::UltraLow) ? 2 : 10;
+    int preColonSpacing = (currentResolution == ScreenResolution::UltraLow) ? 2 : 1; // spacing before colon
+
+    uint16_t maxTimeStringWidth = 0;
+
+    for (size_t i = 0; i < maxLen; i++) {
+        char character = maxWidthTime[i];
+        if (character == ':') {
+            maxTimeStringWidth += segmentHeight + colonSpacing;
+        } else {
+            maxTimeStringWidth += segmentWidth + (segmentHeight * 2) + digitSpacing;
         }
-        scale += step;
-    }
-    // Back off if we exceeded available space
-    if (calcW > target_width || calcH > target_height) {
-        scale -= step;
-        if (scale < 0.30f)
-            scale = 0.30f;
+        if (i < maxLen - 1) {
+            char nextChar = maxWidthTime[i + 1];
+            maxTimeStringWidth += (nextChar == ':') ? preColonSpacing : interCharSpacing;
+        }
     }
 
-    // Derived segment sizes at final scale
-    float segmentWidth = SEGMENT_WIDTH * scale;
-    float segmentHeight = SEGMENT_HEIGHT * scale;
+    // Center based on maximum width - this is the LCD "display area"
+    uint16_t lcdAreaX = (display->getWidth() / 2) - (maxTimeStringWidth / 2);
 
-    // calculate hours:minutes string width using exact draw logic
+    // Calculate actual time width using same spacing rules
     size_t len = strlen(timeString);
-    uint16_t timeStringWidth = 0;
-    {
-        int interCharSpacing = std::max(1, static_cast<int>(roundf(1.5f * scale)));
-        int colonGap = std::max(2, static_cast<int>(roundf(3.0f * scale)));
-        // reuse the same rules as measureTimeWidth to keep centering consistent
-        for (size_t i = 0; i < len; ++i) {
-            char c = timeString[i];
-            if (c == ':') {
-                timeStringWidth += static_cast<uint16_t>(segmentHeight) + colonGap;
-            } else {
-                timeStringWidth += static_cast<uint16_t>(segmentWidth + (segmentHeight * 2) + 4);
-            }
-            timeStringWidth += interCharSpacing;
+    uint16_t actualTimeStringWidth = 0;
+    for (size_t i = 0; i < len; i++) {
+        char character = timeString[i];
+        if (character == ':') {
+            actualTimeStringWidth += segmentHeight + colonSpacing;
+        } else {
+            actualTimeStringWidth += segmentWidth + (segmentHeight * 2) + digitSpacing;
+        }
+        if (i < len - 1) {
+            char nextChar = timeString[i + 1];
+            actualTimeStringWidth += (nextChar == ':') ? preColonSpacing : interCharSpacing;
         }
     }
 
-    uint16_t hourMinuteTextX = (display->getWidth() / 2) - (timeStringWidth / 2);
+    // If actual time is shorter, offset to leave space for missing leading digit(s)
+    uint16_t hourMinuteTextX = lcdAreaX + (maxTimeStringWidth - actualTimeStringWidth);
     uint16_t startingHourMinuteTextX = hourMinuteTextX;
 
 #if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     uint16_t hourMinuteTextY =
-        (display->getHeight() / 2) - (((segmentWidth * 2) + (segmentHeight * 3) + 8) / 2) + 2 - 4; // Move up 4 pixels
+        (display->getHeight() / 2) - (((segmentWidth * 2) + (segmentHeight * 3) + 8) / 2) + 2 - 2; // Move up 2 pixels (was 4)
 #else
     uint16_t hourMinuteTextY = (display->getHeight() / 2) - (((segmentWidth * 2) + (segmentHeight * 3) + 8) / 2) + 2;
 #endif
 
     // iterate over characters in hours:minutes string and draw segmented characters
-    int interCharSpacing = std::max(1, static_cast<int>(roundf(1.5f * scale)));
-    int colonGap = std::max(2, static_cast<int>(roundf(3.0f * scale)));
     for (size_t i = 0; i < len; i++) {
         char character = timeString[i];
 
         if (character == ':') {
             drawSegmentedDisplayColon(display, hourMinuteTextX, hourMinuteTextY, scale);
-
-            hourMinuteTextX += static_cast<uint16_t>(segmentHeight) + colonGap;
+            hourMinuteTextX += segmentHeight + colonSpacing;
         } else {
             drawSegmentedDisplayCharacter(display, hourMinuteTextX, hourMinuteTextY, character - '0', scale);
-
-            hourMinuteTextX += segmentWidth + (segmentHeight * 2) + 4;
+            hourMinuteTextX += segmentWidth + (segmentHeight * 2) + digitSpacing;
         }
 
-        hourMinuteTextX += interCharSpacing;
+        if (i < len - 1) {
+            char nextChar = timeString[i + 1];
+            hourMinuteTextX += (nextChar == ':') ? preColonSpacing : interCharSpacing;
+        }
     }
 
     // draw seconds string + AM/PM
@@ -315,7 +345,7 @@ void drawDigitalClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int1
     if (scale >= 2.0f) {
         xOffset -= (int)(4.5f * scale);
     }
-    display->drawString(startingHourMinuteTextX + timeStringWidth - xOffset, labelYPos, secondString);
+    display->drawString(startingHourMinuteTextX + actualTimeStringWidth - xOffset, labelYPos, secondString);
 #endif
 
     graphics::drawCommonFooter(display, x, y);
