@@ -333,6 +333,22 @@ extern const unsigned char eyes[] PROGMEM;
 #define eye_width 16
 #define eye_height 16
 extern const unsigned char eye[] PROGMEM;
+
+#define dashing_away_width 16
+#define dashing_away_height 16
+extern const unsigned char dashing_away[] PROGMEM;
+
+#define christmas_tree_width 16
+#define christmas_tree_height 16
+extern const unsigned char christmas_tree[] PROGMEM;
+
+#define wrapped_gift_width 16
+#define wrapped_gift_height 16
+extern const unsigned char wrapped_gift[] PROGMEM;
+
+#define menorah_width 16
+#define menorah_height 16
+extern const unsigned char menorah[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
 } // namespace graphics
