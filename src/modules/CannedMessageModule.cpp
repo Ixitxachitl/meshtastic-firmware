@@ -1058,6 +1058,45 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
     }
 #endif // USE_VIRTUAL_KEYBOARD
 
+    // Touch input handling for devices with physical keyboards but touch screens (e.g., T-Deck)
+#if !defined(USE_VIRTUAL_KEYBOARD)
+    if (event->touchX != 0 || event->touchY != 0) {
+        // Check if tap is on destination header (top ~16px of screen)
+        if (event->touchY < FONT_HEIGHT_SMALL + 2) {
+            // Switch to destination selection page
+            this->runState = CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION;
+            graphics::setOverlayActive(true);
+            this->destIndex = 0;
+            this->scrollIndex = 0;
+            this->currentMessageIndex = -1;
+            updateDestinationSelectionList();
+            requestFocus();
+            UIFrameEvent e;
+            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+            notifyObservers(&e);
+            screen->forceDisplay();
+            return true;
+        }
+
+#if HAS_TOUCHSCREEN
+        // Check if tap is on emote button (bottom right corner)
+        const int buttonSize = 24;
+        const int margin = 2;
+        const int buttonX = screen->getWidth() - buttonSize - margin;
+        const int buttonY = screen->getHeight() - buttonSize - margin;
+
+        if (event->touchX >= buttonX && event->touchX <= buttonX + buttonSize && event->touchY >= buttonY &&
+            event->touchY <= buttonY + buttonSize) {
+            // Open emote picker
+            runState = CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER;
+            requestFocus();
+            screen->forceDisplay(true);
+            return true;
+        }
+#endif
+    }
+#endif
+
     // All hardware keys fall through to here (CardKB, physical, etc.)
 
     if (event->kbchar == INPUT_BROKER_MSG_EMOTE_LIST) {
@@ -1066,6 +1105,23 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
         screen->forceDisplay(true);
         return true;
     }
+
+    // Up arrow opens destination selection menu
+    if (event->inputEvent == INPUT_BROKER_UP) {
+        this->runState = CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION;
+        graphics::setOverlayActive(true);
+        this->destIndex = 0;
+        this->scrollIndex = 0;
+        this->currentMessageIndex = -1;
+        updateDestinationSelectionList();
+        requestFocus();
+        UIFrameEvent e;
+        e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+        notifyObservers(&e);
+        screen->forceDisplay();
+        return true;
+    }
+
     // Confirm select (Enter)
     bool isSelect = isSelectEvent(event);
     if (isSelect) {
@@ -1344,8 +1400,9 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
         return 1;
     }
 
-    // Cancel returns to freetext
-    if (event->inputEvent == INPUT_BROKER_CANCEL || event->inputEvent == INPUT_BROKER_ALT_LONG) {
+    // Cancel or backspace returns to freetext
+    if (event->inputEvent == INPUT_BROKER_CANCEL || event->inputEvent == INPUT_BROKER_ALT_LONG ||
+        event->inputEvent == INPUT_BROKER_BACK) {
         runState = CANNED_MESSAGE_RUN_STATE_FREETEXT;
         requestFocus();
         screen->forceDisplay(true);
@@ -1823,28 +1880,6 @@ int CannedMessageModule::getPrevIndex()
     }
 }
 
-#if defined(USE_VIRTUAL_KEYBOARD)
-
-String CannedMessageModule::keyForCoordinates(uint x, uint y)
-{
-    int outerSize = *(&this->keyboard[this->charSet] + 1) - this->keyboard[this->charSet];
-
-    for (int8_t outerIndex = 0; outerIndex < outerSize; outerIndex++) {
-        int innerSize = *(&this->keyboard[this->charSet][outerIndex] + 1) - this->keyboard[this->charSet][outerIndex];
-
-        for (int8_t innerIndex = 0; innerIndex < innerSize; innerIndex++) {
-            Letter letter = this->keyboard[this->charSet][outerIndex][innerIndex];
-
-            if (x > letter.rectX && x < (letter.rectX + letter.rectWidth) && y > letter.rectY &&
-                y < (letter.rectY + letter.rectHeight)) {
-                return letter.character;
-            }
-        }
-    }
-
-    return "";
-}
-
 // Helper function to draw a rounded rectangle outline
 void drawRoundedRect(OLEDDisplay *display, int x, int y, int w, int h, int r)
 {
@@ -1896,6 +1931,28 @@ void fillRoundedRect(OLEDDisplay *display, int x, int y, int w, int h, int r)
     // Bottom-right corner
     display->setPixel(x + w - 2, y + h - r);
     display->setPixel(x + w - r, y + h - 2);
+}
+
+#if defined(USE_VIRTUAL_KEYBOARD)
+
+String CannedMessageModule::keyForCoordinates(uint x, uint y)
+{
+    int outerSize = *(&this->keyboard[this->charSet] + 1) - this->keyboard[this->charSet];
+
+    for (int8_t outerIndex = 0; outerIndex < outerSize; outerIndex++) {
+        int innerSize = *(&this->keyboard[this->charSet][outerIndex] + 1) - this->keyboard[this->charSet][outerIndex];
+
+        for (int8_t innerIndex = 0; innerIndex < innerSize; innerIndex++) {
+            Letter letter = this->keyboard[this->charSet][outerIndex][innerIndex];
+
+            if (x > letter.rectX && x < (letter.rectX + letter.rectWidth) && y > letter.rectY &&
+                y < (letter.rectY + letter.rectHeight)) {
+                return letter.character;
+            }
+        }
+    }
+
+    return "";
 }
 
 void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
@@ -2799,6 +2856,31 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
                 yLine += rowHeight;
             }
         }
+
+        // Draw emote button in bottom right corner for touch devices
+#if HAS_TOUCHSCREEN
+        {
+            display->setColor(WHITE);
+            const int buttonSize = 24;
+            const int margin = 2;
+            const int buttonX = x + display->getWidth() - buttonSize - margin;
+            const int buttonY = y + display->getHeight() - buttonSize - margin;
+
+            // Draw rounded button border (outline only)
+            drawRoundedRect(display, buttonX, buttonY, buttonSize, buttonSize, 3);
+
+            // Draw smiley emoji in center
+            for (int i = 0; i < graphics::numEmotes; i++) {
+                if (strcmp(graphics::emotes[i].label, "\U0001F60A") == 0) { // Smiling Face emoji
+                    int emoteX = buttonX + (buttonSize - graphics::emotes[i].width) / 2;
+                    int emoteY = buttonY + (buttonSize - graphics::emotes[i].height) / 2;
+                    display->drawXbm(emoteX, emoteY, graphics::emotes[i].width, graphics::emotes[i].height,
+                                     graphics::emotes[i].bitmap);
+                    break;
+                }
+            }
+        }
+#endif
 #endif
         return;
     }
