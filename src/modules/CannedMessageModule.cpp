@@ -226,7 +226,7 @@ bool hasKeyForNode(const meshtastic_NodeInfoLite *node)
 }
 /**
  * @brief Items in array this->messages will be set to be pointing on the right
- *     starting points of the string this->messageStore
+ *     starting points of the string this->messageBuffer
  *
  * @return int Returns the number of messages found.
  */
@@ -238,7 +238,7 @@ int CannedMessageModule::splitConfiguredMessages()
     String canned_messages = cannedMessageModuleConfig.messages;
 
     // Copy all message parts into the buffer
-    strncpy(this->messageStore, canned_messages.c_str(), sizeof(this->messageStore));
+    strncpy(this->messageBuffer, canned_messages.c_str(), sizeof(this->messageBuffer));
 
     // Temporary array to allow for insertion
     const char *tempMessages[CANNED_MESSAGE_MODULE_MESSAGE_MAX_COUNT + 3] = {0};
@@ -260,16 +260,16 @@ int CannedMessageModule::splitConfiguredMessages()
     }
 
     // First message always starts at buffer start
-    tempMessages[tempCount++] = this->messageStore;
-    int upTo = strlen(this->messageStore) - 1;
+    tempMessages[tempCount++] = this->messageBuffer;
+    int upTo = strlen(this->messageBuffer) - 1;
 
     // Walk buffer, splitting on '|'
     while (i < upTo) {
-        if (this->messageStore[i] == '|') {
-            this->messageStore[i] = '\0'; // End previous message
+        if (this->messageBuffer[i] == '|') {
+            this->messageBuffer[i] = '\0'; // End previous message
             if (tempCount >= CANNED_MESSAGE_MODULE_MESSAGE_MAX_COUNT)
                 break;
-            tempMessages[tempCount++] = (this->messageStore + i + 1);
+            tempMessages[tempCount++] = (this->messageBuffer + i + 1);
         }
         i += 1;
     }
@@ -287,7 +287,7 @@ int CannedMessageModule::splitConfiguredMessages()
 }
 void CannedMessageModule::drawHeader(OLEDDisplay *display, int16_t x, int16_t y, char *buffer)
 {
-    if (graphics::isHighResolution) {
+    if (graphics::currentResolution == graphics::ScreenResolution::High) {
         if (this->dest == NODENUM_BROADCAST) {
             display->drawStringf(x, y, buffer, "To: Broadcast@%s", channels.getName(this->channel));
         } else {
