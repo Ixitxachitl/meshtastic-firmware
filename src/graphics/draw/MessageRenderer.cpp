@@ -84,6 +84,7 @@ bool waitingToReset = false;
 bool scrollStarted = false;
 static bool manualScrolling = false;
 static bool didReset = false;
+static bool didLoadPreference = false;
 
 // Rebuild control
 static bool s_dirty = true; // true = caches must be rebuilt
@@ -924,8 +925,12 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     // Ensure any boot-relative timestamps are upgraded if RTC is valid
     messageStore.upgradeBootRelativeTimestamps();
 
-    if (!didReset) {
+    if (!didLoadPreference) {
         loadMessageOrderPreference();
+        didLoadPreference = true;
+    }
+
+    if (!didReset) {
         resetScrollState();
         didReset = true;
     }
