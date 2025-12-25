@@ -2,6 +2,12 @@
 #include "main.h"
 #if USE_TFTDISPLAY
 
+#ifdef T_DECK
+#include <bb_captouch.h>
+static BBCapTouch bbct;
+static bool bbctInitialized = false;
+#endif
+
 #if ARCH_PORTDUINO
 #include "platform/portduino/PortduinoGlue.h"
 #endif
@@ -1304,6 +1310,34 @@ void TFTDisplay::sdlLoop()
             InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_SHUTDOWN, .kbchar = 0, .touchX = 0, .touchY = 0};
             inputBroker->injectInputEvent(&event);
         }
+
+        // Check for text input (keyboard characters)
+        while (sdl_panel_->hasTextInput()) {
+            char c = sdl_panel_->getTextInput();
+            // Handle special keys
+            if (c == '\b' || c == 0x08) {
+                // Backspace -> INPUT_BROKER_BACK
+                InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_BACK, .kbchar = 0, .touchX = 0, .touchY = 0};
+                inputBroker->injectInputEvent(&event);
+            } else if (c == '\t' || c == 0x09) {
+                // Tab -> kbchar 0x09
+                InputEvent event = {
+                    .inputEvent = (input_broker_event)INPUT_BROKER_USER_PRESS, .kbchar = 0x09, .touchX = 0, .touchY = 0};
+                inputBroker->injectInputEvent(&event);
+            } else if (c == 0x1B) {
+                // Escape -> INPUT_BROKER_CANCEL
+                InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_CANCEL, .kbchar = 0, .touchX = 0, .touchY = 0};
+                inputBroker->injectInputEvent(&event);
+            } else {
+                // Regular printable character
+                InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_USER_PRESS,
+                                    .kbchar = (unsigned char)c,
+                                    .touchX = 0,
+                                    .touchY = 0};
+                inputBroker->injectInputEvent(&event);
+            }
+        }
+
         // debounce
         if (lastPressed != 0 && !sdl_panel_->gpio_in(lastPressed))
             return;
@@ -1440,6 +1474,20 @@ bool TFTDisplay::getTouch(int16_t *x, int16_t *y)
     } else {
         return false;
     }
+#elif defined(T_DECK)
+    // Use bb_captouch like device-ui does for proper coordinate handling
+    if (!bbctInitialized) {
+        bbct.init(I2C_SDA, I2C_SCL, -1, SCREEN_TOUCH_INT);
+        bbct.setOrientation(90, 320, 240);
+        bbctInitialized = true;
+    }
+    TOUCHINFO ti;
+    if (bbct.getSamples(&ti)) {
+        *x = ti.x[0];
+        *y = ti.y[0] - 90; // Offset needed with setOrientation(90,...) - matches device-ui
+        return true;
+    }
+    return false;
 #elif !defined(M5STACK) && !defined(HACKADAY_COMMUNICATOR)
     return tft->getTouch(x, y);
 #else
