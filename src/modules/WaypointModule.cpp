@@ -113,38 +113,42 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     // Get our node, to use our own position
     meshtastic_NodeInfoLite *ourNode = nodeDB->getMeshNode(nodeDB->getNodeNum());
 
-    // Dimensions / co-ordinates for the compass/circle
-    const uint16_t compassDiam = graphics::CompassRenderer::getCompassDiam(w, h);
-    const int16_t compassX = x + w - (compassDiam / 2) - 5;
-    const int16_t compassY = (config.display.displaymode == meshtastic_Config_DisplayConfig_DisplayMode_DEFAULT)
-                                 ? y + h / 2
-                                 : y + FONT_HEIGHT_SMALL + (h - FONT_HEIGHT_SMALL) / 2;
+    // Dimensions / co-ordinates for the compass - match UIRenderer pattern
+    const int16_t topY = graphics::getTextPositions(display)[1];
+    const int16_t bottomY = h - (FONT_HEIGHT_SMALL - 1);
+    const int16_t usableHeight = bottomY - topY - 5;
+    int16_t compassRadius = usableHeight / 2;
+    if (compassRadius < 8)
+        compassRadius = 8;
+    const int16_t compassDiam = compassRadius * 2;
+    const int16_t compassX = x + w - compassRadius - 8;
+    const int16_t compassY = topY + (usableHeight / 2) + ((FONT_HEIGHT_SMALL - 1) / 2) + 2;
 
     // If our node has a position:
     if (ourNode && (nodeDB->hasValidPosition(ourNode) || screen->hasHeading())) {
         const meshtastic_PositionLite &op = ourNode->position;
-        float myHeading;
-        if (uiconfig.compass_mode == meshtastic_CompassMode_FREEZE_HEADING) {
-            myHeading = 0;
-        } else {
+        float myHeading = 0;
+        if (uiconfig.compass_mode != meshtastic_CompassMode_FREEZE_HEADING) {
             if (screen->hasHeading())
                 myHeading = degToRad(screen->getHeading());
             else
                 myHeading = screen->estimatedHeading(DegD(op.latitude_i), DegD(op.longitude_i));
         }
-        graphics::CompassRenderer::drawCompassNorth(display, compassX, compassY, myHeading, (compassDiam / 2));
 
-        // Compass bearing to waypoint
+        // Compass bearing to waypoint (returns radians, can be negative)
         float bearingToOther =
             GeoCoord::bearing(DegD(op.latitude_i), DegD(op.longitude_i), DegD(wp.latitude_i), DegD(wp.longitude_i));
-        // If the top of the compass is a static north then bearingToOther can be drawn on the compass directly
         // If the top of the compass is not a static north we need adjust bearingToOther based on heading
+        float bearingRel = bearingToOther;
         if (uiconfig.compass_mode != meshtastic_CompassMode_FREEZE_HEADING)
-            bearingToOther -= myHeading;
-        graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, bearingToOther);
+            bearingRel -= myHeading;
 
-        float bearingToOtherDegrees = (bearingToOther < 0) ? bearingToOther + 2 * PI : bearingToOther;
-        bearingToOtherDegrees = radToDeg(bearingToOtherDegrees);
+        // Normalize bearing to 0-360 degrees for display
+        float bearingToOtherDegrees = radToDeg(bearingToOther);
+        while (bearingToOtherDegrees < 0)
+            bearingToOtherDegrees += 360.0f;
+        while (bearingToOtherDegrees >= 360.0f)
+            bearingToOtherDegrees -= 360.0f;
 
         // Distance to Waypoint
         float d = GeoCoord::latLongToMeter(DegD(wp.latitude_i), DegD(wp.longitude_i), DegD(op.latitude_i), DegD(op.longitude_i));
@@ -156,18 +160,30 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
             snprintf(distStr, sizeof(distStr), d < 2000 ? "%.0fm   %.0f°" : "%.1fkm   %.0f°", d < 2000 ? d : d / 1000,
                      bearingToOtherDegrees);
         }
-    }
 
-    else {
+        // Render compass based on display resolution - same pattern as favorite node screens
+#if !defined(USE_EINK)
+        if (graphics::isHighResolution()) {
+            // 3D compass for high-resolution displays
+            graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, bearingRel);
+            graphics::CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, bearingToOther);
+        } else
+#endif
+        {
+            // Classic small-screen compass: circle + 'N' + simple arrow
+            display->drawCircle(compassX, compassY, compassRadius);
+            graphics::CompassRenderer::drawCompassNorth(display, compassX, compassY, myHeading, compassRadius);
+            graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, bearingRel);
+        }
+    } else {
+        // No valid position - draw placeholder
+        display->drawCircle(compassX, compassY, compassRadius);
         display->drawString(compassX - FONT_HEIGHT_SMALL / 4, compassY - FONT_HEIGHT_SMALL / 2, "?");
 
         // ? in the distance field
         snprintf(distStr, sizeof(distStr), "? %s ?°",
                  (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) ? "mi" : "km");
     }
-
-    // Draw compass circle
-    display->drawCircle(compassX, compassY, compassDiam / 2);
 
     display->setTextAlignment(TEXT_ALIGN_LEFT); // Something above me changes to a different alignment, forcing a fix here!
     display->drawString(0, graphics::getTextPositions(display)[line++], lastStr);

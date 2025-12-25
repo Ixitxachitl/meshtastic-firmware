@@ -2,10 +2,12 @@
 
 #if HAS_SCREEN
 #include "DisplayFormatters.h"
+#include "MessageRenderer.h"
 #include "NodeDB.h"
 #include "NotificationRenderer.h"
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
+#include "graphics/emotes.h"
 #include "graphics/images.h"
 #include "input/RotaryEncoderInterruptImpl1.h"
 #include "input/UpDownInterruptImpl1.h"
@@ -25,6 +27,9 @@
 #endif
 
 using namespace meshtastic;
+using graphics::Emote;
+using graphics::emotes;
+using graphics::numEmotes;
 
 #if HAS_BUTTON
 // Global button thread pointer defined in main.cpp
@@ -244,7 +249,9 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
 
     // === Layout Configuration ===
     constexpr uint16_t vPadding = 2;
-    alertBannerOptions = nodeDB->getNumMeshNodes() - 1;
+    // +1 for "Back" option at index 0
+    int numNodes = nodeDB->getNumMeshNodes() - 1; // exclude self
+    alertBannerOptions = numNodes + 1;            // nodes + "Back" option
 
     // let the box drawing function calculate the widths?
 
@@ -270,6 +277,11 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
                inEvent.inputEvent == INPUT_BROKER_USER_PRESS || inEvent.inputEvent == INPUT_BROKER_DOWN_LONG) {
         curSelected++;
     } else if (inEvent.inputEvent == INPUT_BROKER_SELECT) {
+        if (curSelected == 0) {
+            // "Back" selected - just close the picker
+            resetBanner();
+            return;
+        }
         alertBannerCallback(selectedNodenum);
         resetBanner();
         return;
@@ -279,48 +291,87 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
         return;
     }
 
-    if (curSelected == -1)
+    // Wrap selection around
+    if (curSelected < 0)
         curSelected = alertBannerOptions - 1;
-    if (curSelected == alertBannerOptions)
+    if (curSelected >= alertBannerOptions)
         curSelected = 0;
 
     inEvent.inputEvent = INPUT_BROKER_NONE;
     if (alertBannerMessage[0] == '\0')
         return;
 
-    uint16_t totalLines = lineCount + alertBannerOptions;
     uint16_t screenHeight = display->height();
+#if defined(M5STACK_UNITC6L)
+    uint8_t effectiveLineHeight = FONT_HEIGHT_SMALL - 1; // Tighter spacing for Tom Thumb font
+#else
     uint8_t effectiveLineHeight = FONT_HEIGHT_SMALL - 3;
-    uint8_t visibleTotalLines = std::min<uint8_t>(totalLines, (screenHeight - vPadding * 2) / effectiveLineHeight);
-    uint8_t linesShown = lineCount;
-    const char *linePointers[visibleTotalLines + 1] = {0}; // this is sort of a dynamic allocation
+#endif
+
+    // Calculate max visible options using 75% of screen height
+    uint16_t usableHeight = (screenHeight * 3) / 4; // 75% of screen
+    uint8_t maxVisibleOptions = (usableHeight / effectiveLineHeight) - lineCount;
+    if (maxVisibleOptions < 3)
+        maxVisibleOptions = 3; // Minimum 3 visible options
+
+    uint8_t visibleOptions = std::min<uint8_t>(maxVisibleOptions, alertBannerOptions);
+    uint8_t visibleTotalLines = lineCount + visibleOptions;
+
+    const char *linePointers[visibleTotalLines + 1] = {0};
 
     // copy the linestarts to display to the linePointers holder
     for (int i = 0; i < lineCount; i++) {
         linePointers[i] = lineStarts[i];
     }
-    char scratchLineBuffer[visibleTotalLines - lineCount][40];
+    char scratchLineBuffer[visibleOptions][40];
 
+    // Center-focused scrolling:
+    // - Selection moves down to middle of visible area first
+    // - Then list scrolls while selection stays in middle
+    // - At end, selection moves from middle to bottom
+    uint8_t middleIndex = visibleOptions / 2; // Middle position in visible list
     uint8_t firstOptionToShow = 0;
-    if (curSelected > 1 && alertBannerOptions > visibleTotalLines - lineCount) {
-        if (curSelected > alertBannerOptions - visibleTotalLines + lineCount)
-            firstOptionToShow = alertBannerOptions - visibleTotalLines + lineCount;
-        else
-            firstOptionToShow = curSelected - 1;
-    } else {
-        firstOptionToShow = 0;
-    }
-    int scratchLineNum = 0;
-    for (int i = firstOptionToShow; i < alertBannerOptions && linesShown < visibleTotalLines; i++, linesShown++) {
-        char temp_name[16] = {0};
-        if (nodeDB->getMeshNodeByIndex(i + 1)->has_user) {
-            std::string sanitized = sanitizeString(nodeDB->getMeshNodeByIndex(i + 1)->user.long_name);
-            strncpy(temp_name, sanitized.c_str(), sizeof(temp_name) - 1);
+
+    if (alertBannerOptions > visibleOptions) {
+        // Calculate the scroll position to keep selection centered when possible
+        if (curSelected <= middleIndex) {
+            // Near start: don't scroll, let selection move from top toward middle
+            firstOptionToShow = 0;
+        } else if (curSelected >= alertBannerOptions - (visibleOptions - middleIndex)) {
+            // Near end: stop scrolling, let selection move from middle to bottom
+            firstOptionToShow = alertBannerOptions - visibleOptions;
         } else {
-            snprintf(temp_name, sizeof(temp_name), "(%04X)", (uint16_t)(nodeDB->getMeshNodeByIndex(i + 1)->num & 0xFFFF));
+            // Middle region: scroll to keep selection in the middle
+            firstOptionToShow = curSelected - middleIndex;
         }
+    }
+
+    int scratchLineNum = 0;
+    uint8_t linesShown = lineCount;
+    for (int i = firstOptionToShow; i < alertBannerOptions && scratchLineNum < visibleOptions; i++, linesShown++) {
+        char temp_name[16] = {0};
+
+        if (i == 0) {
+            // "Back" option at index 0
+            strncpy(temp_name, "Back", sizeof(temp_name) - 1);
+        } else {
+            // Node options start at index 1, map to nodeDB index (i) since index 0 is self
+            auto node = nodeDB->getMeshNodeByIndex(i);
+            if (node && node->has_user) {
+                std::string sanitized = sanitizeString(node->user.long_name);
+                strncpy(temp_name, sanitized.c_str(), sizeof(temp_name) - 1);
+            } else if (node) {
+                snprintf(temp_name, sizeof(temp_name), "(%04X)", (uint16_t)(node->num & 0xFFFF));
+            }
+        }
+
         if (i == curSelected) {
-            selectedNodenum = nodeDB->getMeshNodeByIndex(i + 1)->num;
+            if (i > 0) {
+                // Only set selectedNodenum for actual nodes, not "Back"
+                auto node = nodeDB->getMeshNodeByIndex(i);
+                if (node)
+                    selectedNodenum = node->num;
+            }
             if (currentResolution == ScreenResolution::High) {
                 strncpy(scratchLineBuffer[scratchLineNum], "> ", 3);
                 strncpy(scratchLineBuffer[scratchLineNum] + 2, temp_name, 36);
@@ -337,6 +388,8 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
         }
         linePointers[linesShown] = scratchLineBuffer[scratchLineNum++];
     }
+
+    uint16_t totalLines = lineCount + alertBannerOptions;
     drawNotificationBox(display, state, linePointers, totalLines, firstOptionToShow);
 }
 
@@ -420,7 +473,11 @@ void NotificationRenderer::drawAlertBannerOverlay(OLEDDisplay *display, OLEDDisp
     uint16_t totalLines = lineCount + alertBannerOptions;
 
     uint16_t screenHeight = display->height();
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+    uint8_t effectiveLineHeight = FONT_HEIGHT_TINY - 1; // Tighter spacing for Tom Thumb font
+#else
     uint8_t effectiveLineHeight = FONT_HEIGHT_SMALL - 3;
+#endif
     uint8_t visibleTotalLines = std::min<uint8_t>(totalLines, (screenHeight - vPadding * 2) / effectiveLineHeight);
     uint8_t linesShown = lineCount;
     const char *linePointers[visibleTotalLines + 1] = {0}; // this is sort of a dynamic allocation
@@ -540,7 +597,11 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
     }
 
     uint16_t screenHeight = display->height();
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+    uint8_t effectiveLineHeight = FONT_HEIGHT_TINY - 1; // Tighter spacing for Tom Thumb font
+#else
     uint8_t effectiveLineHeight = FONT_HEIGHT_SMALL - 3;
+#endif
     uint8_t visibleTotalLines = std::min<uint8_t>(lineCount, (screenHeight - vPadding * 2) / effectiveLineHeight);
     uint16_t contentHeight = visibleTotalLines * effectiveLineHeight;
     uint16_t boxHeight = contentHeight + vPadding * 2;
@@ -606,10 +667,19 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
             }
             display->fillRect(boxLeft, boxTop + 1, boxWidth, effectiveLineHeight - background_yOffset);
             display->setColor(BLACK);
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+            int yOffset = 1; // Consistent spacing for tiny fonts (FONT_HEIGHT_TINY is 6, so 6-5=1 for proper alignment)
+#else
             int yOffset = 3;
-            display->drawString(textX, lineY - yOffset, lineBuffer);
+#endif
+            graphics::MessageRenderer::drawStringWithEmotes(display, textX, lineY - yOffset, std::string(lineBuffer), emotes,
+                                                            numEmotes);
             display->setColor(WHITE);
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+            lineY += effectiveLineHeight; // Consistent spacing for tiny fonts
+#else
             lineY += (effectiveLineHeight - 2 - background_yOffset);
+#endif
         } else {
             // Pop-up
             // If this is the Signal line, center text + bars as one group
@@ -626,7 +696,8 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
                 int totalWidth = textWidth + barsWidth;
                 int groupStartX = boxLeft + (boxWidth - totalWidth) / 2;
 
-                display->drawString(groupStartX, lineY, lineBuffer);
+                graphics::MessageRenderer::drawStringWithEmotes(display, groupStartX, lineY, std::string(lineBuffer), emotes,
+                                                                numEmotes);
 
                 int baseX = groupStartX + textWidth + gap;
                 int baseY = lineY + effectiveLineHeight - 1;
@@ -642,7 +713,13 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
                     }
                 }
             } else {
-                display->drawString(textX, lineY, lineBuffer);
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+                int textYOffset = FONT_HEIGHT_TINY - 5; // Move text down for Tom Thumb font (7-5=2)
+#else
+                int textYOffset = 0;
+#endif
+                graphics::MessageRenderer::drawStringWithEmotes(display, textX, lineY + textYOffset, std::string(lineBuffer),
+                                                                emotes, numEmotes);
             }
             lineY += (effectiveLineHeight);
         }

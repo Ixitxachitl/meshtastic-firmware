@@ -5,6 +5,7 @@
 #include "../mesh/generated/meshtastic/telemetry.pb.h"
 #include "IndicatorSensor.h"
 #include "TelemetrySensor.h"
+#include "mesh/IndicatorSerial.h"
 #include "serialization/cobs.h"
 #include <Adafruit_Sensor.h>
 #include <driver/uart.h>
@@ -25,12 +26,12 @@ enum sensor_pkt_type {
     PKT_TYPE_CMD_BEEP_OFF = 0xA2,
     PKT_TYPE_CMD_SHUTDOWN = 0xA3, // uin32_t
     PKT_TYPE_CMD_POWER_ON = 0xA4,
-    PKT_TYPE_SENSOR_SCD41_TEMP = 0xB0,     // float
+    PKT_TYPE_SENSOR_SCD41_TEMP = 0xB0,     // float - also used for BME688 temperature
     PKT_TYPE_SENSOR_SCD41_HUMIDITY = 0xB1, // float
-    PKT_TYPE_SENSOR_SCD41_CO2 = 0xB2,      // float
+    PKT_TYPE_SENSOR_SCD41_CO2 = 0xB2,      // float - also used for BME688 pressure (hPa)
     PKT_TYPE_SENSOR_AHT20_TEMP = 0xB3,     // float
-    PKT_TYPE_SENSOR_AHT20_HUMIDITY = 0xB4, // float
-    PKT_TYPE_SENSOR_TVOC_INDEX = 0xB5,     // float
+    PKT_TYPE_SENSOR_AHT20_HUMIDITY = 0xB4, // float - also used for BME688 humidity
+    PKT_TYPE_SENSOR_TVOC_INDEX = 0xB5,     // float - also used for BME688 gas resistance (kOhms)
 };
 
 static int cmd_send(uint8_t cmd, const char *p_data, uint8_t len)
@@ -92,6 +93,35 @@ void IndicatorSensor::setup()
 
 bool IndicatorSensor::getMetrics(meshtastic_Telemetry *measurement)
 {
+    bool hasData = false;
+
+    // First, check for BME688 data from RP2040 via NMEA message (newer method)
+    if (sensecapIndicator && sensecapIndicator->hasBME688Data()) {
+        BME688Data bme688 = sensecapIndicator->getBME688Data();
+
+        // Only use data if it's recent (within last 10 seconds)
+        if (bme688.has_data && bme688.last_update > 0 && (millis() - bme688.last_update) < 10000) {
+            measurement->variant.environment_metrics.has_temperature = true;
+            measurement->variant.environment_metrics.temperature = bme688.temperature;
+
+            measurement->variant.environment_metrics.has_relative_humidity = true;
+            measurement->variant.environment_metrics.relative_humidity = bme688.humidity;
+
+            measurement->variant.environment_metrics.has_barometric_pressure = true;
+            measurement->variant.environment_metrics.barometric_pressure = bme688.pressure;
+
+            measurement->variant.environment_metrics.has_gas_resistance = true;
+            measurement->variant.environment_metrics.gas_resistance = bme688.gas_resistance;
+
+            // IAQ (Indoor Air Quality) index
+            measurement->variant.environment_metrics.has_iaq = true;
+            measurement->variant.environment_metrics.iaq = (uint32_t)bme688.iaq;
+
+            hasData = true;
+        }
+    }
+
+    // Also check for legacy COBS-encoded UART data (older method)
     cobs_decode_result ret;
     int len = uart_read_bytes(SENSOR_PORT_NUM, buf, (SENSOR_BUF_SIZE - 1), 100 / portTICK_PERIOD_MS);
 
@@ -118,10 +148,22 @@ bool IndicatorSensor::getMetrics(meshtastic_Telemetry *measurement)
                 value = 0.0;
                 uint8_t pkt_type = data[0];
                 switch (pkt_type) {
+                case PKT_TYPE_SENSOR_SCD41_TEMP: {
+                    memcpy(&value, &data[1], sizeof(value));
+                    // LOG_DEBUG("BME688 Temp: %.1f", value);
+                    cmd_send(PKT_TYPE_ACK, ACK_PKT_PARA, 4);
+                    measurement->variant.environment_metrics.has_temperature = true;
+                    measurement->variant.environment_metrics.temperature = value;
+                    break;
+                }
+
                 case PKT_TYPE_SENSOR_SCD41_CO2: {
                     memcpy(&value, &data[1], sizeof(value));
-                    // LOG_DEBUG("CO2: %.1f", value);
+                    // LOG_DEBUG("BME688 Pressure: %.1f hPa", value);
                     cmd_send(PKT_TYPE_ACK, ACK_PKT_PARA, 4);
+                    // Store pressure (value is in hPa, protobuf expects Pa)
+                    measurement->variant.environment_metrics.has_barometric_pressure = true;
+                    measurement->variant.environment_metrics.barometric_pressure = value;
                     break;
                 }
 
@@ -136,7 +178,7 @@ bool IndicatorSensor::getMetrics(meshtastic_Telemetry *measurement)
 
                 case PKT_TYPE_SENSOR_AHT20_HUMIDITY: {
                     memcpy(&value, &data[1], sizeof(value));
-                    // LOG_DEBUG("Humidity: %.1f", value);
+                    // LOG_DEBUG("BME688 Humidity: %.1f %%", value);
                     cmd_send(PKT_TYPE_ACK, ACK_PKT_PARA, 4);
                     measurement->variant.environment_metrics.has_relative_humidity = true;
                     measurement->variant.environment_metrics.relative_humidity = value;
@@ -145,10 +187,11 @@ bool IndicatorSensor::getMetrics(meshtastic_Telemetry *measurement)
 
                 case PKT_TYPE_SENSOR_TVOC_INDEX: {
                     memcpy(&value, &data[1], sizeof(value));
-                    // LOG_DEBUG("Tvoc: %.1f", value);
+                    // LOG_DEBUG("BME688 Gas: %.1f kOhms", value);
                     cmd_send(PKT_TYPE_ACK, ACK_PKT_PARA, 4);
-                    measurement->variant.environment_metrics.has_iaq = true;
-                    measurement->variant.environment_metrics.iaq = value;
+                    // Store gas resistance (value is in kOhms, protobuf expects kOhms)
+                    measurement->variant.environment_metrics.has_gas_resistance = true;
+                    measurement->variant.environment_metrics.gas_resistance = value;
                     break;
                 }
                 default:
@@ -158,9 +201,10 @@ bool IndicatorSensor::getMetrics(meshtastic_Telemetry *measurement)
 
             p_buf_start = p_buf_end + 1; // next message
         }
-        return true;
+        hasData = true; // Got COBS data
     }
-    return false;
+
+    return hasData;
 }
 
 #endif

@@ -48,7 +48,9 @@ using namespace httpsserver;
 #include "mesh/http/ContentHandler.h"
 
 #include <HTTPClient.h>
+#if !defined(MESHTASTIC_EXCLUDE_WEBSERVER_TLS)
 #include <WiFiClientSecure.h>
+#endif
 HTTPClient httpClient;
 
 #define DEST_FS_USES_LITTLEFS
@@ -100,28 +102,32 @@ void registerHandlers(HTTPServer *insecureServer, HTTPSServer *secureServer)
 
     ResourceNode *nodeRoot = new ResourceNode("/*", "GET", &handleStatic);
 
-    // Secure nodes
-    secureServer->registerNode(nodeAPIv1ToRadioOptions);
-    secureServer->registerNode(nodeAPIv1ToRadio);
-    secureServer->registerNode(nodeAPIv1FromRadioOptions);
-    secureServer->registerNode(nodeAPIv1FromRadio);
-    //    secureServer->registerNode(nodeHotspotApple);
-    //    secureServer->registerNode(nodeHotspotAndroid);
-    secureServer->registerNode(nodeRestart);
-    secureServer->registerNode(nodeFormUpload);
-    secureServer->registerNode(nodeJsonScanNetworks);
-    secureServer->registerNode(nodeJsonBlinkLED);
-    secureServer->registerNode(nodeJsonFsBrowseStatic);
-    secureServer->registerNode(nodeJsonDelete);
-    secureServer->registerNode(nodeJsonReport);
-    secureServer->registerNode(nodeJsonNodes);
-    //    secureServer->registerNode(nodeUpdateFs);
-    //    secureServer->registerNode(nodeDeleteFs);
-    secureServer->registerNode(nodeAdmin);
-    //    secureServer->registerNode(nodeAdminFs);
-    //    secureServer->registerNode(nodeAdminSettings);
-    //    secureServer->registerNode(nodeAdminSettingsApply);
-    secureServer->registerNode(nodeRoot); // This has to be last
+    // Secure nodes (only if HTTPS server exists)
+#if !defined(MESHTASTIC_EXCLUDE_WEBSERVER_TLS)
+    if (secureServer) {
+        secureServer->registerNode(nodeAPIv1ToRadioOptions);
+        secureServer->registerNode(nodeAPIv1ToRadio);
+        secureServer->registerNode(nodeAPIv1FromRadioOptions);
+        secureServer->registerNode(nodeAPIv1FromRadio);
+        //    secureServer->registerNode(nodeHotspotApple);
+        //    secureServer->registerNode(nodeHotspotAndroid);
+        secureServer->registerNode(nodeRestart);
+        secureServer->registerNode(nodeFormUpload);
+        secureServer->registerNode(nodeJsonScanNetworks);
+        secureServer->registerNode(nodeJsonBlinkLED);
+        secureServer->registerNode(nodeJsonFsBrowseStatic);
+        secureServer->registerNode(nodeJsonDelete);
+        secureServer->registerNode(nodeJsonReport);
+        secureServer->registerNode(nodeJsonNodes);
+        //    secureServer->registerNode(nodeUpdateFs);
+        //    secureServer->registerNode(nodeDeleteFs);
+        secureServer->registerNode(nodeAdmin);
+        //    secureServer->registerNode(nodeAdminFs);
+        //    secureServer->registerNode(nodeAdminSettings);
+        //    secureServer->registerNode(nodeAdminSettingsApply);
+        secureServer->registerNode(nodeRoot); // This has to be last
+    }
+#endif
 
     // Insecure nodes
     insecureServer->registerNode(nodeAPIv1ToRadioOptions);

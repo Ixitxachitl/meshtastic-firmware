@@ -53,6 +53,7 @@
 // ratio of voltage divider = 2.0 (RD2=100k, RD3=100k)
 #define ADC_MULTIPLIER 2.11 // 2.0 + 10% for correction of display undervoltage.
 #define ADC_CHANNEL ADC1_GPIO4_CHANNEL
+#define CHARGE_TREND_UP_DELTA_MV 50
 
 // keyboard
 #define I2C_SDA 18 // I2C pins for this board
