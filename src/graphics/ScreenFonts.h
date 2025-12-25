@@ -16,6 +16,9 @@
 #include "graphics/fonts/OLEDDisplayFontsCS.h"
 #endif
 
+// Ohm symbol overlay fonts - single-character fonts that can be swapped in
+#include "graphics/fonts/OLEDDisplayFontsOhm.h"
+
 #if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
 #include "graphics/fonts/OLEDDisplayFontsTomThumb.h"
 #define FONT_TINY TomThumb4x6 // Height: 6
@@ -52,7 +55,7 @@
 #define FONT_MEDIUM_LOCAL ArialMT_Plain_16_UA // Height: 19
 #else
 #ifdef OLED_CS
-#define FONT_MEDIUM_LOCAL ArialMT_Plain_16_CS
+#define FONT_MEDIUM_LOCAL ArialMT_Plain_16_CS // Height: 19
 #else
 #define FONT_MEDIUM_LOCAL ArialMT_Plain_16 // Height: 19
 #endif

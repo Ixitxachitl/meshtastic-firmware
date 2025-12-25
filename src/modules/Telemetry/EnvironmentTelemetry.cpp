@@ -16,6 +16,7 @@
 #include "graphics/draw/MessageRenderer.h"
 #include "graphics/draw/UIRenderer.h"
 #include "graphics/emotes.h"
+#include "graphics/fonts/OLEDDisplayFontsOhm.h"
 #include "graphics/images.h"
 #include "main.h"
 #include "modules/ExternalNotificationModule.h"
@@ -103,7 +104,8 @@ static void drawIAQRuler(OLEDDisplay *dpy, int x, int y, int w, int iaqValue, co
         dpy->drawLine(nx - half, yrow, nx + half, yrow);
     }
 
-    // centered label snug under the triangle base
+    // centered label snug under the triangle base - use FONT_SMALL explicitly
+    dpy->setFont(FONT_SMALL);
     const int lw = dpy->getStringWidth(label);
     const int lx = x + (w - lw) / 2;
     dpy->drawString(lx, baselineY + kNeedleH - 1 + kLabelGap, label);
@@ -177,6 +179,76 @@ static void cleanupStaleNodes()
 
 // Helper: apply both offsets centrally
 // Overload for fixed-capacity ring
+
+/**
+ * Helper function to draw a string containing "kΩ" with proper Ohm symbol rendering.
+ * Detects "kΩ" in the string and uses XBM bitmap rendering for the Ω symbol.
+ * Selects the appropriate Ohm bitmap size based on the font height.
+ * Similar approach to drawStringWithEmotes.
+ */
+static void drawStringWithOhm(OLEDDisplay *display, int16_t x, int16_t y, const char *text, int fontHeight = FONT_HEIGHT_SMALL)
+{
+    // Look for "k" followed by UTF-8 Omega (0xCE 0xA9)
+    const char *ohmPos = nullptr;
+    for (const char *p = text; *p; p++) {
+        if (*p == 'k' && (unsigned char)p[1] == 0xCE && (unsigned char)p[2] == 0xA9) {
+            ohmPos = p;
+            break;
+        }
+    }
+
+    if (!ohmPos) {
+        // No Ohm symbol, draw normally
+        display->drawString(x, y, text);
+        return;
+    }
+
+    // Draw text up to and including "k"
+    size_t prefixLen = ohmPos - text + 1; // Include the 'k'
+    char prefix[128];
+    strncpy(prefix, text, prefixLen);
+    prefix[prefixLen] = '\0';
+    display->drawString(x, y, prefix);
+    x += display->getStringWidth(prefix);
+
+    // Select appropriate Ohm bitmap based on font height
+    const uint8_t *ohmBitmap;
+    int ohmWidth, ohmHeight;
+
+    if (fontHeight <= 7) {
+        // Tiny font (TomThumb, height ~6)
+        ohmBitmap = OhmBitmap_Tiny;
+        ohmWidth = OhmWidth_Tiny;
+        ohmHeight = OhmHeight_Tiny;
+    } else if (fontHeight <= 14) {
+        // Small font (ArialMT_Plain_10, height ~13)
+        ohmBitmap = OhmBitmap_10;
+        ohmWidth = OhmWidth_10;
+        ohmHeight = OhmHeight_10;
+    } else if (fontHeight <= 20) {
+        // Medium font (ArialMT_Plain_16, height ~19)
+        ohmBitmap = OhmBitmap_16;
+        ohmWidth = OhmWidth_16;
+        ohmHeight = OhmHeight_16;
+    } else {
+        // Large font (ArialMT_Plain_24, height ~28)
+        ohmBitmap = OhmBitmap_24;
+        ohmWidth = OhmWidth_24;
+        ohmHeight = OhmHeight_24;
+    }
+
+    // Draw Ohm symbol bitmap, vertically centered with text
+    x += 1; // 1px gap after 'k'
+    int ohmY = y + (fontHeight - ohmHeight) / 2;
+    display->drawXbm(x, ohmY, ohmWidth, ohmHeight, ohmBitmap);
+    x += ohmWidth;
+
+    // Draw remaining text after "kΩ" (skip "k" + UTF-8 Ω bytes: 0xCE 0xA9)
+    const char *remaining = ohmPos + 3; // "k" (1) + "Ω" (0xCE 0xA9 = 2 bytes)
+    if (*remaining != '\0') {
+        display->drawString(x, y, remaining);
+    }
+}
 
 // Sparkline placement offsets (tweak to taste)
 static constexpr int kSparkXOffset = -2; // shift left
@@ -278,7 +350,7 @@ static void drawLargeSparkBoxed(OLEDDisplay *dpy, int x, int y, int w, int h, co
 
     // Draw min/max labels with unit (small font for notation)
     dpy->setFont(ArialMT_Plain_10);
-    dpy->setTextAlignment(TEXT_ALIGN_RIGHT);
+    dpy->setTextAlignment(TEXT_ALIGN_LEFT); // drawStringWithOhm assumes LEFT alignment
     float maxVal = hi2;
     float minVal = lo2;
     // Convert units if needed (data is stored in metric: Celsius, hPa, kg, mm, m/s)
@@ -301,12 +373,34 @@ static void drawLargeSparkBoxed(OLEDDisplay *dpy, int x, int y, int w, int h, co
         maxVal = maxVal * 2.23694f;
         minVal = minVal * 2.23694f;
     }
-    String maxStr = String(maxVal, 1) + unit;
-    String minStr = String(minVal, 1) + unit;
-    dpy->drawString(ix - 3, iy, maxStr);
-    dpy->drawString(ix - 3, iy + ih - 10, minStr);
-    dpy->setTextAlignment(TEXT_ALIGN_LEFT); // restore default
-    dpy->setFont(FONT_SMALL);               // restore to label font
+
+    // Format labels and use drawStringWithOhm for Ohm symbol support
+    char maxBuf[32], minBuf[32];
+    snprintf(maxBuf, sizeof(maxBuf), "%.1f%s", maxVal, unit.c_str());
+    snprintf(minBuf, sizeof(minBuf), "%.1f%s", minVal, unit.c_str());
+
+    // For right-aligned text, calculate width manually since getStringWidth
+    // won't handle UTF-8 Ω correctly
+    int maxWidth, minWidth;
+
+    if (unit == "kΩ") {
+        // Calculate width: "123.4k" + 1px gap + Ohm bitmap width
+        char numWithK[32];
+        snprintf(numWithK, sizeof(numWithK), "%.1fk", maxVal);
+        maxWidth = dpy->getStringWidth(numWithK) + 1 + OhmWidth_10;
+        snprintf(numWithK, sizeof(numWithK), "%.1fk", minVal);
+        minWidth = dpy->getStringWidth(numWithK) + 1 + OhmWidth_10;
+    } else {
+        maxWidth = dpy->getStringWidth(maxBuf);
+        minWidth = dpy->getStringWidth(minBuf);
+    }
+
+    // Draw right-aligned to spark box edge (ix - 3)
+    // Pass font height 13 (ArialMT_Plain_10) to get the correct small Ohm bitmap
+    drawStringWithOhm(dpy, ix - 3 - maxWidth, iy, maxBuf, 13);
+    drawStringWithOhm(dpy, ix - 3 - minWidth, iy + ih - 10, minBuf, 13);
+
+    dpy->setFont(FONT_SMALL); // restore to label font
 
     // Draw polyline (thicker for better visibility on large screens)
     sPrev = clampTo(hist.at(0));
@@ -1073,7 +1167,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         if ((m.has_gas_resistance || m.gas_resistance != 0) &&
             (m.gas_resistance >= kMinGasKOhm && m.gas_resistance <= kMaxGasKOhm)) {
             char buf[48];
-            snprintf(buf, sizeof(buf), "Gas: %.2f kOhm", m.gas_resistance);
+            snprintf(buf, sizeof(buf), "Gas: %.2f kΩ", m.gas_resistance);
             s_displayCache.addEntry(buf);
         }
 #endif
@@ -1376,8 +1470,8 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
                     const int rulerW = SCREEN_WIDTH - 2 * x;
                     drawIAQRuler(display, x, rowY, rulerW, m.iaq, metricRows[i].label);
                 } else {
-                    // Draw label
-                    display->drawString(x, rowY, metricRows[i].label);
+                    // Draw label (use Ohm-aware function for gas resistance)
+                    drawStringWithOhm(display, x, rowY, metricRows[i].label);
 
                     // Draw graph if history data exists
                     if (metricRows[i].hist && metricRows[i].hist->len >= 2) {
@@ -1556,7 +1650,8 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
                     const int rulerW = SCREEN_WIDTH - 2 * x;
                     drawIAQRuler(display, x, rowY, rulerW, m.iaq, metricRows[i].label);
                 } else {
-                    display->drawString(x, rowY, metricRows[i].label);
+                    // Draw label (use Ohm-aware function for gas resistance)
+                    drawStringWithOhm(display, x, rowY, metricRows[i].label);
 
                     // Draw sparkline if history data exists (no offset, 1px gap comes from rowHeight spacing)
                     if (metricRows[i].hist && metricRows[i].hist->len >= 2) {
@@ -1605,14 +1700,14 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         // For M5STACK_UNITC6L only: put sender/time on first line, then all metrics on separate lines
         currentY += rowHeight;
         for (size_t i = 0; i < metricCount; i++) {
-            display->drawString(x, currentY, allMetrics[i]);
+            drawStringWithOhm(display, x, currentY, allMetrics[i]);
             currentY += rowHeight;
         }
 #else
         size_t startIdx = 0;
         if (metricCount > 0) {
             int rightX = SCREEN_WIDTH - display->getStringWidth(allMetrics[0]);
-            display->drawString(rightX, currentY, allMetrics[0]);
+            drawStringWithOhm(display, rightX, currentY, allMetrics[0]);
             startIdx = 1;
         }
         currentY += rowHeight;
@@ -1621,11 +1716,11 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         const int splitX = SCREEN_WIDTH / 2;
         for (size_t i = startIdx; i < metricCount; i += 2) {
             // Left column
-            display->drawString(x, currentY, allMetrics[i]);
+            drawStringWithOhm(display, x, currentY, allMetrics[i]);
 
             // Right column
             if (i + 1 < metricCount) {
-                display->drawString(splitX, currentY, allMetrics[i + 1]);
+                drawStringWithOhm(display, splitX, currentY, allMetrics[i + 1]);
             }
 
             currentY += rowHeight;
