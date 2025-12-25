@@ -11,6 +11,12 @@
 // Optional: Embedded firmware for automatic programming
 #ifdef HAS_BHI260AP_FIRMWARE_EMBEDDED
 #include "motion/bhi260ap_firmware.h"
+#else
+// Use smallest SensorLib firmware - APP30 shuttle (accel, gyro, step counter)
+#ifndef BOSCH_APP30_SHUTTLE_BHI260_FW
+#define BOSCH_APP30_SHUTTLE_BHI260_FW
+#endif
+#include <BoschFirmware.h>
 #endif
 #endif
 
@@ -331,7 +337,7 @@ bool BHI260APSensor::readStepCounterFromFifo()
 #ifdef HAS_BHI260AP_SENSORLIB
 
 // Minimal callback to capture step counter data
-static void step_callback(uint8_t sensor_id, uint8_t *data_ptr, uint32_t len, uint64_t *timestamp)
+static void step_callback(uint8_t sensor_id, uint8_t *data_ptr, uint32_t len, uint64_t *timestamp, void *user_data)
 {
     if (!g_bhi260ap_instance || len < 4)
         return;
@@ -343,7 +349,7 @@ static void step_callback(uint8_t sensor_id, uint8_t *data_ptr, uint32_t len, ui
     }
 }
 
-static void accel_callback(uint8_t sensor_id, uint8_t *data_ptr, uint32_t len, uint64_t *timestamp)
+static void accel_callback(uint8_t sensor_id, uint8_t *data_ptr, uint32_t len, uint64_t *timestamp, void *user_data)
 {
     if (!g_bhi260ap_instance)
         return;
@@ -389,7 +395,7 @@ static void accel_callback(uint8_t sensor_id, uint8_t *data_ptr, uint32_t len, u
     }
 }
 
-static void gyro_callback(uint8_t sensor_id, uint8_t *data_ptr, uint32_t len, uint64_t *timestamp)
+static void gyro_callback(uint8_t sensor_id, uint8_t *data_ptr, uint32_t len, uint64_t *timestamp, void *user_data)
 {
     if (!g_bhi260ap_instance)
         return;
@@ -410,7 +416,7 @@ bool BHI260APSensor::uploadFirmwareToRAM()
 
     // Firmware source priority:
     // 1. Embedded firmware (if HAS_BHI260AP_FIRMWARE_EMBEDDED defined)
-    // 2. Built-in SensorLib minimal firmware
+    // 2. Built-in SensorLib firmware (smallest: APP30 SHUTTLE)
     const uint8_t *firmwareData = nullptr;
     size_t firmwareSize = 0;
     bool writeToFlash = false;
@@ -423,9 +429,9 @@ bool BHI260APSensor::uploadFirmwareToRAM()
     LOG_INFO("BHI260AP: Using embedded firmware (%u bytes)", firmwareSize);
     LOG_INFO("BHI260AP: Will program to external flash chip (one-time operation)");
 #else
-    // Use built-in SensorLib firmware - RAM only
-    firmwareData = bhy2_firmware_image;
-    firmwareSize = sizeof(bhy2_firmware_image);
+    // Use built-in SensorLib firmware - RAM only (APP30 SHUTTLE ~107KB)
+    firmwareData = bosch_firmware_image;
+    firmwareSize = bosch_firmware_size;
     writeToFlash = false;
     LOG_INFO("BHI260AP: Using built-in SensorLib firmware (%u bytes)", firmwareSize);
     LOG_WARN("BHI260AP: Firmware will be lost on power cycle (RAM only)");
@@ -441,7 +447,7 @@ bool BHI260APSensor::uploadFirmwareToRAM()
     }
 
     // Set reset pin to -1 (not used on T-Echo Plus)
-    bhi->setPins(-1, -1);
+    bhi->setPins(-1);
 
     // Configure firmware
     bhi->setFirmware(firmwareData, firmwareSize, writeToFlash, true); // force_update=true
@@ -450,8 +456,8 @@ bool BHI260APSensor::uploadFirmwareToRAM()
     LOG_INFO("BHI260AP: Uploading firmware (this takes ~30 seconds)...");
     uint32_t startTime = millis();
 
-    // Upload firmware - init() triggers the upload when firmware is configured
-    if (!bhi->init(*wire, PIN_WIRE_SDA, PIN_WIRE_SCL, BHI260AP_SLAVE_ADDRESS_L)) {
+    // Upload firmware - begin() triggers the upload when firmware is configured
+    if (!bhi->begin(*wire, BHI260AP_SLAVE_ADDRESS_L, PIN_WIRE_SDA, PIN_WIRE_SCL)) {
         LOG_ERROR("BHI260AP: Firmware upload failed after %lu ms", millis() - startTime);
         LOG_ERROR("BHI260AP: Error code: %d", bhi->getError());
         if (firmwareData)
@@ -484,25 +490,25 @@ bool BHI260APSensor::uploadFirmwareToRAM()
     }
 
     // Enable accelerometer (required for step counter)
-    if (!bhi->configure(SENSOR_ID_ACC_PASS, 10.0, 0)) {
+    if (!bhi->configure(SensorBHI260AP::ACCEL_PASSTHROUGH, 10.0, 0)) {
         LOG_WARN("BHI260AP: Accel config failed");
     } else {
-        bhi->onResultEvent(SENSOR_ID_ACC_PASS, accel_callback);
+        bhi->onResultEvent(SensorBHI260AP::ACCEL_PASSTHROUGH, accel_callback);
         LOG_INFO("BHI260AP: Accel enabled");
     }
 
     // Enable gyroscope
-    if (!bhi->configure(SENSOR_ID_GYRO_PASS, 10.0, 0)) {
+    if (!bhi->configure(SensorBHI260AP::GYRO_PASSTHROUGH, 10.0, 0)) {
         LOG_WARN("BHI260AP: Gyro config failed");
     } else {
-        bhi->onResultEvent(SENSOR_ID_GYRO_PASS, gyro_callback);
+        bhi->onResultEvent(SensorBHI260AP::GYRO_PASSTHROUGH, gyro_callback);
         LOG_INFO("BHI260AP: Gyro enabled");
     }
 
-    if (!bhi->configure(BHI260AP_SENSOR_ID_STEP_COUNTER, 1.0, 0)) {
+    if (!bhi->configure(SensorBHI260AP::STEP_COUNTER, 1.0, 0)) {
         LOG_WARN("BHI260AP: Step counter config failed");
     } else {
-        bhi->onResultEvent((BhySensorID)BHI260AP_SENSOR_ID_STEP_COUNTER, step_callback);
+        bhi->onResultEvent(SensorBHI260AP::STEP_COUNTER, step_callback);
         LOG_INFO("BHI260AP: Step counter OK");
     }
 
