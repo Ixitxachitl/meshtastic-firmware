@@ -1224,24 +1224,25 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
         needsCount = false;
     }
 
-    // Calculate grid dimensions (same as draw function with scaling)
+    // Use grid dimensions calculated during drawing
+    // These are set by drawEmotePickerScreen to ensure consistency
     const int headerFontHeight = FONT_HEIGHT_SMALL;
     const int headerMargin = 2;
-    const int cellPadding = 2;
-    // Scale based on screen size for touchscreen devices, 1x for non-touch
-    const int screenWidth = screen->getWidth();
-#if HAS_TOUCHSCREEN
-    const int emoteScale = (screenWidth >= 400) ? 4 : 2;
-#else
-    const int emoteScale = 1;
-#endif
-    const int emoteSize = 16 * emoteScale; // Must match drawEmotePickerScreen scaling
-    const int cellSize = emoteSize + cellPadding * 2;
+    int cols = emoteGridCols;
+    int rows = emoteGridRows;
+    int cellSize = emoteCellSize;
+
+    // Fallback if draw hasn't been called yet (shouldn't happen in normal flow)
+    if (cols == 0 || rows == 0 || cellSize == 0) {
+        LOG_WARN("Emote picker input called before drawing - using defaults");
+        cols = 10;
+        rows = 5;
+        cellSize = 20;
+    }
+
+    // Define grid positioning constants once for use throughout function
+    int gridX = 2; // Left margin
     int gridTop = headerFontHeight + headerMargin;
-    int availableHeight = screen->getHeight() - gridTop - 2;
-    int availableWidth = screen->getWidth() - 4;
-    int cols = availableWidth / cellSize;
-    int rows = availableHeight / cellSize;
 
     // Navigation keys and swipe gestures
     bool isUp = isUpEvent(event);
@@ -1256,8 +1257,6 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
     if ((event->touchX != 0 || event->touchY != 0) && !isUp && !isDown && !isLeft && !isRight && !isSelect &&
         event->inputEvent != INPUT_BROKER_SELECT_LONG) {
         // Calculate which emote was touched based on grid layout
-        // Account for frame offsets stored from draw function
-        int gridX = emoteFrameX + 2; // Left margin matches drawEmotePickerScreen
         int touchGridTop = emoteFrameY + headerFontHeight + headerMargin;
         int touchCol = (event->touchX - gridX) / cellSize;
         int touchRow = (event->touchY - touchGridTop) / cellSize;
@@ -2529,6 +2528,11 @@ void CannedMessageModule::drawEmotePickerScreen(OLEDDisplay *display, OLEDDispla
 
     int cols = availableWidth / cellSize;
     int rows = availableHeight / cellSize;
+
+    // Store dimensions for input handler
+    emoteGridCols = cols;
+    emoteGridRows = rows;
+    emoteCellSize = cellSize;
 
     // Clamp selection
     if (emotePickerIndex < 0)
