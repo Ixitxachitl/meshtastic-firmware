@@ -1529,15 +1529,6 @@ int Screen::handleTextMessage(const meshtastic_MeshPacket *packet)
                 }
 
                 NotificationRenderer::showKeyboardMessagePopupWithTitle(titleBuf, content, 3000);
-
-// Maintain existing buzzer behavior on M5 if applicable
-#if defined(M5STACK_UNITC6L)
-                if (config.device.buzzer_mode != meshtastic_Config_DeviceConfig_BuzzerMode_DIRECT_MSG_ONLY ||
-                    (isAlert && moduleConfig.external_notification.alert_bell_buzzer) ||
-                    (!isBroadcast(packet->to) && isToUs(packet))) {
-                    playLongBeep();
-                }
-#endif
             } else {
                 // No keyboard active: use regular banner flow, respecting mute settings
                 if (isAlert) {
@@ -1557,20 +1548,7 @@ int Screen::handleTextMessage(const meshtastic_MeshPacket *packet)
                     } else {
                         strcpy(banner, "New Message");
                     }
-#if defined(M5STACK_UNITC6L)
-                    screen->setOn(true);
-                    screen->showSimpleBanner(banner, 1500);
-                    if (config.device.buzzer_mode != meshtastic_Config_DeviceConfig_BuzzerMode_DIRECT_MSG_ONLY ||
-                        (isAlert && moduleConfig.external_notification.alert_bell_buzzer) ||
-                        (!isBroadcast(packet->to) && isToUs(packet))) {
-                        // Beep if not in DIRECT_MSG_ONLY mode or if in DIRECT_MSG_ONLY mode and either
-                        // - packet contains an alert and alert bell buzzer is enabled
-                        // - packet is a non-broadcast that is addressed to this node
-                        playLongBeep();
-                    }
-#else
                     screen->showSimpleBanner(banner, 3000);
-#endif
                 }
             }
         }
