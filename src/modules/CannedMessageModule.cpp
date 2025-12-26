@@ -45,27 +45,38 @@
 // Helper functions for rounded rectangles
 static void fillRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r)
 {
-    display->fillRect(x + r, y, w - 2 * r, h);
-    display->fillRect(x, y + r, w, h - 2 * r);
+    // Clamp radius to half the smallest dimension
+    int maxR = std::min(w, h) / 2;
+    if (r > maxR)
+        r = maxR;
+    if (r < 1)
+        r = 1;
+
+    // Fill main rectangle body (center strip full height)
+    display->fillRect(x + r, y, w - r * 2, h);
+    // Fill left and right side strips (between corners)
+    display->fillRect(x, y + r, r, h - r * 2);
+    display->fillRect(x + w - r, y + r, r, h - r * 2);
+    // Fill corners with filled circles
     display->fillCircle(x + r, y + r, r);
-    display->fillCircle(x + w - r - 1, y + r, r);
-    display->fillCircle(x + r, y + h - r - 1, r);
-    display->fillCircle(x + w - r - 1, y + h - r - 1, r);
+    display->fillCircle(x + w - 1 - r, y + r, r);
+    display->fillCircle(x + r, y + h - 1 - r, r);
+    display->fillCircle(x + w - 1 - r, y + h - 1 - r, r);
 }
 
 static void drawRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r)
 {
     // Top and bottom lines
-    display->drawHorizontalLine(x + r, y, w - 2 * r);
-    display->drawHorizontalLine(x + r, y + h - 1, w - 2 * r);
+    display->drawHorizontalLine(x + r, y, w - r * 2);
+    display->drawHorizontalLine(x + r, y + h - 1, w - r * 2);
     // Left and right lines
-    display->drawVerticalLine(x, y + r, h - 2 * r);
-    display->drawVerticalLine(x + w - 1, y + r, h - 2 * r);
-    // Draw rounded corners using circle arcs
-    display->drawCircleQuads(x + r, y + r, r, 0b00000010);                 // Top-left
-    display->drawCircleQuads(x + w - r - 1, y + r, r, 0b00000001);         // Top-right
-    display->drawCircleQuads(x + r, y + h - r - 1, r, 0b00000100);         // Bottom-left
-    display->drawCircleQuads(x + w - r - 1, y + h - r - 1, r, 0b00001000); // Bottom-right
+    display->drawVerticalLine(x, y + r, h - r * 2);
+    display->drawVerticalLine(x + w - 1, y + r, h - r * 2);
+    // Draw rounded corners using circle arcs (1=top-right, 2=top-left, 4=bottom-left, 8=bottom-right)
+    display->drawCircleQuads(x + r, y + r, r, 2);                 // Top-left
+    display->drawCircleQuads(x + w - 1 - r, y + r, r, 1);         // Top-right
+    display->drawCircleQuads(x + r, y + h - 1 - r, r, 4);         // Bottom-left
+    display->drawCircleQuads(x + w - 1 - r, y + h - 1 - r, r, 8); // Bottom-right
 }
 
 // Tokenize a message string into emote/text segments
@@ -289,13 +300,13 @@ void CannedMessageModule::drawHeader(OLEDDisplay *display, int16_t x, int16_t y,
 {
     if (graphics::currentResolution == graphics::ScreenResolution::High) {
         if (this->dest == NODENUM_BROADCAST) {
-            display->drawStringf(x, y, buffer, "To: Broadcast@%s", channels.getName(this->channel));
+            display->drawStringf(x, y, buffer, "To: #%s", channels.getName(this->channel));
         } else {
             display->drawStringf(x, y, buffer, "To: %s", getNodeName(this->dest));
         }
     } else {
         if (this->dest == NODENUM_BROADCAST) {
-            display->drawStringf(x, y, buffer, "To: Broadc@%.5s", channels.getName(this->channel));
+            display->drawStringf(x, y, buffer, "To: #%.5s", channels.getName(this->channel));
         } else {
             display->drawStringf(x, y, buffer, "To: %s", getNodeName(this->dest));
         }
@@ -745,7 +756,7 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
             if (osk_found && screen) {
                 char headerBuffer[64];
                 if (this->dest == NODENUM_BROADCAST) {
-                    snprintf(headerBuffer, sizeof(headerBuffer), "To: Broadcast@%s", channels.getName(this->channel));
+                    snprintf(headerBuffer, sizeof(headerBuffer), "To: #%s", channels.getName(this->channel));
                 } else {
                     snprintf(headerBuffer, sizeof(headerBuffer), "To: %s", getNodeName(this->dest));
                 }
@@ -1814,7 +1825,22 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
     // Start keyboard lower to maximize text area but use available space efficiently
     int yOffset = display->height() / 2 + 4;
 
-    display->setFont(FONT_MEDIUM);
+    // Select keyboard font based on screen size
+    // Large screens (>=400px width, e.g. Indicator 480x480): FONT_MEDIUM (24pt on large screens)
+    // Medium screens (>=280px width, e.g. T-Deck 320x240): FONT_SMALL (16pt on large screens, 10pt on small)
+    // Small screens (<280px): FONT_SMALL_LOCAL (10pt always)
+    const int screenWidth = display->getWidth();
+    int keyboardFontHeight;
+    if (screenWidth >= 400) {
+        display->setFont(FONT_MEDIUM);
+        keyboardFontHeight = FONT_HEIGHT_MEDIUM;
+    } else if (screenWidth >= 280) {
+        display->setFont(FONT_SMALL);
+        keyboardFontHeight = FONT_HEIGHT_SMALL;
+    } else {
+        display->setFont(FONT_SMALL_LOCAL);
+        keyboardFontHeight = _fontHeight(FONT_SMALL_LOCAL);
+    }
 
     // Calculate keyboard height to fit within available space with minimal bottom margin
     int availableHeight = display->height() - yOffset - 2; // Leave only 2px bottom margin
@@ -1824,9 +1850,19 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
     if (cellHeight > 45)
         cellHeight = 45; // Maximum height
 
-    int yCorrection = 8;
-    const int buttonPadding = 2; // Padding around buttons
-    const int buttonRadius = 3;  // Rounded corner radius
+    const int buttonPadding = 1; // Padding around buttons
+    const int buttonRadius = 7;  // Rounded corner radius
+
+    // Scale icon sizes based on screen size
+    float iconScale;
+    if (screenWidth >= 400) {
+        iconScale = 1.2f; // Large screens
+    } else if (screenWidth >= 280) {
+        iconScale = 1.0f; // Medium screens (T-Deck)
+    } else {
+        iconScale = 0.8f; // Small screens
+    }
+    float enterIconScale = iconScale * 1.4f; // Enter icon is larger
 
     for (int8_t outerIndex = 0; outerIndex < outerSize; outerIndex++) {
         yOffset += outerIndex > 0 ? cellHeight : 0;
@@ -1885,78 +1921,90 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
 #endif
             this->keyboard[this->charSet][outerIndex][innerIndex] = updatedLetter;
 
-            // Calculate character offset for centering - get actual rendered width for BACK and SPACE
-            float characterOffset;
-            if (letter.character == "BACK" || letter.character == "SPACE" || letter.character == "ABC") {
-                int actualWidth = display->getStringWidth(letter.character.c_str());
-                characterOffset = (cellWidth - actualWidth) / 2.0f;
-            } else {
-                characterOffset = ((cellWidth / 2) - (letter.width / 2));
-            }
+            // Calculate center position for this cell
+            int centerX = xOffset + cellWidth / 2;
+            int centerY = yOffset + cellHeight / 2;
 
             if (letter.character == "⇧") {
+                // Calculate icon dimensions for centering (shift icon is ~15x12 at scale 1.0)
+                int iconWidth = (int)(15 * iconScale);
+                int iconHeight = (int)(12 * iconScale);
+                int iconX = centerX - iconWidth / 2;
+                int iconY = centerY - iconHeight / 2;
+
                 if (this->shift) {
                     fillRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
                                     cellHeight - buttonPadding * 2, buttonRadius);
-
                     display->setColor(OLEDDISPLAY_COLOR::BLACK);
-
-                    drawShiftIcon(display, xOffset + characterOffset, yOffset + yCorrection + 5, 1.2);
-
+                    drawShiftIcon(display, iconX, iconY, iconScale);
                     display->setColor(OLEDDISPLAY_COLOR::WHITE);
                 } else {
                     drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
                                     cellHeight - buttonPadding * 2, buttonRadius);
-
-                    drawShiftIcon(display, xOffset + characterOffset, yOffset + yCorrection + 5, 1.2);
+                    drawShiftIcon(display, iconX, iconY, iconScale);
                 }
             } else if (letter.character == "⌫") {
+                // Calculate icon dimensions for centering (backspace icon is ~15x12 at scale 1.0)
+                int iconWidth = (int)(15 * iconScale);
+                int iconHeight = (int)(12 * iconScale);
+                int iconX = centerX - iconWidth / 2;
+                int iconY = centerY - iconHeight / 2;
+
                 if (this->highlight == letter.character[0]) {
                     fillRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
                                     cellHeight - buttonPadding * 2, buttonRadius);
-
                     display->setColor(OLEDDISPLAY_COLOR::BLACK);
-
-                    drawBackspaceIcon(display, xOffset + characterOffset, yOffset + yCorrection + 5, 1.2);
-
+                    drawBackspaceIcon(display, iconX, iconY, iconScale);
                     display->setColor(OLEDDISPLAY_COLOR::WHITE);
-
                     setIntervalFromNow(0);
                 } else {
                     drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
                                     cellHeight - buttonPadding * 2, buttonRadius);
-
-                    drawBackspaceIcon(display, xOffset + characterOffset, yOffset + yCorrection + 5, 1.2);
+                    drawBackspaceIcon(display, iconX, iconY, iconScale);
                 }
             } else if (letter.character == "↵") {
-                drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
-                                cellHeight - buttonPadding * 2, buttonRadius);
+                // Calculate icon dimensions for centering (enter icon is ~15x12 at scale 1.0)
+                int iconWidth = (int)(15 * enterIconScale);
+                int iconHeight = (int)(12 * enterIconScale);
+                int iconX = centerX - iconWidth / 2;
+                int iconY = centerY - iconHeight / 2;
 
-                drawEnterIcon(display, xOffset + characterOffset, yOffset + yCorrection + 5, 1.7);
+                drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
+                                cellHeight - buttonPadding * 2, buttonRadius);
+                drawEnterIcon(display, iconX, iconY, enterIconScale);
             } else if (letter.character == "BACK") {
-                // Draw BACK button with border like other action keys
                 drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
                                 cellHeight - buttonPadding * 2, buttonRadius);
-                display->drawString(xOffset + characterOffset, yOffset + yCorrection, "BACK");
+                display->setTextAlignment(TEXT_ALIGN_CENTER);
+                display->drawString(centerX, centerY - keyboardFontHeight / 2, "BACK");
             } else if (letter.character == "SPACE") {
-                // Draw SPACE button with border like other action keys
                 drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
                                 cellHeight - buttonPadding * 2, buttonRadius);
-                display->drawString(xOffset + characterOffset, yOffset + yCorrection, "SPACE");
+                display->setTextAlignment(TEXT_ALIGN_CENTER);
+                display->drawString(centerX, centerY - keyboardFontHeight / 2, "SPACE");
             } else if (letter.character == "😊") {
-                // Draw emote button with smiley emoji bitmap
                 drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
                                 cellHeight - buttonPadding * 2, buttonRadius);
-                // Find and draw the Smiling_Eyes emoji bitmap
+                // Find and draw the Smiling_Eyes emoji bitmap centered
                 for (int i = 0; i < graphics::numEmotes; i++) {
                     if (strcmp(graphics::emotes[i].label, "\U0001F60A") == 0) {
-                        int emojiX = xOffset + (cellWidth - graphics::emotes[i].width) / 2;
-                        int emojiY = yOffset + (cellHeight - graphics::emotes[i].height) / 2;
+                        int emojiX = centerX - graphics::emotes[i].width / 2;
+                        int emojiY = centerY - graphics::emotes[i].height / 2;
                         display->drawXbm(emojiX, emojiY, graphics::emotes[i].width, graphics::emotes[i].height,
                                          graphics::emotes[i].bitmap);
                         break;
                     }
                 }
+            } else if (letter.character == "ABC") {
+                drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
+                                cellHeight - buttonPadding * 2, buttonRadius);
+                display->setTextAlignment(TEXT_ALIGN_CENTER);
+                display->drawString(centerX, centerY - keyboardFontHeight / 2, "ABC");
+            } else if (letter.character == "123") {
+                drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
+                                cellHeight - buttonPadding * 2, buttonRadius);
+                display->setTextAlignment(TEXT_ALIGN_CENTER);
+                display->drawString(centerX, centerY - keyboardFontHeight / 2, "123");
             } else {
                 // Determine what to display on the key based on shift and charset state
                 String displayChar;
@@ -2051,17 +2099,16 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
                                     cellHeight - buttonPadding * 2, buttonRadius);
 
                     display->setColor(OLEDDISPLAY_COLOR::BLACK);
-
-                    display->drawString(xOffset + characterOffset, yOffset + yCorrection, displayChar);
-
+                    display->setTextAlignment(TEXT_ALIGN_CENTER);
+                    display->drawString(centerX, centerY - keyboardFontHeight / 2, displayChar);
                     display->setColor(OLEDDISPLAY_COLOR::WHITE);
 
                     setIntervalFromNow(0);
                 } else {
                     drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
                                     cellHeight - buttonPadding * 2, buttonRadius);
-
-                    display->drawString(xOffset + characterOffset, yOffset + yCorrection, displayChar);
+                    display->setTextAlignment(TEXT_ALIGN_CENTER);
+                    display->drawString(centerX, centerY - keyboardFontHeight / 2, displayChar);
                 }
             }
         }
@@ -2069,6 +2116,8 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
         xOffset = 0;
     }
 
+    // Restore default text alignment
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
     this->highlight = 0x00;
 }
 
@@ -2766,8 +2815,8 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
             }
         }
 
-        // Draw emote button in bottom right corner for touch devices
-#if HAS_TOUCHSCREEN
+        // Draw emote button in bottom right corner for devices with physical keyboard + touchscreen
+#if HAS_PHYSICAL_KEYBOARD
         {
             display->setColor(WHITE);
             const int buttonSize = 24;
@@ -2789,7 +2838,7 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
                 }
             }
         }
-#endif // HAS_TOUCHSCREEN
+#endif // HAS_PHYSICAL_KEYBOARD
 #endif // !defined(USE_VIRTUAL_KEYBOARD)
         return;
     }
