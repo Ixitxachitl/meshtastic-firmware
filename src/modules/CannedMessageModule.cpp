@@ -1043,7 +1043,7 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
 #endif // USE_VIRTUAL_KEYBOARD
 
     // Touch input handling for devices with physical keyboards but touch screens (e.g., T-Deck)
-#if !defined(USE_VIRTUAL_KEYBOARD)
+#if HAS_PHYSICAL_KEYBOARD
     if (event->touchX != 0 || event->touchY != 0) {
         // Check if tap is on destination header (top ~16px of screen)
         if (event->touchY < FONT_HEIGHT_SMALL + 2) {
@@ -1058,7 +1058,6 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
             return true;
         }
 
-#if HAS_TOUCHSCREEN
         // Check if tap is on emote button (bottom right corner)
         const int buttonSize = 24;
         const int margin = 2;
@@ -1076,9 +1075,8 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
 
         // Consume all other touch events to prevent them from opening menus
         return true;
-#endif // HAS_TOUCHSCREEN
     }
-#endif // !defined(USE_VIRTUAL_KEYBOARD)
+#endif // HAS_PHYSICAL_KEYBOARD
 
     // ---- All hardware keys fall through to here (CardKB, physical, etc.) ----
 
