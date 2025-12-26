@@ -1883,54 +1883,48 @@ int CannedMessageModule::getPrevIndex()
 // Helper function to draw a rounded rectangle outline
 void drawRoundedRect(OLEDDisplay *display, int x, int y, int w, int h, int r)
 {
+    // Clamp radius to half the smallest dimension
+    int maxR = std::min(w, h) / 2;
+    if (r > maxR)
+        r = maxR;
+    if (r < 1)
+        r = 1;
+
     // Draw straight lines (shortened to avoid overlap with corners)
     display->drawHorizontalLine(x + r, y, w - 2 * r);         // Top
     display->drawHorizontalLine(x + r, y + h - 1, w - 2 * r); // Bottom
     display->drawVerticalLine(x, y + r, h - 2 * r);           // Left
     display->drawVerticalLine(x + w - 1, y + r, h - 2 * r);   // Right
 
-    // Draw rounded corners more completely
-    // Top-left corner
-    display->setPixel(x + 1, y + r - 1);
-    display->setPixel(x + r - 1, y + 1);
-
-    // Top-right corner
-    display->setPixel(x + w - 2, y + r - 1);
-    display->setPixel(x + w - r, y + 1);
-
-    // Bottom-left corner
-    display->setPixel(x + 1, y + h - r);
-    display->setPixel(x + r - 1, y + h - 2);
-
-    // Bottom-right corner
-    display->setPixel(x + w - 2, y + h - r);
-    display->setPixel(x + w - r, y + h - 2);
+    // Draw corner arcs using drawCircleQuads (bitmask: 1=top-right, 2=top-left, 4=bottom-right, 8=bottom-left)
+    display->drawCircleQuads(x + r, y + r, r, 2);                 // Top-left
+    display->drawCircleQuads(x + w - 1 - r, y + r, r, 1);         // Top-right
+    display->drawCircleQuads(x + r, y + h - 1 - r, r, 4);         // Bottom-left
+    display->drawCircleQuads(x + w - 1 - r, y + h - 1 - r, r, 8); // Bottom-right
 }
 
 // Helper function to draw a filled rounded rectangle
 void fillRoundedRect(OLEDDisplay *display, int x, int y, int w, int h, int r)
 {
-    // Fill main rectangle body
-    display->fillRect(x + r, y, w - 2 * r, h);
-    display->fillRect(x, y + r, r, h - 2 * r);
-    display->fillRect(x + w - r, y + r, r, h - 2 * r);
+    // Clamp radius to half the smallest dimension
+    int maxR = std::min(w, h) / 2;
+    if (r > maxR)
+        r = maxR;
+    if (r < 1)
+        r = 1;
 
-    // Fill corner pixels more completely
-    // Top-left corner
-    display->setPixel(x + 1, y + r - 1);
-    display->setPixel(x + r - 1, y + 1);
+    // Fill main rectangle body (center strip full height)
+    display->fillRect(x + r, y, w - r * 2, h);
 
-    // Top-right corner
-    display->setPixel(x + w - 2, y + r - 1);
-    display->setPixel(x + w - r, y + 1);
+    // Fill left and right side strips (between corners)
+    display->fillRect(x, y + r, r, h - r * 2);
+    display->fillRect(x + w - r, y + r, r, h - r * 2);
 
-    // Bottom-left corner
-    display->setPixel(x + 1, y + h - r);
-    display->setPixel(x + r - 1, y + h - 2);
-
-    // Bottom-right corner
-    display->setPixel(x + w - 2, y + h - r);
-    display->setPixel(x + w - r, y + h - 2);
+    // Fill corners with filled circles
+    display->fillCircle(x + r, y + r, r);                 // Top-left
+    display->fillCircle(x + w - 1 - r, y + r, r);         // Top-right
+    display->fillCircle(x + r, y + h - 1 - r, r);         // Bottom-left
+    display->fillCircle(x + w - 1 - r, y + h - 1 - r, r); // Bottom-right
 }
 
 #if defined(USE_VIRTUAL_KEYBOARD)
@@ -2003,8 +1997,8 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
         cellHeight = 45; // Maximum height
 
     int yCorrection = 8;
-    const int buttonPadding = 2; // Padding around buttons
-    const int buttonRadius = 3;  // Rounded corner radius
+    const int buttonPadding = 1; // Padding around buttons
+    const int buttonRadius = 7;  // Rounded corner radius
 
     for (int8_t outerIndex = 0; outerIndex < outerSize; outerIndex++) {
         yOffset += outerIndex > 0 ? cellHeight : 0;
