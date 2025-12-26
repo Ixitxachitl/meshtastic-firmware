@@ -7,10 +7,12 @@
 #include "Channels.h"
 #include "FSCommon.h"
 #include "MeshService.h"
+#include "MessageStore.h"
 #include "NodeDB.h"
 #include "SPILock.h"
 #include "buzz.h"
 #include "detect/ScanI2C.h"
+#include "gps/RTC.h"
 #include "graphics/Screen.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/draw/MessageRenderer.h"
@@ -22,6 +24,7 @@
 #include "mesh/generated/meshtastic/cannedmessages.pb.h"
 #include "modules/AdminModule.h"
 #include "modules/ExternalNotificationModule.h" // for buzzer control
+extern MessageStore messageStore;
 #if HAS_TRACKBALL
 #include "input/TrackballInterruptImpl1.h"
 #endif
@@ -144,6 +147,10 @@ static void renderEmote(OLEDDisplay *display, int &nextX, int lineY, int rowHeig
     }
 }
 
+namespace graphics
+{
+extern int bannerSignalBars;
+}
 extern ScanI2C::DeviceAddress cardkb_found;
 extern bool graphics::isMuted;
 extern bool osk_found;
@@ -186,12 +193,15 @@ void CannedMessageModule::LaunchWithDestination(NodeNum newDest, uint8_t newChan
     lastChannel = channel;
     lastDestSet = true;
 
-    // When launched with a specific destination, show presets only (no Select Destination or Free Text)
-    presetsOnly = true;
-    splitConfiguredMessages(); // Rebuild list without destination/freetext options
-
-    // Start at first actual preset message
-    currentMessageIndex = 0;
+    // Upon activation, highlight "[Select Destination]"
+    int selectDestination = 0;
+    for (int i = 0; i < messagesCount; ++i) {
+        if (strcmp(messages[i], "[Select Destination]") == 0) {
+            selectDestination = i;
+            break;
+        }
+    }
+    currentMessageIndex = selectDestination;
 
     // This triggers the canned message list
     runState = CANNED_MESSAGE_RUN_STATE_ACTIVE;
@@ -255,20 +265,8 @@ int CannedMessageModule::splitConfiguredMessages()
     const char *tempMessages[CANNED_MESSAGE_MODULE_MESSAGE_MAX_COUNT + 3] = {0};
     int tempCount = 0;
 
-    // Insert [Select Destination] at position 0 (top) - always shown
+    // Insert [Select Destination] at position 0 (top)
     tempMessages[tempCount++] = "[Select Destination]";
-
-    // Only show Free Text option when not in presets-only mode
-    if (!presetsOnly) {
-#if defined(USE_VIRTUAL_KEYBOARD)
-        // Add a "Free Text" entry at the top if using a touch screen virtual keyboard
-        tempMessages[tempCount++] = "[-- Free Text --]";
-#else
-        if (osk_found && screen) {
-            tempMessages[tempCount++] = "[-- Free Text --]";
-        }
-#endif
-    }
 
     // First message always starts at buffer start
     tempMessages[tempCount++] = this->messageBuffer;
@@ -466,13 +464,8 @@ int CannedMessageModule::handleInputEvent(const InputEvent *event)
     case CANNED_MESSAGE_RUN_STATE_FREETEXT:
         return handleFreeTextInput(event); // All allowed input for this state
 
-    // Virtual keyboard mode: Show virtual keyboard and handle input
+        // Virtual keyboard mode: Show virtual keyboard and handle input
 
-    // If sending, block all input except global/system (handled above)
-    case CANNED_MESSAGE_RUN_STATE_SENDING_ACTIVE:
-        return 1;
-
-    // If sending, block all input except global/system (handled above)
     case CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER:
         return handleEmotePickerInput(event);
 
@@ -730,8 +723,6 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
             // Set runState to inactive so we return to main UI
             runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
             currentMessageIndex = -1;
-            presetsOnly = false;
-            splitConfiguredMessages(); // Rebuild list with all options for next time
 
             // Notify UI to regenerate frame set and redraw
             UIFrameEvent e;
@@ -1401,6 +1392,17 @@ void CannedMessageModule::sendText(NodeNum dest, ChannelIndex channel, const cha
     this->lastSentNode = dest;
     this->incoming = dest;
 
+    // Check if PKI encryption is possible for this node (must happen BEFORE sending)
+    const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(dest);
+    NodeNum myNodeNum = nodeDB->getNodeNum();
+    if (node && node->num != myNodeNum && node->has_user && node->user.public_key.size == 32) {
+        p->pki_encrypted = true;
+        p->channel = 0; // force PKI
+    }
+
+    // Track this packet's request ID for matching ACKs
+    this->lastRequestId = p->id;
+
     // Copy message payload
     p->decoded.payload.size = strlen(message);
     memcpy(p->decoded.payload.bytes, message, p->decoded.payload.size);
@@ -1411,36 +1413,70 @@ void CannedMessageModule::sendText(NodeNum dest, ChannelIndex channel, const cha
         p->decoded.payload.bytes[p->decoded.payload.size] = '\0'; // Null-terminate
     }
 
-    // Mark as waiting for ACK to trigger ACK/NACK screen
+    // Mark as waiting for ACK to trigger ACK/NACK banner
     this->waitingForAck = true;
 
-    // Log outgoing message
-    LOG_INFO("Send message id=%u, dest=%x, msg=%.*s", p->id, p->to, p->decoded.payload.size, p->decoded.payload.bytes);
-
-    if (p->to != 0xffffffff) {
-        // Only add as favorite if our role is NOT CLIENT_BASE
-        if (config.device.role != 12) {
-            LOG_INFO("Proactively adding %x as favorite node", p->to);
-            nodeDB->set_favorite(true, p->to);
-        } else {
-            LOG_DEBUG("Not favoriting node %x as we are CLIENT_BASE role", p->to);
-        }
-
-        screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
-        p->pki_encrypted = true;
-        p->channel = 0;
-    }
-
-    // Send to mesh and phone (even if no phone connected, to track ACKs)
+    // Send to mesh (PKI-encrypted if conditions above matched)
     service->sendToMesh(p, RX_SRC_LOCAL, true);
 
-    // === Simulate local message to clear unread UI ===
+    // Show banner immediately
     if (screen) {
-        meshtastic_MeshPacket simulatedPacket = {};
-        simulatedPacket.from = 0; // Local device
-        screen->handleTextMessage(&simulatedPacket);
+        graphics::BannerOverlayOptions opts;
+        opts.message = "Sending...";
+        opts.durationMs = 2000;
+        screen->showOverlayBanner(opts);
     }
+
+    // Save outgoing message
+    StoredMessage sm;
+
+    // Always use our local time, consistent with other paths
+    uint32_t nowSecs = getValidTime(RTCQuality::RTCQualityDevice, true);
+    sm.timestamp = (nowSecs > 0) ? nowSecs : millis() / 1000;
+    sm.isBootRelative = (nowSecs == 0);
+
+    sm.sender = nodeDB->getNodeNum(); // us
+    sm.channelIndex = channel;
+    size_t len = strnlen(message, MAX_MESSAGE_SIZE - 1);
+    sm.textOffset = MessageStore::storeText(message, len);
+    sm.textLength = len;
+
+    // Classify broadcast vs DM
+    if (dest == NODENUM_BROADCAST) {
+        sm.dest = NODENUM_BROADCAST;
+        sm.type = MessageType::BROADCAST;
+    } else {
+        sm.dest = dest;
+        sm.type = MessageType::DM_TO_US;
+        // Only add as favorite if our role is NOT CLIENT_BASE
+        if (config.device.role != 12) {
+            LOG_INFO("Proactively adding %x as favorite node", dest);
+            nodeDB->set_favorite(true, dest);
+        } else {
+            LOG_DEBUG("Not favoriting node %x as we are CLIENT_BASE role", dest);
+        }
+    }
+    sm.ackStatus = AckStatus::NONE;
+
+    messageStore.addLiveMessage(std::move(sm));
+
+    // Auto-switch thread view on outgoing message
+    if (sm.type == MessageType::BROADCAST) {
+        graphics::MessageRenderer::setThreadMode(graphics::MessageRenderer::ThreadMode::CHANNEL, sm.channelIndex);
+    } else {
+        graphics::MessageRenderer::setThreadMode(graphics::MessageRenderer::ThreadMode::DIRECT, -1, sm.dest);
+    }
+
     playComboTune();
+
+    this->runState = CANNED_MESSAGE_RUN_STATE_SENDING_ACTIVE;
+    this->payload = wantReplies ? 1 : 0;
+    requestFocus();
+
+    // Tell Screen to switch to TextMessage frame via UIFrameEvent
+    UIFrameEvent e;
+    e.action = UIFrameEvent::Action::SWITCH_TO_TEXTMESSAGE;
+    notifyObservers(&e);
 }
 int32_t CannedMessageModule::runOnce()
 {
@@ -1462,7 +1498,6 @@ int32_t CannedMessageModule::runOnce()
             graphics::OnScreenKeyboardModule::instance().stop(false);
         }
 
-        temporaryMessage = "";
         return INT32_MAX;
     }
 
@@ -1499,29 +1534,26 @@ int32_t CannedMessageModule::runOnce()
     }
 
     UIFrameEvent e;
+    // Banner-only UI: silently transition from SENDING_ACTIVE to INACTIVE without REGENERATE_FRAMESET
+    // (REGENERATE_FRAMESET steals focus, but we're already on MessageRenderer via SWITCH_TO_TEXTMESSAGE)
     if ((this->runState == CANNED_MESSAGE_RUN_STATE_SENDING_ACTIVE && this->payload != 0 &&
          this->payload != CANNED_MESSAGE_RUN_STATE_FREETEXT) ||
         (this->runState == CANNED_MESSAGE_RUN_STATE_ACK_NACK_RECEIVED) ||
         (this->runState == CANNED_MESSAGE_RUN_STATE_MESSAGE_SELECTION)) {
         this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
-        temporaryMessage = "";
-        e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
         this->currentMessageIndex = -1;
         this->freetext = "";
         this->cursor = 0;
-        this->notifyObservers(&e);
+        this->payload = 0;
+        return INT32_MAX; // No REGENERATE_FRAMESET - MessageRenderer stays active
     }
     // Handle SENDING_ACTIVE state transition after virtual keyboard message
     else if (this->runState == CANNED_MESSAGE_RUN_STATE_SENDING_ACTIVE && this->payload == 0) {
-        // This happens after virtual keyboard message sending is complete
-        LOG_INFO("Virtual keyboard message sending completed, returning to inactive state");
         this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
-        temporaryMessage = "";
-        e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
         this->currentMessageIndex = -1;
         this->freetext = "";
         this->cursor = 0;
-        this->notifyObservers(&e);
+        return INT32_MAX;
     } else if (((this->runState == CANNED_MESSAGE_RUN_STATE_ACTIVE) || (this->runState == CANNED_MESSAGE_RUN_STATE_FREETEXT)) &&
                !Throttle::isWithinTimespanMs(this->lastTouchMillis, INACTIVATE_AFTER_MS)) {
         // Reset module on inactivity
@@ -1754,16 +1786,6 @@ int CannedMessageModule::getPrevIndex()
     } else {
         return this->currentMessageIndex - 1;
     }
-}
-void CannedMessageModule::showTemporaryMessage(const String &message)
-{
-    temporaryMessage = message;
-    UIFrameEvent e;
-    e.action = UIFrameEvent::Action::REGENERATE_FRAMESET; // We want to change the list of frames shown on-screen
-    notifyObservers(&e);
-    runState = CANNED_MESSAGE_RUN_STATE_MESSAGE_SELECTION;
-    // run this loop again in 2 seconds, next iteration will clear the display
-    setIntervalFromNow(2000);
 }
 
 #if defined(USE_VIRTUAL_KEYBOARD)
@@ -2462,14 +2484,10 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
 
-    // === Draw temporary message if available ===
-    if (temporaryMessage.length() != 0) {
-        requestFocus(); // Tell Screen::setFrames to move to our module's frame
-        LOG_DEBUG("Draw temporary message: %s", temporaryMessage.c_str());
-        display->setTextAlignment(TEXT_ALIGN_CENTER);
-        display->setFont(FONT_MEDIUM);
-        display->drawString(display->getWidth() / 2 + x, 0 + y + 12, temporaryMessage);
-        return;
+    // Never draw if state is outside our UI modes
+    if (!(runState == CANNED_MESSAGE_RUN_STATE_ACTIVE || runState == CANNED_MESSAGE_RUN_STATE_FREETEXT ||
+          runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION || runState == CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER)) {
+        return; // bail if not in a UI state that should render
     }
 
     // === Emote Picker Screen ===
@@ -2481,81 +2499,6 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
     // === Destination Selection ===
     if (this->runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION) {
         drawDestinationSelectionScreen(display, state, x, y);
-        return;
-    }
-
-    // === ACK/NACK Screen ===
-    if (this->runState == CANNED_MESSAGE_RUN_STATE_ACK_NACK_RECEIVED) {
-        requestFocus();
-        EINK_ADD_FRAMEFLAG(display, COSMETIC);
-        display->setTextAlignment(TEXT_ALIGN_CENTER);
-
-#ifdef USE_EINK
-        display->setFont(FONT_SMALL);
-        int yOffset = y + 10;
-#else
-        display->setFont(FONT_MEDIUM);
-#if defined(M5STACK_UNITC6L)
-        int yOffset = y;
-#else
-        int yOffset = y + 10;
-#endif
-#endif
-
-        // --- Delivery Status Message ---
-        if (this->ack) {
-            if (this->lastSentNode == NODENUM_BROADCAST) {
-                snprintf(buffer, sizeof(buffer), "Broadcast Sent to\n%s", channels.getName(this->channel));
-            } else if (this->lastAckHopLimit > this->lastAckHopStart) {
-                snprintf(buffer, sizeof(buffer), "Delivered (%d hops)\nto %s", this->lastAckHopLimit - this->lastAckHopStart,
-                         getNodeName(this->incoming));
-            } else {
-                snprintf(buffer, sizeof(buffer), "Delivered\nto %s", getNodeName(this->incoming));
-            }
-        } else {
-            snprintf(buffer, sizeof(buffer), "Delivery failed\nto %s", getNodeName(this->incoming));
-        }
-
-        // Draw delivery message and compute y-offset after text height
-        int lineCount = 1;
-        for (const char *ptr = buffer; *ptr; ptr++) {
-            if (*ptr == '\n')
-                lineCount++;
-        }
-
-        display->drawString(display->getWidth() / 2 + x, yOffset, buffer);
-#if defined(M5STACK_UNITC6L)
-        yOffset += lineCount * FONT_HEIGHT_MEDIUM - 5; // only 1 line gap, no extra padding
-#else
-        yOffset += lineCount * FONT_HEIGHT_MEDIUM; // only 1 line gap, no extra padding
-#endif
-#ifndef USE_EINK
-        // --- SNR + RSSI Compact Line ---
-        if (this->ack) {
-            display->setFont(FONT_SMALL);
-#if defined(M5STACK_UNITC6L)
-            snprintf(buffer, sizeof(buffer), "SNR: %.1f dB \nRSSI: %d", this->lastRxSnr, this->lastRxRssi);
-#else
-            snprintf(buffer, sizeof(buffer), "SNR: %.1f dB   RSSI: %d", this->lastRxSnr, this->lastRxRssi);
-#endif
-            display->drawString(display->getWidth() / 2 + x, yOffset, buffer);
-        }
-#endif
-
-        return;
-    }
-
-    // === Sending Screen ===
-    if (this->runState == CANNED_MESSAGE_RUN_STATE_SENDING_ACTIVE) {
-        EINK_ADD_FRAMEFLAG(display, COSMETIC);
-        requestFocus();
-#ifdef USE_EINK
-        display->setFont(FONT_SMALL);
-#else
-        display->setFont(FONT_MEDIUM);
-#endif
-        display->setTextAlignment(TEXT_ALIGN_CENTER);
-        display->drawString(display->getWidth() / 2 + x, 0 + y + 12, "Sending...");
         return;
     }
 
@@ -3000,24 +2943,54 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
     }
 }
 
+static float getSnrLimit(meshtastic_Config_LoRaConfig_ModemPreset preset)
+{
+    switch (preset) {
+    case meshtastic_Config_LoRaConfig_ModemPreset_LONG_SLOW:
+    case meshtastic_Config_LoRaConfig_ModemPreset_LONG_MODERATE:
+    case meshtastic_Config_LoRaConfig_ModemPreset_LONG_FAST:
+        return -6.0f;
+    case meshtastic_Config_LoRaConfig_ModemPreset_MEDIUM_SLOW:
+    case meshtastic_Config_LoRaConfig_ModemPreset_MEDIUM_FAST:
+        return -5.5f;
+    case meshtastic_Config_LoRaConfig_ModemPreset_SHORT_SLOW:
+    case meshtastic_Config_LoRaConfig_ModemPreset_SHORT_FAST:
+    case meshtastic_Config_LoRaConfig_ModemPreset_SHORT_TURBO:
+        return -4.5f;
+    default:
+        return -6.0f;
+    }
+}
+
+// Return Good/Fair/Bad label and set 1–5 bars based on SNR and RSSI
+static const char *getSignalGrade(float snr, int32_t rssi, float snrLimit, int &bars)
+{
+    // 5-bar logic: strength inside Good/Fair/Bad category
+    if (snr > snrLimit && rssi > -10) {
+        bars = 5; // very strong good
+        return "Good";
+    } else if (snr > snrLimit && rssi > -20) {
+        bars = 4; // normal good
+        return "Good";
+    } else if (snr > 0 && rssi > -50) {
+        bars = 3; // weaker good (on edge of fair)
+        return "Good";
+    } else if (snr > -10 && rssi > -100) {
+        bars = 2; // fair
+        return "Fair";
+    } else {
+        bars = 1; // bad
+        return "Bad";
+    }
+}
+
 ProcessMessage CannedMessageModule::handleReceived(const meshtastic_MeshPacket &mp)
 {
     if (mp.decoded.portnum == meshtastic_PortNum_ROUTING_APP && waitingForAck) {
         if (mp.decoded.request_id != 0) {
-            // Trigger screen refresh for ACK/NACK feedback
-            UIFrameEvent e;
-            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
-            requestFocus();
-            this->runState = CANNED_MESSAGE_RUN_STATE_ACK_NACK_RECEIVED;
-
             // Decode the routing response
             meshtastic_Routing decoded = meshtastic_Routing_init_default;
             pb_decode_from_bytes(mp.decoded.payload.bytes, mp.decoded.payload.size, meshtastic_Routing_fields, &decoded);
-
-            // Track hop metadata
-            this->lastAckWasRelayed = (mp.hop_limit != mp.hop_start);
-            this->lastAckHopStart = mp.hop_start;
-            this->lastAckHopLimit = mp.hop_limit;
 
             // Determine ACK status
             bool isAck = (decoded.error_reason == meshtastic_Routing_Error_NONE);
@@ -3035,8 +3008,63 @@ ProcessMessage CannedMessageModule::handleReceived(const meshtastic_MeshPacket &
             this->ack = isAck && (wasBroadcast || isFromDest);
 
             waitingForAck = false;
-            this->notifyObservers(&e);
-            setIntervalFromNow(3000); // Time to show ACK/NACK screen
+
+            // Show overlay banner
+            if (screen) {
+                auto *display = screen->getDisplayDevice();
+                graphics::BannerOverlayOptions opts;
+                static char buf[128];
+
+                const char *channelName = channels.getName(this->channel);
+                const char *src = getNodeName(this->incoming);
+                char nodeName[48];
+                strncpy(nodeName, src, sizeof(nodeName) - 1);
+                nodeName[sizeof(nodeName) - 1] = '\0';
+
+                int availWidth =
+                    display->getWidth() - ((graphics::currentResolution == graphics::ScreenResolution::High) ? 60 : 30);
+                if (availWidth < 0)
+                    availWidth = 0;
+
+                size_t origLen = strlen(nodeName);
+                while (nodeName[0] && display->getStringWidth(nodeName) > availWidth) {
+                    nodeName[strlen(nodeName) - 1] = '\0';
+                }
+                if (strlen(nodeName) < origLen) {
+                    strcat(nodeName, "...");
+                }
+
+                // Calculate signal quality and bars based on preset, SNR, and RSSI
+                float snrLimit = getSnrLimit(config.lora.modem_preset);
+                int bars = 0;
+                const char *qualityLabel = getSignalGrade(this->lastRxSnr, this->lastRxRssi, snrLimit, bars);
+
+                if (this->ack) {
+                    if (this->lastSentNode == NODENUM_BROADCAST) {
+                        snprintf(buf, sizeof(buf), "Message sent to\n#%s\n\nSignal: %s",
+                                 (channelName && channelName[0]) ? channelName : "unknown", qualityLabel);
+                    } else {
+                        snprintf(buf, sizeof(buf), "DM sent to\n@%s\n\nSignal: %s",
+                                 (nodeName && nodeName[0]) ? nodeName : "unknown", qualityLabel);
+                    }
+                } else if (isAck && !isFromDest) {
+                    // Relay ACK banner
+                    snprintf(buf, sizeof(buf), "DM Relayed\n(Status Unknown)\n%s\n\nSignal: %s",
+                             (nodeName && nodeName[0]) ? nodeName : "unknown", qualityLabel);
+                } else {
+                    if (this->lastSentNode == NODENUM_BROADCAST) {
+                        snprintf(buf, sizeof(buf), "Message failed to\n#%s",
+                                 (channelName && channelName[0]) ? channelName : "unknown");
+                    } else {
+                        snprintf(buf, sizeof(buf), "DM failed to\n@%s", (nodeName && nodeName[0]) ? nodeName : "unknown");
+                    }
+                }
+
+                opts.message = buf;
+                opts.durationMs = 3000;
+                graphics::bannerSignalBars = bars; // tell banner renderer how many bars to draw
+                screen->showOverlayBanner(opts);   // this triggers drawNotificationBox()
+            }
         }
     }
 
