@@ -615,18 +615,6 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
     }
     int16_t boxTop = (display->height() / 2) - (boxHeight / 2);
     boxHeight += (currentResolution == ScreenResolution::High) ? 2 : 1;
-#if defined(M5STACK_UNITC6L)
-    if (visibleTotalLines == 1) {
-        boxTop += 25;
-    }
-    if (alertBannerOptions < 3) {
-        int missingLines = 3 - alertBannerOptions;
-        int moveUp = missingLines * (effectiveLineHeight / 2);
-        boxTop -= moveUp;
-        if (boxTop < 0)
-            boxTop = 0;
-    }
-#endif
 
     // Draw Box
     display->setColor(BLACK);
