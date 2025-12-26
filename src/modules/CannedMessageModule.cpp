@@ -2825,7 +2825,7 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
             const int buttonY = y + displayHeight - buttonSize - margin;
 
             // Draw rounded button border (outline only)
-            drawRoundedRect(display, buttonX, buttonY, buttonSize, buttonSize, 3);
+            drawRoundedRect(display, buttonX, buttonY, buttonSize, buttonSize, 7);
 
             // Draw smiley emoji in center
             for (int i = 0; i < graphics::numEmotes; i++) {
