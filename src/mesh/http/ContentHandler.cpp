@@ -125,7 +125,7 @@ void registerHandlers(HTTPServer *insecureServer, HTTPSServer *secureServer)
         //    secureServer->registerNode(nodeAdminFs);
         //    secureServer->registerNode(nodeAdminSettings);
         //    secureServer->registerNode(nodeAdminSettingsApply);
-        secureServer->registerNode(nodeRoot); // This has to be last
+        secureServer->setDefaultNode(nodeRoot); // Catch-all for static files
     }
 #endif
 
@@ -149,7 +149,7 @@ void registerHandlers(HTTPServer *insecureServer, HTTPSServer *secureServer)
     //    insecureServer->registerNode(nodeAdminFs);
     //    insecureServer->registerNode(nodeAdminSettings);
     //    insecureServer->registerNode(nodeAdminSettingsApply);
-    insecureServer->registerNode(nodeRoot); // This has to be last
+    insecureServer->setDefaultNode(nodeRoot); // Catch-all for static files
 }
 
 void handleAPIv1FromRadio(HTTPRequest *req, HTTPResponse *res)
@@ -402,91 +402,85 @@ void handleStatic(HTTPRequest *req, HTTPResponse *res)
     if (webServerThread)
         webServerThread->markActivity();
 
-    // Get access to the parameters
-    ResourceParameters *params = req->getParams();
+    // Get the full request path to support nested directories (e.g., "/i18n/locales/en/common.json")
+    std::string requestPath = req->getRequestString();
 
-    std::string parameter1;
-    // Print the first parameter value
-    if (params->getPathParameter(0, parameter1)) {
-
-        std::string filename = "/static/" + parameter1;
-        std::string filenameGzip = "/static/" + parameter1 + ".gz";
-
-        // Try to open the file
-        File file;
-
-        bool has_set_content_type = false;
-
-        if (filename == "/static/") {
-            filename = "/static/index.html";
-            filenameGzip = "/static/index.html.gz";
-        }
-
-        concurrency::LockGuard g(spiLock);
-
-        if (FSCom.exists(filename.c_str())) {
-            file = FSCom.open(filename.c_str());
-            if (!file.available()) {
-                LOG_WARN("File not available - %s", filename.c_str());
-            }
-        } else if (FSCom.exists(filenameGzip.c_str())) {
-            file = FSCom.open(filenameGzip.c_str());
-            res->setHeader("Content-Encoding", "gzip");
-            if (!file.available()) {
-                LOG_WARN("File not available - %s", filenameGzip.c_str());
-            }
-        } else {
-            has_set_content_type = true;
-            filenameGzip = "/static/index.html.gz";
-            file = FSCom.open(filenameGzip.c_str());
-            res->setHeader("Content-Type", "text/html");
-            if (!file.available()) {
-
-                LOG_WARN("File not available - %s", filenameGzip.c_str());
-                res->println("Web server is running.<br><br>The content you are looking for can't be found. Please see: <a "
-                             "href=https://meshtastic.org/docs/software/web-client/>FAQ</a>.<br><br><a "
-                             "href=/admin>admin</a>");
-
-                return;
-            } else {
-                res->setHeader("Content-Encoding", "gzip");
-            }
-        }
-
-        res->setHeader("Content-Length", httpsserver::intToString(file.size()));
-
-        // Content-Type is guessed using the definition of the contentTypes-table defined above
-        int cTypeIdx = 0;
-        do {
-            if (filename.rfind(contentTypes[cTypeIdx][0]) != std::string::npos) {
-                res->setHeader("Content-Type", contentTypes[cTypeIdx][1]);
-                has_set_content_type = true;
-                break;
-            }
-            cTypeIdx += 1;
-        } while (strlen(contentTypes[cTypeIdx][0]) > 0);
-
-        if (!has_set_content_type) {
-            // Set a default content type
-            res->setHeader("Content-Type", "application/octet-stream");
-        }
-
-        // Read the file and write it to the HTTP response body
-        size_t length = 0;
-        do {
-            char buffer[256];
-            length = file.read((uint8_t *)buffer, 256);
-            std::string bufferString(buffer, length);
-            res->write((uint8_t *)bufferString.c_str(), bufferString.size());
-        } while (length > 0);
-
-        file.close();
-
-        return;
-    } else {
-        LOG_ERROR("This should not have happened");
-        res->println("ERROR: This should not have happened");
+    // Remove query string if present
+    size_t queryPos = requestPath.find('?');
+    if (queryPos != std::string::npos) {
+        requestPath = requestPath.substr(0, queryPos);
     }
+
+    // Handle root path
+    if (requestPath.empty() || requestPath == "/") {
+        requestPath = "/index.html";
+    }
+
+    std::string filename = "/static" + requestPath;
+    std::string filenameGzip = "/static" + requestPath + ".gz";
+
+    // Try to open the file
+    File file;
+    bool has_set_content_type = false;
+
+    concurrency::LockGuard g(spiLock);
+
+    if (FSCom.exists(filename.c_str())) {
+        file = FSCom.open(filename.c_str());
+        if (!file.available()) {
+            LOG_WARN("File not available - %s", filename.c_str());
+        }
+    } else if (FSCom.exists(filenameGzip.c_str())) {
+        file = FSCom.open(filenameGzip.c_str());
+        res->setHeader("Content-Encoding", "gzip");
+        if (!file.available()) {
+            LOG_WARN("File not available - %s", filenameGzip.c_str());
+        }
+    } else {
+        // File not found - serve index.html as fallback for SPA routing
+        has_set_content_type = true;
+        filenameGzip = "/static/index.html.gz";
+        file = FSCom.open(filenameGzip.c_str());
+        res->setHeader("Content-Type", "text/html");
+        if (!file.available()) {
+            LOG_WARN("File not available - %s", filenameGzip.c_str());
+            res->println("Web server is running.<br><br>The content you are looking for can't be found. Please see: <a "
+                         "href=https://meshtastic.org/docs/software/web-client/>FAQ</a>.<br><br><a "
+                         "href=/admin>admin</a>");
+            return;
+        } else {
+            res->setHeader("Content-Encoding", "gzip");
+        }
+    }
+
+    res->setHeader("Content-Length", httpsserver::intToString(file.size()));
+
+    // Content-Type is guessed using the definition of the contentTypes-table defined above
+    int cTypeIdx = 0;
+    do {
+        if (filename.rfind(contentTypes[cTypeIdx][0]) != std::string::npos) {
+            res->setHeader("Content-Type", contentTypes[cTypeIdx][1]);
+            has_set_content_type = true;
+            break;
+        }
+        cTypeIdx += 1;
+    } while (strlen(contentTypes[cTypeIdx][0]) > 0);
+
+    if (!has_set_content_type) {
+        // Set a default content type
+        res->setHeader("Content-Type", "application/octet-stream");
+    }
+
+    // Read the file and write it to the HTTP response body
+    size_t length = 0;
+    do {
+        char buffer[256];
+        length = file.read((uint8_t *)buffer, 256);
+        std::string bufferString(buffer, length);
+        res->write((uint8_t *)bufferString.c_str(), bufferString.size());
+    } while (length > 0);
+
+    file.close();
 }
 
 void handleFormUpload(HTTPRequest *req, HTTPResponse *res)
