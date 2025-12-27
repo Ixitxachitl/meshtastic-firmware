@@ -1103,7 +1103,7 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
         currentMessageIndex = -1;
         runState = CANNED_MESSAGE_RUN_STATE_ACTION_SELECT;
         lastTouchMillis = millis();
-        runOnce();
+        setIntervalFromNow(0); // Schedule runOnce via thread (like presets do)
         return true;
     }
 
@@ -1471,7 +1471,8 @@ void CannedMessageModule::sendText(NodeNum dest, ChannelIndex channel, const cha
 
     this->runState = CANNED_MESSAGE_RUN_STATE_SENDING_ACTIVE;
     this->payload = wantReplies ? 1 : 0;
-    requestFocus();
+    // Don't requestFocus() here - we're switching to MessageRenderer frame,
+    // and holding focus would block navigation after ACK
 
     // Tell Screen to switch to TextMessage frame via UIFrameEvent
     UIFrameEvent e;
@@ -1515,27 +1516,25 @@ int32_t CannedMessageModule::runOnce()
                 graphics::NotificationRenderer::resetBanner();
             }
 
-            // Clear payload to indicate virtual keyboard processing is complete
-            // But keep SENDING_ACTIVE state to show "Sending..." screen for 2 seconds
-            this->payload = 0;
+            // sendText() set payload=1 and SENDING_ACTIVE, clear our fields
+            this->currentMessageIndex = -1;
+            this->freetext = "";
+            this->cursor = 0;
+            // Fall through to transition block below (payload is now 1, not FREETEXT)
         } else {
             // Empty message, just go inactive
             LOG_INFO("Empty freetext detected in delayed processing, returning to inactive state");
             this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
+            this->currentMessageIndex = -1;
+            this->freetext = "";
+            this->cursor = 0;
+            return INT32_MAX;
         }
-
-        UIFrameEvent e;
-        e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
-        this->currentMessageIndex = -1;
-        this->freetext = "";
-        this->cursor = 0;
-        this->notifyObservers(&e);
-        return 2000;
     }
 
     UIFrameEvent e;
-    // Banner-only UI: silently transition from SENDING_ACTIVE to INACTIVE without REGENERATE_FRAMESET
-    // (REGENERATE_FRAMESET steals focus, but we're already on MessageRenderer via SWITCH_TO_TEXTMESSAGE)
+    // Transition from SENDING_ACTIVE to INACTIVE immediately (like develop)
+    // waitingForAck only controls whether handleReceived() processes routing packets for ACK banner
     if ((this->runState == CANNED_MESSAGE_RUN_STATE_SENDING_ACTIVE && this->payload != 0 &&
          this->payload != CANNED_MESSAGE_RUN_STATE_FREETEXT) ||
         (this->runState == CANNED_MESSAGE_RUN_STATE_ACK_NACK_RECEIVED) ||
@@ -1554,23 +1553,6 @@ int32_t CannedMessageModule::runOnce()
         this->freetext = "";
         this->cursor = 0;
         return INT32_MAX;
-    } else if (((this->runState == CANNED_MESSAGE_RUN_STATE_ACTIVE) || (this->runState == CANNED_MESSAGE_RUN_STATE_FREETEXT)) &&
-               !Throttle::isWithinTimespanMs(this->lastTouchMillis, INACTIVATE_AFTER_MS)) {
-        // Reset module on inactivity
-        e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
-        this->currentMessageIndex = -1;
-        this->freetext = "";
-        this->cursor = 0;
-        this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
-
-        // Clean up virtual keyboard if it exists during timeout
-        if (graphics::NotificationRenderer::virtualKeyboard) {
-            LOG_INFO("Cleaning up virtual keyboard due to module timeout");
-            graphics::OnScreenKeyboardModule::instance().stop(false);
-            graphics::NotificationRenderer::resetBanner();
-        }
-
-        this->notifyObservers(&e);
     } else if (this->runState == CANNED_MESSAGE_RUN_STATE_ACTION_SELECT) {
         if (this->payload == 0) {
             // [Exit] button pressed - return to inactive state
@@ -1579,7 +1561,9 @@ int32_t CannedMessageModule::runOnce()
         } else if (this->payload == CANNED_MESSAGE_RUN_STATE_FREETEXT) {
             if (this->freetext.length() > 0) {
                 sendText(this->dest, this->channel, this->freetext.c_str(), true);
-                this->runState = CANNED_MESSAGE_RUN_STATE_SENDING_ACTIVE;
+                // sendText sets runState=SENDING_ACTIVE, payload=1
+                // Go directly to INACTIVE since we're switching to MessageRenderer
+                this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
             } else {
                 this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
             }
@@ -1594,7 +1578,9 @@ int32_t CannedMessageModule::runOnce()
                 } else {
                     sendText(this->dest, this->channel, this->messages[this->currentMessageIndex], true);
                 }
-                this->runState = CANNED_MESSAGE_RUN_STATE_SENDING_ACTIVE;
+                // sendText sets runState=SENDING_ACTIVE, payload=1
+                // Go directly to INACTIVE since we're switching to MessageRenderer
+                this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
             } else {
                 this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
             }
@@ -1602,8 +1588,8 @@ int32_t CannedMessageModule::runOnce()
         this->currentMessageIndex = -1;
         this->freetext = "";
         this->cursor = 0;
-        this->notifyObservers(&e);
-        return 2000;
+        this->payload = 0;
+        return INT32_MAX;
     }
     // Highlight [Select Destination] initially when entering the message list
     else if ((this->runState != CANNED_MESSAGE_RUN_STATE_FREETEXT) && (this->currentMessageIndex == -1)) {
