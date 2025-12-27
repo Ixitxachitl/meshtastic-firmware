@@ -1103,7 +1103,7 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
         currentMessageIndex = -1;
         runState = CANNED_MESSAGE_RUN_STATE_ACTION_SELECT;
         lastTouchMillis = millis();
-        setIntervalFromNow(0); // Schedule runOnce via thread (like presets do)
+        runOnce(); // Process immediately (like touch enter does)
         return true;
     }
 
