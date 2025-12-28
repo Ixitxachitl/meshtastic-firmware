@@ -136,19 +136,29 @@ static void taskCreateCert(void *parameter)
 
 void createSSLCert()
 {
+#if defined(MESHTASTIC_EXCLUDE_WEBSERVER_TLS)
+    // Skip SSL certificate generation on platforms without TLS support (e.g., ESP32-C6)
+    LOG_INFO("TLS excluded - skipping SSL certificate generation");
+    isCertReady = true;
+#else
     if (isWifiAvailable() && !isCertReady) {
         bool runLoop = false;
 
         // Create a new process just to handle creating the cert.
         //   This is a workaround for Bug: https://github.com/fhessel/esp32_https_server/issues/48
         //  jm@casler.org (Oct 2020)
-        xTaskCreate(taskCreateCert, /* Task function. */
-                    "createCert",   /* String with name of task. */
-                    // 16384,          /* Stack size in bytes. */
-                    8192,  /* Stack size in bytes. */
-                    NULL,  /* Parameter passed as input of the task */
-                    16,    /* Priority of the task. */
-                    NULL); /* Task handle. */
+        // Use larger stack for devices with PSRAM, smaller for memory-constrained devices
+#if BOARD_HAS_PSRAM
+        const uint32_t certTaskStack = 16384; // 16KB for PSRAM devices (ESP32-S3-BOX-3, etc.)
+#else
+        const uint32_t certTaskStack = 8192; // 8KB for devices without PSRAM (Cardputer, etc.)
+#endif
+        xTaskCreate(taskCreateCert,           /* Task function. */
+                    "createCert",             /* String with name of task. */
+                    certTaskStack,            /* Stack size in bytes - conditional based on PSRAM availability */
+                    NULL,                     /* Parameter passed as input of the task */
+                    16,                       /* Priority of the task. */
+                    NULL);                    /* Task handle. */
 
         LOG_DEBUG("Waiting for SSL Cert to be generated");
         while (!isCertReady) {
@@ -172,6 +182,7 @@ void createSSLCert()
         }
         LOG_INFO("SSL Cert Ready!");
     }
+#endif
 }
 
 WebServerThread *webServerThread;
@@ -228,23 +239,55 @@ void initWebServer()
 {
     LOG_DEBUG("Init Web Server");
 
-    // We can now use the new certificate to setup our server as usual.
+#if defined(MESHTASTIC_EXCLUDE_WEBSERVER_TLS)
+    // HTTP-only mode for platforms without TLS support (e.g., ESP32-C6)
+    LOG_INFO("Starting HTTP-only web server (TLS excluded)");
+    secureServer = nullptr;
+    insecureServer = new HTTPServer();
+
+    registerHandlers(insecureServer, secureServer);
+
+    LOG_INFO("Start Web Server (HTTP)");
+    insecureServer->start();
+    if (insecureServer->isRunning()) {
+        LOG_INFO("HTTP Server started successfully on port 80");
+        isWebServerReady = true;
+        LOG_INFO("Web Server Ready! HTTP-only mode (no HTTPS support on this platform)");
+    } else {
+        LOG_ERROR("Web Server Failed! HTTP server did not start");
+    }
+#else
+    // Full HTTPS + HTTP mode for platforms with TLS support
     secureServer = new HTTPSServer(cert);
     insecureServer = new HTTPServer();
 
     registerHandlers(insecureServer, secureServer);
 
+    bool httpsOk = false;
     if (secureServer) {
-        LOG_INFO("Start Secure Web Server");
+        LOG_INFO("Start Secure Web Server (HTTPS)");
         secureServer->start();
+        if (secureServer->isRunning()) {
+            LOG_INFO("HTTPS Server started successfully on port 443");
+            httpsOk = true;
+        } else {
+            LOG_WARN("HTTPS Server failed to start - SSL/TLS may not be available");
+        }
     }
-    LOG_INFO("Start Insecure Web Server");
+
+    LOG_INFO("Start Insecure Web Server (HTTP)");
     insecureServer->start();
     if (insecureServer->isRunning()) {
-        LOG_INFO("Web Servers Ready! :-) ");
+        LOG_INFO("HTTP Server started successfully on port 80");
         isWebServerReady = true;
+        if (httpsOk) {
+            LOG_INFO("Web Servers Ready! Both HTTP and HTTPS available");
+        } else {
+            LOG_WARN("Web Servers Ready! HTTP only (HTTPS failed)");
+        }
     } else {
-        LOG_ERROR("Web Servers Failed! ;-( ");
+        LOG_ERROR("Web Servers Failed! HTTP server did not start");
     }
+#endif
 }
 #endif

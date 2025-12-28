@@ -225,6 +225,7 @@ class Screen : public concurrency::OSThread
     inline int getHeight() const { return displayHeight; }
     inline int getWidth() const { return displayWidth; }
     size_t frameCount = 0; // Total number of active frames
+
     ~Screen();
 
     // Which frame we want to be displayed, after we regen the frameset by calling setFrames
@@ -349,6 +350,8 @@ class Screen : public concurrency::OSThread
 
     /// Stops showing the boot screen.
     void stopBootScreen() { enqueueCmd(ScreenCmd{.cmd = Cmd::STOP_BOOT_SCREEN}); }
+
+    void switchToMessagesPage();
 
     void runNow()
     {
@@ -652,6 +655,7 @@ class Screen : public concurrency::OSThread
             uint8_t deviceFocused = 255;
             uint8_t system = 255;
             uint8_t gps = 255;
+            uint8_t compass = 255;
             uint8_t home = 255;
             uint8_t textMessage = 255;
             uint8_t nodelist_nodes = 255;
@@ -665,6 +669,7 @@ class Screen : public concurrency::OSThread
             uint8_t firstFavorite = 255;
             uint8_t lastFavorite = 255;
             uint8_t lora = 255;
+            uint8_t environment = 255;
         } positions;
 
         uint8_t frameCount = 0;

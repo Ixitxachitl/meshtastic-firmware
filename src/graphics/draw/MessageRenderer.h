@@ -36,7 +36,11 @@ const std::vector<uint32_t> &getSeenPeers();
 void clearThreadRegistries();
 
 // Text and emote rendering
-void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string &line, const Emote *emotes, int emoteCount);
+void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string &line, const Emote *emotes, int emoteCount,
+                          bool isMessageHeader = false);
+
+// Calculate the width of a string with emotes (for alignment calculations)
+int getStringWidthWithEmotes(OLEDDisplay *display, const std::string &line, const Emote *emotes, int emoteCount);
 
 /// Draws the text message frame for displaying received messages
 void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
@@ -51,8 +55,16 @@ std::vector<int> calculateLineHeights(const std::vector<std::string> &lines, con
 // Reset scroll state when new messages arrive
 void resetScrollState();
 
+// Manual scroll controls (used by keyboard to override auto-scroll)
+void scrollUp();
+void scrollDown();
+
 // Manual scroll control for encoder-style inputs
 void nudgeScroll(int8_t direction);
+
+// Message ordering preference (false = old on top/new on bottom, true = new on top/old on bottom)
+bool getMessageOrderNewestFirst();
+void setMessageOrderNewestFirst(bool newestFirst);
 
 // Helper to auto-select the correct thread mode from a message
 void setThreadFor(const StoredMessage &sm, const meshtastic_MeshPacket &packet);
@@ -62,9 +74,6 @@ void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const mesht
 
 // Clear Message Line Cache from Message Renderer
 void clearMessageCache();
-
-void scrollUp();
-void scrollDown();
 
 } // namespace MessageRenderer
 } // namespace graphics

@@ -4,6 +4,7 @@
 #include "graphics/Screen.h"
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
+#include "input/InputBroker.h"
 #include "main.h"
 #include <Arduino.h>
 #include <vector>
@@ -23,11 +24,12 @@ VirtualKeyboard::~VirtualKeyboard() {}
 
 void VirtualKeyboard::initializeKeyboard()
 {
-    // New 4 row, 11 column keyboard layout:
+    // New 5 row, 11 column keyboard layout with emote button:
     static const char LAYOUT[KEYBOARD_ROWS][KEYBOARD_COLS] = {{'1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '\b'},
                                                               {'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '\n'},
                                                               {'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', ' '},
-                                                              {'z', 'x', 'c', 'v', 'b', 'n', 'm', '.', ',', '?', '\x1b'}};
+                                                              {'z', 'x', 'c', 'v', 'b', 'n', 'm', '.', ',', '?', '\x1b'},
+                                                              {'\x10', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}}; // \x10 = emote button
 
     // Derive layout dimensions and assert they match the configured keyboard grid
     constexpr int LAYOUT_ROWS = (int)(sizeof(LAYOUT) / sizeof(LAYOUT[0]));
@@ -53,14 +55,17 @@ void VirtualKeyboard::initializeKeyboard()
                 type = VK_BACKSPACE;
             } else if (ch == '\n') {
                 type = VK_ENTER;
-            } else if (ch == '\x1b') { // ESC
+            } else if (ch == '\x1b') { // ESC (now displayed as BACK)
                 type = VK_ESC;
             } else if (ch == ' ') {
                 type = VK_SPACE;
+            } else if (ch == '\x10') { // Emote picker
+                type = VK_EMOTE;
             }
 
             // Make action keys wider to fit text while keeping the last column aligned
-            uint8_t width = (type == VK_BACKSPACE || type == VK_ENTER || type == VK_SPACE) ? (KEY_WIDTH * 3) : KEY_WIDTH;
+            uint8_t width =
+                (type == VK_BACKSPACE || type == VK_ENTER || type == VK_SPACE || type == VK_EMOTE) ? (KEY_WIDTH * 3) : KEY_WIDTH;
             keyboard[row][col] = {ch, type, (uint8_t)(col * KEY_WIDTH), (uint8_t)(row * KEY_HEIGHT), width, KEY_HEIGHT};
         }
     }
@@ -416,12 +421,13 @@ void VirtualKeyboard::drawKey(OLEDDisplay *display, const VirtualKey &key, bool 
     const int fontH = FONT_HEIGHT_SMALL;
     // Build label and metrics first
     std::string keyText;
-    if (key.type == VK_BACKSPACE || key.type == VK_ENTER || key.type == VK_SPACE || key.type == VK_ESC) {
+    if (key.type == VK_BACKSPACE || key.type == VK_ENTER || key.type == VK_SPACE || key.type == VK_ESC || key.type == VK_EMOTE) {
         // Keep literal text labels for the action keys on the rightmost column
         keyText = (key.type == VK_BACKSPACE) ? "BACK"
                   : (key.type == VK_ENTER)   ? "ENTER"
                   : (key.type == VK_SPACE)   ? "SPACE"
                   : (key.type == VK_ESC)     ? "ESC"
+                  : (key.type == VK_EMOTE)   ? "E"
                                              : "";
     } else {
         char c = getCharForKey(key, false);
@@ -452,7 +458,8 @@ void VirtualKeyboard::drawKey(OLEDDisplay *display, const VirtualKey &key, bool 
     int contentH = height;
     if (selected) {
         display->setColor(WHITE);
-        bool isAction = (key.type == VK_BACKSPACE || key.type == VK_ENTER || key.type == VK_SPACE || key.type == VK_ESC);
+        bool isAction = (key.type == VK_BACKSPACE || key.type == VK_ENTER || key.type == VK_SPACE || key.type == VK_ESC ||
+                         key.type == VK_EMOTE);
 
         if (display->getHeight() <= 64 && !isAction) {
             display->fillRect(x, y, width, height);
@@ -483,6 +490,24 @@ void VirtualKeyboard::drawKey(OLEDDisplay *display, const VirtualKey &key, bool 
         display->setColor(BLACK);
     } else {
         display->setColor(WHITE);
+        // Draw subtle borders around keys for better visual separation on touchscreens
+        // Only draw on larger displays to avoid cluttering small screens
+        if (display->getHeight() > 64 && display->getWidth() > 128) {
+            bool isAction = (key.type == VK_BACKSPACE || key.type == VK_ENTER || key.type == VK_SPACE || key.type == VK_ESC ||
+                             key.type == VK_EMOTE);
+            // Draw borders around action keys to make them stand out
+            if (isAction) {
+                const int borderPadX = 2;
+                const int borderPadY = 1;
+                int borderX = x + borderPadX;
+                int borderY = y + borderPadY;
+                int borderW = width - borderPadX * 2;
+                int borderH = height - borderPadY * 2;
+                if (borderW > 0 && borderH > 0) {
+                    display->drawRect(borderX, borderY, borderW, borderH);
+                }
+            }
+        }
     }
 
     int centeredTextY;
@@ -621,6 +646,17 @@ void VirtualKeyboard::handlePress()
             callback("");
         }
         return;
+    case VK_EMOTE:
+        // Trigger emote picker - inject input event to open CannedMessageModule emote picker
+        if (screen) {
+            InputEvent emoteEvent = {.source = "VirtualKeyboard",
+                                     .inputEvent = INPUT_BROKER_ANYKEY,
+                                     .kbchar = INPUT_BROKER_MSG_EMOTE_LIST,
+                                     .touchX = 0,
+                                     .touchY = 0};
+            inputBroker->injectInputEvent(&emoteEvent);
+        }
+        break;
     default:
         break;
     }
@@ -661,6 +697,17 @@ void VirtualKeyboard::handleLongPress()
     case VK_ESC:
         if (onTextEntered) {
             onTextEntered("");
+        }
+        break;
+    case VK_EMOTE:
+        // Long press on emote button also opens emote picker
+        if (screen) {
+            InputEvent emoteEvent = {.source = "VirtualKeyboard",
+                                     .inputEvent = INPUT_BROKER_ANYKEY,
+                                     .kbchar = INPUT_BROKER_MSG_EMOTE_LIST,
+                                     .touchX = 0,
+                                     .touchY = 0};
+            inputBroker->injectInputEvent(&emoteEvent);
         }
         break;
     default:

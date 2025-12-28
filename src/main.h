@@ -42,7 +42,7 @@ extern bool eink_found;
 extern bool pmu_found;
 extern bool isUSBPowered;
 
-#if defined(T_WATCH_S3) || defined(T_LORA_PAGER)
+#if defined(T_WATCH_S3) || defined(T_LORA_PAGER) || defined(TTGO_T_ECHO_PLUS)
 #include <Adafruit_DRV2605.h>
 extern Adafruit_DRV2605 drv;
 #endif

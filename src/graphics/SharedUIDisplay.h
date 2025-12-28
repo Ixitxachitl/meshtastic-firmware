@@ -3,6 +3,8 @@
 #include <OLEDDisplay.h>
 #include <string>
 
+extern OLEDDisplay *display;
+
 namespace graphics
 {
 
@@ -27,6 +29,17 @@ namespace graphics
 #define textFifthLine_medium (textFourthLine_medium + FONT_HEIGHT_SMALL)
 #define textSixthLine_medium (textFifthLine_medium + FONT_HEIGHT_SMALL)
 
+// Consistent Line Spacing for M5Stack UnitC6L with FONT_TINY (Tom Thumb 3x6 font)
+// FONT_HEIGHT_TINY is 7 (6px font + 1px gap calculated by _fontHeight macro)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+#define textFirstLine_unitc6l (FONT_HEIGHT_TINY + 4) // 11 pixels (header + spacing)
+#define textSecondLine_unitc6l (textFirstLine_unitc6l + FONT_HEIGHT_TINY)
+#define textThirdLine_unitc6l (textSecondLine_unitc6l + FONT_HEIGHT_TINY)
+#define textFourthLine_unitc6l (textThirdLine_unitc6l + FONT_HEIGHT_TINY)
+#define textFifthLine_unitc6l (textFourthLine_unitc6l + FONT_HEIGHT_TINY)
+#define textSixthLine_unitc6l (textFifthLine_unitc6l + FONT_HEIGHT_TINY)
+#endif
+
 // Consistent Line Spacing for devices like VisionMaster T190
 #define textFirstLine_large (FONT_HEIGHT_SMALL + 1)
 #define textSecondLine_large (textFirstLine_large + (FONT_HEIGHT_SMALL + 5))
@@ -44,6 +57,11 @@ extern bool hasUnreadMessage;
 extern bool isMuted;
 enum class ScreenResolution : uint8_t { UltraLow = 0, Low = 1, High = 2 };
 extern ScreenResolution currentResolution;
+// Convenience alias for legacy code - true if High resolution
+inline bool isHighResolution()
+{
+    return currentResolution == ScreenResolution::High;
+}
 ScreenResolution determineScreenResolution(int16_t screenheight, int16_t screenwidth);
 
 void decomposeTime(uint32_t rtc_sec, int &hour, int &minute, int &second);
@@ -64,4 +82,13 @@ bool isAllowedPunctuation(char c);
 
 std::string sanitizeString(const std::string &input);
 
+void setMessagesScreenActive(bool active);
+bool isMessagesScreenActive();
+
+void setMessagesFrameIndex(int idx);
+int getMessagesFrameIndex();
+
+// Centralized overlay state (menus, pickers, banners)
+void setOverlayActive(bool active);
+bool isOverlayActive();
 } // namespace graphics
