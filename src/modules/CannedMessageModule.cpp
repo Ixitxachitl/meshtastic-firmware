@@ -40,6 +40,7 @@ extern MessageStore messageStore;
 #endif
 
 #include "graphics/ScreenFonts.h"
+#include "meshUtils.h"
 #include <Throttle.h>
 
 // Remove Canned message screen if no action is taken for some milliseconds
@@ -400,7 +401,7 @@ void CannedMessageModule::updateDestinationSelectionList()
     destIndex = 0;   // Highlight the first entry
     if (nodesChanged && runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION) {
         LOG_INFO("Nodes changed, forcing UI refresh.");
-        screen->forceDisplay();
+        IF_SCREEN(screen->forceDisplay());
     }
 }
 
@@ -531,7 +532,7 @@ bool CannedMessageModule::handleTabSwitch(const InputEvent *event)
     UIFrameEvent e;
     e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
     notifyObservers(&e);
-    screen->forceDisplay();
+    IF_SCREEN(screen->forceDisplay());
     return true;
 }
 
@@ -590,7 +591,7 @@ int CannedMessageModule::handleDestinationSelectionInput(const InputEvent *event
         else if ((destIndex / columns) >= (scrollIndex + visibleRows))
             scrollIndex = (destIndex / columns) - visibleRows + 1;
 
-        screen->forceDisplay(true);
+        IF_SCREEN(screen->forceDisplay(true));
         return 1;
     }
 
@@ -605,7 +606,7 @@ int CannedMessageModule::handleDestinationSelectionInput(const InputEvent *event
         if ((destIndex / columns) >= (scrollIndex + visibleRows))
             scrollIndex = (destIndex / columns) - visibleRows + 1;
 
-        screen->forceDisplay(true);
+        IF_SCREEN(screen->forceDisplay(true));
         return 1;
     }
 
@@ -634,7 +635,7 @@ int CannedMessageModule::handleDestinationSelectionInput(const InputEvent *event
 
         runState = returnToCannedList ? CANNED_MESSAGE_RUN_STATE_ACTIVE : CANNED_MESSAGE_RUN_STATE_FREETEXT;
         returnToCannedList = false;
-        screen->forceDisplay(true);
+        IF_SCREEN(screen->forceDisplay(true));
         return 1;
     }
 
@@ -647,7 +648,7 @@ int CannedMessageModule::handleDestinationSelectionInput(const InputEvent *event
         // UIFrameEvent e;
         // e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
         // notifyObservers(&e);
-        screen->forceDisplay(true);
+        IF_SCREEN(screen->forceDisplay(true));
         return 1;
     }
 
@@ -687,7 +688,7 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
         UIFrameEvent e;
         e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
         notifyObservers(&e);
-        screen->forceDisplay();
+        IF_SCREEN(screen->forceDisplay());
         return true;
     }
 
@@ -714,7 +715,7 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
             destIndex = 0;
             scrollIndex = 0;
             updateDestinationSelectionList(); // Make sure list is fresh
-            screen->forceDisplay();
+            IF_SCREEN(screen->forceDisplay());
             return true;
         }
 
@@ -728,7 +729,7 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
             UIFrameEvent e;
             e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
             notifyObservers(&e);
-            screen->forceDisplay();
+            IF_SCREEN(screen->forceDisplay());
             return true;
         }
 
@@ -761,7 +762,7 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
                         UIFrameEvent e;
                         e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
                         this->notifyObservers(&e);
-                        screen->forceDisplay();
+                        IF_SCREEN(screen->forceDisplay());
 
                         setIntervalFromNow(500);
                         return;
@@ -781,7 +782,7 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
                         UIFrameEvent e;
                         e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
                         this->notifyObservers(&e);
-                        screen->forceDisplay();
+                        IF_SCREEN(screen->forceDisplay());
 
                         // Schedule cleanup for next loop iteration to ensure safe deletion
                         setIntervalFromNow(50);
@@ -811,7 +812,7 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
                 UIFrameEvent e;
                 e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
                 notifyObservers(&e);
-                screen->forceDisplay();
+                IF_SCREEN(screen->forceDisplay());
             });
 #else
             payload = runState;
@@ -851,7 +852,7 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
         UIFrameEvent e;
         e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
         notifyObservers(&e);
-        screen->forceDisplay();
+        IF_SCREEN(screen->forceDisplay());
         return true;
     }
 
@@ -867,7 +868,7 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
         UIFrameEvent e;
         e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
         notifyObservers(&e);
-        screen->forceDisplay();
+        IF_SCREEN(screen->forceDisplay());
         return true;
     }
     // Touch input (virtual keyboard) handling
@@ -882,7 +883,7 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
             this->currentMessageIndex = -1;
             updateDestinationSelectionList();
             requestFocus();
-            screen->forceDisplay(true);
+            IF_SCREEN(screen->forceDisplay(true));
             return true;
         }
 
@@ -916,13 +917,13 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
             UIFrameEvent e;
             e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
             notifyObservers(&e);
-            screen->forceDisplay();
+            IF_SCREEN(screen->forceDisplay());
             return true;
         } else if (keyTapped == "😊") {
             // Open emote picker
             runState = CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER;
             requestFocus();
-            screen->forceDisplay(true);
+            IF_SCREEN(screen->forceDisplay(true));
             return true;
         } else if (keyTapped == "SPACE") {
 #ifndef RAK14014
@@ -1056,7 +1057,7 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
             this->currentMessageIndex = -1;
             updateDestinationSelectionList();
             requestFocus();
-            screen->forceDisplay(true);
+            IF_SCREEN(screen->forceDisplay(true));
             return true;
         }
 
@@ -1071,7 +1072,7 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
             // Open emote picker
             runState = CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER;
             requestFocus();
-            screen->forceDisplay(true);
+            IF_SCREEN(screen->forceDisplay(true));
             return true;
         }
 
@@ -1085,7 +1086,7 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
     if (event->kbchar == INPUT_BROKER_MSG_EMOTE_LIST) {
         runState = CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER;
         requestFocus();
-        screen->forceDisplay();
+        IF_SCREEN(screen->forceDisplay());
         return true;
     }
     // Confirm select (Enter)
@@ -1147,7 +1148,7 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
         UIFrameEvent e;
         e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
         notifyObservers(&e);
-        screen->forceDisplay();
+        IF_SCREEN(screen->forceDisplay());
         return true;
     }
 
@@ -1250,7 +1251,7 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
                 emotePickerIndex = touchedIdx;
                 LOG_DEBUG("Touch highlighted emote index=%d", touchedIdx);
                 requestFocus();
-                screen->forceDisplay(true);
+                IF_SCREEN(screen->forceDisplay(true));
                 return 1;
             }
         }
@@ -1263,7 +1264,7 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
     if (isUp && emotePickerIndex >= cols) {
         emotePickerIndex -= cols;
         requestFocus();
-        screen->forceDisplay(true);
+        IF_SCREEN(screen->forceDisplay(true));
         return 1;
     }
     if (isDown) {
@@ -1284,19 +1285,19 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
             emotePickerIndex = targetIdx;
         }
         requestFocus();
-        screen->forceDisplay(true);
+        IF_SCREEN(screen->forceDisplay(true));
         return 1;
     }
     if (isLeft && currentCol > 0) {
         emotePickerIndex--;
         requestFocus();
-        screen->forceDisplay(true);
+        IF_SCREEN(screen->forceDisplay(true));
         return 1;
     }
     if (isRight && currentCol < cols - 1 && emotePickerIndex < numUniqueEmotes - 1) {
         emotePickerIndex++;
         requestFocus();
-        screen->forceDisplay(true);
+        IF_SCREEN(screen->forceDisplay(true));
         return 1;
     }
 
@@ -1361,7 +1362,7 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
         LOG_DEBUG("After insert: freetext='%s', cursor=%d", freetext.c_str(), cursor);
         runState = CANNED_MESSAGE_RUN_STATE_FREETEXT;
         requestFocus();
-        screen->forceDisplay(true);
+        IF_SCREEN(screen->forceDisplay(true));
         return 1;
     }
 
@@ -1370,7 +1371,7 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
         event->inputEvent == INPUT_BROKER_BACK) {
         runState = CANNED_MESSAGE_RUN_STATE_FREETEXT;
         requestFocus();
-        screen->forceDisplay(true);
+        IF_SCREEN(screen->forceDisplay(true));
         return 1;
     }
 
