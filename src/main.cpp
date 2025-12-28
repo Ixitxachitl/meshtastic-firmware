@@ -1118,6 +1118,11 @@ SPI.setFrequency(4000000);
     };
     touchConfig.singlePress = INPUT_BROKER_NONE;
     touchConfig.longPress = INPUT_BROKER_BACK;
+#if defined(PIN_EINK_EN)
+    // T-Echo: 3-second hold toggles backlight
+    touchConfig.longLongPress = INPUT_BROKER_BACKLIGHT_TOGGLE;
+    touchConfig.longLongPressTime = 3000;
+#endif
     TouchButtonThread->initButton(touchConfig);
 #endif
 

@@ -1791,6 +1791,19 @@ int Screen::handleInputEvent(const InputEvent *event)
             } else if (event->inputEvent == INPUT_BROKER_CANCEL) {
                 setOn(false);
             }
+#if defined(PIN_EINK_EN)
+            else if (event->inputEvent == INPUT_BROKER_BACKLIGHT_TOGGLE) {
+                // Toggle E-Ink backlight
+                if (uiconfig.screen_brightness == 1) {
+                    uiconfig.screen_brightness = 0;
+                    digitalWrite(PIN_EINK_EN, LOW);
+                } else {
+                    uiconfig.screen_brightness = 1;
+                    digitalWrite(PIN_EINK_EN, HIGH);
+                }
+                menuHandler::saveUIConfig();
+            }
+#endif
         }
     }
 

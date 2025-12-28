@@ -108,9 +108,9 @@ class menuHandler
     static void textMessageMenu();
     static void envTelemetryMenu();
     static void envTelemetrySourceMenu();
+    static void saveUIConfig();
 
   private:
-    static void saveUIConfig();
     static void keyVerificationInitMenu();
     static void keyVerificationFinalPrompt();
     static void BluetoothToggleMenu();
