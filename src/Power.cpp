@@ -61,7 +61,7 @@ RTC_NOINIT_ATTR uint64_t RTC_reg_b;
 
 #endif // BAT_MEASURE_ADC_UNIT
 
-esp_adc_cal_characteristics_t *adc_characs = (esp_adc_cal_characteristics_t *)calloc(1, sizeof(esp_adc_cal_characteristics_t));
+adc_cali_handle_t adc_cali_handle = NULL;
 #ifndef ADC_ATTENUATION
 static const adc_atten_t atten = ADC_ATTEN_DB_12;
 #else
@@ -329,7 +329,12 @@ class AnalogBatteryLevel : public HasBatteryLevel
             battery_adcEnable();
 #ifdef ARCH_ESP32 // ADC block for espressif platforms
             raw = espAdcRead();
-            scaled = esp_adc_cal_raw_to_voltage(raw, adc_characs);
+            if (adc_cali_handle != NULL) {
+                adc_cali_raw_to_voltage(adc_cali_handle, raw, (int *)&scaled);
+            } else {
+                // Fallback if calibration not available
+                scaled = raw;
+            }
             scaled *= operativeAdcMultiplier;
 #else // block for all other platforms
             for (uint32_t i = 0; i < BATTERY_SENSE_SAMPLES; i++) {
@@ -466,9 +471,11 @@ class AnalogBatteryLevel : public HasBatteryLevel
         return NRF_POWER->USBREGSTATUS & POWER_USBREGSTATUS_VBUSDETECT_Msk;
 #endif
         const uint16_t v = getBattVoltage();
-        if (slopeCharging == OptTrue)   return true;
-        if (slopeCharging == OptFalse)  return false;
-        return v > chargingVolt; 
+        if (slopeCharging == OptTrue)
+            return true;
+        if (slopeCharging == OptFalse)
+            return false;
+        return v > chargingVolt;
     }
 
     /// Assume charging if we have a battery and external power is connected.
@@ -499,7 +506,8 @@ class AnalogBatteryLevel : public HasBatteryLevel
         return isBatteryConnect() && isVbusIn();
 #endif
 #endif
-        if (slopeCharging != OptUnknown) return slopeCharging;
+        if (slopeCharging != OptUnknown)
+            return slopeCharging;
         // by default, we check the battery voltage only
         return isVbusIn();
     }
@@ -519,28 +527,28 @@ class AnalogBatteryLevel : public HasBatteryLevel
 
     // Trend-based charge detection (default path when no PMU/INA/EXT pins)
     uint32_t trend_t0_ms = 0;
-    float    trend_v0_mv = NAN;
+    float trend_v0_mv = NAN;
     OptionalBool slopeCharging = OptUnknown;
     uint32_t last_decision_ms = 0;
 
-    // Tunables (can be #ifdef’d per board)
-    #ifndef CHARGE_TREND_WINDOW_MS
-    #define CHARGE_TREND_WINDOW_MS (120000) // 2 minutes
-    #endif
-    #ifndef CHARGE_TREND_UP_DELTA_MV
-    #define CHARGE_TREND_UP_DELTA_MV (20)   // require +20 mV rise
-    #endif
-    #ifndef CHARGE_TREND_DOWN_DELTA_MV
-    #define CHARGE_TREND_DOWN_DELTA_MV (20) // require -20 mV drop
-    #endif
-    #ifndef CHARGE_TREND_STICKY_MS
-    #define CHARGE_TREND_STICKY_MS (60000)  // don't flip for 60 s after a decision
-    #endif
+// Tunables (can be #ifdef’d per board)
+#ifndef CHARGE_TREND_WINDOW_MS
+#define CHARGE_TREND_WINDOW_MS (120000) // 2 minutes
+#endif
+#ifndef CHARGE_TREND_UP_DELTA_MV
+#define CHARGE_TREND_UP_DELTA_MV (20) // require +20 mV rise
+#endif
+#ifndef CHARGE_TREND_DOWN_DELTA_MV
+#define CHARGE_TREND_DOWN_DELTA_MV (20) // require -20 mV drop
+#endif
+#ifndef CHARGE_TREND_STICKY_MS
+#define CHARGE_TREND_STICKY_MS (60000) // don't flip for 60 s after a decision
+#endif
 
     void updateTrendDecision()
     {
         const uint32_t now = millis();
-        const float v1 = last_read_value;       // already filtered mV
+        const float v1 = last_read_value; // already filtered mV
         // Initialize baseline the first time we have a sane reading
         if (isnan(trend_v0_mv)) {
             trend_v0_mv = v1;
@@ -549,22 +557,26 @@ class AnalogBatteryLevel : public HasBatteryLevel
         }
         // Be sure we have enough time span to judge a trend
         const uint32_t dt = now - trend_t0_ms;
-        if (dt < CHARGE_TREND_WINDOW_MS) return;
+        if (dt < CHARGE_TREND_WINDOW_MS)
+            return;
 
         const float dv = v1 - trend_v0_mv;
 
         // Respect stickiness/hysteresis to avoid chatter
-        if (last_decision_ms && (now - last_decision_ms) < CHARGE_TREND_STICKY_MS) return;
+        if (last_decision_ms && (now - last_decision_ms) < CHARGE_TREND_STICKY_MS)
+            return;
 
         if (dv >= CHARGE_TREND_UP_DELTA_MV) {
             slopeCharging = OptTrue;
             last_decision_ms = now;
             // Reset baseline for next window
-            trend_v0_mv = v1; trend_t0_ms = now;
+            trend_v0_mv = v1;
+            trend_t0_ms = now;
         } else if (dv <= -CHARGE_TREND_DOWN_DELTA_MV) {
             slopeCharging = OptFalse;
             last_decision_ms = now;
-            trend_v0_mv = v1; trend_t0_ms = now;
+            trend_v0_mv = v1;
+            trend_t0_ms = now;
         } else {
             // no decision; extend window to accumulate more signal
             // (optional) slowly advance baseline to prevent unbounded dt
@@ -698,22 +710,17 @@ bool Power::analogInit()
     RTC_reg_b = READ_PERI_REG(SENS_SAR_READ_CTRL2_REG);
 #endif
 #endif
-    // calibrate ADC
-    esp_adc_cal_value_t val_type = esp_adc_cal_characterize(unit, atten, width, DEFAULT_VREF, adc_characs);
-    // show ADC characterization base
-    if (val_type == ESP_ADC_CAL_VAL_EFUSE_TP) {
-        LOG_INFO("ADC config based on Two Point values stored in eFuse");
-    } else if (val_type == ESP_ADC_CAL_VAL_EFUSE_VREF) {
-        LOG_INFO("ADC config based on reference voltage stored in eFuse");
-    }
-#ifdef CONFIG_IDF_TARGET_ESP32S3
-    // ESP32S3
-    else if (val_type == ESP_ADC_CAL_VAL_EFUSE_TP_FIT) {
-        LOG_INFO("ADC config based on Two Point values and fitting curve coefficients stored in eFuse");
-    }
-#endif
-    else {
-        LOG_INFO("ADC config based on default reference voltage");
+    // calibrate ADC using new API
+    adc_cali_line_fitting_config_t cali_config = {
+        .unit_id = unit,
+        .atten = atten,
+        .bitwidth = width,
+    };
+    esp_err_t ret = adc_cali_create_scheme_line_fitting(&cali_config, &adc_cali_handle);
+    if (ret == ESP_OK) {
+        LOG_INFO("ADC calibration scheme (line fitting) initialized successfully");
+    } else {
+        LOG_WARN("ADC calibration failed, using raw values. Error: %d", ret);
     }
 #endif // ARCH_ESP32
 
