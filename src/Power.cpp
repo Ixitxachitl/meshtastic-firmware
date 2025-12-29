@@ -61,7 +61,11 @@ RTC_NOINIT_ATTR uint64_t RTC_reg_b;
 
 #endif // BAT_MEASURE_ADC_UNIT
 
+#if HAS_NEW_ADC_API
 adc_cali_handle_t adc_cali_handle = NULL;
+#else
+esp_adc_cal_characteristics_t *adc_characs = (esp_adc_cal_characteristics_t *)calloc(1, sizeof(esp_adc_cal_characteristics_t));
+#endif
 #ifndef ADC_ATTENUATION
 static const adc_atten_t atten = ADC_ATTEN_DB_12;
 #else
@@ -329,12 +333,15 @@ class AnalogBatteryLevel : public HasBatteryLevel
             battery_adcEnable();
 #ifdef ARCH_ESP32 // ADC block for espressif platforms
             raw = espAdcRead();
+#if HAS_NEW_ADC_API
             if (adc_cali_handle != NULL) {
                 adc_cali_raw_to_voltage(adc_cali_handle, raw, (int *)&scaled);
             } else {
-                // Fallback if calibration not available
                 scaled = raw;
             }
+#else
+            scaled = esp_adc_cal_raw_to_voltage(raw, adc_characs);
+#endif
             scaled *= operativeAdcMultiplier;
 #else // block for all other platforms
             for (uint32_t i = 0; i < BATTERY_SENSE_SAMPLES; i++) {
@@ -710,7 +717,9 @@ bool Power::analogInit()
     RTC_reg_b = READ_PERI_REG(SENS_SAR_READ_CTRL2_REG);
 #endif
 #endif
-    // calibrate ADC using new API
+    // calibrate ADC
+#if HAS_NEW_ADC_API
+    // Use new ADC calibration API (ESP-IDF 5.0+)
     adc_cali_line_fitting_config_t cali_config = {
         .unit_id = unit,
         .atten = atten,
@@ -722,6 +731,23 @@ bool Power::analogInit()
     } else {
         LOG_WARN("ADC calibration failed, using raw values. Error: %d", ret);
     }
+#else
+    // Use legacy ADC calibration API
+    esp_adc_cal_value_t val_type = esp_adc_cal_characterize(unit, atten, width, DEFAULT_VREF, adc_characs);
+    if (val_type == ESP_ADC_CAL_VAL_EFUSE_TP) {
+        LOG_INFO("ADC config based on Two Point values stored in eFuse");
+    } else if (val_type == ESP_ADC_CAL_VAL_EFUSE_VREF) {
+        LOG_INFO("ADC config based on reference voltage stored in eFuse");
+    }
+#ifdef CONFIG_IDF_TARGET_ESP32S3
+    else if (val_type == ESP_ADC_CAL_VAL_EFUSE_TP_FIT) {
+        LOG_INFO("ADC config based on Two Point values and fitting curve coefficients stored in eFuse");
+    }
+#endif
+    else {
+        LOG_INFO("ADC config based on default reference voltage");
+    }
+#endif
 #endif // ARCH_ESP32
 
 #ifdef ARCH_NRF52

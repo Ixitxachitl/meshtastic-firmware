@@ -4,8 +4,15 @@
 #include "configuration.h"
 
 #ifdef ARCH_ESP32
+// Try to use new ADC calibration API (ESP-IDF 5.0+), fall back to legacy if not available
+#if __has_include(<esp_adc/adc_cali.h>)
+#define HAS_NEW_ADC_API 1
 #include <esp_adc/adc_cali.h>
 #include <esp_adc/adc_cali_scheme.h>
+#else
+#define HAS_NEW_ADC_API 0
+#include <esp_adc_cal.h>
+#endif
 #include <soc/adc_channel.h>
 #endif
 
