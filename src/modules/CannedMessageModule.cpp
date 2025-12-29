@@ -323,7 +323,13 @@ void CannedMessageModule::resetSearch()
 
     // Adjust scrollIndex so previousDestIndex is still visible
     int totalEntries = activeChannelIndices.size() + filteredNodes.size();
-    this->visibleRows = (displayHeight - FONT_HEIGHT_SMALL * 2) / FONT_HEIGHT_SMALL;
+#if defined(USE_TINY_FONT) || defined(M5STACK_UNITC6L)
+    // Tiny fonts need full height + spacing for readability
+    const int rowSpacing = FONT_HEIGHT_SMALL + 1;
+#else
+    const int rowSpacing = FONT_HEIGHT_SMALL;
+#endif
+    this->visibleRows = (displayHeight - FONT_HEIGHT_SMALL * 2) / rowSpacing;
     if (this->visibleRows < 1)
         this->visibleRows = 1;
     int maxScrollIndex = std::max(0, totalEntries - visibleRows);
@@ -2223,11 +2229,18 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
     display->setTextAlignment(TEXT_ALIGN_LEFT);
 
     // === List Items ===
+#if defined(USE_TINY_FONT) || defined(M5STACK_UNITC6L)
+    // Tiny fonts (6px height) need full height + 1px spacing for readability
+    const int rowSpacing = FONT_HEIGHT_SMALL + 1;
+    int rowYOffset = titleY + FONT_HEIGHT_SMALL + 1;
+#else
+    const int rowSpacing = FONT_HEIGHT_SMALL - 4;
     int rowYOffset = titleY + (FONT_HEIGHT_SMALL - 4);
+#endif
     int numActiveChannels = this->activeChannelIndices.size();
     int totalEntries = numActiveChannels + this->filteredNodes.size();
     int columns = 1;
-    this->visibleRows = (display->getHeight() - (titleY + FONT_HEIGHT_SMALL)) / (FONT_HEIGHT_SMALL - 4);
+    this->visibleRows = (display->getHeight() - (titleY + FONT_HEIGHT_SMALL)) / rowSpacing;
     if (this->visibleRows < 1)
         this->visibleRows = 1;
 
@@ -2243,7 +2256,7 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
             break;
 
         int xOffset = 0;
-        int yOffset = row * (FONT_HEIGHT_SMALL - 4) + rowYOffset;
+        int yOffset = row * rowSpacing + rowYOffset;
         char entryText[64] = "";
 
         // Draw Channels First
@@ -2279,7 +2292,12 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
         // === Highlight background (if selected) ===
         if (itemIndex == destIndex) {
             int scrollPadding = 8; // Reserve space for scrollbar
+#if defined(USE_TINY_FONT) || defined(M5STACK_UNITC6L)
+            // For tiny fonts, highlight the full row including spacing
+            display->fillRect(0, yOffset - 1, display->getWidth() - scrollPadding, rowSpacing - 1);
+#else
             display->fillRect(0, yOffset + 2, display->getWidth() - scrollPadding, FONT_HEIGHT_SMALL - 5);
+#endif
             display->setColor(BLACK);
         }
 
@@ -2294,7 +2312,11 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
                 const meshtastic_NodeInfoLite *node = this->filteredNodes[nodeIndex].node;
                 if (node && hasKeyForNode(node)) {
                     int iconX = display->getWidth() - key_symbol_width - 15;
+#if defined(USE_TINY_FONT) || defined(M5STACK_UNITC6L)
+                    int iconY = yOffset + (rowSpacing - key_symbol_height) / 2;
+#else
                     int iconY = yOffset + (FONT_HEIGHT_SMALL - key_symbol_height) / 2;
+#endif
 
                     if (itemIndex == destIndex) {
                         display->setColor(INVERSE);
@@ -2309,7 +2331,7 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
 
     // Scrollbar
     if (totalEntries > visibleRows) {
-        int scrollbarHeight = visibleRows * (FONT_HEIGHT_SMALL - 4);
+        int scrollbarHeight = visibleRows * rowSpacing;
         int totalScrollable = totalEntries;
         int scrollTrackX = display->getWidth() - 6;
         display->drawRect(scrollTrackX, rowYOffset, 4, scrollbarHeight);
@@ -2564,7 +2586,11 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
             int16_t labelW = display->getStringWidth(label);
 
             // triangle size visually matches glyph height, not full line height
+#if defined(USE_TINY_FONT) || defined(M5STACK_UNITC6L)
+            const int triH = FONT_HEIGHT_SMALL; // Use full height for tiny fonts
+#else
             const int triH = FONT_HEIGHT_SMALL - 3;
+#endif
             const int triW = triH * 0.7;
 
             const int16_t padX = 3;
@@ -2779,7 +2805,14 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
         display->setFont(FONT_SMALL);
 
         // ====== Precompute per-row heights based on emotes (centered if present) ======
+#if defined(USE_TINY_FONT) || defined(M5STACK_UNITC6L)
+        // Tiny fonts (6px height) need full height + 1px spacing for readability
+        const int baseRowSpacing = FONT_HEIGHT_SMALL + 1;
+        const int headerToListGap = 1; // Minimal gap after header
+#else
         const int baseRowSpacing = FONT_HEIGHT_SMALL - 4;
+        const int headerToListGap = -3; // Shift message list upward to reduce spacing
+#endif
 
         int topMsg;
         std::vector<int> rowHeights;
@@ -2788,8 +2821,8 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
         // Draw header (To: ...)
         drawHeader(display, x, y, buffer);
 
-        // Shift message list upward by 3 pixels to reduce spacing between header and first message
-        const int listYOffset = y + FONT_HEIGHT_SMALL - 3;
+        // Position list below header
+        const int listYOffset = y + FONT_HEIGHT_SMALL + headerToListGap;
         _visibleRows = (display->getHeight() - listYOffset) / baseRowSpacing;
 
         // Figure out which messages are visible and their needed heights
@@ -2882,7 +2915,12 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
 #else
             int scrollPadding = 8;
             if (_highlight) {
+#if defined(USE_TINY_FONT) || defined(M5STACK_UNITC6L)
+                // For tiny fonts, draw highlight to match text position exactly
+                display->fillRect(x + 0, lineY + textYOffset - 1, display->getWidth() - scrollPadding, FONT_HEIGHT_SMALL);
+#else
                 display->fillRect(x + 0, lineY, display->getWidth() - scrollPadding, rowHeight);
+#endif
                 display->setColor(BLACK);
             }
             int nextX = x + (_highlight ? 2 : 0);

@@ -1752,11 +1752,7 @@ int Screen::handleInputEvent(const InputEvent *event)
                     if (!messageStore.getMessages().empty()) {
                         menuHandler::messageResponseMenu();
                     } else {
-                        if (currentResolution == ScreenResolution::UltraLow) {
-                            menuHandler::textMessageMenu();
-                        } else {
-                            menuHandler::textMessageBaseMenu();
-                        }
+                        menuHandler::textMessageBaseMenu();
                     }
                 } else if (framesetInfo.positions.firstFavorite != 255 &&
                            this->ui->getUiState()->currentFrame >= framesetInfo.positions.firstFavorite &&
