@@ -710,6 +710,46 @@ void nudgeScroll(int8_t direction)
     }
 }
 
+void adjustScroll(int16_t deltaY)
+{
+    if (cachedHeights.empty()) {
+        scrollY = 0.0f;
+        return;
+    }
+
+    // Enable manual scrolling mode to prevent auto-scroll
+    manualScrolling = true;
+
+    // Natural scrolling: drag down = scroll up (negative delta)
+    scrollY -= static_cast<float>(deltaY);
+
+    // Calculate bounds
+    OLEDDisplay *display = (screen != nullptr) ? screen->getDisplayDevice() : nullptr;
+    const int displayHeight = display ? display->getHeight() : 64;
+    const int navHeight = FONT_HEIGHT_SMALL;
+    const int usableHeight = std::max(0, displayHeight - navHeight);
+
+    int totalHeight = 0;
+    for (int h : cachedHeights)
+        totalHeight += h;
+
+    int maxScroll = totalHeight - usableHeight;
+    if (maxScroll < 0)
+        maxScroll = 0;
+
+    // Clamp scroll position
+    if (scrollY < 0.0f)
+        scrollY = 0.0f;
+    if (scrollY > maxScroll)
+        scrollY = static_cast<float>(maxScroll);
+
+    // Reset auto-scroll timers
+    waitingToReset = false;
+    scrollStarted = false;
+    scrollStartDelay = millis();
+    lastTime = millis();
+}
+
 // Current thread state
 static ThreadMode currentMode = ThreadMode::ALL;
 static int currentChannel = -1;

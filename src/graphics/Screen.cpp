@@ -1628,7 +1628,19 @@ int Screen::handleInputEvent(const InputEvent *event)
         return 0;
     }
     // UP/DOWN in message screen scrolls through message threads
-    if (ui->getUiState()->currentFrame == framesetInfo.positions.textMessage) {
+    // BUT: if overlay/menu is active, pass through to menu handler instead
+    if (ui->getUiState()->currentFrame == framesetInfo.positions.textMessage && !graphics::isOverlayActive()) {
+
+#if HAS_TOUCHSCREEN
+        // Precise touch scrolling for touchscreen devices
+        if (event->inputEvent == INPUT_BROKER_SCROLL_DRAG) {
+            if (!messageStore.getMessages().empty()) {
+                graphics::MessageRenderer::adjustScroll(event->deltaY);
+                setFastFramerate();
+                return 0;
+            }
+        }
+#endif
 
         if (event->inputEvent == INPUT_BROKER_UP) {
             if (messageStore.getMessages().empty()) {

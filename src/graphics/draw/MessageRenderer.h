@@ -62,6 +62,9 @@ void scrollDown();
 // Manual scroll control for encoder-style inputs
 void nudgeScroll(int8_t direction);
 
+// Precise scroll control for touchscreen drag gestures
+void adjustScroll(int16_t deltaY);
+
 // Message ordering preference (false = old on top/new on bottom, true = new on top/old on bottom)
 bool getMessageOrderNewestFirst();
 void setMessageOrderNewestFirst(bool newestFirst);

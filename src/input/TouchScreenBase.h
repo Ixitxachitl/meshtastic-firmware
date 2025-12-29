@@ -10,6 +10,7 @@ typedef struct _TouchEvent {
     char touchEvent;
     uint16_t x;
     uint16_t y;
+    int16_t deltaY; // Y movement delta for precise scrolling
 } TouchEvent;
 
 class TouchScreenBase : public Observable<const InputEvent *>, public concurrency::OSThread
@@ -28,7 +29,8 @@ class TouchScreenBase : public Observable<const InputEvent *>, public concurrenc
         TOUCH_ACTION_LEFT,
         TOUCH_ACTION_RIGHT,
         TOUCH_ACTION_TAP,
-        TOUCH_ACTION_LONG_PRESS
+        TOUCH_ACTION_LONG_PRESS,
+        TOUCH_ACTION_SCROLL_DRAG // Continuous scrolling gesture
     };
 
     virtual int32_t runOnce() override;
@@ -50,6 +52,7 @@ class TouchScreenBase : public Observable<const InputEvent *>, public concurrenc
     int16_t _first_y, _last_y; // vertical swipe direction
     time_t _start;             // for LONG_PRESS
     bool _tapped;              // for DOUBLE_TAP
+    bool _isScrolling = false; // true when scroll drag events are being fired
 
     const char *_originName;
 };
