@@ -1176,6 +1176,50 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
 
 int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
 {
+    // Handle scroll drag events for smooth touchscreen scrolling
+#if HAS_TOUCHSCREEN
+    if (event->inputEvent == INPUT_BROKER_SCROLL_DRAG) {
+        // Convert pixel deltaY to row offset
+        int cellSize = emoteCellSize > 0 ? emoteCellSize : 30; // Fallback if not initialized
+        float rowDelta = -event->deltaY / (float)cellSize;     // Negative for natural scrolling
+
+        emoteScrollOffset += rowDelta;
+
+        // Clamp to valid range
+        int cols = emoteGridCols > 0 ? emoteGridCols : 10;
+        int rows = emoteGridRows > 0 ? emoteGridRows : 5;
+
+        // Count unique emotes (same logic as drawing)
+        int numUniqueEmotes = 0;
+        for (int i = 0; i < graphics::numEmotes; ++i) {
+            const unsigned char *bitmap = graphics::emotes[i].bitmap;
+            bool isDuplicate = false;
+            for (int j = 0; j < i; ++j) {
+                if (graphics::emotes[j].bitmap == bitmap) {
+                    isDuplicate = true;
+                    break;
+                }
+            }
+            if (!isDuplicate)
+                numUniqueEmotes++;
+        }
+
+        int totalRows = (numUniqueEmotes + cols - 1) / cols;
+        float maxScrollOffset = totalRows - rows;
+        if (maxScrollOffset < 0)
+            maxScrollOffset = 0;
+
+        if (emoteScrollOffset < 0)
+            emoteScrollOffset = 0;
+        if (emoteScrollOffset > maxScrollOffset)
+            emoteScrollOffset = maxScrollOffset;
+
+        requestFocus();
+        IF_SCREEN(screen->forceDisplay(true));
+        return 1;
+    }
+#endif
+
     // Build deduplicated count (matches drawEmotePickerScreen logic)
     static int numUniqueEmotes = 0;
     static bool needsCount = true;
@@ -1227,35 +1271,53 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
     // Touch input handling for emote picker
     // Tap highlights emote, long press/select inserts it (prevents accidental selection)
     // Don't process tap if it's actually a select/long press event
+    // Also ignore touches with deltaY movement (part of scroll gesture)
     if ((event->touchX != 0 || event->touchY != 0) && !isUp && !isDown && !isLeft && !isRight && !isSelect &&
-        event->inputEvent != INPUT_BROKER_SELECT_LONG) {
+        event->inputEvent != INPUT_BROKER_SELECT_LONG && event->inputEvent != INPUT_BROKER_SCROLL_DRAG && event->deltaY == 0) {
         // Calculate which emote was touched based on grid layout
-        // Match drawEmotePickerScreen layout calculation
+        // Account for smooth scroll offset
+        int pixelOffset = (int)((emoteScrollOffset - (int)emoteScrollOffset) * cellSize);
         int touchCol = (event->touchX - gridX) / cellSize;
-        int touchRow = (event->touchY - gridTop) / cellSize;
 
-        LOG_DEBUG("Touch: raw x=%d y=%d, gridX=%d gridTop=%d, touchCol=%d touchRow=%d, cellSize=%d", event->touchX, event->touchY,
-                  gridX, gridTop, touchCol, touchRow, cellSize);
+        // Allow tapping partially visible emotes by including rows just outside visible area
+        // Calculate touch row including emotes that are partially scrolled off screen
+        int touchRow = (event->touchY - gridTop + pixelOffset) / cellSize;
 
-        // Validate touch is within grid bounds
-        if (touchCol >= 0 && touchCol < cols && touchRow >= 0 && touchRow < rows) {
-            // Calculate scroll position (matches drawEmotePickerScreen logic)
-            int selectedRow = emotePickerIndex / cols;
-            int topRow = selectedRow - rows / 2;
-            if (topRow < 0)
-                topRow = 0;
-            int maxTopRow = (numUniqueEmotes + cols - 1) / cols - rows;
-            if (topRow > maxTopRow && maxTopRow >= 0)
-                topRow = maxTopRow;
+        LOG_DEBUG("Touch: raw x=%d y=%d, gridX=%d gridTop=%d, touchCol=%d touchRow=%d, cellSize=%d, scrollOffset=%.2f",
+                  event->touchX, event->touchY, gridX, gridTop, touchCol, touchRow, cellSize, emoteScrollOffset);
+
+        // Validate touch column is within grid
+        if (touchCol >= 0 && touchCol < cols) {
+            // Calculate which emote was touched using current scroll offset
+            int topRow = (int)emoteScrollOffset;
             int firstVisibleIdx = topRow * cols;
 
             int touchedIdx = firstVisibleIdx + touchRow * cols + touchCol;
 
-            // Validate touched emote exists
+            // Validate touched emote exists (allow any valid index, even if partially visible)
             if (touchedIdx >= 0 && touchedIdx < numUniqueEmotes) {
-                // Tap: just highlight the emote (move cursor to it)
+                // Tap: highlight the emote (move cursor to it)
                 emotePickerIndex = touchedIdx;
-                LOG_DEBUG("Touch highlighted emote index=%d", touchedIdx);
+
+                // If tapped emote is off-center, smoothly scroll to center it
+                int touchedRow = touchedIdx / cols;
+                float centerOffset = touchedRow - (rows / 2.0f);
+
+                // Clamp to valid scroll range
+                int totalRows = (numUniqueEmotes + cols - 1) / cols;
+                float maxScrollOffset = totalRows - rows;
+                if (maxScrollOffset < 0)
+                    maxScrollOffset = 0;
+
+                if (centerOffset < 0)
+                    centerOffset = 0;
+                if (centerOffset > maxScrollOffset)
+                    centerOffset = maxScrollOffset;
+
+                // Update scroll position to center the tapped emote
+                emoteScrollOffset = centerOffset;
+
+                LOG_DEBUG("Touch selected emote index=%d, centered at scroll offset=%.2f", touchedIdx, emoteScrollOffset);
                 requestFocus();
                 IF_SCREEN(screen->forceDisplay(true));
                 return 1;
@@ -1264,47 +1326,107 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
     }
 
     // Grid navigation with row/col boundary checks
-    // UP/DOWN move between rows, LEFT/RIGHT move within a row
-    int currentCol = emotePickerIndex % cols;
+    // Skip if this is a touch swipe gesture (has touch coordinates) - those are consumed
+    // But allow trackball, keyboard, and button inputs (no touch coordinates)
+    bool isTouchSwipe = (event->touchX != 0 || event->touchY != 0) && (isUp || isDown || isLeft || isRight);
+    if (!isTouchSwipe) {
+        int currentCol = emotePickerIndex % cols;
 
-    if (isUp && emotePickerIndex >= cols) {
-        emotePickerIndex -= cols;
-        requestFocus();
-        IF_SCREEN(screen->forceDisplay(true));
-        return 1;
-    }
-    if (isDown) {
-        int targetIdx = emotePickerIndex + cols;
-        // If moving down would go past the last emote, try to find an emote in the same column on the next row
-        if (targetIdx >= numUniqueEmotes) {
-            // Check if there's any emote below in the same column
-            int nextRowStart = ((emotePickerIndex / cols) + 1) * cols;
-            int targetInSameCol = nextRowStart + currentCol;
-            if (targetInSameCol < numUniqueEmotes) {
-                emotePickerIndex = targetInSameCol;
-            } else if (nextRowStart < numUniqueEmotes) {
-                // Move to the last emote if the same column doesn't exist
-                emotePickerIndex = numUniqueEmotes - 1;
-            }
-            // else: already on last row, don't move
-        } else {
-            emotePickerIndex = targetIdx;
+        if (isUp && emotePickerIndex >= cols) {
+            emotePickerIndex -= cols;
+
+            // Update scroll to keep selected emote centered
+            int selectedRow = emotePickerIndex / cols;
+            float centerOffset = selectedRow - (rows / 2.0f);
+            int totalRows = (numUniqueEmotes + cols - 1) / cols;
+            float maxScrollOffset = totalRows - rows;
+            if (maxScrollOffset < 0)
+                maxScrollOffset = 0;
+            if (centerOffset < 0)
+                centerOffset = 0;
+            if (centerOffset > maxScrollOffset)
+                centerOffset = maxScrollOffset;
+            emoteScrollOffset = centerOffset;
+
+            requestFocus();
+            IF_SCREEN(screen->forceDisplay(true));
+            return 1;
         }
-        requestFocus();
-        IF_SCREEN(screen->forceDisplay(true));
-        return 1;
-    }
-    if (isLeft && currentCol > 0) {
-        emotePickerIndex--;
-        requestFocus();
-        IF_SCREEN(screen->forceDisplay(true));
-        return 1;
-    }
-    if (isRight && currentCol < cols - 1 && emotePickerIndex < numUniqueEmotes - 1) {
-        emotePickerIndex++;
-        requestFocus();
-        IF_SCREEN(screen->forceDisplay(true));
-        return 1;
+        if (isDown) {
+            int targetIdx = emotePickerIndex + cols;
+            // If moving down would go past the last emote, try to find an emote in the same column on the next row
+            if (targetIdx >= numUniqueEmotes) {
+                // Check if there's any emote below in the same column
+                int nextRowStart = ((emotePickerIndex / cols) + 1) * cols;
+                int targetInSameCol = nextRowStart + currentCol;
+                if (targetInSameCol < numUniqueEmotes) {
+                    emotePickerIndex = targetInSameCol;
+                } else if (nextRowStart < numUniqueEmotes) {
+                    // Move to the last emote if the same column doesn't exist
+                    emotePickerIndex = numUniqueEmotes - 1;
+                }
+                // else: already on last row, don't move
+            } else {
+                emotePickerIndex = targetIdx;
+            }
+
+            // Update scroll to keep selected emote centered
+            int selectedRow = emotePickerIndex / cols;
+            float centerOffset = selectedRow - (rows / 2.0f);
+            int totalRows = (numUniqueEmotes + cols - 1) / cols;
+            float maxScrollOffset = totalRows - rows;
+            if (maxScrollOffset < 0)
+                maxScrollOffset = 0;
+            if (centerOffset < 0)
+                centerOffset = 0;
+            if (centerOffset > maxScrollOffset)
+                centerOffset = maxScrollOffset;
+            emoteScrollOffset = centerOffset;
+
+            requestFocus();
+            IF_SCREEN(screen->forceDisplay(true));
+            return 1;
+        }
+        if (isLeft && currentCol > 0) {
+            emotePickerIndex--;
+
+            // Update scroll to keep selected emote visible (center it)
+            int selectedRow = emotePickerIndex / cols;
+            float centerOffset = selectedRow - (rows / 2.0f);
+            int totalRows = (numUniqueEmotes + cols - 1) / cols;
+            float maxScrollOffset = totalRows - rows;
+            if (maxScrollOffset < 0)
+                maxScrollOffset = 0;
+            if (centerOffset < 0)
+                centerOffset = 0;
+            if (centerOffset > maxScrollOffset)
+                centerOffset = maxScrollOffset;
+            emoteScrollOffset = centerOffset;
+
+            requestFocus();
+            IF_SCREEN(screen->forceDisplay(true));
+            return 1;
+        }
+        if (isRight && currentCol < cols - 1 && emotePickerIndex < numUniqueEmotes - 1) {
+            emotePickerIndex++;
+
+            // Update scroll to keep selected emote visible (center it)
+            int selectedRow = emotePickerIndex / cols;
+            float centerOffset = selectedRow - (rows / 2.0f);
+            int totalRows = (numUniqueEmotes + cols - 1) / cols;
+            float maxScrollOffset = totalRows - rows;
+            if (maxScrollOffset < 0)
+                maxScrollOffset = 0;
+            if (centerOffset < 0)
+                centerOffset = 0;
+            if (centerOffset > maxScrollOffset)
+                centerOffset = maxScrollOffset;
+            emoteScrollOffset = centerOffset;
+
+            requestFocus();
+            IF_SCREEN(screen->forceDisplay(true));
+            return 1;
+        }
     }
 
     // Select emote: find the unique emote and insert its label
@@ -1312,17 +1434,12 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
     if (isSelect || event->inputEvent == INPUT_BROKER_SELECT_LONG) {
         // If this is a long press with touch coordinates, first update selection to the touched emote
         if ((event->touchX != 0 || event->touchY != 0)) {
+            int pixelOffset = (int)((emoteScrollOffset - (int)emoteScrollOffset) * cellSize);
             int touchCol = (event->touchX - gridX) / cellSize;
-            int touchRow = (event->touchY - gridTop) / cellSize;
+            int touchRow = (event->touchY - gridTop + pixelOffset) / cellSize;
 
             if (touchCol >= 0 && touchCol < cols && touchRow >= 0 && touchRow < rows) {
-                int selectedRow = emotePickerIndex / cols;
-                int topRow = selectedRow - rows / 2;
-                if (topRow < 0)
-                    topRow = 0;
-                int maxTopRow = (numUniqueEmotes + cols - 1) / cols - rows;
-                if (topRow > maxTopRow && maxTopRow >= 0)
-                    topRow = maxTopRow;
+                int topRow = (int)emoteScrollOffset;
                 int firstVisibleIdx = topRow * cols;
 
                 int touchedIdx = firstVisibleIdx + touchRow * cols + touchCol;
@@ -2406,26 +2523,35 @@ void CannedMessageModule::drawEmotePickerScreen(OLEDDisplay *display, OLEDDispla
     if (emotePickerIndex >= numUniqueEmotes)
         emotePickerIndex = numUniqueEmotes - 1;
 
-    // Calculate scroll position to keep selected item visible (smooth scrolling)
+    // Calculate scroll position - use direct emoteScrollOffset for touch, or center selected for keyboard
+    int totalRows = (numUniqueEmotes + cols - 1) / cols;
     int selectedRow = emotePickerIndex / cols;
-    int topRow = selectedRow - rows / 2;
-    if (topRow < 0)
-        topRow = 0;
-    int maxTopRow = (numUniqueEmotes + cols - 1) / cols - rows;
-    if (topRow > maxTopRow && maxTopRow >= 0)
-        topRow = maxTopRow;
 
+    // If keyboard navigation moved the selection, update scroll to keep it visible
+    float targetScrollOffset = selectedRow - rows / 2.0f;
+    if (targetScrollOffset < 0)
+        targetScrollOffset = 0;
+    float maxScrollOffset = totalRows - rows;
+    if (maxScrollOffset < 0)
+        maxScrollOffset = 0;
+    if (targetScrollOffset > maxScrollOffset)
+        targetScrollOffset = maxScrollOffset;
+
+    // Snap scroll position to center selected item (no animation)
+    // But preserve scroll offset if user is touch-scrolling
+    if (emoteScrollOffset < 0 || emoteScrollOffset > maxScrollOffset) {
+        // Clamp if out of bounds
+        emoteScrollOffset = targetScrollOffset;
+    }
+    // Otherwise keep whatever scroll position the user set via touch drag
+
+    int topRow = (int)emoteScrollOffset;
     int firstVisibleIdx = topRow * cols;
 
-    // Draw header
-    display->setFont(FONT_SMALL);
-    display->setTextAlignment(TEXT_ALIGN_CENTER);
-    char headerText[32];
-    snprintf(headerText, sizeof(headerText), "Emotes (%d/%d)", emotePickerIndex + 1, numUniqueEmotes);
-    display->drawString(display->getWidth() / 2, headerY, headerText);
+    // Draw grid with smooth scrolling (support fractional scroll offset)
+    int pixelOffset = (int)((emoteScrollOffset - topRow) * cellSize);
 
-    // Draw grid
-    for (int row = 0; row < rows; ++row) {
+    for (int row = 0; row < rows + 2; ++row) { // +2 to draw partial rows at both top and bottom during smooth scrolling
         for (int col = 0; col < cols; ++col) {
             int idx = firstVisibleIdx + row * cols + col;
             if (idx >= numUniqueEmotes)
@@ -2435,17 +2561,24 @@ void CannedMessageModule::drawEmotePickerScreen(OLEDDisplay *display, OLEDDispla
             const graphics::Emote &emote = graphics::emotes[emoteIdx];
 
             int cellX = x + 2 + col * cellSize;
-            int cellY = gridTop + row * cellSize;
+            int cellY = gridTop + row * cellSize - pixelOffset; // Apply smooth scroll offset
+
+            // Calculate actual rendered bounds (emote size, not just cell size)
+            // Emotes are centered in cell, so actual rendered area depends on emoteSize
+            int emoteX = cellX + (cellSize - emoteSize) / 2;
+            int emoteY = cellY + (cellSize - emoteSize) / 2;
+            int emoteBottom = emoteY + emoteSize; // Actual bottom of rendered pixels
+
+            // Skip drawing if emote is completely outside visible area (allow partial visibility)
+            // Use actual emote rendering bounds, not cell bounds
+            if (emoteY >= gridTop + availableHeight || emoteBottom <= gridTop)
+                continue;
 
             // Highlight selected emote with filled rect
             if (idx == emotePickerIndex) {
                 display->fillRect(cellX, cellY, cellSize, cellSize);
                 display->setColor(BLACK);
             }
-
-            // Center emote in cell, accounting for scale
-            int emoteX = cellX + (cellSize - emoteSize) / 2;
-            int emoteY = cellY + (cellSize - emoteSize) / 2;
 
             // Draw with scaling on large screens
             if (emoteScale > 1) {
@@ -2458,14 +2591,30 @@ void CannedMessageModule::drawEmotePickerScreen(OLEDDisplay *display, OLEDDispla
                             // Draw emoteScale x emoteScale pixel block for each source pixel
                             for (int dy = 0; dy < emoteScale; dy++) {
                                 for (int dx = 0; dx < emoteScale; dx++) {
-                                    display->setPixel(emoteX + sx * emoteScale + dx, emoteY + sy * emoteScale + dy);
+                                    int pixelY = emoteY + sy * emoteScale + dy;
+                                    // Clip pixels that would overlap header area
+                                    if (pixelY >= gridTop) {
+                                        display->setPixel(emoteX + sx * emoteScale + dx, pixelY);
+                                    }
                                 }
                             }
                         }
                     }
                 }
             } else {
-                display->drawXbm(emoteX, emoteY, emote.width, emote.height, emote.bitmap);
+                // For unscaled emotes, only draw pixels below header
+                for (int sy = 0; sy < emote.height; sy++) {
+                    int pixelY = emoteY + sy;
+                    if (pixelY >= gridTop) {
+                        for (int sx = 0; sx < emote.width; sx++) {
+                            int byteIdx = sy * ((emote.width + 7) / 8) + sx / 8;
+                            int bitIdx = sx % 8;
+                            if (emote.bitmap[byteIdx] & (1 << bitIdx)) {
+                                display->setPixel(emoteX + sx, pixelY);
+                            }
+                        }
+                    }
+                }
             }
 
             if (idx == emotePickerIndex)
@@ -2473,14 +2622,25 @@ void CannedMessageModule::drawEmotePickerScreen(OLEDDisplay *display, OLEDDispla
         }
     }
 
-    // Draw scrollbar if needed
-    int totalRows = (numUniqueEmotes + cols - 1) / cols;
+    // Draw header with background AFTER grid so it appears on top
+    display->setFont(FONT_SMALL);
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    char headerText[32];
+    snprintf(headerText, sizeof(headerText), "Emotes (%d/%d)", emotePickerIndex + 1, numUniqueEmotes);
+
+    // Draw filled background behind header to prevent emote overlap (just font height, no extra margin)
+    display->fillRect(0, headerY, display->getWidth(), headerFontHeight);
+    display->setColor(BLACK);
+    display->drawString(display->getWidth() / 2, headerY, headerText);
+    display->setColor(WHITE);
+
+    // Draw scrollbar if needed (position below header, use smooth scroll offset)
     if (totalRows > rows) {
-        int scrollbarHeight = rows * cellSize;
+        int scrollbarHeight = availableHeight;
         int scrollTrackX = display->getWidth() - 6;
         display->drawRect(scrollTrackX, gridTop, 4, scrollbarHeight);
         int scrollBarLen = std::max(6, (scrollbarHeight * rows) / totalRows);
-        int scrollBarPos = gridTop + (scrollbarHeight * topRow) / totalRows;
+        int scrollBarPos = gridTop + (int)((scrollbarHeight * emoteScrollOffset) / totalRows);
         display->fillRect(scrollTrackX, scrollBarPos, 4, scrollBarLen);
     }
 }

@@ -63,7 +63,8 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
     void LaunchFreetextWithDestination(NodeNum, uint8_t newChannel = 0);
 
     // === Emote Picker navigation ===
-    int emotePickerIndex = 0; // Tracks currently selected emote in the picker
+    int emotePickerIndex = 0;       // Tracks currently selected emote in the picker
+    float emoteScrollOffset = 0.0f; // Smooth scrolling offset (in rows)
 
     // Frame offset for touch coordinate translation
     int16_t emoteFrameX = 0;
@@ -93,6 +94,7 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
     void updateDestinationSelectionList();
     void drawDestinationSelectionScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
     bool isCharInputAllowed() const;
+    bool isEmotePickerActive() const { return runState == CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER; }
     String drawWithCursor(String text, int cursor);
 
     // === Emote Picker ===

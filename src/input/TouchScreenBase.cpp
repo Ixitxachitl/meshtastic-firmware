@@ -3,8 +3,9 @@
 #include "graphics/draw/NotificationRenderer.h" // for isOverlayBannerShowing()
 #include "main.h"
 
-#if defined(RAK14014) && !defined(MESHTASTIC_EXCLUDE_CANNEDMESSAGES)
+#if !defined(MESHTASTIC_EXCLUDE_CANNEDMESSAGES)
 #include "modules/CannedMessageModule.h"
+extern CannedMessageModule *cannedMessageModule;
 #endif
 
 #ifndef TIME_LONG_PRESS
@@ -52,10 +53,18 @@ int32_t TouchScreenBase::runOnce()
         this->setInterval(20);
 
         // Fire continuous scroll drag events while touching and moving
-        // ONLY on screens that support scrolling (messages screen) AND when no overlay/menu is active
+        // ONLY on screens that support scrolling (messages screen, emote picker) AND when no overlay/menu is active
 #if HAS_SCREEN
         bool overlayShowing = graphics::NotificationRenderer::isOverlayBannerShowing();
-        bool canScrollDrag = graphics::isMessagesScreenActive() && !overlayShowing;
+
+        // Check if we're on a screen that supports scrolling
+        bool messagesActive = graphics::isMessagesScreenActive();
+#if !defined(MESHTASTIC_EXCLUDE_CANNEDMESSAGES)
+        bool emotePickerActive = (cannedMessageModule && cannedMessageModule->isEmotePickerActive());
+#else
+        bool emotePickerActive = false;
+#endif
+        bool canScrollDrag = (messagesActive || emotePickerActive) && !overlayShowing;
 
         // If overlay opened during this touch gesture, immediately stop scrolling
         if (_isScrolling && overlayShowing) {
