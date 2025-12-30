@@ -1058,7 +1058,7 @@ class LGFX : public lgfx::LGFX_Device
             cfg.pin_cs = ST7701_CS;
             cfg.pin_sclk = ST7701_SCK;
             cfg.pin_mosi = ST7701_SDA;
-            // cfg.use_psram = 1;
+            cfg.use_psram = 1; // Enable PSRAM for frame buffer to ensure DMA cache coherency
             _panel_instance.config_detail(cfg);
         }
 
@@ -1089,7 +1089,7 @@ class LGFX : public lgfx::LGFX_Device
             cfg.pin_vsync = GPIO_NUM_17;
             cfg.pin_hsync = GPIO_NUM_16;
             cfg.pin_pclk = GPIO_NUM_21;
-            cfg.freq_write = 12000000;
+            cfg.freq_write = 12000000; // 12MHz - slower refresh reduces chance of visible tearing
 
             cfg.hsync_polarity = 0;
             cfg.hsync_front_porch = 10;
@@ -1097,9 +1097,9 @@ class LGFX : public lgfx::LGFX_Device
             cfg.hsync_back_porch = 50;
 
             cfg.vsync_polarity = 0;
-            cfg.vsync_front_porch = 10;
-            cfg.vsync_pulse_width = 8;
-            cfg.vsync_back_porch = 20;
+            cfg.vsync_front_porch = 20; // Increased blanking time for LVGL updates
+            cfg.vsync_pulse_width = 10; // Wider sync pulse
+            cfg.vsync_back_porch = 30;  // Larger back porch gives more time for buffer updates
 
             cfg.pclk_active_neg = 0;
             cfg.de_idle_high = 1;
@@ -1562,9 +1562,8 @@ bool TFTDisplay::connect()
 
     if (this->linePixelBuffer == NULL) {
 #if defined(ARCH_ESP32) && defined(BOARD_HAS_PSRAM)
-        // Allocate TFT line buffer in internal RAM for DMA compatibility
-        this->linePixelBuffer =
-            (uint16_t *)heap_caps_malloc(sizeof(uint16_t) * displayWidth, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        // Allocate TFT line buffer with DMA capability (can use PSRAM on ESP32-S3)
+        this->linePixelBuffer = (uint16_t *)heap_caps_malloc(sizeof(uint16_t) * displayWidth, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
 #else
         this->linePixelBuffer = (uint16_t *)malloc(sizeof(uint16_t) * displayWidth);
 #endif
