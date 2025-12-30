@@ -99,6 +99,27 @@ int getMessagesFrameIndex()
     return s_messagesFrameIndex;
 }
 
+// === Environment Telemetry screen active state ===
+static volatile bool s_isEnvTelemetryScreenActive = false;
+static int s_envTelemetryFrameIndex = -1;
+
+bool isEnvTelemetryScreenActive()
+{
+    return s_isEnvTelemetryScreenActive;
+}
+void setEnvTelemetryScreenActive(bool active)
+{
+    s_isEnvTelemetryScreenActive = active;
+}
+void setEnvTelemetryFrameIndex(int idx)
+{
+    s_envTelemetryFrameIndex = idx;
+}
+int getEnvTelemetryFrameIndex()
+{
+    return s_envTelemetryFrameIndex;
+}
+
 // === Internal State ===
 bool isBoltVisibleShared = true;
 uint32_t lastBlinkShared = 0;

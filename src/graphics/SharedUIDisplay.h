@@ -88,6 +88,12 @@ bool isMessagesScreenActive();
 void setMessagesFrameIndex(int idx);
 int getMessagesFrameIndex();
 
+void setEnvTelemetryScreenActive(bool active);
+bool isEnvTelemetryScreenActive();
+
+void setEnvTelemetryFrameIndex(int idx);
+int getEnvTelemetryFrameIndex();
+
 // Centralized overlay state (menus, pickers, banners)
 void setOverlayActive(bool active);
 bool isOverlayActive();

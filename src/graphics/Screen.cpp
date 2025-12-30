@@ -1241,6 +1241,7 @@ void Screen::setFrames(FrameFocus focus)
     // Store the info about this frameset, for future setFrames calls
     this->framesetInfo = fsi;
     graphics::setMessagesFrameIndex(fsi.positions.textMessage);
+    graphics::setEnvTelemetryFrameIndex(fsi.positions.environment);
 
     setFastFramerate(); // Draw ASAP
 }
@@ -1629,7 +1630,9 @@ int Screen::handleInputEvent(const InputEvent *event)
     }
     // UP/DOWN in message screen scrolls through message threads
     // BUT: if overlay/menu is active, pass through to menu handler instead
-    if (ui->getUiState()->currentFrame == framesetInfo.positions.textMessage && !graphics::isOverlayActive()) {
+    // Also: if canned message module is active, skip this handler entirely so events pass through
+    bool cannedActive = cannedMessageModule->isCannedMessageActive();
+    if (ui->getUiState()->currentFrame == framesetInfo.positions.textMessage && !graphics::isOverlayActive() && !cannedActive) {
 
 #if HAS_TOUCHSCREEN
         // Precise touch scrolling for touchscreen devices

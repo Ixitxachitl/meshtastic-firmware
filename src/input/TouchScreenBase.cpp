@@ -58,23 +58,24 @@ int32_t TouchScreenBase::runOnce()
         this->setInterval(20);
 
         // Fire continuous scroll drag events while touching and moving
-        // ONLY on screens that support scrolling (messages screen, emote picker) AND when no overlay/menu is active
+        // ONLY on screens that support scrolling (messages screen, emote picker, env telemetry) AND when no overlay/menu is
+        // active
 #if HAS_SCREEN
         bool overlayShowing = graphics::NotificationRenderer::isOverlayBannerShowing();
 
         // Check if we're on a screen that supports scrolling
         bool messagesActive = graphics::isMessagesScreenActive();
+        bool envTelemetryActive = graphics::isEnvTelemetryScreenActive();
 #if !defined(MESHTASTIC_EXCLUDE_CANNEDMESSAGES)
         bool emotePickerActive = (cannedMessageModule && cannedMessageModule->isEmotePickerActive());
+        bool cannedMessageActive = (cannedMessageModule && cannedMessageModule->isCannedMessageActive());
 #else
         bool emotePickerActive = false;
+        bool cannedMessageActive = false;
 #endif
-#if HAS_TELEMETRY && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
-        bool envTelemetryActive = (environmentTelemetryModule && environmentTelemetryModule->isEnvironmentTelemetryActive());
-#else
-        bool envTelemetryActive = false;
-#endif
-        bool canScrollDrag = (messagesActive || emotePickerActive || envTelemetryActive) && !overlayShowing;
+        // Enable scroll drag for: messages (when canned not active), emote picker, or env telemetry screen
+        bool canScrollDrag =
+            ((messagesActive && !cannedMessageActive) || emotePickerActive || envTelemetryActive) && !overlayShowing;
 
         // If overlay opened during this touch gesture, immediately stop scrolling
         if (_isScrolling && overlayShowing) {
@@ -142,6 +143,8 @@ int32_t TouchScreenBase::runOnce()
             }
             // swipe vertical - suppress if we were scrolling and no overlay active
             else if (ady > adx && ady > TOUCH_THRESHOLD_Y) {
+                LOG_DEBUG("Vertical swipe detected: dy=%d, ady=%d, _isScrolling=%d, overlayActive=%d", dy, ady, _isScrolling,
+                          overlayActive);
                 // If we were scrolling on messages screen AND no overlay is open,
                 // suppress UP/DOWN (scroll drag already handled the gesture)
                 if (_isScrolling && !overlayActive) {

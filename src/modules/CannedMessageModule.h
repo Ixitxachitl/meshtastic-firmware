@@ -95,6 +95,7 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
     void drawDestinationSelectionScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
     bool isCharInputAllowed() const;
     bool isEmotePickerActive() const { return runState == CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER; }
+    bool isCannedMessageActive() const { return runState != CANNED_MESSAGE_RUN_STATE_INACTIVE; }
     String drawWithCursor(String text, int cursor);
 
     // === Emote Picker ===
