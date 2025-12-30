@@ -1907,39 +1907,42 @@ bool EnvironmentTelemetryModule::handleReceivedProtobuf(const meshtastic_MeshPac
 bool EnvironmentTelemetryModule::getEnvironmentTelemetry(meshtastic_Telemetry *m)
 {
     bool valid = true;
-    bool hasSensor = false;
+    bool hasEnvSensor = false; // Track if we have actual environmental sensors
     m->time = getTime();
     m->which_variant = meshtastic_Telemetry_environment_metrics_tag;
     m->variant.environment_metrics = meshtastic_EnvironmentMetrics_init_zero;
 
     for (TelemetrySensor *sensor : sensors) {
         valid = valid && sensor->getMetrics(m);
-        hasSensor = true;
+        hasEnvSensor = true; // These are actual environmental sensors
+    }
+
+#ifdef HAS_RAKPROT
+    valid = valid && rak9154Sensor.getMetrics(m);
+    hasEnvSensor = true; // RAK9154 is environmental
+#endif
+
+    // Early return if we don't have environmental sensors - don't try to read power sensors
+    if (!hasEnvSensor) {
+        return false;
     }
 
 #ifndef T1000X_SENSOR_EN
     if (ina219Sensor.hasSensor()) {
         valid = valid && ina219Sensor.getMetrics(m);
-        hasSensor = true;
     }
     if (ina260Sensor.hasSensor()) {
         valid = valid && ina260Sensor.getMetrics(m);
-        hasSensor = true;
     }
     if (ina3221Sensor.hasSensor()) {
         valid = valid && ina3221Sensor.getMetrics(m);
-        hasSensor = true;
     }
     if (max17048Sensor.hasSensor()) {
         valid = valid && max17048Sensor.getMetrics(m);
-        hasSensor = true;
     }
 #endif
-#ifdef HAS_RAKPROT
-    valid = valid && rak9154Sensor.getMetrics(m);
-    hasSensor = true;
-#endif
-    return valid && hasSensor;
+    // Only return true if we have actual environmental sensors (not just power sensors)
+    return valid && hasEnvSensor;
 }
 
 meshtastic_MeshPacket *EnvironmentTelemetryModule::allocReply()
@@ -1976,105 +1979,106 @@ bool EnvironmentTelemetryModule::sendTelemetry(NodeNum dest, bool phoneOnly)
     m.which_variant = meshtastic_Telemetry_environment_metrics_tag;
     m.time = getTime();
 
-    if (getEnvironmentTelemetry(&m)) {
-        LOG_INFO("Send: barometric_pressure=%f, current=%f, gas_resistance=%f, relative_humidity=%f, temperature=%f",
-                 m.variant.environment_metrics.barometric_pressure, m.variant.environment_metrics.current,
-                 m.variant.environment_metrics.gas_resistance, m.variant.environment_metrics.relative_humidity,
-                 m.variant.environment_metrics.temperature);
-        LOG_INFO("Send: voltage=%f, IAQ=%d, distance=%f, lux=%f", m.variant.environment_metrics.voltage,
-                 m.variant.environment_metrics.iaq, m.variant.environment_metrics.distance, m.variant.environment_metrics.lux);
-
-        LOG_INFO("Send: wind speed=%fm/s, direction=%d degrees, weight=%fkg", m.variant.environment_metrics.wind_speed,
-                 m.variant.environment_metrics.wind_direction, m.variant.environment_metrics.weight);
-
-        LOG_INFO("Send: radiation=%fµR/h", m.variant.environment_metrics.radiation);
-
-        LOG_INFO("Send: soil_temperature=%f, soil_moisture=%u", m.variant.environment_metrics.soil_temperature,
-                 m.variant.environment_metrics.soil_moisture);
-
-        sensor_read_error_count = 0;
-
-        meshtastic_MeshPacket *p = allocDataProtobuf(m);
-        p->to = dest;
-        p->decoded.want_response = false;
-        if (config.device.role == meshtastic_Config_DeviceConfig_Role_SENSOR)
-            p->priority = meshtastic_MeshPacket_Priority_RELIABLE;
-        else
-            p->priority = meshtastic_MeshPacket_Priority_BACKGROUND;
-
-        // Store own metrics in s_hist (no packet storage needed)
-        uint32_t self = nodeDB->getNodeNum();
-        const auto &em = m.variant.environment_metrics;
-        auto &selfHist = s_hist[self];
-        selfHist.lastUpdate = millis();
-        selfHist.rxTime = millis(); // For "ago" display
-        selfHist.lastMetrics = em;  // Store full metrics for display
-        if (em.has_temperature)
-            selfHist.temp.push(em.temperature);
-        if (em.has_relative_humidity)
-            selfHist.hum.push(em.relative_humidity);
-        if (em.barometric_pressure)
-            selfHist.press.push(em.barometric_pressure);
-        if (em.has_gas_resistance || em.gas_resistance != 0)
-            selfHist.gas.push(em.gas_resistance);
-        if (em.voltage != 0)
-            selfHist.voltage.push(em.voltage);
-        if (em.current != 0)
-            selfHist.current.push(em.current);
-        if (em.lux != 0)
-            selfHist.lux.push(em.lux);
-        if (em.white_lux != 0)
-            selfHist.whiteLux.push(em.white_lux);
-        if (em.weight != 0)
-            selfHist.weight.push(em.weight);
-        if (em.distance != 0)
-            selfHist.distance.push(em.distance);
-        if (em.radiation != 0)
-            selfHist.radiation.push(em.radiation);
-        if (em.wind_speed != 0)
-            selfHist.windSpeed.push(em.wind_speed);
-        if (em.wind_direction != 0)
-            selfHist.windDirection.push(em.wind_direction);
-        if (em.soil_temperature != 0)
-            selfHist.soilTemp.push(em.soil_temperature);
-        if (em.soil_moisture != 0)
-            selfHist.soilMoisture.push(em.soil_moisture);
-        // Calculate dew point if we have temp and humidity
-        if (em.has_temperature && em.has_relative_humidity && em.relative_humidity > 0.0f) {
-            float dpC = dewPointC(em.temperature, em.relative_humidity);
-            if (!isnan(dpC))
-                selfHist.dewPoint.push(dpC);
-        }
-
-        // Track most recent source for auto-display and mark cache dirty
-        s_lastSource = self;
-        s_displayCache.markDirty();
-        // Screen will refresh on next UI cycle
-
-        if (phoneOnly) {
-            LOG_INFO("Send packet to phone");
-            service->sendToPhone(p);
-        } else {
-            LOG_INFO("Send packet to mesh");
-            service->sendToMesh(p, RX_SRC_LOCAL, true);
-
-            if (config.device.role == meshtastic_Config_DeviceConfig_Role_SENSOR && config.power.is_power_saving) {
-                meshtastic_ClientNotification *notification = clientNotificationPool.allocZeroed();
-                notification->level = meshtastic_LogRecord_Level_INFO;
-                notification->time = getValidTime(RTCQualityFromNet);
-                sprintf(notification->message, "Sending telemetry and sleeping for %us interval in a moment",
-                        Default::getConfiguredOrDefaultMs(moduleConfig.telemetry.environment_update_interval,
-                                                          default_telemetry_broadcast_interval_secs) /
-                            1000U);
-                service->sendClientNotification(notification);
-                sleepOnNextExecution = true;
-                LOG_DEBUG("Start next execution in 5s, then sleep");
-                setIntervalFromNow(FIVE_SECONDS_MS);
-            }
-        }
-        return true;
+    if (!getEnvironmentTelemetry(&m)) {
+        return false;
     }
-    return false;
+
+    LOG_INFO("Send: barometric_pressure=%f, current=%f, gas_resistance=%f, relative_humidity=%f, temperature=%f",
+             m.variant.environment_metrics.barometric_pressure, m.variant.environment_metrics.current,
+             m.variant.environment_metrics.gas_resistance, m.variant.environment_metrics.relative_humidity,
+             m.variant.environment_metrics.temperature);
+    LOG_INFO("Send: voltage=%f, IAQ=%d, distance=%f, lux=%f", m.variant.environment_metrics.voltage,
+             m.variant.environment_metrics.iaq, m.variant.environment_metrics.distance, m.variant.environment_metrics.lux);
+
+    LOG_INFO("Send: wind speed=%fm/s, direction=%d degrees, weight=%fkg", m.variant.environment_metrics.wind_speed,
+             m.variant.environment_metrics.wind_direction, m.variant.environment_metrics.weight);
+
+    LOG_INFO("Send: radiation=%fµR/h", m.variant.environment_metrics.radiation);
+
+    LOG_INFO("Send: soil_temperature=%f, soil_moisture=%u", m.variant.environment_metrics.soil_temperature,
+             m.variant.environment_metrics.soil_moisture);
+
+    sensor_read_error_count = 0;
+
+    meshtastic_MeshPacket *p = allocDataProtobuf(m);
+    p->to = dest;
+    p->decoded.want_response = false;
+    if (config.device.role == meshtastic_Config_DeviceConfig_Role_SENSOR)
+        p->priority = meshtastic_MeshPacket_Priority_RELIABLE;
+    else
+        p->priority = meshtastic_MeshPacket_Priority_BACKGROUND;
+
+    // Store own metrics in s_hist (no packet storage needed)
+    uint32_t self = nodeDB->getNodeNum();
+    const auto &em = m.variant.environment_metrics;
+    auto &selfHist = s_hist[self];
+    selfHist.lastUpdate = millis();
+    selfHist.rxTime = millis(); // For "ago" display
+    selfHist.lastMetrics = em;  // Store full metrics for display
+    if (em.has_temperature)
+        selfHist.temp.push(em.temperature);
+    if (em.has_relative_humidity)
+        selfHist.hum.push(em.relative_humidity);
+    if (em.barometric_pressure)
+        selfHist.press.push(em.barometric_pressure);
+    if (em.has_gas_resistance || em.gas_resistance != 0)
+        selfHist.gas.push(em.gas_resistance);
+    if (em.voltage != 0)
+        selfHist.voltage.push(em.voltage);
+    if (em.current != 0)
+        selfHist.current.push(em.current);
+    if (em.lux != 0)
+        selfHist.lux.push(em.lux);
+    if (em.white_lux != 0)
+        selfHist.whiteLux.push(em.white_lux);
+    if (em.weight != 0)
+        selfHist.weight.push(em.weight);
+    if (em.distance != 0)
+        selfHist.distance.push(em.distance);
+    if (em.radiation != 0)
+        selfHist.radiation.push(em.radiation);
+    if (em.wind_speed != 0)
+        selfHist.windSpeed.push(em.wind_speed);
+    if (em.wind_direction != 0)
+        selfHist.windDirection.push(em.wind_direction);
+    if (em.soil_temperature != 0)
+        selfHist.soilTemp.push(em.soil_temperature);
+    if (em.soil_moisture != 0)
+        selfHist.soilMoisture.push(em.soil_moisture);
+    // Calculate dew point if we have temp and humidity
+    if (em.has_temperature && em.has_relative_humidity && em.relative_humidity > 0.0f) {
+        float dpC = dewPointC(em.temperature, em.relative_humidity);
+        if (!isnan(dpC))
+            selfHist.dewPoint.push(dpC);
+    }
+
+    // Track most recent source for auto-display and mark cache dirty
+    s_lastSource = self;
+    s_displayCache.markDirty();
+    // Screen will refresh on next UI cycle
+
+    if (phoneOnly) {
+        LOG_INFO("Send packet to phone");
+        service->sendToPhone(p);
+    } else {
+        LOG_INFO("Send packet to mesh");
+        service->sendToMesh(p, RX_SRC_LOCAL, true);
+
+        if (config.device.role == meshtastic_Config_DeviceConfig_Role_SENSOR && config.power.is_power_saving) {
+            meshtastic_ClientNotification *notification = clientNotificationPool.allocZeroed();
+            notification->level = meshtastic_LogRecord_Level_INFO;
+            notification->time = getValidTime(RTCQualityFromNet);
+            sprintf(notification->message, "Sending telemetry and sleeping for %us interval in a moment",
+                    Default::getConfiguredOrDefaultMs(moduleConfig.telemetry.environment_update_interval,
+                                                      default_telemetry_broadcast_interval_secs) /
+                        1000U);
+            service->sendClientNotification(notification);
+            sleepOnNextExecution = true;
+            LOG_DEBUG("Start next execution in 5s, then sleep");
+            setIntervalFromNow(FIVE_SECONDS_MS);
+        }
+    }
+    return true;
 }
 
 AdminMessageHandleResult EnvironmentTelemetryModule::handleAdminMessageForModule(const meshtastic_MeshPacket &mp,
