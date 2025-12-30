@@ -663,9 +663,12 @@ void scrollDown()
     if (maxScroll < 0)
         maxScroll = 0;
 
+    // Allow overscrolling by navigation bar height
+    int maxScrollWithOverscroll = maxScroll + FONT_HEIGHT_SMALL;
+
     scrollY += 12;
-    if (scrollY > maxScroll)
-        scrollY = maxScroll;
+    if (scrollY > maxScrollWithOverscroll)
+        scrollY = maxScrollWithOverscroll;
 }
 
 void nudgeScroll(int8_t direction)
@@ -737,11 +740,14 @@ void adjustScroll(int16_t deltaY)
     if (maxScroll < 0)
         maxScroll = 0;
 
+    // Allow overscrolling at the bottom by navigation bar height so text isn't blocked
+    int maxScrollWithOverscroll = maxScroll + navHeight;
+
     // Clamp scroll position
     if (scrollY < 0.0f)
         scrollY = 0.0f;
-    if (scrollY > maxScroll)
-        scrollY = static_cast<float>(maxScroll);
+    if (scrollY > maxScrollWithOverscroll)
+        scrollY = static_cast<float>(maxScrollWithOverscroll);
 
     // Reset auto-scroll timers
     waitingToReset = false;
