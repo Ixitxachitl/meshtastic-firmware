@@ -48,6 +48,10 @@ class EnvironmentTelemetryModule : private concurrency::OSThread,
     static void scrollUp();
     static void scrollDown();
     static void resetScroll();
+    static void handleScrollDrag(int deltaY); // Handle smooth touch scrolling
+
+    // Check if environment telemetry screen is currently active (for TouchScreenBase)
+    bool isEnvironmentTelemetryActive() { return wantUIFrame(); }
 
     MeshModule *asMesh() { return this; }
     std::vector<uint32_t> getSourcesWithTelemetry() const;

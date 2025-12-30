@@ -1685,6 +1685,15 @@ int Screen::handleInputEvent(const InputEvent *event)
     // UP/DOWN in environment telemetry screen scrolls through metrics
     if (ui->getUiState()->currentFrame == framesetInfo.positions.environment) {
 
+#if HAS_TOUCHSCREEN
+        // Precise touch scrolling for touchscreen devices
+        if (event->inputEvent == INPUT_BROKER_SCROLL_DRAG) {
+            EnvironmentTelemetryModule::handleScrollDrag(event->deltaY);
+            setFastFramerate();
+            return 0;
+        }
+#endif
+
         if (event->inputEvent == INPUT_BROKER_UP) {
             EnvironmentTelemetryModule::scrollUp();
             setFastFramerate();

@@ -985,8 +985,8 @@ static struct TelemetryDisplayCache {
     }
 } s_displayCache;
 
-// Scroll state tracking
-static int s_scrollY = 0;
+// Scroll state tracking (float for smooth pixel-level scrolling)
+static float s_scrollY = 0.0f;
 static bool s_manualScrolling = false;
 
 std::vector<uint32_t> EnvironmentTelemetryModule::getSourcesWithTelemetry() const
@@ -1014,20 +1014,30 @@ void EnvironmentTelemetryModule::invalidateDisplayCache()
 void EnvironmentTelemetryModule::scrollUp()
 {
     s_manualScrolling = true;
-    s_scrollY -= 12; // Scroll by one row (similar to MessageRenderer)
-    if (s_scrollY < 0)
-        s_scrollY = 0;
+    s_scrollY -= 12.0f; // Scroll by one row (similar to MessageRenderer)
+    if (s_scrollY < 0.0f)
+        s_scrollY = 0.0f;
 }
 
 void EnvironmentTelemetryModule::scrollDown()
 {
     s_manualScrolling = true;
-    s_scrollY += 12; // Scroll by one row
+    s_scrollY += 12.0f; // Scroll by one row
+}
+
+void EnvironmentTelemetryModule::handleScrollDrag(int deltaY)
+{
+    s_manualScrolling = true;
+    // Direct 1:1 pixel scrolling - negative deltaY means drag down (scroll content up)
+    s_scrollY -= (float)deltaY;
+    // Note: clamping happens in drawFrame to respect actual content height
+    if (s_scrollY < 0.0f)
+        s_scrollY = 0.0f;
 }
 
 void EnvironmentTelemetryModule::resetScroll()
 {
-    s_scrollY = 0;
+    s_scrollY = 0.0f;
     s_manualScrolling = false;
 }
 
@@ -1446,16 +1456,16 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         }
 
         // Clamp scroll position
-        int maxScroll = totalContentHeight - visibleHeight;
-        if (maxScroll < 0)
-            maxScroll = 0;
-        if (s_scrollY < 0)
-            s_scrollY = 0;
+        float maxScroll = (float)(totalContentHeight - visibleHeight);
+        if (maxScroll < 0.0f)
+            maxScroll = 0.0f;
+        if (s_scrollY < 0.0f)
+            s_scrollY = 0.0f;
         if (s_scrollY > maxScroll)
             s_scrollY = maxScroll;
 
-        // Render visible metric rows with offset
-        int yOffset = scrollTop - s_scrollY;
+        // Render visible metric rows with offset (convert float to int for rendering)
+        int yOffset = scrollTop - (int)s_scrollY;
         int cumulativeY = 0;
 
         for (size_t i = 0; i < metricRowCount; i++) {
@@ -1491,7 +1501,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
             int scrollbarX = SCREEN_WIDTH - kScrollbarWidth;
             int scrollbarHeight = visibleHeight;
             int thumbHeight = std::max(6, (scrollbarHeight * visibleHeight) / totalContentHeight);
-            int thumbY = scrollTop + (scrollbarHeight - thumbHeight) * s_scrollY / maxScroll;
+            int thumbY = scrollTop + (int)((scrollbarHeight - thumbHeight) * s_scrollY / maxScroll);
 
             for (int i = 0; i < thumbHeight; i++) {
                 display->setPixel(scrollbarX, thumbY + i);
@@ -1620,19 +1630,19 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         }
 
         // Clamp scroll position
-        int maxScroll = totalContentHeight - visibleHeight;
-        if (maxScroll < 0)
-            maxScroll = 0;
-        if (s_scrollY < 0)
-            s_scrollY = 0;
+        float maxScroll = (float)(totalContentHeight - visibleHeight);
+        if (maxScroll < 0.0f)
+            maxScroll = 0.0f;
+        if (s_scrollY < 0.0f)
+            s_scrollY = 0.0f;
         if (s_scrollY > maxScroll)
             s_scrollY = maxScroll;
 
-        // Render visible metric rows with offset
+        // Render visible metric rows with offset (convert float to int for rendering)
         // Calculate IAQ ruler actual height
         const int iaqRulerHeight = kRulerBaselineOfs + kNeedleH + FONT_HEIGHT_SMALL + 4;
 
-        int yOffset = scrollTop - s_scrollY;
+        int yOffset = scrollTop - (int)s_scrollY;
         int cumulativeY = 0; // Track actual Y position accounting for variable row heights
 
         for (size_t i = 0; i < metricRowCount; i++) {
@@ -1669,7 +1679,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
             int scrollbarX = SCREEN_WIDTH - 2;
             int scrollbarHeight = visibleHeight;
             int thumbHeight = std::max(6, (scrollbarHeight * visibleHeight) / totalContentHeight);
-            int thumbY = scrollTop + (scrollbarHeight - thumbHeight) * s_scrollY / maxScroll;
+            int thumbY = scrollTop + (int)((scrollbarHeight - thumbHeight) * s_scrollY / maxScroll);
 
             for (int i = 0; i < thumbHeight; i++) {
                 display->setPixel(scrollbarX, thumbY + i);

@@ -8,6 +8,11 @@
 extern CannedMessageModule *cannedMessageModule;
 #endif
 
+#if HAS_TELEMETRY && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
+#include "modules/Telemetry/EnvironmentTelemetry.h"
+extern EnvironmentTelemetryModule *environmentTelemetryModule;
+#endif
+
 #ifndef TIME_LONG_PRESS
 #define TIME_LONG_PRESS 400
 #endif
@@ -64,7 +69,12 @@ int32_t TouchScreenBase::runOnce()
 #else
         bool emotePickerActive = false;
 #endif
-        bool canScrollDrag = (messagesActive || emotePickerActive) && !overlayShowing;
+#if HAS_TELEMETRY && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
+        bool envTelemetryActive = (environmentTelemetryModule && environmentTelemetryModule->isEnvironmentTelemetryActive());
+#else
+        bool envTelemetryActive = false;
+#endif
+        bool canScrollDrag = (messagesActive || emotePickerActive || envTelemetryActive) && !overlayShowing;
 
         // If overlay opened during this touch gesture, immediately stop scrolling
         if (_isScrolling && overlayShowing) {
