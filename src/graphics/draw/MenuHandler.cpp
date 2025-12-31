@@ -18,6 +18,7 @@
 #include "mesh/MeshTypes.h"
 #include "modules/AdminModule.h"
 #include "modules/CannedMessageModule.h"
+#include "modules/ExternalNotificationModule.h"
 #include "modules/KeyVerificationModule.h"
 #include "modules/Telemetry/EnvironmentTelemetry.h"
 
@@ -867,12 +868,21 @@ void menuHandler::messageViewModeMenu()
 
 void menuHandler::homeBaseMenu()
 {
-    enum optionsNumbers { Back, Backlight, Position, Preset, Freetext, Sleep, enumEnd };
+    enum optionsNumbers { Back, Mute, Backlight, Position, Preset, Freetext, Sleep, enumEnd };
 
     static const char *optionsArray[enumEnd] = {"Back"};
     static int optionsEnumArray[enumEnd] = {Back};
     int options = 1;
 
+    if (moduleConfig.external_notification.enabled && externalNotificationModule &&
+        config.device.buzzer_mode != meshtastic_Config_DeviceConfig_BuzzerMode_DISABLED) {
+        if (!externalNotificationModule->getMute()) {
+            optionsArray[options] = "Temporarily Mute";
+        } else {
+            optionsArray[options] = "Unmute";
+        }
+        optionsEnumArray[options++] = Mute;
+    }
 #if defined(PIN_EINK_EN) || defined(PCA_PIN_EINK_EN)
     optionsArray[options] = "Toggle Backlight";
     optionsEnumArray[options++] = Backlight;
@@ -896,7 +906,13 @@ void menuHandler::homeBaseMenu()
     bannerOptions.optionsEnumPtr = optionsEnumArray;
     bannerOptions.optionsCount = options;
     bannerOptions.bannerCallback = [](int selected) -> void {
-        if (selected == Backlight) {
+        if (selected == Mute) {
+            if (moduleConfig.external_notification.enabled && externalNotificationModule) {
+                externalNotificationModule->setMute(!externalNotificationModule->getMute());
+                IF_SCREEN(if (!externalNotificationModule->getMute()) externalNotificationModule->stopNow();)
+            }
+        } else if (selected == Backlight) {
+            screen->setOn(false);
 #if defined(PIN_EINK_EN)
             if (uiconfig.screen_brightness == 1) {
                 uiconfig.screen_brightness = 0;
@@ -973,6 +989,7 @@ void menuHandler::systemBaseMenu()
 
     optionsArray[options] = "Notifications";
     optionsEnumArray[options++] = Notifications;
+
     optionsArray[options] = "Display Options";
     optionsEnumArray[options++] = ScreenOptions;
 
@@ -1009,7 +1026,7 @@ void menuHandler::systemBaseMenu()
     bannerOptions.optionsEnumPtr = optionsEnumArray;
     bannerOptions.bannerCallback = [](int selected) -> void {
         if (selected == Notifications) {
-            menuHandler::menuQueue = menuHandler::notifications_menu;
+            menuHandler::menuQueue = menuHandler::buzzermodemenupicker;
             screen->runNow();
         } else if (selected == ScreenOptions) {
             menuHandler::menuQueue = menuHandler::screen_options_menu;
@@ -1628,9 +1645,9 @@ void menuHandler::BluetoothToggleMenu()
 
 void menuHandler::BuzzerModeMenu()
 {
-    static const char *optionsArray[] = {"All Enabled", "Disabled", "Notifications", "System Only", "DMs Only"};
+    static const char *optionsArray[] = {"All Enabled", "All Disabled", "Notifications", "System Only", "DMs Only"};
     BannerOverlayOptions bannerOptions;
-    bannerOptions.message = "Buzzer Mode";
+    bannerOptions.message = "Notification Sounds";
     bannerOptions.optionsArrayPtr = optionsArray;
     bannerOptions.optionsCount = 5;
     bannerOptions.bannerCallback = [](int selected) -> void {
@@ -2004,30 +2021,6 @@ void menuHandler::wifiToggleMenu()
             config.bluetooth.enabled = false;
             service->reloadConfig(SEGMENT_CONFIG);
             rebootAtMsec = (millis() + DEFAULT_REBOOT_SECONDS * 1000);
-        }
-    };
-    screen->showOverlayBanner(bannerOptions);
-}
-
-void menuHandler::notificationsMenu()
-{
-    enum optionsNumbers { Back, BuzzerActions };
-    static const char *optionsArray[] = {"Back", "Buzzer Actions"};
-    static int optionsEnumArray[] = {Back, BuzzerActions};
-    int options = 2;
-
-    BannerOverlayOptions bannerOptions;
-    bannerOptions.message = "Notifications";
-    bannerOptions.optionsArrayPtr = optionsArray;
-    bannerOptions.optionsCount = options;
-    bannerOptions.optionsEnumPtr = optionsEnumArray;
-    bannerOptions.bannerCallback = [](int selected) -> void {
-        if (selected == BuzzerActions) {
-            menuHandler::menuQueue = menuHandler::buzzermodemenupicker;
-            screen->runNow();
-        } else {
-            menuQueue = system_base_menu;
-            screen->runNow();
         }
     };
     screen->showOverlayBanner(bannerOptions);
@@ -2593,9 +2586,6 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
         break;
     case bluetooth_toggle_menu:
         BluetoothToggleMenu();
-        break;
-    case notifications_menu:
-        notificationsMenu();
         break;
     case screen_options_menu:
         screenOptionsMenu();

@@ -54,7 +54,6 @@ namespace graphics
 
 // Shared state (declare inside namespace)
 extern bool hasUnreadMessage;
-extern bool isMuted;
 enum class ScreenResolution : uint8_t { UltraLow = 0, Low = 1, High = 2 };
 extern ScreenResolution currentResolution;
 // Convenience alias for legacy code - true if High resolution
