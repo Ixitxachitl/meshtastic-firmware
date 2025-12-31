@@ -112,9 +112,13 @@ static void drawIAQRuler(OLEDDisplay *dpy, int x, int y, int w, int iaqValue, co
 }
 
 // keep last N samples per source
-// Reduced buffer size to minimize heap usage - 20 samples balances memory with visual quality
-static constexpr size_t kHistLen = 30; // max samples to keep (reduced from 120→60→30)
-static constexpr int kSparkH = 12;     // pixels tall for standard displays
+// Use larger buffer on PSRAM devices for richer historical data
+#if defined(ARCH_ESP32) && defined(BOARD_HAS_PSRAM)
+static constexpr size_t kHistLen = 120; // Increased for PSRAM devices - more historical depth
+#else
+static constexpr size_t kHistLen = 30;     // Conservative for limited heap (reduced from 120→60→30)
+#endif
+static constexpr int kSparkH = 12; // pixels tall for standard displays
 
 // Large display sparkline settings (SenseCAP Indicator 480x480, T-Deck 320x240)
 static constexpr int kLargeSparkH = 80;      // Double height graphs for large displays
@@ -152,8 +156,14 @@ template <size_t N> struct NodeHist {
 
 // One record per node; no per-sample heap churn
 static std::unordered_map<uint32_t, NodeHist<kHistLen>> s_hist;
+
 // Cap on maximum nodes and evict stale ones
-static constexpr size_t kMaxHistNodes = 5;             // Reduced from 64→8→5 - conservative limit for high traffic
+// Use larger limits on devices with PSRAM to allow more telemetry history
+#if defined(ARCH_ESP32) && defined(BOARD_HAS_PSRAM)
+static constexpr size_t kMaxHistNodes = 32; // Increased for PSRAM-equipped devices
+#else
+static constexpr size_t kMaxHistNodes = 5; // Conservative limit for devices with limited heap
+#endif
 static constexpr uint32_t kNodeStaleTimeout = 3600000; // 1 hour - evict nodes not updated in this time
 
 // Reserve map capacity on first use to avoid dynamic reallocation

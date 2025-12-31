@@ -154,6 +154,7 @@ bool IndicatorSensor::getMetrics(meshtastic_Telemetry *measurement)
                     cmd_send(PKT_TYPE_ACK, ACK_PKT_PARA, 4);
                     measurement->variant.environment_metrics.has_temperature = true;
                     measurement->variant.environment_metrics.temperature = value;
+                    hasData = true; // Valid sensor data received
                     break;
                 }
 
@@ -164,6 +165,7 @@ bool IndicatorSensor::getMetrics(meshtastic_Telemetry *measurement)
                     // Store pressure (value is in hPa, protobuf expects Pa)
                     measurement->variant.environment_metrics.has_barometric_pressure = true;
                     measurement->variant.environment_metrics.barometric_pressure = value;
+                    hasData = true; // Valid sensor data received
                     break;
                 }
 
@@ -173,6 +175,7 @@ bool IndicatorSensor::getMetrics(meshtastic_Telemetry *measurement)
                     cmd_send(PKT_TYPE_ACK, ACK_PKT_PARA, 4);
                     measurement->variant.environment_metrics.has_temperature = true;
                     measurement->variant.environment_metrics.temperature = value;
+                    hasData = true; // Valid sensor data received
                     break;
                 }
 
@@ -182,6 +185,7 @@ bool IndicatorSensor::getMetrics(meshtastic_Telemetry *measurement)
                     cmd_send(PKT_TYPE_ACK, ACK_PKT_PARA, 4);
                     measurement->variant.environment_metrics.has_relative_humidity = true;
                     measurement->variant.environment_metrics.relative_humidity = value;
+                    hasData = true; // Valid sensor data received
                     break;
                 }
 
@@ -192,6 +196,7 @@ bool IndicatorSensor::getMetrics(meshtastic_Telemetry *measurement)
                     // Store gas resistance (value is in kOhms, protobuf expects kOhms)
                     measurement->variant.environment_metrics.has_gas_resistance = true;
                     measurement->variant.environment_metrics.gas_resistance = value;
+                    hasData = true; // Valid sensor data received
                     break;
                 }
                 default:
@@ -201,7 +206,6 @@ bool IndicatorSensor::getMetrics(meshtastic_Telemetry *measurement)
 
             p_buf_start = p_buf_end + 1; // next message
         }
-        hasData = true; // Got COBS data
     }
 
     return hasData;
