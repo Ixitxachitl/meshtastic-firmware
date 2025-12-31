@@ -114,7 +114,7 @@ static void drawIAQRuler(OLEDDisplay *dpy, int x, int y, int w, int iaqValue, co
 // keep last N samples per source
 // Use larger buffer on PSRAM devices for richer historical data
 #if defined(ARCH_ESP32) && defined(BOARD_HAS_PSRAM)
-static constexpr size_t kHistLen = 120; // Increased for PSRAM devices - more historical depth
+static constexpr size_t kHistLen = 60; // Moderate increase for PSRAM devices
 #else
 static constexpr size_t kHistLen = 30;     // Conservative for limited heap (reduced from 120→60→30)
 #endif
@@ -160,7 +160,7 @@ static std::unordered_map<uint32_t, NodeHist<kHistLen>> s_hist;
 // Cap on maximum nodes and evict stale ones
 // Use larger limits on devices with PSRAM to allow more telemetry history
 #if defined(ARCH_ESP32) && defined(BOARD_HAS_PSRAM)
-static constexpr size_t kMaxHistNodes = 32; // Increased for PSRAM-equipped devices
+static constexpr size_t kMaxHistNodes = 16; // Moderate increase for PSRAM-equipped devices
 #else
 static constexpr size_t kMaxHistNodes = 5; // Conservative limit for devices with limited heap
 #endif

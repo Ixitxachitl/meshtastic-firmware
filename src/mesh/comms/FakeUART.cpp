@@ -70,7 +70,7 @@ size_t FakeUART::write(char *buffer, size_t size)
     message.data.nmea[size] = '\0'; // Null terminate
     message.which_data = meshtastic_InterdeviceMessage_nmea_tag;
 
-    LOG_DEBUG("FakeUART::write(%s)", message.data.nmea);
+    // LOG_DEBUG("FakeUART::write(%s)", message.data.nmea); // Suppress verbose GPS NMEA logging
 
     sensecapIndicator->send_uplink(message);
 
@@ -99,7 +99,7 @@ void FakeUART::handleIncomingNMEA(const char *nmea)
         }
     }
 
-    LOG_DEBUG("FakeUART buffered NMEA: %s", nmea);
+    // LOG_DEBUG("FakeUART buffered NMEA: %s", nmea); // Suppress verbose GPS NMEA logging
 }
 
 #endif
