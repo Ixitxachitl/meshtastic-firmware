@@ -8,7 +8,7 @@
 namespace graphics
 {
 
-enum VirtualKeyType { VK_CHAR, VK_BACKSPACE, VK_ENTER, VK_SHIFT, VK_ESC, VK_SPACE };
+enum VirtualKeyType { VK_CHAR, VK_BACKSPACE, VK_ENTER, VK_SHIFT, VK_ESC, VK_SPACE, VK_EMOTE };
 
 struct VirtualKey {
     char character;
@@ -44,10 +44,10 @@ class VirtualKeyboard
     bool isTimedOut() const;
 
   private:
-    static const uint8_t KEYBOARD_ROWS = 4;
+    static const uint8_t KEYBOARD_ROWS = 5;
     static const uint8_t KEYBOARD_COLS = 11;
     static const uint8_t KEY_WIDTH = 9;
-    static const uint8_t KEY_HEIGHT = 9;        // Compressed to fit 4 rows on 64px displays
+    static const uint8_t KEY_HEIGHT = 9;        // Compressed to fit 5 rows on displays
     static const uint8_t KEYBOARD_START_Y = 26; // Start just below input box bottom
 
     VirtualKey keyboard[KEYBOARD_ROWS][KEYBOARD_COLS];

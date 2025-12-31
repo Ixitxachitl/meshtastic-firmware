@@ -1,6 +1,7 @@
 #include "configuration.h"
 #if HAS_SCREEN
 #include "CompassRenderer.h"
+#include "MessageRenderer.h"
 #include "NodeDB.h"
 #include "NodeListRenderer.h"
 #include "UIRenderer.h"
@@ -8,6 +9,7 @@
 #include "gps/RTC.h" // for getTime() function
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
+#include "graphics/emotes.h"
 #include "graphics/images.h"
 #include "meshUtils.h"
 #include <algorithm>
@@ -21,7 +23,12 @@ extern bool haveGlyphs(const char *str);
 // Global screen instance
 extern graphics::Screen *screen;
 
-#if defined(M5STACK_UNITC6L)
+// Use emotes from graphics namespace
+using graphics::Emote;
+using graphics::emotes;
+using graphics::numEmotes;
+
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
 static uint32_t lastSwitchTime = 0;
 #endif
 namespace graphics
@@ -41,6 +48,22 @@ void drawScaledXBitmap16x16(int x, int y, int width, int height, const uint8_t *
                 display->fillRect(x + row * 2, y + col * 2, 2, 2);
             }
         }
+    }
+}
+
+// Helper to draw favorite bullet point with platform-specific offset
+static inline void drawFavoriteBullet(OLEDDisplay *display, int x, int y, meshtastic_NodeInfoLite *node)
+{
+    if (!node->is_favorite)
+        return;
+    if (currentResolution == ScreenResolution::High) {
+        drawScaledXBitmap16x16(x, y + 6, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
+    } else {
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+        display->drawXbm(x, y + 1, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
+#else
+        display->drawXbm(x, y + 5, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
+#endif
     }
 }
 
@@ -94,10 +117,16 @@ const char *getSafeNodeName(OLEDDisplay *display, meshtastic_NodeInfoLite *node,
         raw = config.display.use_long_node_name ? node->user.long_name : node->user.short_name;
     }
 
-    // 2) Sanitize (empty if raw is null/empty)
+#if defined(USE_TINY_FONT)
+    // For tiny fonts, sanitize first (emoji won't render properly anyway)
     std::string s = (raw && *raw) ? sanitizeString(raw) : std::string{};
+#else
+    // For normal fonts with emoji support, use raw string without sanitization
+    // drawStringWithEmotes will handle unknown emoji replacement
+    std::string s = (raw && *raw) ? std::string(raw) : std::string{};
+#endif
 
-    // 3) Fallback if sanitize yields empty; otherwise copy safely (truncate if needed)
+    // 3) Fallback if empty; otherwise copy safely (truncate if needed)
     if (s.empty() || s == "¿" || s.find_first_not_of("¿") == std::string::npos) {
         writeFallbackId();
     } else {
@@ -226,14 +255,13 @@ void drawEntryLastHeard(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int
 
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
+#if defined(USE_TINY_FONT)
     display->drawString(x + ((currentResolution == ScreenResolution::High) ? 6 : 3), y, nodeName);
-    if (node->is_favorite) {
-        if (currentResolution == ScreenResolution::High) {
-            drawScaledXBitmap16x16(x, y + 6, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
-        } else {
-            display->drawXbm(x, y + 5, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
-        }
-    }
+#else
+    graphics::MessageRenderer::drawStringWithEmotes(display, x + ((currentResolution == ScreenResolution::High) ? 6 : 3), y,
+                                                    nodeName, emotes, numEmotes);
+#endif
+    drawFavoriteBullet(display, x, y, node);
 
     int rightEdge = x + columnWidth - timeOffset;
     if (timeStr[strlen(timeStr) - 1] == 'm') // Fix the fact that our fonts don't line up well all the time
@@ -246,7 +274,6 @@ void drawEntryHopSignal(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int
 {
     bool isLeftCol = (x < SCREEN_WIDTH / 2);
 
-    int nameMaxWidth = columnWidth - 25;
     int barsOffset = (currentResolution == ScreenResolution::High) ? (isLeftCol ? 20 : 24) : (isLeftCol ? 15 : 19);
     int hopOffset = (currentResolution == ScreenResolution::High) ? (isLeftCol ? 21 : 29) : (isLeftCol ? 13 : 17);
 
@@ -257,14 +284,14 @@ void drawEntryHopSignal(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
 
+#if defined(USE_TINY_FONT)
+    int nameMaxWidth = columnWidth - 25;
     display->drawStringMaxWidth(x + ((currentResolution == ScreenResolution::High) ? 6 : 3), y, nameMaxWidth, nodeName);
-    if (node->is_favorite) {
-        if (currentResolution == ScreenResolution::High) {
-            drawScaledXBitmap16x16(x, y + 6, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
-        } else {
-            display->drawXbm(x, y + 5, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
-        }
-    }
+#else
+    graphics::MessageRenderer::drawStringWithEmotes(display, x + ((currentResolution == ScreenResolution::High) ? 6 : 3), y,
+                                                    nodeName, emotes, numEmotes);
+#endif
+    drawFavoriteBullet(display, x, y, node);
 
     // Draw signal strength bars
     int bars = (node->snr > 5) ? 4 : (node->snr > 0) ? 3 : (node->snr > -5) ? 2 : (node->snr > -10) ? 1 : 0;
@@ -293,10 +320,6 @@ void drawEntryHopSignal(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int
 
 void drawNodeDistance(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16_t x, int16_t y, int columnWidth)
 {
-    bool isLeftCol = (x < SCREEN_WIDTH / 2);
-    int nameMaxWidth =
-        columnWidth - ((currentResolution == ScreenResolution::High) ? (isLeftCol ? 25 : 28) : (isLeftCol ? 20 : 22));
-
     const char *nodeName = getSafeNodeName(display, node, columnWidth);
     char distStr[10] = "";
 
@@ -350,16 +373,19 @@ void drawNodeDistance(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
 
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
+#if defined(USE_TINY_FONT)
+    bool isLeftCol = (x < SCREEN_WIDTH / 2);
+    int nameMaxWidth =
+        columnWidth - ((currentResolution == ScreenResolution::High) ? (isLeftCol ? 25 : 28) : (isLeftCol ? 20 : 22));
     display->drawStringMaxWidth(x + ((currentResolution == ScreenResolution::High) ? 6 : 3), y, nameMaxWidth, nodeName);
-    if (node->is_favorite) {
-        if (currentResolution == ScreenResolution::High) {
-            drawScaledXBitmap16x16(x, y + 6, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
-        } else {
-            display->drawXbm(x, y + 5, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
-        }
-    }
+#else
+    graphics::MessageRenderer::drawStringWithEmotes(display, x + ((currentResolution == ScreenResolution::High) ? 6 : 3), y,
+                                                    nodeName, emotes, numEmotes);
+#endif
+    drawFavoriteBullet(display, x, y, node);
 
     if (strlen(distStr) > 0) {
+        bool isLeftCol = (x < SCREEN_WIDTH / 2);
         int offset = (currentResolution == ScreenResolution::High)
                          ? (isLeftCol ? 7 : 10) // Offset for Wide Screens (Left Column:Right Column)
                          : (isLeftCol ? 4 : 7); // Offset for Narrow Screens (Left Column:Right Column)
@@ -385,24 +411,20 @@ void drawEntryDynamic_Nodes(OLEDDisplay *display, meshtastic_NodeInfoLite *node,
 
 void drawEntryCompass(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16_t x, int16_t y, int columnWidth)
 {
-    bool isLeftCol = (x < SCREEN_WIDTH / 2);
-
-    // Adjust max text width depending on column and screen width
-    int nameMaxWidth =
-        columnWidth - ((currentResolution == ScreenResolution::High) ? (isLeftCol ? 25 : 28) : (isLeftCol ? 20 : 22));
-
     const char *nodeName = getSafeNodeName(display, node, columnWidth);
 
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
+#if defined(USE_TINY_FONT)
+    bool isLeftCol = (x < SCREEN_WIDTH / 2);
+    int nameMaxWidth =
+        columnWidth - ((currentResolution == ScreenResolution::High) ? (isLeftCol ? 25 : 28) : (isLeftCol ? 20 : 22));
     display->drawStringMaxWidth(x + ((currentResolution == ScreenResolution::High) ? 6 : 3), y, nameMaxWidth, nodeName);
-    if (node->is_favorite) {
-        if (currentResolution == ScreenResolution::High) {
-            drawScaledXBitmap16x16(x, y + 6, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint, display);
-        } else {
-            display->drawXbm(x, y + 5, smallbulletpoint_width, smallbulletpoint_height, smallbulletpoint);
-        }
-    }
+#else
+    graphics::MessageRenderer::drawStringWithEmotes(display, x + ((currentResolution == ScreenResolution::High) ? 6 : 3), y,
+                                                    nodeName, emotes, numEmotes);
+#endif
+    drawFavoriteBullet(display, x, y, node);
 }
 
 void drawCompassArrow(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16_t x, int16_t y, int columnWidth, float myHeading,
@@ -461,8 +483,16 @@ void drawCompassArrow(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
 void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y, const char *title,
                         EntryRenderer renderer, NodeExtrasRenderer extras, float heading, double lat, double lon)
 {
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+    const int COMMON_HEADER_HEIGHT = FONT_HEIGHT_TINY + 3;
+#else
     const int COMMON_HEADER_HEIGHT = FONT_HEIGHT_SMALL - 1;
+#endif
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+    const int rowYOffset = FONT_HEIGHT_TINY;
+#else
     const int rowYOffset = FONT_HEIGHT_SMALL - 3;
+#endif
     bool locationScreen = false;
 
     if (strcmp(title, "Bearings") == 0)
@@ -646,7 +676,7 @@ void drawDynamicListScreen_Nodes(OLEDDisplay *display, OLEDDisplayUiState *state
 
     unsigned long now = millis();
 
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     display->clear();
     if (now - lastSwitchTime >= 3000) {
         display->display();
@@ -747,7 +777,7 @@ void drawNodeListWithCompasses(OLEDDisplay *display, OLEDDisplayUiState *state, 
     double lat = DegD(ourNode->position.latitude_i);
     double lon = DegD(ourNode->position.longitude_i);
 
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     display->clear();
     uint32_t now = millis();
     if (now - lastSwitchTime >= 2000) {

@@ -25,11 +25,34 @@
     }
   },
 
-  // Use 'forwardPorts' to make a list of ports inside the container available locally.
-  "forwardPorts": [4403],
+  // Use device cgroup rules to allow access to serial devices without requiring them at startup
+  "runArgs": [
+    "--device-cgroup-rule=c 166:* rmw", // ttyACM* devices
+    "--device-cgroup-rule=c 188:* rmw", // ttyUSB* devices
+    "--group-add=dialout",
+    "--privileged" // Required for WSL device forwarding
+  ],
 
-  // Use "--device=" to make a local device available inside the container.
-  // "runArgs": ["--device=/dev/ttyACM0"],
+  // Mount host /dev to access devices attached after container start
+  "mounts": ["type=bind,source=/dev,target=/dev"],
+
+  // Expose ports from the container to all network interfaces
+  "appPort": ["4403:4403"],
+
+  // Forward ports from the container to the host
+  "forwardPorts": [4403],
+  "portsAttributes": {
+    "4403": {
+      "label": "Meshtastic API",
+      "onAutoForward": "notify",
+      "elevateIfNeeded": true
+    }
+  },
+
+  // Environment variables for X11 forwarding
+  "containerEnv": {
+    "DISPLAY": "${localEnv:DISPLAY}"
+  },
 
   // Run commands to prepare the container for use
   "postCreateCommand": ".devcontainer/setup.sh"

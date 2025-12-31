@@ -126,8 +126,20 @@ struct Panel_sdl : public Panel_FrameBufferBase {
     static void addKeyCodeMapping(SDL_KeyCode keyCode, uint8_t gpio);
     static int getKeyCodeMapping(SDL_KeyCode keyCode);
 
+    // Text input support
+    static bool hasTextInput() { return !_text_input_buffer.empty(); }
+    static char getTextInput()
+    {
+        if (_text_input_buffer.empty())
+            return 0;
+        char c = _text_input_buffer.front();
+        _text_input_buffer.erase(0, 1);
+        return c;
+    }
+
   protected:
     const char *_window_title = "LGFX Simulator";
+    static std::string _text_input_buffer;
     SDL_mutex *_sdl_mutex = nullptr;
 
     void sdl_create(monitor_t *m);
