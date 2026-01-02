@@ -2,6 +2,7 @@
 #if HAS_SCREEN
 #include "CompassRenderer.h"
 #include "GPSStatus.h"
+#include "MessageRenderer.h"
 #include "NodeDB.h"
 #include "NodeListRenderer.h"
 #include "UIRenderer.h"
@@ -9,6 +10,8 @@
 #include "gps/GeoCoord.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/TimeFormatters.h"
+#include "graphics/draw/Math3D.h"
+#include "graphics/emotes.h"
 #include "graphics/images.h"
 #include "main.h"
 #include "target_specific.h"
@@ -18,7 +21,15 @@
 
 // External variables
 extern graphics::Screen *screen;
-#if defined(M5STACK_UNITC6L)
+#if !MESHTASTIC_EXCLUDE_BMI270
+extern "C" Quat GetAttitudeForRenderer();
+extern "C" uint32_t GetStepCountForRenderer();
+extern "C" bool HasStepCounterForRenderer();
+#endif
+#ifdef HAS_BHI260AP_SENSORLIB
+extern "C" bool GetBHI260APDataForRenderer(float *accelX, float *accelY, float *accelZ, float *gyroX, float *gyroY, float *gyroZ);
+#endif
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
 static uint32_t lastSwitchTime = 0;
 #endif
 namespace graphics
@@ -26,14 +37,33 @@ namespace graphics
 NodeNum UIRenderer::currentFavoriteNodeNum = 0;
 std::vector<meshtastic_NodeInfoLite *> graphics::UIRenderer::favoritedNodes;
 
+using graphics::Emote;
+using graphics::emotes;
+using graphics::numEmotes;
+
 static inline void drawSatelliteIcon(OLEDDisplay *display, int16_t x, int16_t y)
 {
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+    int yOffset = -2;
+#else
     int yOffset = (currentResolution == ScreenResolution::High) ? -5 : 1;
+#endif
     if (currentResolution == ScreenResolution::High) {
         NodeListRenderer::drawScaledXBitmap16x16(x, y + yOffset, imgSatellite_width, imgSatellite_height, imgSatellite, display);
     } else {
         display->drawXbm(x + 1, y + yOffset, imgSatellite_width, imgSatellite_height, imgSatellite);
     }
+}
+
+// Footprint icon bitmap (16x16)
+static const unsigned char footprint[] PROGMEM = {0x00, 0x00, 0x00, 0x00, 0x30, 0x00, 0x78, 0x00, 0x78, 0x0C, 0x78,
+                                                  0x1E, 0x78, 0x1E, 0x78, 0x1E, 0x00, 0x1E, 0x78, 0x1E, 0x78, 0x00,
+                                                  0x30, 0x1E, 0x00, 0x1E, 0x00, 0x0C, 0x00, 0x00, 0x00, 0x00};
+
+static inline void drawFootprintIcon(OLEDDisplay *display, int16_t x, int16_t y)
+{
+    // Draw the 16x16 footprint bitmap
+    display->drawXbm(x, y, 16, 16, footprint);
 }
 
 void graphics::UIRenderer::rebuildFavoritedNodes()
@@ -62,11 +92,16 @@ extern uint32_t dopThresholds[5];
 // Draw GPS status summary
 void UIRenderer::drawGps(OLEDDisplay *display, int16_t x, int16_t y, const meshtastic::GPSStatus *gps)
 {
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+    int yOffset = -2;
+#else
+    int yOffset = (currentResolution == ScreenResolution::High) ? -2 : 1;
+#endif
     // Draw satellite image
     if (currentResolution == ScreenResolution::High) {
-        NodeListRenderer::drawScaledXBitmap16x16(x, y - 2, imgSatellite_width, imgSatellite_height, imgSatellite, display);
+        NodeListRenderer::drawScaledXBitmap16x16(x, y + yOffset, imgSatellite_width, imgSatellite_height, imgSatellite, display);
     } else {
-        display->drawXbm(x + 1, y + 1, imgSatellite_width, imgSatellite_height, imgSatellite);
+        display->drawXbm(x + 1, y + yOffset, imgSatellite_width, imgSatellite_height, imgSatellite);
     }
     char textString[10];
 
@@ -277,7 +312,11 @@ void UIRenderer::drawNodes(OLEDDisplay *display, int16_t x, int16_t y, const mes
     if (currentResolution == ScreenResolution::High) {
         NodeListRenderer::drawScaledXBitmap16x16(x, y - 1, 8, 8, imgUser, display);
     } else {
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+        display->drawFastImage(x, y - 3, 8, 8, imgUser);
+#else
         display->drawFastImage(x, y + 1, 8, 8, imgUser);
+#endif
     }
 #endif
     int string_offset = (currentResolution == ScreenResolution::High) ? 9 : 0;
@@ -300,8 +339,11 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
     meshtastic_NodeInfoLite *node = favoritedNodes[nodeIndex];
     if (!node || node->num == nodeDB->getNodeNum() || !node->is_favorite)
         return;
+
+    currentFavoriteNodeNum = node->num;
+
     display->clear();
-#if defined(M5STACK_UNITC6L)
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     uint32_t now = millis();
     if (now - lastSwitchTime >= 10000) // 10000 ms = 10 秒
     {
@@ -309,7 +351,6 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
         lastSwitchTime = now;
     }
 #endif
-    currentFavoriteNodeNum = node->num;
     // === Create the shortName and title string ===
     const char *shortName = (node->has_user && haveGlyphs(node->user.short_name)) ? node->user.short_name : "Node";
     char titlestr[32] = {0};
@@ -317,6 +358,8 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
 
     // === Draw battery/time/mail header (common across screens) ===
     graphics::drawCommonHeader(display, x, y, titlestr);
+
+    // (Classic small-screen compass is drawn later at the computed compass position)
 
     // ===== DYNAMIC ROW STACKING WITH YOUR MACROS =====
     // 1. Each potential info row has a macro-defined Y position (not regular increments!).
@@ -329,16 +372,21 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
     std::string usernameStr;
     // === 1. Long Name (always try to show first) ===
     const char *username;
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+    username = (node->has_user && node->user.long_name[0]) ? node->user.short_name : nullptr;
+#else
     if (currentResolution == ScreenResolution::UltraLow) {
         username = (node->has_user && node->user.long_name[0]) ? node->user.short_name : nullptr;
     } else {
         username = (node->has_user && node->user.long_name[0]) ? node->user.long_name : nullptr;
     }
+#endif
 
     if (username) {
         usernameStr = sanitizeString(username); // Sanitize the incoming long_name just in case
-        // Print node's long name (e.g. "Backpack Node")
-        display->drawString(x, getTextPositions(display)[line++], usernameStr.c_str());
+        // Print node's long name (e.g. "Backpack Node") with emoji support
+        graphics::MessageRenderer::drawStringWithEmotes(display, x, getTextPositions(display)[line++], usernameStr.c_str(),
+                                                        emotes, numEmotes);
     }
 
     // === 2. Signal and Hops (combined on one line, if available) ===
@@ -389,7 +437,7 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
     if (seenStr[0] && line < 5) {
         display->drawString(x, getTextPositions(display)[line++], seenStr);
     }
-#if !defined(M5STACK_UNITC6L)
+#if !defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     // === 4. Uptime (only show if metric is present) ===
     char uptimeStr[32] = "";
     if (node->has_device_metrics && node->device_metrics.has_uptime_seconds) {
@@ -485,16 +533,44 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
             float d =
                 GeoCoord::latLongToMeter(DegD(p.latitude_i), DegD(p.longitude_i), DegD(op.latitude_i), DegD(op.longitude_i));
             */
-            float bearing = GeoCoord::bearing(DegD(op.latitude_i), DegD(op.longitude_i), DegD(p.latitude_i), DegD(p.longitude_i));
-            if (uiconfig.compass_mode == meshtastic_CompassMode_FREEZE_HEADING) {
-                myHeading = 0;
-            } else {
-                bearing -= myHeading;
-            }
+            // Absolute world bearing (do NOT subtract heading here; the 3D renderer already does -heading)
+            float bearingWorld =
+                GeoCoord::bearing(DegD(op.latitude_i), DegD(op.longitude_i), DegD(p.latitude_i), DegD(p.longitude_i));
+            // If you still draw any legacy 2D bits, you can keep this relative bearing:
+            float bearingRel = bearingWorld;
+            if (uiconfig.compass_mode != meshtastic_CompassMode_FREEZE_HEADING)
+                bearingRel -= myHeading;
 
-            display->drawCircle(compassX, compassY, compassRadius);
-            CompassRenderer::drawCompassNorth(display, compassX, compassY, myHeading, compassRadius);
-            CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, bearing);
+            // Elevation (radians)
+            int32_t myAltM = ourNode ? ourNode->position.altitude : 0;
+            if (myAltM == 0)
+                myAltM = geoCoord.getAltitude();
+            int32_t tgtAltM = p.altitude;
+            float groundM =
+                GeoCoord::latLongToMeter(DegD(p.latitude_i), DegD(p.longitude_i), DegD(op.latitude_i), DegD(op.longitude_i));
+            float dzM = float(tgtAltM - myAltM);
+            float elevRad = (fabsf(groundM) > 0.5f) ? atanf(dzM / groundM) : 0.0f;
+
+            // Render compass based on display resolution and type
+#if !defined(USE_EINK)
+            if (isHighResolution()) {
+                // 3D spherical compass + 3D-aware rim chevron toward favorite node
+#if !MESHTASTIC_EXCLUDE_BMI270
+                const Quat att = GetAttitudeForRenderer();
+#else
+                const Quat att = {1, 0, 0, 0}; // Identity quaternion
+#endif
+                graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, bearingRel);
+                graphics::CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, bearingWorld,
+                                                              elevRad);
+            } else
+#endif
+            {
+                // Classic small-screen compass: circle + 'N' + simple arrow (for TFTs, low-res OLEDs, and e-ink)
+                display->drawCircle(compassX, compassY, compassRadius);
+                graphics::CompassRenderer::drawCompassNorth(display, compassX, compassY, myHeading, compassRadius);
+                graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, bearingRel);
+            }
         }
         // else show nothing
     } else {
@@ -535,19 +611,51 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
                 myHeading = screen->hasHeading() ? screen->getHeading() * PI / 180
                                                  : screen->estimatedHeading(DegD(op.latitude_i), DegD(op.longitude_i));
             }
-            graphics::CompassRenderer::drawCompassNorth(display, compassX, compassY, myHeading, compassRadius);
 
             const auto &p = node->position;
             /* unused
             float d =
                 GeoCoord::latLongToMeter(DegD(p.latitude_i), DegD(p.longitude_i), DegD(op.latitude_i), DegD(op.longitude_i));
             */
-            float bearing = GeoCoord::bearing(DegD(op.latitude_i), DegD(op.longitude_i), DegD(p.latitude_i), DegD(p.longitude_i));
+            float bearingWorld =
+                GeoCoord::bearing(DegD(op.latitude_i), DegD(op.longitude_i), DegD(p.latitude_i), DegD(p.longitude_i));
+            float bearingRel = bearingWorld;
             if (uiconfig.compass_mode != meshtastic_CompassMode_FREEZE_HEADING)
-                bearing -= myHeading;
-            graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, bearing);
+                bearingRel -= myHeading;
 
-            display->drawCircle(compassX, compassY, compassRadius);
+            // --- Elevation angle (radians) for 3D chevron ---
+            // My altitude: prefer ourNode->position.altitude, else GeoCoord (same units: meters)
+            int32_t myAltM = ourNode ? ourNode->position.altitude : 0;
+            if (myAltM == 0) { // fall back to current GeoCoord altitude if set
+                myAltM = geoCoord.getAltitude();
+            }
+            // Target altitude:
+            int32_t tgtAltM = p.altitude;
+            // Ground range in meters:
+            float groundM =
+                GeoCoord::latLongToMeter(DegD(p.latitude_i), DegD(p.longitude_i), DegD(op.latitude_i), DegD(op.longitude_i));
+            // Elevation angle: +up = positive
+            float dzM = float(tgtAltM - myAltM);
+            float elevRad = (fabsf(groundM) > 0.5f) ? atanf(dzM / groundM) : 0.0f;
+
+#if !defined(USE_EINK)
+            if (isHighResolution()) {
+#if !MESHTASTIC_EXCLUDE_BMI270
+                const Quat att = GetAttitudeForRenderer();
+#else
+                const Quat att = {1, 0, 0, 0};
+#endif
+                graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, bearingRel);
+                graphics::CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, bearingWorld,
+                                                              elevRad);
+            } else
+#endif
+            {
+                // Classic small-screen compass (for TFTs, low-res OLEDs, and e-ink)
+                display->drawCircle(compassX, compassY, compassRadius);
+                graphics::CompassRenderer::drawCompassNorth(display, compassX, compassY, myHeading, compassRadius);
+                graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, bearingRel);
+            }
         }
         // else show nothing
     }
@@ -586,6 +694,14 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
     config.display.heading_bold = false;
 
     // Display Region and Channel Utilization
+#if defined(M5STACK_UNITC6L)
+    drawNodes(display, x, getTextPositions(display)[line++] + 2, nodeStatus, -1, false, "online");
+    // Uptime calculated here but drawn later with channel utilization
+    uint32_t uptime = millis() / 1000;
+    uint32_t days = uptime / 86400;
+    uint32_t hours = (uptime % 86400) / 3600;
+    uint32_t mins = (uptime % 3600) / 60;
+#else
     if (currentResolution == ScreenResolution::UltraLow) {
         drawNodes(display, x, getTextPositions(display)[line] + 2, nodeStatus, -1, false, "online");
     } else {
@@ -596,6 +712,7 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
         getUptimeStr(millis(), "Up", uptimeStr, sizeof(uptimeStr));
     }
     display->drawString(SCREEN_WIDTH - display->getStringWidth(uptimeStr), getTextPositions(display)[line++], uptimeStr);
+#endif
 
     // === Second Row: Satellites and Voltage ===
     config.display.heading_bold = false;
@@ -619,14 +736,45 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
 #if defined(M5STACK_UNITC6L)
     line += 1;
 
-    // === Node Identity ===
+    // === Channel Utilization and Uptime (same line) ===
+    char chUtilStr[16];
+    snprintf(chUtilStr, sizeof(chUtilStr), "Ch:%2.0f%%", airTime->channelUtilizationPercent());
+    display->drawString(x, getTextPositions(display)[line], chUtilStr);
+
+    char uptimeCompactStr[24] = "";
+    if (days)
+        snprintf(uptimeCompactStr, sizeof(uptimeCompactStr), "Up:%ud%uh", days, hours);
+    else if (hours)
+        snprintf(uptimeCompactStr, sizeof(uptimeCompactStr), "Up:%uh%um", hours, mins);
+    else
+        snprintf(uptimeCompactStr, sizeof(uptimeCompactStr), "Up:%um", mins);
+
+    display->drawString(SCREEN_WIDTH - display->getStringWidth(uptimeCompactStr), getTextPositions(display)[line],
+                        uptimeCompactStr);
+    line += 1;
+
+    // === Node Identity (Long Name + Short Name) ===
     int textWidth = 0;
     int nameX = 0;
+    std::string longNameStr;
+
+    if (ourNode && ourNode->has_user && strlen(ourNode->user.long_name) > 0) {
+        longNameStr = sanitizeString(ourNode->user.long_name);
+    }
+
     char shortnameble[35];
     snprintf(shortnameble, sizeof(shortnameble), "%s",
              graphics::UIRenderer::haveGlyphs(owner.short_name) ? owner.short_name : "");
 
-    // === ShortName Centered ===
+    // Show long name if available
+    if (!longNameStr.empty()) {
+        textWidth = graphics::MessageRenderer::getStringWidthWithEmotes(display, longNameStr, emotes, numEmotes);
+        nameX = (SCREEN_WIDTH - textWidth) / 2;
+        graphics::MessageRenderer::drawStringWithEmotes(display, nameX, getTextPositions(display)[line++], longNameStr, emotes,
+                                                        numEmotes);
+    }
+
+    // Show short name on next line
     textWidth = display->getStringWidth(shortnameble);
     nameX = (SCREEN_WIDTH - textWidth) / 2;
     display->drawString(nameX, getTextPositions(display)[line++], shortnameble);
@@ -650,7 +798,11 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
 
     int chUtil_x = (currentResolution == ScreenResolution::High) ? display->getStringWidth(chUtil) + 10
                                                                  : display->getStringWidth(chUtil) + 5;
+#if defined(USE_TINY_FONT)
+    int chUtil_y = getTextPositions(display)[line] - 1;
+#else
     int chUtil_y = getTextPositions(display)[line] + 3;
+#endif
 
     int chutil_bar_width = (currentResolution == ScreenResolution::High) ? 100 : 50;
     if (!config.bluetooth.enabled) {
@@ -746,9 +898,10 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
             nameX, ((rows == 4) ? getTextPositions(display)[line++] : getTextPositions(display)[line++]) + yOffset, combinedName);
     } else {
         // === LongName Centered ===
-        textWidth = display->getStringWidth(longNameStr.c_str());
+        textWidth = graphics::MessageRenderer::getStringWidthWithEmotes(display, longNameStr, emotes, numEmotes);
         nameX = (SCREEN_WIDTH - textWidth) / 2;
-        display->drawString(nameX, getTextPositions(display)[line++], longNameStr.c_str());
+        graphics::MessageRenderer::drawStringWithEmotes(display, nameX, getTextPositions(display)[line++], longNameStr, emotes,
+                                                        numEmotes);
 
         // === ShortName Centered ===
         textWidth = display->getStringWidth(shortnameble);
@@ -915,24 +1068,27 @@ void UIRenderer::drawIconScreen(const char *upperMsg, OLEDDisplay *display, OLED
     // needs to be drawn relative to x and y
 
     // draw centered icon left to right and centered above the one line of app text
-#if defined(M5STACK_UNITC6L)
-    display->drawXbm(x + (SCREEN_WIDTH - 50) / 2, y + (SCREEN_HEIGHT - 28) / 2, icon_width, icon_height, icon_bits);
-    display->setFont(FONT_MEDIUM);
-    display->setTextAlignment(TEXT_ALIGN_LEFT);
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+    display->drawXbm(x + (SCREEN_WIDTH - 50) / 2, y + (SCREEN_HEIGHT - FONT_HEIGHT_SMALL - icon_height) / 2 + 1, icon_width,
+                     icon_height, icon_bits);
     display->setFont(FONT_SMALL);
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+
+    // Draw meshtastic.org at bottom
+    const char *title = "meshtastic.org";
+    display->drawString(x + getStringCenteredX(title), y + SCREEN_HEIGHT - FONT_HEIGHT_SMALL, title);
+
     // Draw region in upper left
-    if (upperMsg) {
-        int msgWidth = display->getStringWidth(upperMsg);
-        int msgX = x + (SCREEN_WIDTH - msgWidth) / 2;
-        int msgY = y;
-        display->drawString(msgX, msgY, upperMsg);
-    }
-    // Draw version and short name in bottom middle
+    if (upperMsg)
+        display->drawString(x + 0, y + 0, upperMsg);
+
+    // Draw version and short name in upper right
     char buf[25];
-    snprintf(buf, sizeof(buf), "%s   %s", xstr(APP_VERSION_SHORT),
+    snprintf(buf, sizeof(buf), "%s\n%s", xstr(APP_VERSION_SHORT),
              graphics::UIRenderer::haveGlyphs(owner.short_name) ? owner.short_name : "");
 
-    display->drawString(x + getStringCenteredX(buf), y + SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM, buf);
+    display->setTextAlignment(TEXT_ALIGN_RIGHT);
+    display->drawString(x + SCREEN_WIDTH, y + 0, buf);
     screen->forceDisplay();
 
     display->setTextAlignment(TEXT_ALIGN_LEFT); // Restore left align, just to be kind to any other unsuspecting code
@@ -984,7 +1140,6 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
     config.display.heading_bold = false;
 
     const char *displayLine = ""; // Initialize to empty string by default
-    meshtastic_NodeInfoLite *ourNode = nodeDB->getMeshNode(nodeDB->getNodeNum());
 
     if (config.position.gps_mode != meshtastic_Config_PositionConfig_GpsMode_ENABLED) {
         if (config.position.fixed_position) {
@@ -1008,18 +1163,36 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
 
     // === Determine Compass Heading ===
     float heading = 0;
+    static float frozenHeading = 0; // Store the heading when freeze mode was activated
+    static bool hasStoredFrozenHeading = false;
+    static meshtastic_CompassMode lastCompassMode = (meshtastic_CompassMode)-1; // Force initial detection
     bool validHeading = false;
-    if (uiconfig.compass_mode == meshtastic_CompassMode_FREEZE_HEADING) {
+
+    // Always get current heading for compass ring rotation
+    if (screen->hasHeading()) {
+        heading = radians(screen->getHeading());
         validHeading = true;
     } else {
-        if (screen->hasHeading()) {
-            heading = radians(screen->getHeading());
-            validHeading = true;
-        } else {
-            heading = screen->estimatedHeading(geoCoord.getLatitude() * 1e-7, geoCoord.getLongitude() * 1e-7);
-            validHeading = !isnan(heading);
+        heading = screen->estimatedHeading(geoCoord.getLatitude() * 1e-7, geoCoord.getLongitude() * 1e-7);
+        validHeading = !isnan(heading);
+    }
+
+    // Handle freeze heading mode - capture current heading when mode is first activated
+    if (uiconfig.compass_mode != lastCompassMode) {
+        // Mode changed, reset frozen heading state
+        hasStoredFrozenHeading = false;
+        lastCompassMode = uiconfig.compass_mode;
+    }
+
+    if (uiconfig.compass_mode == meshtastic_CompassMode_FREEZE_HEADING) {
+        if (!hasStoredFrozenHeading && validHeading) {
+            frozenHeading = heading; // Capture current heading
+            hasStoredFrozenHeading = true;
         }
     }
+
+    // Determine needle heading based on mode
+    float needleHeading = (uiconfig.compass_mode == meshtastic_CompassMode_FREEZE_HEADING) ? frozenHeading : heading;
 
     // If GPS is off, no need to display these parts
     if (strcmp(displayLine, "GPS off") != 0 && strcmp(displayLine, "No GPS") != 0) {
@@ -1059,7 +1232,7 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
         }
         display->drawString(x, getTextPositions(display)[line++], altitudeLine);
     }
-#if !defined(M5STACK_UNITC6L)
+#if !defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
     // === Draw Compass if heading is valid ===
     if (validHeading) {
         // --- Compass Rendering: landscape (wide) screens use original side-aligned logic ---
@@ -1077,25 +1250,107 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
             // Center vertically and nudge down slightly to keep "N" clear of header
             const int16_t compassY = topY + (usableHeight / 2) + ((FONT_HEIGHT_SMALL - 1) / 2) + 2;
 
-            CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, -heading);
-            display->drawCircle(compassX, compassY, compassRadius);
+            // Add step count display above compass (top right area)
+#if !MESHTASTIC_EXCLUDE_BMI270
+            uint32_t stepCount = GetStepCountForRenderer();
+            if (HasStepCounterForRenderer()) { // Show if step counter hardware exists
+                display->setTextAlignment(TEXT_ALIGN_RIGHT);
+                display->setFont(FONT_SMALL);
 
-            // "N" label
-            float northAngle = 0;
-            if (uiconfig.compass_mode != meshtastic_CompassMode_FIXED_RING)
-                northAngle = -heading;
-            float radius = compassRadius;
-            int16_t nX = compassX + (radius - 1) * sin(northAngle);
-            int16_t nY = compassY - (radius - 1) * cos(northAngle);
-            int16_t nLabelWidth = display->getStringWidth("N") + 2;
-            int16_t nLabelHeightBox = FONT_HEIGHT_SMALL + 1;
+                // Position step display in top right, below header
+                const int16_t stepX = SCREEN_WIDTH - 2;
+                const int16_t stepY = topY - 2;
 
-            display->setColor(BLACK);
-            display->fillRect(nX - nLabelWidth / 2, nY - nLabelHeightBox / 2, nLabelWidth, nLabelHeightBox);
-            display->setColor(WHITE);
-            display->setFont(FONT_SMALL);
-            display->setTextAlignment(TEXT_ALIGN_CENTER);
-            display->drawString(nX, nY - FONT_HEIGHT_SMALL / 2, "N");
+                // Format step count (show as K if > 1000)
+                char stepText[16];
+                if (stepCount >= 10000) {
+                    snprintf(stepText, sizeof(stepText), "%.1fK", stepCount / 1000.0f);
+                } else if (stepCount >= 1000) {
+                    snprintf(stepText, sizeof(stepText), "%.2fK", stepCount / 1000.0f);
+                } else {
+                    snprintf(stepText, sizeof(stepText), "%u", stepCount);
+                }
+
+                // Calculate text width to position footprints to the left of the digits
+                int16_t textWidth = display->getStringWidth(stepText);
+
+                // Draw footprint icon to the left of the text with some spacing
+                drawFootprintIcon(display, stepX - textWidth - 15, stepY + 2);
+
+                display->drawString(stepX, stepY, stepText);
+                display->setTextAlignment(TEXT_ALIGN_LEFT); // Reset alignment
+            }
+#endif
+
+            // Compass with mode-specific behavior
+#if !MESHTASTIC_EXCLUDE_BMI270
+            const Quat att = GetAttitudeForRenderer();
+#else
+            const Quat att = {1, 0, 0, 0};
+#endif
+
+            // Render compass sphere with mode-specific attitude
+            if (uiconfig.compass_mode == meshtastic_CompassMode_FIXED_RING) {
+                // FIXED_RING: Use runtime-detected compass (3D for OLED, simple for TFT/e-ink)
+                CompassRenderer::setTopDownView(true);
+                CompassRenderer::drawCompassSphere(display, compassX, compassY, compassRadius);
+
+#if !defined(USE_EINK)
+                if (isHighResolution()) {
+                    // High-res OLED: show fixed cardinal labels around the ring
+                    const uint16_t rDraw = (uint16_t)std::max<int>(1, (int)(compassRadius));
+                    const int16_t cxShift = (int16_t)(compassX - (int)(rDraw * 0.14f));
+                    const int16_t cy = compassY;
+                    const float rLabel = rDraw * 1.06f;
+
+                    display->setFont(FONT_SMALL);
+                    display->setTextAlignment(TEXT_ALIGN_CENTER);
+                    display->drawString(cxShift, cy - (int)rLabel - (FONT_HEIGHT_SMALL / 2), "N");
+                    display->drawString(cxShift + (int)rLabel, cy - (FONT_HEIGHT_SMALL / 2), "E");
+                    display->drawString(cxShift, cy + (int)rLabel - (FONT_HEIGHT_SMALL / 2), "S");
+                    display->drawString(cxShift - (int)rLabel, cy - (FONT_HEIGHT_SMALL / 2), "W");
+
+                    CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, Quat::identity(),
+                                                        needleHeading, 0.0f);
+                } else
+#endif
+                {
+                    // Low-res/e-ink: match develop visuals — no fixed E/N/S/W labels, static 'N' at top, frozen needle if
+                    // selected
+                    display->setFont(FONT_SMALL);
+                    display->setTextAlignment(TEXT_ALIGN_CENTER);
+                    int16_t nX = compassX;
+                    int16_t nY = compassY - (compassRadius - 1);
+                    display->drawString(nX, nY - (FONT_HEIGHT_SMALL / 2), "N");
+                    // Use needleHeading so FREEZE_HEADING is respected
+                    CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, -needleHeading);
+                }
+
+                CompassRenderer::setTopDownView(false);
+            } else {
+                // DYNAMIC/FREEZE_HEADING
+#if !defined(USE_EINK)
+                if (isHighResolution()) {
+                    // Normal 3D compass with gravity
+                    CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, -heading);
+                    CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, needleHeading, 0.0f);
+                } else
+#endif
+                {
+                    // Classic small-screen/e-ink compass: circle + 'N' + simple arrow
+                    display->drawCircle(compassX, compassY, compassRadius);
+                    display->setFont(FONT_SMALL);
+                    display->setTextAlignment(TEXT_ALIGN_CENTER);
+                    // North rotates with live heading unless FIXED_RING; needle may be frozen per mode
+                    float northAngle = (uiconfig.compass_mode != meshtastic_CompassMode_FIXED_RING) ? -heading : 0.0f;
+                    int16_t nX = compassX + (int16_t)((compassRadius - 1) * sinf(northAngle));
+                    int16_t nY = compassY - (int16_t)((compassRadius - 1) * cosf(northAngle));
+                    display->drawString(nX, nY - (FONT_HEIGHT_SMALL / 2), "N");
+                    // Use needleHeading so FREEZE_HEADING affects the arrow on low-res too
+                    CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, -needleHeading);
+                }
+            }
+
         } else {
             // Portrait or square: put compass at the bottom and centered, scaled to fit available space
             // For E-Ink screens, account for navigation bar at the bottom!
@@ -1111,6 +1366,47 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
             if (availableHeight < FONT_HEIGHT_SMALL * 2)
                 return;
 
+                // Add step count display in top right corner for portrait/square screens
+#if !MESHTASTIC_EXCLUDE_BMI270
+            uint32_t stepCount = GetStepCountForRenderer();
+            if (HasStepCounterForRenderer()) {
+                display->setTextAlignment(TEXT_ALIGN_RIGHT);
+                display->setFont(FONT_SMALL);
+
+                const int16_t stepX = SCREEN_WIDTH - 2;
+                const int16_t stepY = getTextPositions(display)[1];
+
+                char stepText[16];
+                if (stepCount >= 10000) {
+                    snprintf(stepText, sizeof(stepText), "%.1fK", stepCount / 1000.0f);
+                } else if (stepCount >= 1000) {
+                    snprintf(stepText, sizeof(stepText), "%.2fK", stepCount / 1000.0f);
+                } else {
+                    snprintf(stepText, sizeof(stepText), "%u", stepCount);
+                }
+
+                int16_t textWidth = display->getStringWidth(stepText);
+                drawFootprintIcon(display, stepX - textWidth - 15, stepY + 2);
+                display->drawString(stepX, stepY, stepText);
+
+#ifdef HAS_BHI260AP_SENSORLIB
+                // Show IMU data under step counter for t-echo-plus
+                float ax, ay, az, gx, gy, gz;
+                if (GetBHI260APDataForRenderer(&ax, &ay, &az, &gx, &gy, &gz)) {
+                    char imuText[32];
+                    // Show accel on one line
+                    snprintf(imuText, sizeof(imuText), "A:%.1f,%.1f,%.1f", ax, ay, az);
+                    display->drawString(stepX, stepY + 14, imuText);
+                    // Show gyro on next line
+                    snprintf(imuText, sizeof(imuText), "G:%.1f,%.1f,%.1f", gx, gy, gz);
+                    display->drawString(stepX, stepY + 28, imuText);
+                }
+#endif
+
+                display->setTextAlignment(TEXT_ALIGN_LEFT);
+            }
+#endif
+
             int compassRadius = availableHeight / 2;
             if (compassRadius < 8)
                 compassRadius = 8;
@@ -1120,31 +1416,216 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
             int compassX = x + SCREEN_WIDTH / 2;
             int compassY = yBelowContent + availableHeight / 2;
 
-            CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, -heading);
-            display->drawCircle(compassX, compassY, compassRadius);
+            // Compass with mode-specific behavior
+#if !MESHTASTIC_EXCLUDE_BMI270
+            const Quat att = GetAttitudeForRenderer();
+#else
+            const Quat att = {1, 0, 0, 0};
+#endif
 
-            // "N" label
-            float northAngle = 0;
-            if (uiconfig.compass_mode != meshtastic_CompassMode_FIXED_RING)
-                northAngle = -heading;
-            float radius = compassRadius;
-            int16_t nX = compassX + (radius - 1) * sin(northAngle);
-            int16_t nY = compassY - (radius - 1) * cos(northAngle);
-            int16_t nLabelWidth = display->getStringWidth("N") + 2;
-            int16_t nLabelHeightBox = FONT_HEIGHT_SMALL + 1;
+            // Render compass sphere with mode-specific attitude
+            if (uiconfig.compass_mode == meshtastic_CompassMode_FIXED_RING) {
+                // FIXED_RING: Render 3D compass from top-down view (ignoring gravity)
+                CompassRenderer::setTopDownView(true);
+                CompassRenderer::drawCompassSphere(display, compassX, compassY, compassRadius, Quat::identity());
 
-            display->setColor(BLACK);
-            display->fillRect(nX - nLabelWidth / 2, nY - nLabelHeightBox / 2, nLabelWidth, nLabelHeightBox);
-            display->setColor(WHITE);
-            display->setFont(FONT_SMALL);
-            display->setTextAlignment(TEXT_ALIGN_CENTER);
-            display->drawString(nX, nY - FONT_HEIGHT_SMALL / 2, "N");
+#if !defined(USE_EINK)
+                if (isHighResolution()) {
+                    // High-res OLED: show fixed cardinal direction labels
+                    const uint16_t rDraw = (uint16_t)std::max<int>(1, (int)(compassRadius));
+                    const int16_t cxShift = (int16_t)(compassX - (int)(rDraw * 0.14f));
+                    const int16_t cy = compassY;
+                    const float rLabel = rDraw * 1.06f;
+
+                    display->setFont(FONT_SMALL);
+                    display->setTextAlignment(TEXT_ALIGN_CENTER);
+                    display->drawString(cxShift, cy - (int)rLabel - (FONT_HEIGHT_SMALL / 2), "N");
+                    display->drawString(cxShift + (int)rLabel, cy - (FONT_HEIGHT_SMALL / 2), "E");
+                    display->drawString(cxShift, cy + (int)rLabel - (FONT_HEIGHT_SMALL / 2), "S");
+                    display->drawString(cxShift - (int)rLabel, cy - (FONT_HEIGHT_SMALL / 2), "W");
+
+                    CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, Quat::identity(),
+                                                        needleHeading, 0.0f);
+                } else
+#endif
+                {
+                    // Low-res/e-ink: match develop visuals — no fixed E/N/S/W labels, static 'N', frozen needle if selected
+                    display->setFont(FONT_SMALL);
+                    display->setTextAlignment(TEXT_ALIGN_CENTER);
+                    int16_t nX = compassX;
+                    int16_t nY = compassY - (compassRadius - 1);
+                    display->drawString(nX, nY - (FONT_HEIGHT_SMALL / 2), "N");
+                    // Use needleHeading so FREEZE_HEADING is respected
+                    CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, -needleHeading);
+                }
+
+                CompassRenderer::setTopDownView(false);
+            } else {
+                // DYNAMIC/FREEZE_HEADING
+#if !defined(USE_EINK)
+                if (isHighResolution()) {
+                    // Normal 3D compass with gravity
+                    CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, -heading);
+                    CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, needleHeading, 0.0f);
+                } else
+#endif
+                {
+                    // Classic small-screen/e-ink compass
+                    display->drawCircle(compassX, compassY, compassRadius);
+                    display->setFont(FONT_SMALL);
+                    display->setTextAlignment(TEXT_ALIGN_CENTER);
+                    // North rotates with live heading unless FIXED_RING
+                    float northAngle = (uiconfig.compass_mode != meshtastic_CompassMode_FIXED_RING) ? -heading : 0.0f;
+                    int16_t nX = compassX + (int16_t)((compassRadius - 1) * sinf(northAngle));
+                    int16_t nY = compassY - (int16_t)((compassRadius - 1) * cosf(northAngle));
+                    display->drawString(nX, nY - (FONT_HEIGHT_SMALL / 2), "N");
+                    // Use needleHeading to honor FREEZE_HEADING on low-res
+                    CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, -needleHeading);
+                }
+            }
         }
     }
 #endif
 #endif // HAS_GPS
     graphics::drawCommonFooter(display, x, y);
 }
+
+#if defined(M5STACK_UNITC6L)
+// ****************************
+// * Compass-Only Screen      *
+// ****************************
+void UIRenderer::drawCompassScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
+{
+    display->clear();
+
+#if HAS_GPS
+    // === Determine Compass Heading ===
+    float heading = 0;
+    static float frozenHeading = 0;
+    static bool hasStoredFrozenHeading = false;
+    static meshtastic_CompassMode lastCompassMode = (meshtastic_CompassMode)-1;
+    bool validHeading = false;
+
+    // Get current heading
+    if (screen->hasHeading()) {
+        heading = radians(screen->getHeading());
+        validHeading = true;
+    } else {
+        meshtastic_NodeInfoLite *ourNode = nodeDB->getMeshNode(nodeDB->getNodeNum());
+        if (ourNode) {
+            double lat = DegD(ourNode->position.latitude_i);
+            double lon = DegD(ourNode->position.longitude_i);
+            heading = screen->estimatedHeading(lat, lon);
+            validHeading = !isnan(heading);
+        }
+    }
+
+    // Handle freeze heading mode
+    if (uiconfig.compass_mode != lastCompassMode) {
+        hasStoredFrozenHeading = false;
+        lastCompassMode = uiconfig.compass_mode;
+    }
+
+    if (uiconfig.compass_mode == meshtastic_CompassMode_FREEZE_HEADING) {
+        if (!hasStoredFrozenHeading && validHeading) {
+            frozenHeading = heading;
+            hasStoredFrozenHeading = true;
+        }
+    }
+
+    // Determine needle heading based on mode
+    float needleHeading = (uiconfig.compass_mode == meshtastic_CompassMode_FREEZE_HEADING) ? frozenHeading : heading;
+
+    if (validHeading) {
+        // Calculate compass position - maximize compass size with labels inside
+        int availableHeight = SCREEN_HEIGHT - 4;
+        int availableWidth = SCREEN_WIDTH - 4;
+
+        // Use smaller dimension for compass radius
+        int compassRadius = std::min(availableWidth, availableHeight) / 2;
+        if (compassRadius < 16)
+            compassRadius = 16;
+
+        // Center horizontally and vertically (shifted 4 pixels right)
+        int compassX = x + SCREEN_WIDTH / 2 + 4;
+        int compassY = y + (SCREEN_HEIGHT / 2);
+
+        // Get attitude quaternion for 3D compass
+#if !MESHTASTIC_EXCLUDE_BMI270
+        const Quat att = GetAttitudeForRenderer();
+#else
+        const Quat att = {1, 0, 0, 0};
+#endif
+
+        // Render 3D compass sphere with mode-specific behavior
+        if (uiconfig.compass_mode == meshtastic_CompassMode_FIXED_RING) {
+            // FIXED_RING: Use top-down view (ignore gravity tilt)
+            CompassRenderer::setTopDownView(true);
+            CompassRenderer::drawCompassSphere(display, compassX, compassY, compassRadius, Quat::identity());
+
+            // Draw needle respecting freeze mode
+            CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, Quat::identity(), needleHeading,
+                                                0.0f);
+            CompassRenderer::setTopDownView(false);
+        } else {
+            // DYNAMIC/FREEZE_HEADING: Full 3D compass with gravity
+            CompassRenderer::drawCompassSphere(display, compassX, compassY, compassRadius, att);
+
+            // Draw needle (uses needleHeading so freeze mode is respected)
+            CompassRenderer::drawCenterNeedle3D(display, compassX, compassY, compassRadius, att, needleHeading, 0.0f);
+        }
+
+        // Draw cardinal direction labels on the edge of the compass with black background boxes
+        const float rLabel = compassRadius - (FONT_HEIGHT_SMALL / 2) - 1; // Position on the edge
+        const int boxWidth = 5;
+        const int boxHeight = 7;
+
+        display->setFont(FONT_SMALL);
+        display->setTextAlignment(TEXT_ALIGN_CENTER);
+
+        // Draw "N" with black background box (shifted 2 pixels left)
+        int nX = compassX - 2;
+        int nY = compassY - (int)rLabel - (FONT_HEIGHT_SMALL / 2);
+        display->setColor(BLACK);
+        display->fillRect(nX - boxWidth / 2 - 1, nY - 1, boxWidth, boxHeight);
+        display->setColor(WHITE);
+        display->drawString(nX, nY, "N");
+
+        // Draw "E" with black background box (shifted 2 pixels left)
+        int eX = compassX + (int)rLabel - 2;
+        int eY = compassY - (FONT_HEIGHT_SMALL / 2);
+        display->setColor(BLACK);
+        display->fillRect(eX - boxWidth / 2 - 1, eY - 1, boxWidth, boxHeight);
+        display->setColor(WHITE);
+        display->drawString(eX, eY, "E");
+
+        // Draw "S" with black background box (shifted 2 pixels left)
+        int sX = compassX - 2;
+        int sY = compassY + (int)rLabel - (FONT_HEIGHT_SMALL / 2);
+        display->setColor(BLACK);
+        display->fillRect(sX - boxWidth / 2 - 1, sY - 1, boxWidth, boxHeight);
+        display->setColor(WHITE);
+        display->drawString(sX, sY, "S");
+
+        // Draw "W" with black background box (shifted 2 pixels left)
+        int wX = compassX - (int)rLabel - 2;
+        int wY = compassY - (FONT_HEIGHT_SMALL / 2);
+        display->setColor(BLACK);
+        display->fillRect(wX - boxWidth / 2 - 1, wY - 1, boxWidth, boxHeight);
+        display->setColor(WHITE);
+        display->drawString(wX, wY, "W");
+    } else {
+        // No valid heading - show message
+        display->setFont(FONT_SMALL);
+        display->setTextAlignment(TEXT_ALIGN_CENTER);
+        display->drawString(x + SCREEN_WIDTH / 2, y + SCREEN_HEIGHT / 2 - FONT_HEIGHT_SMALL / 2, "No Heading");
+    }
+#endif // HAS_GPS
+
+    // Draw footer only (no header to maximize compass size)
+    graphics::drawCommonFooter(display, x, y);
+}
+#endif // M5STACK_UNITC6L
 
 #ifdef USERPREFS_OEM_TEXT
 
@@ -1218,6 +1699,13 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
     if (currentFrame != lastFrameIndex) {
         lastFrameIndex = currentFrame;
         lastFrameChangeTime = millis();
+
+        // Update screen-active flags based on current frame index
+        const int msgIdx = graphics::getMessagesFrameIndex();
+        graphics::setMessagesScreenActive(state->currentFrame == msgIdx);
+
+        const int envIdx = graphics::getEnvTelemetryFrameIndex();
+        graphics::setEnvTelemetryScreenActive(state->currentFrame == envIdx);
     }
 
     const int iconSize = (currentResolution == ScreenResolution::High) ? 16 : 8;

@@ -21,7 +21,22 @@ extern ExtensionIOXL9555 io;
 class AudioThread : public concurrency::OSThread
 {
   public:
-    AudioThread() : OSThread("Audio") { initOutput(); }
+    AudioThread() : OSThread("Audio")
+    {
+        initOutput();
+
+#ifdef HAS_FREE_RTOS
+        // Configure as FreeRTOS task with appropriate settings for audio processing
+        // Higher priority and more stack for real-time audio processing
+        const uint32_t audioStackWords = 4096 / sizeof(StackType_t); // 4KB stack
+        const UBaseType_t audioPriority = tskIDLE_PRIORITY + 2;      // Higher priority for real-time
+        const BaseType_t audioCore = 1;                              // APP CPU (core 1)
+
+        setFreeRTOSTask(true, audioStackWords, audioPriority, audioCore);
+#endif
+    }
+    // Optional: expose how many times runOnce() has executed
+    uint32_t pumpTicks() const { return pump_tick_count_; }
 
     void beginRttl(const void *data, uint32_t len)
     {
@@ -85,15 +100,29 @@ class AudioThread : public concurrency::OSThread
   protected:
     int32_t runOnce() override
     {
-        canSleep = true; // Assume we should not keep the board awake
-
-        // if (i2sRtttl != nullptr && i2sRtttl->isRunning()) {
-        //     i2sRtttl->loop();
-        // }
-        return AUDIO_THREAD_INTERVAL_MS;
+        canSleep = true; // by default we allow sleep
+        if (i2sRtttl && i2sRtttl->isRunning()) {
+            canSleep = false;
+            // Ask buzzer module if we should over-prefill right now.
+            bool boost = false;
+#ifdef HAS_I2S
+            extern bool buzzBoostActive();
+            boost = buzzBoostActive();
+#endif
+            // Prefill more chunks when boosting, a bit less otherwise.
+            const int prefill = boost ? 12 : 6; // try 12; 8–14 is fine too
+            for (int i = 0; i < prefill; ++i) {
+                (void)i2sRtttl->loop();
+            }
+            // Tick faster while boosting to keep DMA topped up.
+            return boost ? 2 : 3;
+        }
+        return AUDIO_THREAD_INTERVAL_MS; // e.g. 100 ms idle
     }
 
   private:
+    volatile uint32_t pump_tick_count_ = 0;
+
     void initOutput()
     {
         audioOut = new AudioOutputI2S(1, AudioOutputI2S::EXTERNAL_I2S);

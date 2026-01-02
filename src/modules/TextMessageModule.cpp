@@ -36,6 +36,10 @@ ProcessMessage TextMessageModule::handleReceived(const meshtastic_MeshPacket &mp
     if (shouldWakeOnReceivedMessage()) {
         powerFSM.trigger(EVENT_RECEIVED_MSG);
     }
+    
+    if (screen) {
+        screen->handleTextMessage(&mp);
+    }
 
     // Notify any observers (e.g. external modules that care about packets)
     notifyObservers(&mp);

@@ -52,6 +52,7 @@ void TouchScreenImpl1::onEvent(const TouchEvent &event)
     e.kbchar = 0;
     e.touchX = event.x;
     e.touchY = event.y;
+    e.deltaY = event.deltaY;
 
     switch (event.touchEvent) {
     case TOUCH_ACTION_LEFT: {
@@ -76,6 +77,10 @@ void TouchScreenImpl1::onEvent(const TouchEvent &event)
     }
     case TOUCH_ACTION_TAP: {
         e.inputEvent = INPUT_BROKER_USER_PRESS;
+        break;
+    }
+    case TOUCH_ACTION_SCROLL_DRAG: {
+        e.inputEvent = INPUT_BROKER_SCROLL_DRAG;
         break;
     }
     default:

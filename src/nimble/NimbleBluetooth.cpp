@@ -651,6 +651,9 @@ class NimbleBluetoothServerCallback : public NimBLEServerCallbacks
     {
         LOG_INFO("BLE incoming connection %s", connInfo.getAddress().toString().c_str());
 
+        // Store the connection handle for future use
+        nimbleBluetoothConnHandle = connInfo.getConnHandle();
+
         const uint16_t connHandle = connInfo.getConnHandle();
 #if NIMBLE_ENABLE_2M_PHY && (defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32C6))
         int phyResult =
@@ -671,6 +674,18 @@ class NimbleBluetoothServerCallback : public NimBLEServerCallbacks
 
         LOG_INFO("BLE conn %u initial MTU %u (target %u)", connHandle, connInfo.getMTU(), kPreferredBleMtu);
         pServer->updateConnParams(connHandle, 6, 12, 0, 200);
+
+        // If this is a bonded connection, authentication won't happen again, so close the pairing screen now
+        if (connInfo.isBonded()) {
+            LOG_INFO("BLE bonded connection, closing pairing screen if showing");
+            if (passkeyShowing) {
+                passkeyShowing = false;
+                if (screen)
+                    screen->endAlert();
+            }
+            meshtastic::BluetoothStatus newStatus(meshtastic::BluetoothStatus::ConnectionState::CONNECTED);
+            bluetoothStatus->updateStatus(&newStatus);
+        }
     }
 #endif
 
@@ -828,12 +843,13 @@ void NimbleBluetooth::setup()
         LOG_WARN("Unable to request MTU %u, rc=%d", kPreferredBleMtu, mtuResult);
     }
 
-    int phyResult = ble_gap_set_prefered_default_le_phy(BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK);
-    if (phyResult == 0) {
-        LOG_INFO("BLE default PHY preference set to 2M");
-    } else {
-        LOG_WARN("Failed to prefer 2M PHY by default, rc=%d", phyResult);
-    }
+    // Disable PHY preference to avoid controller assert in llc_phy_upd.c
+    // int phyResult = ble_gap_set_prefered_default_le_phy(BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK);
+    // if (phyResult == 0) {
+    //     LOG_INFO("BLE default PHY preference set to 2M");
+    // } else {
+    //     LOG_WARN("Failed to prefer 2M PHY by default, rc=%d", phyResult);
+    // }
 
     int dataLenResult = ble_gap_write_sugg_def_data_len(kPreferredBleTxOctets, kPreferredBleTxTimeUs);
     if (dataLenResult == 0) {

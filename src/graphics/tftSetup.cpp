@@ -27,9 +27,15 @@ CallbackObserver<DeviceScreen, esp_sleep_wakeup_cause_t> endSleepObserver =
 void tft_task_handler(void *param = nullptr)
 {
     while (true) {
+#if !defined(ST72xx_DE) && !defined(ST7701_CS)
+        // RGB parallel bus devices (ST72xx_DE, ST7701_CS) don't use SPI, skip the lock
+        // Locking SPI mutex on RGB bus devices causes timing issues and display glitches
         spiLock->lock();
+#endif
         deviceScreen->task_handler();
+#if !defined(ST72xx_DE) && !defined(ST7701_CS)
         spiLock->unlock();
+#endif
         deviceScreen->sleep();
     }
 }
