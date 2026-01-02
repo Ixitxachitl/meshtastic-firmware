@@ -65,6 +65,20 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
     // === Emote Picker navigation ===
     int emotePickerIndex = 0; // Tracks currently selected emote in the picker
 
+    // Frame offset for touch coordinate translation
+    int16_t emoteFrameX = 0;
+    int16_t emoteFrameY = 0;
+
+    // Touch tracking for swipe detection
+    uint16_t emoteTouchStartX = 0;
+    uint16_t emoteTouchStartY = 0;
+    bool emoteTouchActive = false;
+
+    // Grid dimensions for emote picker (set during draw, used during input)
+    int emoteGridCols = 0;
+    int emoteGridRows = 0;
+    int emoteCellSize = 0;
+
     // === Message navigation ===
     const char *getCurrentMessage();
     const char *getPrevMessage();
@@ -145,6 +159,7 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
 
     // === Display and UI ===
     int displayHeight = 64;
+    int displayWidth = 128;
     int destIndex = 0;
     int scrollIndex = 0;
     int visibleRows = 0;
@@ -167,6 +182,7 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
 
     bool ack = false;           // True = ACK received, False = NACK or failed
     bool waitingForAck = false; // True if we're expecting an ACK and should monitor routing packets
+
     float lastRxSnr = 0;        // SNR from last received ACK (used for diagnostics/UI)
     int32_t lastRxRssi = 0;     // RSSI from last received ACK (used for diagnostics/UI)
     uint32_t lastRequestId = 0; // tracks the request_id of our last sent packet
@@ -196,7 +212,21 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
     bool handleFreeTextInput(const InputEvent *event);
 
 #if defined(USE_VIRTUAL_KEYBOARD)
-    Letter keyboard[2][4][10] = {{{{"Q", 20, 0, 0, 0, 0},
+    Letter keyboard[2][5][14] = {{{{"`", 8, 0, 0, 0, 0},
+                                   {"1", 12, 0, 0, 0, 0},
+                                   {"2", 13.5, 0, 0, 0, 0},
+                                   {"3", 12.5, 0, 0, 0, 0},
+                                   {"4", 14, 0, 0, 0, 0},
+                                   {"5", 14, 0, 0, 0, 0},
+                                   {"6", 14, 0, 0, 0, 0},
+                                   {"7", 13.5, 0, 0, 0, 0},
+                                   {"8", 14, 0, 0, 0, 0},
+                                   {"9", 14, 0, 0, 0, 0},
+                                   {"0", 14, 0, 0, 0, 0},
+                                   {"-", 8, 0, 0, 0, 0},
+                                   {"=", 10, 0, 0, 0, 0},
+                                   {"⌫", 20, 0, 0, 0, 0}},
+                                  {{"Q", 20, 0, 0, 0, 0},
                                    {"W", 22, 0, 0, 0, 0},
                                    {"E", 17, 0, 0, 0, 0},
                                    {"R", 16.5, 0, 0, 0, 0},
@@ -205,7 +235,11 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
                                    {"U", 16.5, 0, 0, 0, 0},
                                    {"I", 5, 0, 0, 0, 0},
                                    {"O", 19.5, 0, 0, 0, 0},
-                                   {"P", 15.5, 0, 0, 0, 0}},
+                                   {"P", 15.5, 0, 0, 0, 0},
+                                   {"[", 7, 0, 0, 0, 0},
+                                   {"]", 7, 0, 0, 0, 0},
+                                   {"\\", 8, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0}},
                                   {{"A", 14, 0, 0, 0, 0},
                                    {"S", 15, 0, 0, 0, 0},
                                    {"D", 16.5, 0, 0, 0, 0},
@@ -215,6 +249,10 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
                                    {"J", 12, 0, 0, 0, 0},
                                    {"K", 15.5, 0, 0, 0, 0},
                                    {"L", 14, 0, 0, 0, 0},
+                                   {";", 4.5, 0, 0, 0, 0},
+                                   {"'", 10, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
                                    {"", 0, 0, 0, 0, 0}},
                                   {{"⇧", 20, 0, 0, 0, 0},
                                    {"Z", 14, 0, 0, 0, 0},
@@ -224,11 +262,19 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
                                    {"B", 15, 0, 0, 0, 0},
                                    {"N", 15, 0, 0, 0, 0},
                                    {"M", 17, 0, 0, 0, 0},
-                                   {"⌫", 20, 0, 0, 0, 0},
+                                   {",", 8, 0, 0, 0, 0},
+                                   {".", 8, 0, 0, 0, 0},
+                                   {"/", 8, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
                                    {"", 0, 0, 0, 0, 0}},
-                                  {{"123", 42, 0, 0, 0, 0},
-                                   {" ", 64, 0, 0, 0, 0},
-                                   {"↵", 36, 0, 0, 0, 0},
+                                  {{"BACK", 30, 0, 0, 0, 0},
+                                   {"😊", 25, 0, 0, 0, 0},
+                                   {"SPACE", 38, 0, 0, 0, 0},
+                                   {"↵", 28, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
                                    {"", 0, 0, 0, 0, 0},
                                    {"", 0, 0, 0, 0, 0},
                                    {"", 0, 0, 0, 0, 0},
@@ -236,33 +282,76 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
                                    {"", 0, 0, 0, 0, 0},
                                    {"", 0, 0, 0, 0, 0},
                                    {"", 0, 0, 0, 0, 0}}},
-                                 {{{"1", 12, 0, 0, 0, 0},
-                                   {"2", 13.5, 0, 0, 0, 0},
-                                   {"3", 12.5, 0, 0, 0, 0},
-                                   {"4", 14, 0, 0, 0, 0},
-                                   {"5", 14, 0, 0, 0, 0},
-                                   {"6", 14, 0, 0, 0, 0},
-                                   {"7", 13.5, 0, 0, 0, 0},
-                                   {"8", 14, 0, 0, 0, 0},
-                                   {"9", 14, 0, 0, 0, 0},
-                                   {"0", 14, 0, 0, 0, 0}},
-                                  {{"-", 8, 0, 0, 0, 0},
-                                   {"/", 8, 0, 0, 0, 0},
-                                   {":", 4.5, 0, 0, 0, 0},
-                                   {";", 4.5, 0, 0, 0, 0},
+                                 {{{"~", 8, 0, 0, 0, 0},
+                                   {"!", 10, 0, 0, 0, 0},
+                                   {"@", 21.5, 0, 0, 0, 0},
+                                   {"#", 14, 0, 0, 0, 0},
+                                   {"$", 12.5, 0, 0, 0, 0},
+                                   {"%", 14, 0, 0, 0, 0},
+                                   {"^", 14, 0, 0, 0, 0},
+                                   {"&", 15, 0, 0, 0, 0},
+                                   {"*", 14, 0, 0, 0, 0},
                                    {"(", 7, 0, 0, 0, 0},
                                    {")", 6.5, 0, 0, 0, 0},
-                                   {"$", 12.5, 0, 0, 0, 0},
-                                   {"&", 15, 0, 0, 0, 0},
-                                   {"@", 21.5, 0, 0, 0, 0},
-                                   {"\"", 8, 0, 0, 0, 0}},
-                                  {{".", 8, 0, 0, 0, 0},
-                                   {",", 8, 0, 0, 0, 0},
-                                   {"?", 10, 0, 0, 0, 0},
-                                   {"!", 10, 0, 0, 0, 0},
-                                   {"'", 10, 0, 0, 0, 0},
+                                   {"-", 8, 0, 0, 0, 0},
+                                   {"=", 10, 0, 0, 0, 0},
                                    {"⌫", 20, 0, 0, 0, 0}},
-                                  {{"ABC", 50, 0, 0, 0, 0}, {" ", 64, 0, 0, 0, 0}, {"↵", 36, 0, 0, 0, 0}}}};
+                                  {{"-", 8, 0, 0, 0, 0},
+                                   {"=", 10, 0, 0, 0, 0},
+                                   {"[", 7, 0, 0, 0, 0},
+                                   {"]", 7, 0, 0, 0, 0},
+                                   {";", 4.5, 0, 0, 0, 0},
+                                   {"'", 10, 0, 0, 0, 0},
+                                   {",", 8, 0, 0, 0, 0},
+                                   {".", 8, 0, 0, 0, 0},
+                                   {"/", 8, 0, 0, 0, 0},
+                                   {"\\", 8, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0}},
+                                  {{"_", 10, 0, 0, 0, 0},
+                                   {"+", 10, 0, 0, 0, 0},
+                                   {"{", 8, 0, 0, 0, 0},
+                                   {"}", 8, 0, 0, 0, 0},
+                                   {":", 4.5, 0, 0, 0, 0},
+                                   {"\"", 8, 0, 0, 0, 0},
+                                   {"<", 10, 0, 0, 0, 0},
+                                   {">", 10, 0, 0, 0, 0},
+                                   {"?", 10, 0, 0, 0, 0},
+                                   {"|", 4, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0}},
+                                  {{"⇧", 20, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0}},
+                                  {{"BACK", 30, 0, 0, 0, 0},
+                                   {"ABC", 28, 0, 0, 0, 0},
+                                   {"SPACE", 38, 0, 0, 0, 0},
+                                   {"↵", 28, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0}}}};
 #endif
 };
 
