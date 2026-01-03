@@ -24,6 +24,8 @@ enum input_broker_event {
     INPUT_BROKER_USER_PRESS,
     INPUT_BROKER_ALT_PRESS,
     INPUT_BROKER_ALT_LONG,
+    INPUT_BROKER_SCROLL_DRAG, // Touch scroll drag
+    INPUT_BROKER_BACKLIGHT_TOGGLE = 0x9a,
     INPUT_BROKER_SHUTDOWN = 0x9b,
     INPUT_BROKER_GPS_TOGGLE = 0x9e,
     INPUT_BROKER_SEND_PING = 0xaf,
@@ -48,6 +50,7 @@ typedef struct _InputEvent {
     unsigned char kbchar;
     uint16_t touchX;
     uint16_t touchY;
+    int16_t deltaY; // Y delta for touch scrolling
 } InputEvent;
 
 class InputPollable

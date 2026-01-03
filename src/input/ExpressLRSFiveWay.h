@@ -13,7 +13,12 @@
 
 #ifdef INPUTBROKER_EXPRESSLRSFIVEWAY_TYPE
 
+#if __has_include(<esp_adc/adc_cali.h>)
+#include <esp_adc/adc_cali.h>
+#include <esp_adc/adc_cali_scheme.h>
+#else
 #include <esp_adc_cal.h>
+#endif
 #include <soc/adc_channel.h>
 
 #include "InputBroker.h"
