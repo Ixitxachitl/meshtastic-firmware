@@ -458,9 +458,10 @@ void setup()
     LOG_INFO("\n\n//\\ E S H T /\\ S T / C\n");
 
 #if defined(ARCH_ESP32) && defined(BOARD_HAS_PSRAM)
-#ifndef SENSECAP_INDICATOR
-    // use PSRAM for malloc calls > 256 bytes
-    // NOTE: Disabled for TFT devices as TFT_eSPI DMA requires internal RAM buffers
+#ifndef LGFX_DRIVER
+    // Use PSRAM for malloc calls > 256 bytes
+    // NOTE: Excluded for LGFX_DRIVER devices (especially RGB displays) as LovyanGFX
+    // manages PSRAM allocation internally with specific DMA-compatible memory attributes
     heap_caps_malloc_extmem_enable(256);
 #endif
 #endif
@@ -569,7 +570,7 @@ void setup()
 
 #if !MESHTASTIC_EXCLUDE_I2C
     // --- Secondary I2C (Wire1) on CAP/Grove pins (G2=SDA, G1=SCL) ---
-#if WIRE_INTERFACES_COUNT == 2
+#if WIRE_INTERFACES_COUNT == 2 && defined(G1) && defined(G2)
     const bool wantExternalI2COnCap = true;
     if (wantExternalI2COnCap) {
 #if defined(ARCH_RP2040)
@@ -593,7 +594,7 @@ void setup()
     } else {
         LOG_INFO("CAP bus (Wire1) disabled by config.");
     }
-#endif // WIRE_INTERFACES_COUNT == 2
+#endif // WIRE_INTERFACES_COUNT == 2 && defined(G1) && defined(G2)
 
     // --- Primary I2C (Wire) ---
 #if defined(I2C_SDA) && defined(ARCH_RP2040)
