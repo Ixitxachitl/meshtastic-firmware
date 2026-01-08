@@ -29,6 +29,8 @@
 #include <utility>
 
 extern uint16_t TFT_MESH;
+extern bool kb_found;
+extern bool osk_found;
 
 namespace graphics
 {
@@ -538,8 +540,8 @@ void menuHandler::replyMenu()
     optionsArray[options] = "With Preset";
     optionsEnumArray[options++] = ReplyPreset;
 
-    // Freetext reply (only when keyboard exists)
-    if (kb_found) {
+    // Freetext reply (only when keyboard or button input exists)
+    if (kb_found || osk_found) {
         optionsArray[options] = "With Freetext";
         optionsEnumArray[options++] = ReplyFreetext;
     }
@@ -982,7 +984,7 @@ void menuHandler::textMessageBaseMenu()
     int options = 1;
     optionsArray[options] = "New Preset Msg";
     optionsEnumArray[options++] = Preset;
-    if (kb_found) {
+    if (kb_found || osk_found) {
         optionsArray[options] = "New Freetext Msg";
         optionsEnumArray[options++] = Freetext;
     }
@@ -1105,7 +1107,7 @@ void menuHandler::favoriteBaseMenu()
     }
     optionsEnumArray[options++] = Preset;
 
-    if (kb_found) {
+    if (kb_found || osk_found) {
         optionsArray[options] = "New Freetext Msg";
         optionsEnumArray[options++] = Freetext;
     }

@@ -42,10 +42,11 @@ class VirtualKeyboard
     // Timeout management
     void resetTimeout();
     bool isTimedOut() const;
+    void disableTimeout();
 
   private:
-    static const uint8_t KEYBOARD_ROWS = 5;
-    static const uint8_t KEYBOARD_COLS = 11;
+    static const uint8_t KEYBOARD_ROWS = 4;
+    static const uint8_t KEYBOARD_COLS = 12; // Row 2 has 12 columns (chars + space), row 3 has 12 (chars + emote + ESC)
     static const uint8_t KEY_WIDTH = 9;
     static const uint8_t KEY_HEIGHT = 9;        // Compressed to fit 5 rows on displays
     static const uint8_t KEYBOARD_START_Y = 26; // Start just below input box bottom
@@ -61,7 +62,8 @@ class VirtualKeyboard
 
     // Timeout management for auto-exit
     uint32_t lastActivityTime;
-    static const uint32_t TIMEOUT_MS = 60000; // 1 minute timeout
+    static const uint32_t TIMEOUT_MS = 0; // Disabled timeout for trackball devices
+    bool timeoutDisabled;
 
     void initializeKeyboard();
     void drawKey(OLEDDisplay *display, const VirtualKey &key, bool selected, int16_t x, int16_t y, uint8_t w, uint8_t h,

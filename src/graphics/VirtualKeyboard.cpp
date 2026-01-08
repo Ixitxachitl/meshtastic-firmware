@@ -4,6 +4,9 @@
 #include "graphics/Screen.h"
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
+#include "graphics/draw/MessageRenderer.h"
+#include "graphics/emotes.h"
+#include "graphics/images.h"
 #include "input/InputBroker.h"
 #include "main.h"
 #include <Arduino.h>
@@ -12,7 +15,12 @@
 namespace graphics
 {
 
-VirtualKeyboard::VirtualKeyboard() : cursorRow(0), cursorCol(0), lastActivityTime(millis())
+// Embedded smiley face icon for emote button
+static const unsigned char emote_icon[] PROGMEM = {0x3C, 0x42, 0xA5, 0x81, 0xA5, 0x99, 0x42, 0x3C};
+static const int emote_icon_width = 8;
+static const int emote_icon_height = 8;
+
+VirtualKeyboard::VirtualKeyboard() : cursorRow(0), cursorCol(0), lastActivityTime(millis()), timeoutDisabled(false)
 {
     initializeKeyboard();
     // Set cursor to H(2, 5)
@@ -24,12 +32,12 @@ VirtualKeyboard::~VirtualKeyboard() {}
 
 void VirtualKeyboard::initializeKeyboard()
 {
-    // New 5 row, 11 column keyboard layout with emote button:
-    static const char LAYOUT[KEYBOARD_ROWS][KEYBOARD_COLS] = {{'1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '\b'},
-                                                              {'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '\n'},
-                                                              {'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', ' '},
-                                                              {'z', 'x', 'c', 'v', 'b', 'n', 'm', '.', ',', '?', '\x1b'},
-                                                              {'\x10', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}}; // \x10 = emote button
+    // 4 row keyboard: rows 0-1 have 11 columns, row 2 has 12 (adds space), row 3 has 12 (adds emote + ESC)
+    static const char LAYOUT[KEYBOARD_ROWS][KEYBOARD_COLS] = {
+        {'1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '\b', 0},
+        {'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '\n', 0},
+        {'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', ' ', 0},
+        {'z', 'x', 'c', 'v', 'b', 'n', 'm', '.', ',', '?', '\x10', '\x1b'}}; // emote, ESC
 
     // Derive layout dimensions and assert they match the configured keyboard grid
     constexpr int LAYOUT_ROWS = (int)(sizeof(LAYOUT) / sizeof(LAYOUT[0]));
@@ -88,25 +96,25 @@ void VirtualKeyboard::draw(OLEDDisplay *display, int16_t offsetX, int16_t offset
 
     // Determine last-column label max width
     display->setFont(FONT_SMALL);
-    const int wENTER = display->getStringWidth("ENTER");
-    int lastColLabelW = wENTER; // ENTER is usually the widest
-    // Smaller padding on very small screens to avoid excessive whitespace
-    const int lastColPad = (screenW <= 128 ? 2 : 6);
-    const int reservedLastColW = lastColLabelW + lastColPad; // reserved width for last column keys
+    // Calculate action key widths based on text
+    const int wBACK = display->getStringWidth("BACK") + 4;
+    const int wENTER = display->getStringWidth("ENTER") + 4;
+    const int wSPACE = display->getStringWidth("SPACE") + 4;
+    const int wEMOTE = 8 + 4;                            // Icon width + padding
+    const int wESC = display->getStringWidth("ESC") + 2; // Reduced padding
 
-    // Always reserve width for the rightmost text column to avoid overlap on small screens
-    int cellW = 0;
-    int leftoverW = 0;
-    {
-        const int leftCols = KEYBOARD_COLS - 1; // 10 input characters
-        int usableW = screenW - reservedLastColW;
-        if (usableW < leftCols) {
-            // Guard: ensure at least 1px per left cell if labels are extremely wide (unlikely)
-            usableW = leftCols;
-        }
-        cellW = usableW / leftCols;
-        leftoverW = usableW - cellW * leftCols; // distribute extra pixels over left columns (left to right)
-    }
+    // Calculate cell width based on character keys only
+    const int charCols = 10; // Number of character columns per row (0-9)
+    int cellW = 9;           // Base cell width for character keys
+
+    // Calculate total width for each row type
+    const int row11Width = charCols * cellW + wBACK;         // Rows 0, 1 width
+    const int row12Width = charCols * cellW + wSPACE;        // Row 2 width (has space)
+    const int row13Width = charCols * cellW + wEMOTE + wESC; // Row 3 width (has emote+ESC)
+
+    // Use widest row to calculate left-aligned offset for all rows
+    const int maxRowWidth = std::max({row11Width, row12Width, row13Width});
+    const int rowOffset = (screenW - maxRowWidth) / 2;
 
     // Dynamic key geometry
     int cellH = KEY_HEIGHT;
@@ -114,15 +122,19 @@ void VirtualKeyboard::draw(OLEDDisplay *display, int16_t offsetX, int16_t offset
     if (screenH <= 64) {
         const int headerHeight = headerText.empty() ? 0 : (FONT_HEIGHT_SMALL - 2);
         const int gapBelowHeader = 0;
-        const int singleLineBoxHeight = FONT_HEIGHT_SMALL;
+        const int singleLineBoxHeight = 18; // Fixed 18px input box height
         const int gapAboveKeyboard = 0;
         keyboardStartY = offsetY + headerHeight + gapBelowHeader + singleLineBoxHeight + gapAboveKeyboard;
         if (keyboardStartY < 0)
             keyboardStartY = 0;
         if (keyboardStartY > screenH)
             keyboardStartY = screenH;
+        // Account for row spacing when calculating cell height
+        const int rowSpacing = 1;
         int keyboardHeight = screenH - keyboardStartY;
-        cellH = std::max(1, keyboardHeight / KEYBOARD_ROWS);
+        // Subtract space needed for gaps between rows: (KEYBOARD_ROWS - 1) gaps
+        int heightForKeys = keyboardHeight - (KEYBOARD_ROWS - 1) * rowSpacing;
+        cellH = std::max(1, heightForKeys / KEYBOARD_ROWS);
     } else if (isWide) {
         // For wide screens (e.g., T114 240x135), prefer square keys: height equals left-column key width.
         cellH = std::max((int)KEY_HEIGHT, cellW);
@@ -149,7 +161,8 @@ void VirtualKeyboard::draw(OLEDDisplay *display, int16_t offsetX, int16_t offset
     } else {
         // Default (non-wide, non-64px) behavior: use key height heuristic and place at bottom
         cellH = KEY_HEIGHT;
-        int keyboardHeight = KEYBOARD_ROWS * cellH;
+        const int rowSpacing = 1; // Account for spacing between rows
+        int keyboardHeight = KEYBOARD_ROWS * cellH + (KEYBOARD_ROWS - 1) * rowSpacing;
         keyboardStartY = screenH - keyboardHeight;
         if (keyboardStartY < 0)
             keyboardStartY = 0;
@@ -158,32 +171,37 @@ void VirtualKeyboard::draw(OLEDDisplay *display, int16_t offsetX, int16_t offset
     // Draw input area above keyboard
     drawInputArea(display, offsetX, offsetY, keyboardStartY);
 
-    // Precompute per-column x and width with leftover distributed over left columns for even spacing
-    int colX[KEYBOARD_COLS];
-    int colW[KEYBOARD_COLS];
-    int runningX = offsetX;
-    for (int col = 0; col < KEYBOARD_COLS - 1; ++col) {
-        int wcol = cellW + (col < leftoverW ? 1 : 0);
-        colX[col] = runningX;
-        colW[col] = wcol;
-        runningX += wcol;
-    }
-    // Last column
-    colX[KEYBOARD_COLS - 1] = runningX;
-    colW[KEYBOARD_COLS - 1] = reservedLastColW;
-
-    // Draw keyboard grid
+    // Draw keyboard grid with spacing between rows
+    const int rowSpacing = 1; // 1 pixel gap between rows
     for (int row = 0; row < KEYBOARD_ROWS; row++) {
+        int runningX = offsetX + rowOffset;
+
         for (int col = 0; col < KEYBOARD_COLS; col++) {
             const VirtualKey &k = keyboard[row][col];
             if (k.character != 0 || k.type != VK_CHAR) {
                 const bool isLastCol = (col == KEYBOARD_COLS - 1);
-                int x = colX[col];
-                int w = colW[col];
-                int y = offsetY + keyboardStartY + row * cellH;
+                int x = runningX;
+                int w = cellW;
+
+                // Set width based on key type
+                if (k.type == VK_BACKSPACE) {
+                    w = wBACK;
+                } else if (k.type == VK_ENTER) {
+                    w = wENTER;
+                } else if (k.type == VK_SPACE) {
+                    w = wSPACE;
+                } else if (k.type == VK_EMOTE) {
+                    w = wEMOTE;
+                } else if (k.type == VK_ESC) {
+                    w = wESC;
+                }
+
+                int y = offsetY + keyboardStartY + row * (cellH + rowSpacing);
                 int h = cellH;
                 bool selected = (row == cursorRow && col == cursorCol);
                 drawKey(display, k, selected, x, y, (uint8_t)w, (uint8_t)h, isLastCol);
+
+                runningX += w;
             }
         }
     }
@@ -195,15 +213,25 @@ void VirtualKeyboard::drawInputArea(OLEDDisplay *display, int16_t offsetX, int16
 
     const int screenWidth = display->getWidth();
     const int screenHeight = display->getHeight();
-    // Use the standard small font metrics for input box sizing (restore original size)
-    const int inputLineH = FONT_HEIGHT_SMALL;
+    // Use fixed 18px height for input box (consistent across all devices)
+    const int inputLineH = 18;
 
     // Header uses the standard small (which may be larger on big screens)
     display->setFont(FONT_SMALL);
     int headerHeight = 0;
     if (!headerText.empty()) {
-        // Draw header and reserve exact font height (plus a tighter gap) to maximize input area
+        // Calculate character count (max 233 for meshtastic_Constants_DATA_PAYLOAD_LEN)
+        const int maxChars = 233;
+        int charsLeft = maxChars - inputText.length();
+        char charCountStr[16];
+        snprintf(charCountStr, sizeof(charCountStr), "%d left", charsLeft);
+        int charCountWidth = display->getStringWidth(charCountStr);
+
+        // Draw header left-aligned
         display->drawString(offsetX + 2, offsetY, headerText.c_str());
+        // Draw character count right-aligned
+        display->drawString(offsetX + screenWidth - charCountWidth - 2, offsetY, charCountStr);
+
         if (screenHeight <= 64) {
             headerHeight = FONT_HEIGHT_SMALL - 2; // 11px
         } else {
@@ -237,8 +265,8 @@ void VirtualKeyboard::drawInputArea(OLEDDisplay *display, int16_t offsetX, int16
         boxHeight = availableH;
     }
 
-    // Draw box border
-    display->drawRect(boxX, boxY, boxWidth, boxHeight);
+    // Draw box border (1 pixel shorter from bottom)
+    display->drawRect(boxX, boxY, boxWidth, boxHeight - 1);
 
     display->setFont(FONT_SMALL);
 
@@ -304,8 +332,10 @@ void VirtualKeyboard::drawInputArea(OLEDDisplay *display, int16_t offsetX, int16
 
         for (int i = 0; i < linesToShow; ++i) {
             const std::string &chunk = lines[startIndex + i];
-            display->drawString(textX, lineY, chunk.c_str());
-            caretX = textX + display->getStringWidth(chunk.c_str());
+            graphics::MessageRenderer::drawStringWithEmotes(display, textX, lineY + 1, chunk, graphics::emotes,
+                                                            graphics::numEmotes);
+            caretX = textX +
+                     graphics::MessageRenderer::getStringWidthWithEmotes(display, chunk, graphics::emotes, graphics::numEmotes);
             caretY = lineY;
             lineY += lineStep;
         }
@@ -332,27 +362,31 @@ void VirtualKeyboard::drawInputArea(OLEDDisplay *display, int16_t offsetX, int16
         }
     } else {
         std::string displayText = inputText;
-        int textW = display->getStringWidth(displayText.c_str());
+        int textW =
+            graphics::MessageRenderer::getStringWidthWithEmotes(display, displayText, graphics::emotes, graphics::numEmotes);
         std::string scrolled = displayText;
         if (textW > maxTextWidth) {
             // Trim from the left until it fits
             while (textW > maxTextWidth && !scrolled.empty()) {
                 scrolled.erase(0, 1);
-                textW = display->getStringWidth(scrolled.c_str());
+                textW =
+                    graphics::MessageRenderer::getStringWidthWithEmotes(display, scrolled, graphics::emotes, graphics::numEmotes);
             }
             // Add leading ellipsis and ensure it still fits
             if (scrolled != displayText) {
                 scrolled = "..." + scrolled;
-                textW = display->getStringWidth(scrolled.c_str());
+                textW =
+                    graphics::MessageRenderer::getStringWidthWithEmotes(display, scrolled, graphics::emotes, graphics::numEmotes);
                 // If adding ellipsis causes overflow, trim more after the ellipsis
                 while (textW > maxTextWidth && scrolled.size() > 3) {
                     scrolled.erase(3, 1); // remove chars after the ellipsis
-                    textW = display->getStringWidth(scrolled.c_str());
+                    textW = graphics::MessageRenderer::getStringWidthWithEmotes(display, scrolled, graphics::emotes,
+                                                                                graphics::numEmotes);
                 }
             }
         } else {
             // Keep textW in sync with what we draw
-            textW = display->getStringWidth(scrolled.c_str());
+            textW = graphics::MessageRenderer::getStringWidthWithEmotes(display, scrolled, graphics::emotes, graphics::numEmotes);
         }
 
         int textY;
@@ -374,7 +408,8 @@ void VirtualKeyboard::drawInputArea(OLEDDisplay *display, int16_t offsetX, int16
         }
 
         if (!scrolled.empty()) {
-            display->drawString(textX, textY, scrolled.c_str());
+            graphics::MessageRenderer::drawStringWithEmotes(display, textX, textY + 1, scrolled, graphics::emotes,
+                                                            graphics::numEmotes);
         }
 
         int cursorX = textX + textW;
@@ -532,7 +567,17 @@ void VirtualKeyboard::drawKey(OLEDDisplay *display, const VirtualKey &key, bool 
 #ifdef MUZI_BASE // Correct issue with character vertical position on MUZI_BASE
     centeredTextY -= 2;
 #endif
-    display->drawString(textX, centeredTextY, keyText.c_str());
+
+    // Draw smiley face for emote button using embedded icon
+    if (key.type == VK_EMOTE) {
+        int centerX = x + width / 2;
+        int centerY = y + height / 2;
+        int iconX = centerX - emote_icon_width / 2;
+        int iconY = centerY - emote_icon_height / 2;
+        display->drawXbm(iconX, iconY, emote_icon_width, emote_icon_height, emote_icon);
+    } else {
+        display->drawString(textX, centeredTextY, keyText.c_str());
+    }
 }
 
 char VirtualKeyboard::getCharForKey(const VirtualKey &key, bool isLongPress)
@@ -554,28 +599,75 @@ char VirtualKeyboard::getCharForKey(const VirtualKey &key, bool isLongPress)
 void VirtualKeyboard::moveCursorDelta(int dRow, int dCol)
 {
     resetTimeout();
-    // wrap around rows and cols in the 4x11 grid
+
     int r = (int)cursorRow + dRow;
     int c = (int)cursorCol + dCol;
+
+    // Handle row wrapping
     if (r < 0)
         r = KEYBOARD_ROWS - 1;
     else if (r >= KEYBOARD_ROWS)
         r = 0;
+
+    // Handle column wrapping
     if (c < 0)
         c = KEYBOARD_COLS - 1;
     else if (c >= KEYBOARD_COLS)
         c = 0;
+
+    // If moving vertically and landed on empty cell, find nearest valid cell in that row
+    if (dRow != 0) {
+        const VirtualKey &targetKey = keyboard[r][c];
+        if (targetKey.character == 0 && targetKey.type == VK_CHAR) {
+            // Empty cell - find last valid cell in this row
+            int validCol = -1;
+            for (int col = KEYBOARD_COLS - 1; col >= 0; col--) {
+                const VirtualKey &k = keyboard[r][col];
+                if (k.character != 0 || k.type != VK_CHAR) {
+                    validCol = col;
+                    break;
+                }
+            }
+            if (validCol >= 0) {
+                c = validCol;
+            }
+        }
+    }
+
     cursorRow = (uint8_t)r;
     cursorCol = (uint8_t)c;
 }
 
 void VirtualKeyboard::moveCursorUp()
 {
+    resetTimeout();
+
+    // If in row 0, send special event to switch to destination selection mode
+    if (cursorRow == 0) {
+        if (inputBroker) {
+            InputEvent e;
+            e.source = "VirtualKeyboard";
+            e.inputEvent = INPUT_BROKER_UP;
+            e.kbchar = INPUT_BROKER_EVENT_NAV_SELECT_DESTINATION;
+            e.touchX = 0;
+            e.touchY = 0;
+            e.deltaY = 0;
+            inputBroker->injectInputEvent(&e);
+        }
+        return;
+    }
+
     moveCursorDelta(-1, 0);
+    if (screen) {
+        screen->forceDisplay(true);
+    }
 }
 void VirtualKeyboard::moveCursorDown()
 {
     moveCursorDelta(1, 0);
+    if (screen) {
+        screen->forceDisplay(true);
+    }
 }
 void VirtualKeyboard::moveCursorLeft()
 {
@@ -592,6 +684,9 @@ void VirtualKeyboard::moveCursorLeft()
             cursorCol = KEYBOARD_COLS - 1;
         }
     }
+    if (screen) {
+        screen->forceDisplay(true);
+    }
 }
 void VirtualKeyboard::moveCursorRight()
 {
@@ -607,6 +702,9 @@ void VirtualKeyboard::moveCursorRight()
             cursorRow = 0;
             cursorCol = 0;
         }
+    }
+    if (screen) {
+        screen->forceDisplay(true);
     }
 }
 
@@ -648,7 +746,7 @@ void VirtualKeyboard::handlePress()
         return;
     case VK_EMOTE:
         // Trigger emote picker - inject input event to open CannedMessageModule emote picker
-        if (screen) {
+        if (inputBroker) {
             InputEvent emoteEvent = {.source = "VirtualKeyboard",
                                      .inputEvent = INPUT_BROKER_ANYKEY,
                                      .kbchar = INPUT_BROKER_MSG_EMOTE_LIST,
@@ -701,7 +799,7 @@ void VirtualKeyboard::handleLongPress()
         break;
     case VK_EMOTE:
         // Long press on emote button also opens emote picker
-        if (screen) {
+        if (inputBroker) {
             InputEvent emoteEvent = {.source = "VirtualKeyboard",
                                      .inputEvent = INPUT_BROKER_ANYKEY,
                                      .kbchar = INPUT_BROKER_MSG_EMOTE_LIST,
@@ -724,9 +822,36 @@ void VirtualKeyboard::insertCharacter(char c)
 
 void VirtualKeyboard::deleteCharacter()
 {
-    if (!inputText.empty()) {
-        inputText.pop_back();
+    if (inputText.empty()) {
+        return;
     }
+
+    // Find start of UTF-8 character before end
+    size_t deletePos = inputText.length() - 1;
+
+    // Walk backwards while we're in the middle of a UTF-8 sequence
+    // UTF-8 continuation bytes start with bits 10xxxxxx (0x80-0xBF)
+    while (deletePos > 0 && (static_cast<unsigned char>(inputText[deletePos]) & 0xC0) == 0x80) {
+        deletePos--;
+    }
+
+    // Check if the character before this is a variation selector base
+    // If we just deleted a variation selector (U+FE0F, U+FE0E, etc: 0xEF 0xB8 0x8E-0x8F)
+    // check if there's a base character before it that should also be deleted
+    if (deletePos >= 3 && static_cast<unsigned char>(inputText[deletePos]) == 0xEF &&
+        static_cast<unsigned char>(inputText[deletePos + 1]) == 0xB8 &&
+        (static_cast<unsigned char>(inputText[deletePos + 2]) == 0x8E ||
+         static_cast<unsigned char>(inputText[deletePos + 2]) == 0x8F)) {
+        // This is a variation selector - delete the base char before it too
+        size_t baseEnd = deletePos - 1;
+        while (baseEnd > 0 && (static_cast<unsigned char>(inputText[baseEnd]) & 0xC0) == 0x80) {
+            baseEnd--;
+        }
+        deletePos = baseEnd;
+    }
+
+    // Delete from deletePos to end
+    inputText.erase(deletePos);
 }
 
 void VirtualKeyboard::submitText()
@@ -739,8 +864,7 @@ void VirtualKeyboard::submitText()
         std::function<void(const std::string &)> callback = onTextEntered;
         std::string textToSubmit = inputText;
         onTextEntered = nullptr;
-        // Don't clear inputText here - let the calling module handle cleanup
-        // inputText = "";  // Removed: keep text visible until module cleans up
+        inputText = ""; // Clear text after submission
         callback(textToSubmit);
     } else if (inputText.empty()) {
         // For empty text, just ignore the submission - don't clear callback
@@ -779,8 +903,15 @@ void VirtualKeyboard::resetTimeout()
     lastActivityTime = millis();
 }
 
+void VirtualKeyboard::disableTimeout()
+{
+    timeoutDisabled = true;
+}
+
 bool VirtualKeyboard::isTimedOut() const
 {
+    if (timeoutDisabled || TIMEOUT_MS == 0)
+        return false;
     return (millis() - lastActivityTime) > TIMEOUT_MS;
 }
 

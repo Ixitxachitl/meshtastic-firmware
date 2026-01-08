@@ -222,11 +222,8 @@ void CannedMessageModule::LaunchRepeatDestination()
 
 void CannedMessageModule::LaunchFreetextWithDestination(NodeNum newDest, uint8_t newChannel)
 {
-    // Use the requested destination, unless it's "broadcast" and we have a previous node/channel
-    if (newDest == NODENUM_BROADCAST && lastDestSet) {
-        newDest = lastDest;
-        newChannel = lastChannel;
-    }
+    // Do NOT override explicit broadcast replies
+    // Only reuse lastDest in LaunchRepeatDestination()
     dest = newDest;
     channel = newChannel;
     lastDest = dest;
@@ -238,6 +235,8 @@ void CannedMessageModule::LaunchFreetextWithDestination(NodeNum newDest, uint8_t
     UIFrameEvent e;
     e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
     notifyObservers(&e);
+
+    LOG_DEBUG("[CannedMessage] LaunchFreetextWithDestination dest=0x%08x ch=%d", dest, channel);
 }
 
 static bool returnToCannedList = false;
@@ -468,6 +467,36 @@ int CannedMessageModule::handleInputEvent(const InputEvent *event)
 
     // Free text input mode: Handles character input, cancel, backspace, select, etc.
     case CANNED_MESSAGE_RUN_STATE_FREETEXT:
+        // If VirtualKeyboard is active, check for special events first
+        if (osk_found && graphics::NotificationRenderer::virtualKeyboard) {
+            // Emote picker request should be handled by CannedMessageModule
+            if (event->kbchar == INPUT_BROKER_MSG_EMOTE_LIST) {
+                return handleFreeTextInput(event);
+            }
+            // Destination selection request from VirtualKeyboard (UP from row 0)
+            if (event->kbchar == INPUT_BROKER_EVENT_NAV_SELECT_DESTINATION) {
+                // Close the VirtualKeyboard before switching (don't call empty callback)
+                graphics::OnScreenKeyboardModule::instance().stop(false);
+                graphics::NotificationRenderer::virtualKeyboard = nullptr;
+
+                runState = CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION;
+                destIndex = 0;
+                scrollIndex = 0;
+                updateDestinationSelectionList(); // Populate the destination list
+                requestFocus();
+                UIFrameEvent e;
+                e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+                notifyObservers(&e);
+                IF_SCREEN(screen->forceDisplay(true));
+                return 1;
+            }
+            // Otherwise delegate to VirtualKeyboard
+            InputEvent brokerEvent;
+            brokerEvent.inputEvent = event->inputEvent;
+            brokerEvent.kbchar = event->kbchar;
+            graphics::OnScreenKeyboardModule::instance().handleInput(brokerEvent);
+            return 1; // Input handled by keyboard
+        }
         return handleFreeTextInput(event); // All allowed input for this state
 
         // Virtual keyboard mode: Show virtual keyboard and handle input
@@ -638,21 +667,35 @@ int CannedMessageModule::handleDestinationSelectionInput(const InputEvent *event
             }
         }
 
-        runState = returnToCannedList ? CANNED_MESSAGE_RUN_STATE_ACTIVE : CANNED_MESSAGE_RUN_STATE_FREETEXT;
+        // Return to keyboard if we came from keyboard, otherwise to canned list
+        runState = (osk_found && !returnToCannedList)
+                       ? CANNED_MESSAGE_RUN_STATE_FREETEXT
+                       : (returnToCannedList ? CANNED_MESSAGE_RUN_STATE_ACTIVE : CANNED_MESSAGE_RUN_STATE_FREETEXT);
         returnToCannedList = false;
+
+        // Regenerate frames to show keyboard again
+        UIFrameEvent e;
+        e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+        notifyObservers(&e);
+
         IF_SCREEN(screen->forceDisplay(true));
         return 1;
     }
 
     // CANCEL
     if (event->inputEvent == INPUT_BROKER_CANCEL || event->inputEvent == INPUT_BROKER_ALT_LONG) {
-        runState = returnToCannedList ? CANNED_MESSAGE_RUN_STATE_ACTIVE : CANNED_MESSAGE_RUN_STATE_FREETEXT;
+        // Return to keyboard if we came from keyboard, otherwise to canned list
+        runState = (osk_found && !returnToCannedList)
+                       ? CANNED_MESSAGE_RUN_STATE_FREETEXT
+                       : (returnToCannedList ? CANNED_MESSAGE_RUN_STATE_ACTIVE : CANNED_MESSAGE_RUN_STATE_FREETEXT);
         returnToCannedList = false;
         searchQuery = "";
 
-        // UIFrameEvent e;
-        // e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
-        // notifyObservers(&e);
+        // Regenerate frames to show keyboard again
+        UIFrameEvent e;
+        e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+        notifyObservers(&e);
+
         IF_SCREEN(screen->forceDisplay(true));
         return 1;
     }
@@ -1089,6 +1132,11 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
     // ---- All hardware keys fall through to here (CardKB, physical, etc.) ----
 
     if (event->kbchar == INPUT_BROKER_MSG_EMOTE_LIST) {
+        // Get current text from VirtualKeyboard before switching to emote picker
+        if (graphics::NotificationRenderer::virtualKeyboard) {
+            freetext = graphics::NotificationRenderer::virtualKeyboard->getInputText().c_str();
+            cursor = freetext.length(); // Set cursor to end since VirtualKeyboard doesn't track cursor
+        }
         runState = CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER;
         requestFocus();
         IF_SCREEN(screen->forceDisplay());
@@ -1475,13 +1523,23 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
         String label = graphics::emotes[actualEmoteIdx].label;
         String emoteInsert = label;
         LOG_DEBUG("Selected emote: label='%s', index=%d, cursor=%d", label.c_str(), actualEmoteIdx, cursor);
-        if (cursor == freetext.length()) {
+
+        // For VirtualKeyboard (trackball devices), always append at the end since it doesn't support cursor positioning
+        if (osk_found && graphics::NotificationRenderer::virtualKeyboard) {
             freetext += emoteInsert;
+            cursor = freetext.length();
+            graphics::NotificationRenderer::virtualKeyboard->setInputText(freetext.c_str());
         } else {
-            freetext = freetext.substring(0, cursor) + emoteInsert + freetext.substring(cursor);
+            // For other keyboards, insert at cursor position
+            if (cursor == freetext.length()) {
+                freetext += emoteInsert;
+            } else {
+                freetext = freetext.substring(0, cursor) + emoteInsert + freetext.substring(cursor);
+            }
+            cursor += emoteInsert.length();
         }
-        cursor += emoteInsert.length();
         LOG_DEBUG("After insert: freetext='%s', cursor=%d", freetext.c_str(), cursor);
+
         runState = CANNED_MESSAGE_RUN_STATE_FREETEXT;
         requestFocus();
         IF_SCREEN(screen->forceDisplay(true));
@@ -2688,6 +2746,52 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
 #if defined(USE_VIRTUAL_KEYBOARD)
         drawKeyboard(display, state, 0, 0);
 #else
+        // For trackball devices, show the button-navigated virtual keyboard
+        if (osk_found) {
+            // Ensure OnScreenKeyboardModule is started
+            if (!graphics::NotificationRenderer::virtualKeyboard) {
+                char header[64];
+                const char *nodeName = getNodeName(dest);
+                if (dest == NODENUM_BROADCAST) {
+                    snprintf(header, sizeof(header), "To: #%s", channels.getName(channel));
+                } else {
+                    snprintf(header, sizeof(header), "To: @%s", nodeName ? nodeName : "Unknown");
+                }
+
+                LOG_INFO("Starting VirtualKeyboard for trackball device");
+                graphics::OnScreenKeyboardModule::instance().start(header, freetext.c_str(),
+                                                                   0, // No timeout for trackball devices
+                                                                   [this](const std::string &text) {
+                                                                       if (!text.empty()) {
+                                                                           this->freetext = text.c_str();
+                                                                           this->payload = CANNED_MESSAGE_RUN_STATE_FREETEXT;
+                                                                           this->currentMessageIndex = -1;
+                                                                           this->runState =
+                                                                               CANNED_MESSAGE_RUN_STATE_SENDING_ACTIVE;
+                                                                           this->lastTouchMillis = millis();
+                                                                       } else {
+                                                                           this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
+                                                                           this->freetext = "";
+                                                                           this->cursor = 0;
+                                                                       }
+                                                                       // Regenerate frames when done
+                                                                       UIFrameEvent e;
+                                                                       e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+                                                                       notifyObservers(&e);
+                                                                       // Trigger runOnce to process SENDING_ACTIVE state
+                                                                       // immediately
+                                                                       this->setIntervalFromNow(0);
+                                                                   });
+                // Disable timeout for trackball devices
+                if (graphics::NotificationRenderer::virtualKeyboard) {
+                    graphics::NotificationRenderer::virtualKeyboard->disableTimeout();
+                }
+            }
+            // Draw the virtual keyboard
+            graphics::OnScreenKeyboardModule::instance().draw(display);
+            return;
+        }
+
         display->setTextAlignment(TEXT_ALIGN_LEFT);
         display->setFont(FONT_SMALL);
 
