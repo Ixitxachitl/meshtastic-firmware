@@ -361,6 +361,22 @@ extern const unsigned char star_of_david[] PROGMEM;
 #define snow_man_width 16
 #define snow_man_height 16
 extern const unsigned char snow_man[] PROGMEM;
+
+#define hot_beverage_width 16
+#define hot_beverage_height 16
+extern const unsigned char hot_beverage[] PROGMEM;
+
+#define raising_hands_width 16
+#define raising_hands_height 16
+extern const unsigned char raising_hands[] PROGMEM;
+
+#define sunrise_width 16
+#define sunrise_height 16
+extern const unsigned char sunrise[] PROGMEM;
+
+#define sunset_width 16
+#define sunset_height 16
+extern const unsigned char sunset[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
 } // namespace graphics

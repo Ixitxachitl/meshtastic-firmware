@@ -44,6 +44,7 @@ const Emote emotes[] = {
     {"\u270C\uFE0F", peace_sign, peace_sign_width, peace_sign_height},        // ✌️ Victory Hand
     {"\U0001F596", vulcan_salute, vulcan_salute_width, vulcan_salute_height}, // 🖖 Vulcan Salute
     {"\U0001F64F", praying, praying_width, praying_height},                   // 🙏 Praying Hands
+    {"\U0001F64C", raising_hands, raising_hands_width, raising_hands_height}, // 🙌 Raising Hands
     {"\U0001F4AA", strong, strong_width, strong_height},                      // 💪 Flexed Biceps
     {"\U0001F937", shrug, shrug_width, shrug_height},                         // 🤷 Person Shrugging
     {"\U0001F920", cowboy, cowboy_width, cowboy_height},                      // 🤠 Cowboy Hat Face
@@ -58,6 +59,7 @@ const Emote emotes[] = {
     // --- Weather ---
     {"\u2600", sun, sun_width, sun_height},                                   // ☀ Sun (without variation selector)
     {"\u2600\uFE0F", sun, sun_width, sun_height},                             // ☀️ Sun (with variation selector)
+    {"\U0001F327", rain, rain_width, rain_height},                            // 🌧 Cloud with Rain
     {"\U0001F327\uFE0F", rain, rain_width, rain_height},                      // 🌧️ Cloud with Rain
     {"\u2601\uFE0F", cloud, cloud_width, cloud_height},                       // ☁️ Cloud
     {"\U0001F32B\uFE0F", fog, fog_width, fog_height},                         // 🌫️ Fog
@@ -76,6 +78,10 @@ const Emote emotes[] = {
     {"\u26C8\uFE0F", cloud_with_lightning_rain, cloud_with_lightning_rain_width,
      cloud_with_lightning_rain_height},                                 // ⛈️ Cloud with Lightning and Rain
     {"\U0001F32C\uFE0F", wind_face, wind_face_width, wind_face_height}, // 🌬️ Wind Face
+    {"\U0001F305", sunrise, sunrise_width, sunrise_height},             // 🌅 Sunrise
+    {"\U0001F304", sunrise, sunrise_width, sunrise_height},             // 🌄 Sunrise
+    {"\U0001F306", sunset, sunset_width, sunset_height},                // 🌆 Sunset
+    {"\U0001F307", sunset, sunset_width, sunset_height},                // 🌇 Sunset
 
     // --- Moon Phases ---
     {"\U0001F311", new_moon, new_moon_width, new_moon_height},                                     // 🌑 New Moon
@@ -107,18 +113,19 @@ const Emote emotes[] = {
     {"\U0001F498", heart, heart_width, heart_height},   // 💘 Heart with Arrow
 
     // --- Objects ---
-    {"\U0001F4A9", poo, poo_width, poo_height},                      // 💩 Pile of Poo
-    {"\U0001F514", bell_icon, bell_icon_width, bell_icon_height},    // 🔔 Bell
-    {"\U0001F4CB", clipboard, clipboard_width, clipboard_height},    // 📋 Clipboard
-    {"\U0001F36A", cookie, cookie_width, cookie_height},             // 🍪 Cookie
-    {"\U0001F370", shortcake, shortcake_width, shortcake_height},    // 🍰 Shortcake
-    {"\U0001F351", peach, peach_width, peach_height},                // 🍑 Peach
-    {"\U0001F983", turkey, turkey_width, turkey_height},             // 🦃 Turkey
-    {"\U0001F357", turkey_leg, turkey_leg_width, turkey_leg_height}, // 🍗 Poultry Leg
-    {"\U0001F525", fire, fire_width, fire_height},                   // 🔥 Fire
-    {"\u2728", sparkles, sparkles_width, sparkles_height},           // ✨ Sparkles
-    {"\U0001F573\uFE0F", hole, hole_width, hole_height},             // 🕳️ Hole
-    {"\U0001F3B3", bowling, bowling_width, bowling_height},          // 🎳 Bowling
+    {"\U0001F4A9", poo, poo_width, poo_height},                        // 💩 Pile of Poo
+    {"\U0001F514", bell_icon, bell_icon_width, bell_icon_height},      // 🔔 Bell
+    {"\U0001F4CB", clipboard, clipboard_width, clipboard_height},      // 📋 Clipboard
+    {"\U0001F36A", cookie, cookie_width, cookie_height},               // 🍪 Cookie
+    {"\U0001F370", shortcake, shortcake_width, shortcake_height},      // 🍰 Shortcake
+    {"\U0001F351", peach, peach_width, peach_height},                  // 🍑 Peach
+    {"\U0001F983", turkey, turkey_width, turkey_height},               // 🦃 Turkey
+    {"\U0001F357", turkey_leg, turkey_leg_width, turkey_leg_height},   // 🍗 Poultry Leg
+    {"\U0001F525", fire, fire_width, fire_height},                     // 🔥 Fire
+    {"\u2728", sparkles, sparkles_width, sparkles_height},             // ✨ Sparkles
+    {"\U0001F573\uFE0F", hole, hole_width, hole_height},               // 🕳️ Hole
+    {"\U0001F3B3", bowling, bowling_width, bowling_height},            // 🎳 Bowling
+    {"\u2615", hot_beverage, hot_beverage_width, hot_beverage_height}, // ☕ Hot Beverage
 
     // --- Arrows ---
     {"\u2193", downwards_arrow, downwards_arrow_width, downwards_arrow_height},          // ↓ Downwards Arrow
@@ -515,6 +522,22 @@ const unsigned char star_of_david[] PROGMEM = {0x00, 0x00, 0x00, 0x01, 0x80, 0x0
 const unsigned char snow_man[] PROGMEM = {0xE0, 0x03, 0xE0, 0x03, 0xF0, 0x07, 0x20, 0x02, 0x10, 0x04, 0x50,
                                           0x05, 0x92, 0x24, 0x23, 0x62, 0xD4, 0x15, 0x08, 0x09, 0x88, 0x08,
                                           0x08, 0x08, 0x88, 0x08, 0x08, 0x08, 0x10, 0x04, 0xE0, 0x03};
+
+const unsigned char hot_beverage[] PROGMEM = {0x00, 0x00, 0x22, 0x02, 0x44, 0x04, 0x88, 0x08, 0x00, 0x00, 0xF8,
+                                              0x0F, 0x04, 0x10, 0xF2, 0x27, 0x06, 0x30, 0xFA, 0x5F, 0x02, 0x50,
+                                              0x04, 0x50, 0x1E, 0x3C, 0xE1, 0x43, 0x0E, 0x38, 0xF0, 0x07};
+
+const unsigned char raising_hands[] PROGMEM = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x09, 0x40,
+                                               0x05, 0x18, 0x30, 0x3C, 0x78, 0x3E, 0xF8, 0x46, 0xC4, 0xA2, 0x8A,
+                                               0x82, 0x82, 0x82, 0x82, 0x42, 0x84, 0x3C, 0x78, 0x00, 0x00};
+
+const unsigned char sunrise[] PROGMEM = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x21, 0x10, 0x11, 0x00,
+                                         0x00, 0xC2, 0x87, 0xE4, 0x4F, 0xF0, 0x1F, 0xF8, 0x3F, 0xF8, 0x3E,
+                                         0x78, 0x3C, 0x3E, 0xF8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+const unsigned char sunset[] PROGMEM = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x21, 0x10, 0x11, 0x00,
+                                        0x00, 0xC2, 0x87, 0x24, 0x48, 0x10, 0x10, 0x08, 0x20, 0x08, 0x20,
+                                        0x08, 0x20, 0x3E, 0xF8, 0x40, 0x04, 0x80, 0x02, 0x00, 0x01};
 #endif
 
 } // namespace graphics
