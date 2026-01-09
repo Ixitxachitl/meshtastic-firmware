@@ -1647,7 +1647,8 @@ int Screen::handleInputEvent(const InputEvent *event)
 
         if (event->inputEvent == INPUT_BROKER_UP) {
             if (messageStore.getMessages().empty()) {
-                cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST);
+                // Swallow UP input when no messages to prevent preset menu from opening
+                return 1;
             } else {
                 graphics::MessageRenderer::scrollUp();
                 setFastFramerate(); // match existing behavior
@@ -1657,7 +1658,8 @@ int Screen::handleInputEvent(const InputEvent *event)
 
         if (event->inputEvent == INPUT_BROKER_DOWN) {
             if (messageStore.getMessages().empty()) {
-                cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST);
+                // Swallow DOWN input when no messages to prevent preset menu from opening
+                return 1;
             } else {
                 graphics::MessageRenderer::scrollDown();
                 setFastFramerate();

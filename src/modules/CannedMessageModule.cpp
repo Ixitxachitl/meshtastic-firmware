@@ -431,6 +431,14 @@ int CannedMessageModule::handleInputEvent(const InputEvent *event)
         return 0;
     }
 
+    // Swallow UP/DOWN when there are no real messages to prevent preset menu from opening
+    if (messagesCount <= 2 && runState == CANNED_MESSAGE_RUN_STATE_ACTIVE) {
+        if (event->inputEvent == INPUT_BROKER_UP || event->inputEvent == INPUT_BROKER_UP_LONG ||
+            event->inputEvent == INPUT_BROKER_DOWN || event->inputEvent == INPUT_BROKER_DOWN_LONG) {
+            return 1; // Swallow UP/DOWN to prevent preset menu
+        }
+    }
+
     // If module is inactive, block all long press and touch-only events
     if (runState == CANNED_MESSAGE_RUN_STATE_INACTIVE &&
         (event->inputEvent == INPUT_BROKER_SELECT_LONG || event->inputEvent == INPUT_BROKER_ALT_LONG ||
@@ -473,8 +481,9 @@ int CannedMessageModule::handleInputEvent(const InputEvent *event)
             if (event->kbchar == INPUT_BROKER_MSG_EMOTE_LIST) {
                 return handleFreeTextInput(event);
             }
-            // Destination selection request from VirtualKeyboard (UP from row 0)
-            if (event->kbchar == INPUT_BROKER_EVENT_NAV_SELECT_DESTINATION) {
+            // SELECT when header is focused - open destination picker
+            if (headerFocused && (event->inputEvent == INPUT_BROKER_SELECT || event->inputEvent == INPUT_BROKER_USER_PRESS)) {
+                headerFocused = false;
                 // Close the VirtualKeyboard before switching (don't call empty callback)
                 graphics::OnScreenKeyboardModule::instance().stop(false);
                 graphics::NotificationRenderer::virtualKeyboard = nullptr;
@@ -490,11 +499,43 @@ int CannedMessageModule::handleInputEvent(const InputEvent *event)
                 IF_SCREEN(screen->forceDisplay(true));
                 return 1;
             }
-            // Otherwise delegate to VirtualKeyboard
-            InputEvent brokerEvent;
-            brokerEvent.inputEvent = event->inputEvent;
-            brokerEvent.kbchar = event->kbchar;
-            graphics::OnScreenKeyboardModule::instance().handleInput(brokerEvent);
+            // Destination selection request from VirtualKeyboard (UP from row 0)
+            if (event->kbchar == INPUT_BROKER_EVENT_NAV_SELECT_DESTINATION) {
+                if (headerFocused) {
+                    // Pressing UP again when header is focused - wrap back to keyboard N key
+                    headerFocused = false;
+                    if (graphics::NotificationRenderer::virtualKeyboard) {
+                        graphics::NotificationRenderer::virtualKeyboard->setHeaderFocused(false);
+                        graphics::NotificationRenderer::virtualKeyboard->setCursorPosition(3, 5); // Row 3, N key
+                    }
+                    IF_SCREEN(screen->forceDisplay(true));
+                } else {
+                    // First UP press - highlight the header
+                    headerFocused = true;
+                    if (graphics::NotificationRenderer::virtualKeyboard) {
+                        graphics::NotificationRenderer::virtualKeyboard->setHeaderFocused(true);
+                    }
+                    IF_SCREEN(screen->forceDisplay(true));
+                }
+                return 1;
+            }
+            // DOWN when header is focused - go back to keyboard top row
+            if (headerFocused && (event->inputEvent == INPUT_BROKER_DOWN || event->inputEvent == INPUT_BROKER_USER_PRESS)) {
+                headerFocused = false;
+                if (graphics::NotificationRenderer::virtualKeyboard) {
+                    graphics::NotificationRenderer::virtualKeyboard->setHeaderFocused(false);
+                    graphics::NotificationRenderer::virtualKeyboard->setCursorPosition(0, 5); // Top row, middle (H key)
+                }
+                IF_SCREEN(screen->forceDisplay(true));
+                return 1;
+            }
+            // Otherwise delegate to VirtualKeyboard (unless it's a header nav event already handled)
+            if (event->kbchar != INPUT_BROKER_EVENT_NAV_SELECT_DESTINATION) {
+                InputEvent brokerEvent;
+                brokerEvent.inputEvent = event->inputEvent;
+                brokerEvent.kbchar = event->kbchar;
+                graphics::OnScreenKeyboardModule::instance().handleInput(brokerEvent);
+            }
             return 1; // Input handled by keyboard
         }
         return handleFreeTextInput(event); // All allowed input for this state
@@ -752,6 +793,9 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
         handled = true;
     } else if (isDown && messagesCount > 0) {
         runState = CANNED_MESSAGE_RUN_STATE_ACTION_DOWN;
+        handled = true;
+    } else if ((isUp || isDown) && messagesCount == 0) {
+        // Swallow navigation on empty list
         handled = true;
     } else if (isSelect) {
         const char *current = messages[currentMessageIndex];
@@ -2436,7 +2480,7 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
         // Draw Channels First
         if (itemIndex < numActiveChannels) {
             uint8_t channelIndex = this->activeChannelIndices[itemIndex];
-            snprintf(entryText, sizeof(entryText), "@%s", channels.getName(channelIndex));
+            snprintf(entryText, sizeof(entryText), "#%s", channels.getName(channelIndex));
         }
         // Then Draw Nodes
         else {

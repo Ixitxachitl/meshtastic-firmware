@@ -20,7 +20,8 @@ static const unsigned char emote_icon[] PROGMEM = {0x3C, 0x42, 0xA5, 0x81, 0xA5,
 static const int emote_icon_width = 8;
 static const int emote_icon_height = 8;
 
-VirtualKeyboard::VirtualKeyboard() : cursorRow(0), cursorCol(0), lastActivityTime(millis()), timeoutDisabled(false)
+VirtualKeyboard::VirtualKeyboard()
+    : cursorRow(0), cursorCol(0), lastActivityTime(millis()), headerFocused(false), timeoutDisabled(false)
 {
     initializeKeyboard();
     // Set cursor to H(2, 5)
@@ -198,7 +199,8 @@ void VirtualKeyboard::draw(OLEDDisplay *display, int16_t offsetX, int16_t offset
 
                 int y = offsetY + keyboardStartY + row * (cellH + rowSpacing);
                 int h = cellH;
-                bool selected = (row == cursorRow && col == cursorCol);
+                // Don't show cursor/selection when header is focused
+                bool selected = !headerFocused && (row == cursorRow && col == cursorCol);
                 drawKey(display, k, selected, x, y, (uint8_t)w, (uint8_t)h, isLastCol);
 
                 runningX += w;
@@ -227,8 +229,19 @@ void VirtualKeyboard::drawInputArea(OLEDDisplay *display, int16_t offsetX, int16
         snprintf(charCountStr, sizeof(charCountStr), "%d left", charsLeft);
         int charCountWidth = display->getStringWidth(charCountStr);
 
+        // Draw highlight if header is focused (only over destination text, not character count)
+        if (headerFocused) {
+            int headerTextWidth = display->getStringWidth(headerText.c_str());
+            display->fillRect(offsetX, offsetY + 1, headerTextWidth + 6, FONT_HEIGHT_SMALL - 4);
+            display->setColor(BLACK);
+        }
+
         // Draw header left-aligned
         display->drawString(offsetX + 2, offsetY, headerText.c_str());
+
+        // Reset color before drawing character count
+        display->setColor(WHITE);
+
         // Draw character count right-aligned
         display->drawString(offsetX + screenWidth - charCountWidth - 2, offsetY, charCountStr);
 
@@ -647,7 +660,7 @@ void VirtualKeyboard::moveCursorUp()
         if (inputBroker) {
             InputEvent e;
             e.source = "VirtualKeyboard";
-            e.inputEvent = INPUT_BROKER_UP;
+            e.inputEvent = static_cast<input_broker_event>(0); // Don't trigger navigation sound
             e.kbchar = INPUT_BROKER_EVENT_NAV_SELECT_DESTINATION;
             e.touchX = 0;
             e.touchY = 0;
@@ -664,6 +677,21 @@ void VirtualKeyboard::moveCursorUp()
 }
 void VirtualKeyboard::moveCursorDown()
 {
+    // If in row 3 (bottom row), wrap to header
+    if (cursorRow == 3) {
+        if (inputBroker) {
+            InputEvent e;
+            e.source = "VirtualKeyboard";
+            e.inputEvent = static_cast<input_broker_event>(0); // Don't trigger navigation sound
+            e.kbchar = INPUT_BROKER_EVENT_NAV_SELECT_DESTINATION;
+            e.touchX = 0;
+            e.touchY = 0;
+            e.deltaY = 0;
+            inputBroker->injectInputEvent(&e);
+        }
+        return;
+    }
+
     moveCursorDelta(1, 0);
     if (screen) {
         screen->forceDisplay(true);
@@ -705,6 +733,15 @@ void VirtualKeyboard::moveCursorRight()
     }
     if (screen) {
         screen->forceDisplay(true);
+    }
+}
+
+void VirtualKeyboard::setCursorPosition(uint8_t row, uint8_t col)
+{
+    if (row < KEYBOARD_ROWS && col < KEYBOARD_COLS) {
+        cursorRow = row;
+        cursorCol = col;
+        resetTimeout();
     }
 }
 
@@ -891,6 +928,11 @@ std::string VirtualKeyboard::getInputText() const
 void VirtualKeyboard::setHeader(const std::string &header)
 {
     headerText = header;
+}
+
+void VirtualKeyboard::setHeaderFocused(bool focused)
+{
+    headerFocused = focused;
 }
 
 void VirtualKeyboard::setCallback(std::function<void(const std::string &)> callback)

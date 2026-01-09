@@ -29,6 +29,7 @@ class VirtualKeyboard
     void setInputText(const std::string &text);
     std::string getInputText() const;
     void setHeader(const std::string &header);
+    void setHeaderFocused(bool focused); // Set whether header is focused/highlighted
     void setCallback(std::function<void(const std::string &)> callback);
 
     // Navigation methods for encoder input
@@ -36,6 +37,8 @@ class VirtualKeyboard
     void moveCursorDown();
     void moveCursorLeft();
     void moveCursorRight();
+    void setCursorPosition(uint8_t row, uint8_t col);  // Set cursor to specific position
+    uint8_t getCursorRow() const { return cursorRow; } // Get current cursor row
     void handlePress();
     void handleLongPress();
 
@@ -55,6 +58,7 @@ class VirtualKeyboard
 
     std::string inputText;
     std::string headerText;
+    bool headerFocused; // Whether the header is focused/highlighted
     std::function<void(const std::string &)> onTextEntered;
 
     uint8_t cursorRow;

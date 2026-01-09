@@ -167,6 +167,7 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
     int scrollIndex = 0;
     int visibleRows = 0;
     bool needsUpdate = true;
+    bool headerFocused = false; // Track if destination header is focused/highlighted
     unsigned long lastUpdateMillis = 0;
     String searchQuery;
     String freetext;
