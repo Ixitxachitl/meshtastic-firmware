@@ -1906,8 +1906,9 @@ bool EnvironmentTelemetryModule::handleReceivedProtobuf(const meshtastic_MeshPac
 
         // Track most recent source for auto-display and mark cache dirty
         s_lastSource = from;
+#if HAS_SCREEN
         s_displayCache.markDirty();
-
+#endif
         // Screen will refresh on next UI cycle - no need to force
     }
 
@@ -2064,7 +2065,9 @@ bool EnvironmentTelemetryModule::sendTelemetry(NodeNum dest, bool phoneOnly)
 
     // Track most recent source for auto-display and mark cache dirty
     s_lastSource = self;
+#if HAS_SCREEN
     s_displayCache.markDirty();
+#endif
     // Screen will refresh on next UI cycle
 
     if (phoneOnly) {

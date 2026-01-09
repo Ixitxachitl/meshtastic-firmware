@@ -3,7 +3,7 @@
 #include "graphics/draw/NotificationRenderer.h" // for isOverlayBannerShowing()
 #include "main.h"
 
-#if !defined(MESHTASTIC_EXCLUDE_CANNEDMESSAGES)
+#if !defined(MESHTASTIC_EXCLUDE_CANNEDMESSAGES) && !defined(MESHTASTIC_EXCLUDE_SCREEN)
 #include "modules/CannedMessageModule.h"
 extern CannedMessageModule *cannedMessageModule;
 #endif
@@ -66,7 +66,7 @@ int32_t TouchScreenBase::runOnce()
         // Check if we're on a screen that supports scrolling
         bool messagesActive = graphics::isMessagesScreenActive();
         bool envTelemetryActive = graphics::isEnvTelemetryScreenActive();
-#if !defined(MESHTASTIC_EXCLUDE_CANNEDMESSAGES)
+#if !defined(MESHTASTIC_EXCLUDE_CANNEDMESSAGES) && !defined(MESHTASTIC_EXCLUDE_SCREEN)
         bool emotePickerActive = (cannedMessageModule && cannedMessageModule->isEmotePickerActive());
         bool cannedMessageActive = (cannedMessageModule && cannedMessageModule->isCannedMessageActive());
 #else
@@ -186,7 +186,7 @@ int32_t TouchScreenBase::runOnce()
     }
     _touchedOld = touched;
 
-#if defined RAK14014
+#if defined(RAK14014) && !defined(MESHTASTIC_EXCLUDE_CANNEDMESSAGES) && !defined(MESHTASTIC_EXCLUDE_SCREEN)
     // Speed up the processing speed of the keyboard in virtual keyboard mode
     auto state = cannedMessageModule->getRunState();
     if (state == CANNED_MESSAGE_RUN_STATE_FREETEXT) {
