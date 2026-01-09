@@ -377,6 +377,10 @@ extern const unsigned char sunrise[] PROGMEM;
 #define sunset_width 16
 #define sunset_height 16
 extern const unsigned char sunset[] PROGMEM;
+
+#define one_hundred_width 16
+#define one_hundred_height 16
+extern const unsigned char one_hundred[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
 } // namespace graphics

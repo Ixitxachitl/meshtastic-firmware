@@ -514,8 +514,16 @@ void VirtualKeyboard::drawKey(OLEDDisplay *display, const VirtualKey &key, bool 
         } else if (isAction) {
             const int padX = 1;
             const int padY = 2;
-            int hlW = textWidth + padX * 2;
-            int hlX = textX - padX;
+            int hlW, hlX;
+
+            // For emote button, center highlight on icon instead of text
+            if (key.type == VK_EMOTE) {
+                hlW = emote_icon_width + padX * 2;
+                hlX = x + (width - hlW) / 2;
+            } else {
+                hlW = textWidth + padX * 2;
+                hlX = textX - padX;
+            }
 
             if (hlX < x) {
                 hlW -= (x - hlX);
@@ -854,6 +862,9 @@ void VirtualKeyboard::insertCharacter(char c)
 {
     if (inputText.length() < 160) { // Reasonable text length limit
         inputText += c;
+        if (screen) {
+            screen->forceDisplay(true);
+        }
     }
 }
 

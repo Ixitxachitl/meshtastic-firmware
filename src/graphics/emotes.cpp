@@ -51,10 +51,11 @@ const Emote emotes[] = {
     {"\U0001F3A7", deadmau5, deadmau5_width, deadmau5_height},                // 🎧 Headphones
 
     // --- Symbols ---
-    {"\u2714\uFE0F", check_mark, check_mark_width, check_mark_height}, // ✔️ Check Mark
-    {"\u2705", check_mark, check_mark_width, check_mark_height},       // ✅ Check Mark Button
-    {"\u2611\uFE0F", check_mark, check_mark_width, check_mark_height}, // ☑️ Check Box with Check
-    {"\U0001F3E0", house, house_width, house_height},                  // 🏠 House
+    {"\u2714\uFE0F", check_mark, check_mark_width, check_mark_height},  // ✔️ Check Mark
+    {"\u2705", check_mark, check_mark_width, check_mark_height},        // ✅ Check Mark Button
+    {"\u2611\uFE0F", check_mark, check_mark_width, check_mark_height},  // ☑️ Check Box with Check
+    {"\U0001F3E0", house, house_width, house_height},                   // 🏠 House
+    {"\U0001F4AF", one_hundred, one_hundred_width, one_hundred_height}, // 💯 Hundred Points Symbol
 
     // --- Weather ---
     {"\u2600", sun, sun_width, sun_height},                                   // ☀ Sun (without variation selector)
@@ -538,6 +539,10 @@ const unsigned char sunrise[] PROGMEM = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0
 const unsigned char sunset[] PROGMEM = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x21, 0x10, 0x11, 0x00,
                                         0x00, 0xC2, 0x87, 0x24, 0x48, 0x10, 0x10, 0x08, 0x20, 0x08, 0x20,
                                         0x08, 0x20, 0x3E, 0xF8, 0x40, 0x04, 0x80, 0x02, 0x00, 0x01};
+
+const unsigned char one_hundred[] PROGMEM = {0x00, 0x00, 0x00, 0x00, 0x00, 0x78, 0xF0, 0xFC, 0xFB, 0xCD, 0x9B,
+                                             0xCD, 0x9B, 0xCD, 0x9B, 0xCD, 0x9B, 0xFD, 0xFB, 0x79, 0xF3, 0x00,
+                                             0x03, 0x3C, 0xE0, 0x03, 0x1C, 0x78, 0xC0, 0x07, 0x38, 0x00};
 #endif
 
 } // namespace graphics
