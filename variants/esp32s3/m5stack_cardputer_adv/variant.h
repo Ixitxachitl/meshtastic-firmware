@@ -27,6 +27,7 @@
 // #define KB_BL_PIN -1 // No keyboard backlight
 #define I2C_NO_RESCAN
 #define KB_INT TCA8418_INT
+#define HAS_PHYSICAL_KEYBOARD 1
 #define CANNED_MESSAGE_MODULE_ENABLE 1
 
 // GPS

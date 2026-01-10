@@ -3079,7 +3079,7 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
         }
 
         // Draw emote button in bottom right corner for devices with physical keyboard + touchscreen
-#if HAS_PHYSICAL_KEYBOARD
+#if HAS_PHYSICAL_KEYBOARD && HAS_TOUCHSCREEN
         {
             display->setColor(WHITE);
             const int buttonSize = 24;
@@ -3101,7 +3101,7 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
                 }
             }
         }
-#endif // HAS_PHYSICAL_KEYBOARD
+#endif // HAS_PHYSICAL_KEYBOARD && HAS_TOUCHSCREEN
 #endif // !defined(USE_VIRTUAL_KEYBOARD)
         return;
     }
