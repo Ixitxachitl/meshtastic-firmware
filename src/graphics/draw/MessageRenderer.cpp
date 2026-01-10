@@ -980,6 +980,13 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     if (!didReset) {
         resetScrollState();
         didReset = true;
+
+        // If old messages are on top, we need to calculate initial scroll position to show newest at bottom
+        // This is done after the cache is built, so we defer actual positioning to first render
+        if (!messageOrderNewestFirst) {
+            // Set a flag to initialize scroll position after cache is built
+            waitingToReset = true; // Temporarily use this flag to indicate we need initial positioning
+        }
     }
 
     // Clear the unread message indicator when viewing the message
@@ -1419,6 +1426,19 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         cachedIsBootRelative.clear();
         cachedIsBootRelative.swap(isBootRel);
         s_dirty = false;
+
+        // Initialize scroll position if this is the first time we're building the cache
+        // and we're in "old on top" mode (newest messages at bottom)
+        if (!manualScrolling && !messageOrderNewestFirst && scrollY == 0 && !scrollStarted) {
+            // Calculate the position to show newest messages (at bottom)
+            int totalH = 0;
+            for (int h : cachedHeights)
+                totalH += h;
+            int bottomOffset = totalH - usableHeight + FONT_HEIGHT_SMALL;
+            if (bottomOffset > 0) {
+                scrollY = bottomOffset;
+            }
+        }
     }
 
     // Scrolling logic based on message ordering preference
