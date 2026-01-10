@@ -21,7 +21,7 @@ static const int emote_icon_width = 8;
 static const int emote_icon_height = 8;
 
 VirtualKeyboard::VirtualKeyboard()
-    : cursorRow(0), cursorCol(0), lastActivityTime(millis()), headerFocused(false), timeoutDisabled(false)
+    : cursorRow(0), cursorCol(0), lastActivityTime(millis()), headerFocused(false), shiftActive(false), timeoutDisabled(false)
 {
     initializeKeyboard();
     // Set cursor to H(2, 5)
@@ -38,7 +38,7 @@ void VirtualKeyboard::initializeKeyboard()
         {'1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '\b', 0},
         {'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '\n', 0},
         {'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', ' ', 0},
-        {'z', 'x', 'c', 'v', 'b', 'n', 'm', '.', ',', '?', '\x10', '\x1b'}}; // emote, ESC
+        {'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', '\x10', '\x1b'}}; // emote, ESC
 
     // Derive layout dimensions and assert they match the configured keyboard grid
     constexpr int LAYOUT_ROWS = (int)(sizeof(LAYOUT) / sizeof(LAYOUT[0]));
@@ -478,10 +478,7 @@ void VirtualKeyboard::drawKey(OLEDDisplay *display, const VirtualKey &key, bool 
                   : (key.type == VK_EMOTE)   ? "E"
                                              : "";
     } else {
-        char c = getCharForKey(key, false);
-        if (c >= 'a' && c <= 'z') {
-            c = c - 'a' + 'A';
-        }
+        char c = getCharForKey(key, shiftActive); // Use shift state to determine case/modifier
         keyText = (key.character == ' ' || key.character == '_') ? "_" : std::string(1, c);
     }
 
@@ -609,9 +606,40 @@ char VirtualKeyboard::getCharForKey(const VirtualKey &key, bool isLongPress)
 
     char c = key.character;
 
-    // Long-press: only keep letter lowercase->uppercase conversion; remove other symbol mappings
-    if (isLongPress && c >= 'a' && c <= 'z') {
-        c = (char)(c - 'a' + 'A');
+    if (isLongPress) {
+        // Letters: lowercase -> uppercase
+        if (c >= 'a' && c <= 'z') {
+            c = (char)(c - 'a' + 'A');
+        }
+        // Numbers and punctuation: modifiers
+        else if (c == '1')
+            c = '!';
+        else if (c == '2')
+            c = '@';
+        else if (c == '3')
+            c = '#';
+        else if (c == '4')
+            c = '$';
+        else if (c == '5')
+            c = '%';
+        else if (c == '6')
+            c = '^';
+        else if (c == '7')
+            c = '&';
+        else if (c == '8')
+            c = '*';
+        else if (c == '9')
+            c = '(';
+        else if (c == '0')
+            c = ')';
+        else if (c == ';')
+            c = ':';
+        else if (c == ',')
+            c = '<';
+        else if (c == '.')
+            c = '>';
+        else if (c == '/')
+            c = '?';
     }
 
     return c;
@@ -764,9 +792,10 @@ void VirtualKeyboard::handlePress()
         return;
     }
 
-    // For character keys, insert lowercase character
+    // For character keys, insert character immediately (shifted if shift is active)
     if (key.type == VK_CHAR) {
-        insertCharacter(getCharForKey(key, false)); // false = lowercase/normal char
+        insertCharacter(getCharForKey(key, shiftActive)); // Use current shift state
+        shiftActive = false;                              // Turn off shift after inserting character
         return;
     }
 
@@ -774,6 +803,9 @@ void VirtualKeyboard::handlePress()
     switch (key.type) {
     case VK_BACKSPACE:
         deleteCharacter();
+        if (screen) {
+            screen->forceDisplay(true);
+        }
         break;
     case VK_ENTER:
         submitText();
@@ -816,9 +848,12 @@ void VirtualKeyboard::handleLongPress()
         return;
     }
 
-    // For character keys, insert uppercase/alternate character
+    // For character keys, toggle shift mode
     if (key.type == VK_CHAR) {
-        insertCharacter(getCharForKey(key, true)); // true = uppercase/alternate char
+        shiftActive = !shiftActive; // Toggle shift mode
+        if (screen) {
+            screen->forceDisplay(true);
+        }
         return;
     }
 

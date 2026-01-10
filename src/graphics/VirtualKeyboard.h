@@ -59,6 +59,7 @@ class VirtualKeyboard
     std::string inputText;
     std::string headerText;
     bool headerFocused; // Whether the header is focused/highlighted
+    bool shiftActive;   // Whether shift mode is active (shows uppercase/modifiers)
     std::function<void(const std::string &)> onTextEntered;
 
     uint8_t cursorRow;
