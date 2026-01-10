@@ -687,6 +687,49 @@ void VirtualKeyboard::moveCursorDelta(int dRow, int dCol)
     cursorCol = (uint8_t)c;
 }
 
+bool VirtualKeyboard::findValidKey(int &row, int &col, int dRow, int dCol)
+{
+    // Check if current position is valid
+    const VirtualKey &key = keyboard[row][col];
+    if (key.character != 0 || key.type != VK_CHAR) {
+        return true; // Already on a valid key
+    }
+
+    // Search in the direction specified
+    int searchRow = row;
+    int searchCol = col;
+
+    // If moving horizontally, search along the row
+    if (dCol != 0) {
+        int step = (dCol > 0) ? 1 : -1;
+        for (int attempts = 0; attempts < KEYBOARD_COLS; attempts++) {
+            searchCol += step;
+            if (searchCol < 0)
+                searchCol = KEYBOARD_COLS - 1;
+            if (searchCol >= KEYBOARD_COLS)
+                searchCol = 0;
+
+            const VirtualKey &k = keyboard[searchRow][searchCol];
+            if (k.character != 0 || k.type != VK_CHAR) {
+                row = searchRow;
+                col = searchCol;
+                return true;
+            }
+        }
+    }
+
+    // If moving vertically or no valid key found horizontally, find rightmost valid key in row
+    for (int c = KEYBOARD_COLS - 1; c >= 0; c--) {
+        const VirtualKey &k = keyboard[row][c];
+        if (k.character != 0 || k.type != VK_CHAR) {
+            col = c;
+            return true;
+        }
+    }
+
+    return false; // No valid key found (shouldn't happen)
+}
+
 void VirtualKeyboard::moveCursorUp()
 {
     resetTimeout();
@@ -737,17 +780,19 @@ void VirtualKeyboard::moveCursorLeft()
 {
     resetTimeout();
 
-    if (cursorCol > 0) {
-        cursorCol--;
-    } else {
-        if (cursorRow > 0) {
-            cursorRow--;
-            cursorCol = KEYBOARD_COLS - 1;
-        } else {
-            cursorRow = KEYBOARD_ROWS - 1;
-            cursorCol = KEYBOARD_COLS - 1;
-        }
+    int newRow = cursorRow;
+    int newCol = cursorCol - 1;
+
+    // Wrap within the same row
+    if (newCol < 0) {
+        newCol = KEYBOARD_COLS - 1;
     }
+
+    // Find valid key staying on same row (dRow=0)
+    findValidKey(newRow, newCol, 0, -1);
+    cursorRow = newRow;
+    cursorCol = newCol;
+
     if (screen) {
         screen->forceDisplay(true);
     }
@@ -756,17 +801,19 @@ void VirtualKeyboard::moveCursorRight()
 {
     resetTimeout();
 
-    if (cursorCol < KEYBOARD_COLS - 1) {
-        cursorCol++;
-    } else {
-        if (cursorRow < KEYBOARD_ROWS - 1) {
-            cursorRow++;
-            cursorCol = 0;
-        } else {
-            cursorRow = 0;
-            cursorCol = 0;
-        }
+    int newRow = cursorRow;
+    int newCol = cursorCol + 1;
+
+    // Wrap within the same row
+    if (newCol >= KEYBOARD_COLS) {
+        newCol = 0;
     }
+
+    // Find valid key staying on same row (dRow=0)
+    findValidKey(newRow, newCol, 0, 1);
+    cursorRow = newRow;
+    cursorCol = newCol;
+
     if (screen) {
         screen->forceDisplay(true);
     }

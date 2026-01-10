@@ -77,6 +77,7 @@ class VirtualKeyboard
 
     // Unified cursor movement helper
     void moveCursorDelta(int dRow, int dCol);
+    bool findValidKey(int &row, int &col, int dRow, int dCol); // Find nearest valid key in direction
 
     char getCharForKey(const VirtualKey &key, bool isLongPress = false);
     void insertCharacter(char c);
