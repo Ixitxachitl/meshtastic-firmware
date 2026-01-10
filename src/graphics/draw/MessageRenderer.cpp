@@ -237,6 +237,31 @@ static inline size_t utf8CharLen(uint8_t c)
     return 1;
 }
 
+// Count UTF-8 characters (treating multi-byte sequences including emoji as 1 character)
+static size_t utf8CharCount(const char *str)
+{
+    size_t count = 0;
+    for (size_t i = 0; str[i];) {
+        size_t len = utf8CharLen((uint8_t)str[i]);
+        i += len;
+        count++;
+    }
+    return count;
+}
+
+// Truncate string to specified number of UTF-8 characters (in-place)
+static void utf8Truncate(char *str, size_t maxChars)
+{
+    size_t count = 0;
+    size_t i = 0;
+    while (str[i] && count < maxChars) {
+        size_t len = utf8CharLen((uint8_t)str[i]);
+        i += len;
+        count++;
+    }
+    str[i] = '\0';
+}
+
 // Remove variation selectors (FE0F) and skin tone modifiers from emoji so they match your labels
 std::string normalizeEmoji(const std::string &s)
 {
@@ -1196,17 +1221,16 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 if (availWidth < 0)
                     availWidth = 0;
 
-                // Fit sender to available width - truncate senderBuf directly to avoid string allocations
-                size_t origLen = strlen(senderBuf);
-                while (senderBuf[0] && display->getStringWidth(senderBuf) > availWidth) {
-                    // Remove last character (naive truncation, but avoids allocations)
-                    size_t len = strlen(senderBuf);
-                    if (len > 0)
-                        senderBuf[len - 1] = '\0';
+                // Fit sender to available width - truncate by UTF-8 characters (emoji count as 1 char)
+                size_t origCharCount = utf8CharCount(senderBuf);
+                size_t charCount = origCharCount;
+                while (senderBuf[0] && display->getStringWidth(senderBuf) > availWidth && charCount > 0) {
+                    charCount--;
+                    utf8Truncate(senderBuf, charCount);
                 }
 
                 // If we actually truncated, append "..."
-                if (strlen(senderBuf) < origLen && strlen(senderBuf) + 3 < sizeof(senderBuf)) {
+                if (charCount < origCharCount && strlen(senderBuf) + 3 < sizeof(senderBuf)) {
                     strcat(senderBuf, "...");
                 }
 
@@ -1330,17 +1354,16 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 if (availWidth < 0)
                     availWidth = 0;
 
-                // Fit sender to available width - truncate senderBuf directly to avoid string allocations
-                size_t origLen = strlen(senderBuf);
-                while (senderBuf[0] && display->getStringWidth(senderBuf) > availWidth) {
-                    // Remove last character (naive truncation, but avoids allocations)
-                    size_t len = strlen(senderBuf);
-                    if (len > 0)
-                        senderBuf[len - 1] = '\0';
+                // Fit sender to available width - truncate by UTF-8 characters (emoji count as 1 char)
+                size_t origCharCount = utf8CharCount(senderBuf);
+                size_t charCount = origCharCount;
+                while (senderBuf[0] && display->getStringWidth(senderBuf) > availWidth && charCount > 0) {
+                    charCount--;
+                    utf8Truncate(senderBuf, charCount);
                 }
 
                 // If we actually truncated, append "..."
-                if (strlen(senderBuf) < origLen && strlen(senderBuf) + 3 < sizeof(senderBuf)) {
+                if (charCount < origCharCount && strlen(senderBuf) + 3 < sizeof(senderBuf)) {
                     strcat(senderBuf, "...");
                 }
 
