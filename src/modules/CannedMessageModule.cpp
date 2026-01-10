@@ -475,8 +475,9 @@ int CannedMessageModule::handleInputEvent(const InputEvent *event)
 
     // Free text input mode: Handles character input, cancel, backspace, select, etc.
     case CANNED_MESSAGE_RUN_STATE_FREETEXT:
-        // If VirtualKeyboard is active, check for special events first
-        if (osk_found && graphics::NotificationRenderer::virtualKeyboard) {
+        // If VirtualKeyboard is active AND no external keyboard (CardKB), use virtual keyboard
+        // When CardKB is connected, prefer it over the virtual keyboard
+        if (osk_found && !kb_found && graphics::NotificationRenderer::virtualKeyboard) {
             // Emote picker request should be handled by CannedMessageModule
             if (event->kbchar == INPUT_BROKER_MSG_EMOTE_LIST) {
                 return handleFreeTextInput(event);
@@ -709,7 +710,8 @@ int CannedMessageModule::handleDestinationSelectionInput(const InputEvent *event
         }
 
         // Return to keyboard if we came from keyboard, otherwise to canned list
-        runState = (osk_found && !returnToCannedList)
+        // Only use OSK if no external keyboard is connected - prefer physical keyboard
+        runState = (osk_found && !kb_found && !returnToCannedList)
                        ? CANNED_MESSAGE_RUN_STATE_FREETEXT
                        : (returnToCannedList ? CANNED_MESSAGE_RUN_STATE_ACTIVE : CANNED_MESSAGE_RUN_STATE_FREETEXT);
         returnToCannedList = false;
@@ -726,7 +728,8 @@ int CannedMessageModule::handleDestinationSelectionInput(const InputEvent *event
     // CANCEL
     if (event->inputEvent == INPUT_BROKER_CANCEL || event->inputEvent == INPUT_BROKER_ALT_LONG) {
         // Return to keyboard if we came from keyboard, otherwise to canned list
-        runState = (osk_found && !returnToCannedList)
+        // Only use OSK if no external keyboard is connected - prefer physical keyboard
+        runState = (osk_found && !kb_found && !returnToCannedList)
                        ? CANNED_MESSAGE_RUN_STATE_FREETEXT
                        : (returnToCannedList ? CANNED_MESSAGE_RUN_STATE_ACTIVE : CANNED_MESSAGE_RUN_STATE_FREETEXT);
         returnToCannedList = false;
@@ -837,7 +840,8 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
         }
 #else
         if (strcmp(current, "[-- Free Text --]") == 0) {
-            if (osk_found && screen) {
+            // Only use OSK if no external keyboard is connected - prefer physical keyboard
+            if (osk_found && !kb_found && screen) {
                 char headerBuffer[64];
                 if (this->dest == NODENUM_BROADCAST) {
                     snprintf(headerBuffer, sizeof(headerBuffer), "To: #%s", channels.getName(this->channel));
@@ -1569,7 +1573,8 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
         LOG_DEBUG("Selected emote: label='%s', index=%d, cursor=%d", label.c_str(), actualEmoteIdx, cursor);
 
         // For VirtualKeyboard (trackball devices), always append at the end since it doesn't support cursor positioning
-        if (osk_found && graphics::NotificationRenderer::virtualKeyboard) {
+        // Only use OSK if no external keyboard is connected - prefer physical keyboard
+        if (osk_found && !kb_found && graphics::NotificationRenderer::virtualKeyboard) {
             freetext += emoteInsert;
             cursor = freetext.length();
             graphics::NotificationRenderer::virtualKeyboard->setInputText(freetext.c_str());
@@ -2791,7 +2796,8 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
         drawKeyboard(display, state, 0, 0);
 #else
         // For trackball devices, show the button-navigated virtual keyboard
-        if (osk_found) {
+        // Only if no external keyboard (CardKB) is connected - prefer physical keyboard
+        if (osk_found && !kb_found) {
             // Ensure OnScreenKeyboardModule is started
             if (!graphics::NotificationRenderer::virtualKeyboard) {
                 char header[64];
