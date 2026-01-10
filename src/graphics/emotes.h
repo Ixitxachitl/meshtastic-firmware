@@ -381,6 +381,10 @@ extern const unsigned char sunset[] PROGMEM;
 #define one_hundred_width 16
 #define one_hundred_height 16
 extern const unsigned char one_hundred[] PROGMEM;
+
+#define ogre_width 16
+#define ogre_height 16
+extern const unsigned char ogre[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
 } // namespace graphics
