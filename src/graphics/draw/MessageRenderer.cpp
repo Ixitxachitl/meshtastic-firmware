@@ -13,6 +13,7 @@
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/TimeFormatters.h"
+#include "graphics/draw/NotificationRenderer.h"
 #include "graphics/emotes.h"
 #include "main.h"
 #include "meshUtils.h"
@@ -2007,11 +2008,52 @@ void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const mesht
         // longer time if on any other screen (regardless of which thread we were last viewing)
         bool onMessageScreen = graphics::isMessagesScreenActive();
 
-        if (shouldWakeOnReceivedMessage()) {
-            screen->setOn(true);
-        }
+        // If virtual keyboard is active, show non-intrusive popup instead of full banner
+        if (NotificationRenderer::current_notification_type == notificationTypeEnum::text_input) {
+            if (shouldWakeOnReceivedMessage()) {
+                screen->setOn(true);
+                screen->forceDisplay();
+            }
 
-        screen->showSimpleBanner(banner, onMessageScreen ? 1000 : 3000);
+            // Build popup: title from banner first line, content = message text (sanitized)
+            char titleBuf[64] = {0};
+            // Extract first line from banner as title
+            const char *newline = strchr(banner, '\n');
+            if (newline) {
+                size_t titleLen = std::min((size_t)(newline - banner), sizeof(titleBuf) - 1);
+                strncpy(titleBuf, banner, titleLen);
+                titleBuf[titleLen] = '\0';
+            } else {
+                strncpy(titleBuf, banner, sizeof(titleBuf) - 1);
+            }
+
+            // Content: payload bytes (sanitize and strip bell character)
+            char content[256] = {0};
+            std::string raw;
+            raw.reserve(packet.decoded.payload.size);
+            for (size_t i = 0; i < packet.decoded.payload.size; ++i) {
+                char c = msgRaw[i];
+                if (c == '\x07') // ASCII_BELL
+                    continue;
+                raw.push_back(c);
+            }
+            // Basic sanitization: remove control characters except newline/tab
+            std::string sanitized;
+            for (char c : raw) {
+                if ((c >= 32 && c <= 126) || c == '\n' || c == '\t')
+                    sanitized.push_back(c);
+            }
+            strncpy(content, sanitized.c_str(), sizeof(content) - 1);
+
+            NotificationRenderer::showKeyboardMessagePopupWithTitle(titleBuf, content, 3000);
+        } else {
+            // Normal banner display when keyboard not active
+            if (shouldWakeOnReceivedMessage()) {
+                screen->setOn(true);
+            }
+
+            screen->showSimpleBanner(banner, onMessageScreen ? 1000 : 3000);
+        }
     }
 
     // Always focus into the correct conversation thread when a message with real text arrives
