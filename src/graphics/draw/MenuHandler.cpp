@@ -541,7 +541,11 @@ void menuHandler::replyMenu()
     optionsEnumArray[options++] = ReplyPreset;
 
     // Freetext reply (only when keyboard or button input exists)
+#if HAS_TRACKBALL || HAS_TOUCHSCREEN || defined(HAS_PHYSICAL_KEYBOARD)
     if (kb_found || osk_found) {
+#else
+    if (kb_found) {
+#endif
         optionsArray[options] = "With Freetext";
         optionsEnumArray[options++] = ReplyFreetext;
     }
@@ -984,7 +988,11 @@ void menuHandler::textMessageBaseMenu()
     int options = 1;
     optionsArray[options] = "New Preset Msg";
     optionsEnumArray[options++] = Preset;
+#if HAS_TRACKBALL || HAS_TOUCHSCREEN || defined(HAS_PHYSICAL_KEYBOARD)
     if (kb_found || osk_found) {
+#else
+    if (kb_found) {
+#endif
         optionsArray[options] = "New Freetext Msg";
         optionsEnumArray[options++] = Freetext;
     }
@@ -1107,7 +1115,11 @@ void menuHandler::favoriteBaseMenu()
     }
     optionsEnumArray[options++] = Preset;
 
+#if HAS_TRACKBALL || HAS_TOUCHSCREEN || defined(HAS_PHYSICAL_KEYBOARD)
     if (kb_found || osk_found) {
+#else
+    if (kb_found) {
+#endif
         optionsArray[options] = "New Freetext Msg";
         optionsEnumArray[options++] = Freetext;
     }

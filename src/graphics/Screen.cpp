@@ -1745,11 +1745,7 @@ int Screen::handleInputEvent(const InputEvent *event)
                     if (!messageStore.getMessages().empty()) {
                         menuHandler::messageResponseMenu();
                     } else {
-#if defined(M5STACK_UNITC6L)
-                        menuHandler::textMessageMenu();
-#else
                         menuHandler::textMessageBaseMenu();
-#endif
                     }
                 }
             } else if (event->inputEvent == INPUT_BROKER_BACK) {
