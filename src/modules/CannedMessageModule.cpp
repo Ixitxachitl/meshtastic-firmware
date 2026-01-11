@@ -477,6 +477,10 @@ int CannedMessageModule::handleInputEvent(const InputEvent *event)
             // SELECT when header is focused - open destination picker
             if (headerFocused && (event->inputEvent == INPUT_BROKER_SELECT || event->inputEvent == INPUT_BROKER_USER_PRESS)) {
                 headerFocused = false;
+                // Save the current input text before closing the keyboard
+                if (graphics::NotificationRenderer::virtualKeyboard) {
+                    freetext = graphics::NotificationRenderer::virtualKeyboard->getInputText().c_str();
+                }
                 // Close the VirtualKeyboard before switching (don't call empty callback)
                 graphics::OnScreenKeyboardModule::instance().stop(false);
                 graphics::NotificationRenderer::virtualKeyboard = nullptr;
