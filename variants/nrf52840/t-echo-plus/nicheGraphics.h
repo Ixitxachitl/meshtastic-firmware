@@ -4,22 +4,15 @@
 
 #ifdef MESHTASTIC_INCLUDE_NICHE_GRAPHICS
 
-// InkHUD-specific components
-// ---------------------------
-#include "graphics/niche/InkHUD/InkHUD.h"
-
-// Applets
+#include "graphics/niche/Drivers/Backlight/LatchingBacklight.h"
+#include "graphics/niche/Drivers/EInk/GDEY0154D67.h"
 #include "graphics/niche/InkHUD/Applets/User/AllMessage/AllMessageApplet.h"
 #include "graphics/niche/InkHUD/Applets/User/DM/DMApplet.h"
 #include "graphics/niche/InkHUD/Applets/User/Heard/HeardApplet.h"
 #include "graphics/niche/InkHUD/Applets/User/Positions/PositionsApplet.h"
 #include "graphics/niche/InkHUD/Applets/User/RecentsList/RecentsListApplet.h"
 #include "graphics/niche/InkHUD/Applets/User/ThreadedMessage/ThreadedMessageApplet.h"
-
-// Shared NicheGraphics components
-// --------------------------------
-#include "graphics/niche/Drivers/Backlight/LatchingBacklight.h"
-#include "graphics/niche/Drivers/EInk/GDEY0154D67.h"
+#include "graphics/niche/InkHUD/InkHUD.h"
 #include "graphics/niche/Inputs/TwoButton.h"
 
 // Special case - fix T-Echo Plus's touch button
@@ -96,6 +89,7 @@ void setupNicheGraphics()
     buttons->setHandlerShortPress(0, [inkhud]() { inkhud->shortpress(); });
     buttons->setHandlerLongPress(0, [inkhud]() { inkhud->longpress(); });
 
+<<<<<<< HEAD
     // #1: Aux Button (Capacitive Touch Button)
     // - short: momentary backlight
     // - long: latch backlight on
@@ -120,6 +114,17 @@ void setupNicheGraphics()
     buttons->setHandlerShortPress(1, [backlight]() { backlight->off(); });
 
     // Begin handling button events
+=======
+    buttons->setWiring(1, PIN_BUTTON_TOUCH);
+    buttons->setTiming(1, 50, 5000);
+    buttons->setHandlerDown(1, [inkhud, backlight]() {
+        backlight->peek();
+        inkhud->persistence->settings.optionalMenuItems.backlight = false;
+    });
+    buttons->setHandlerLongPress(1, [backlight]() { backlight->latch(); });
+    buttons->setHandlerShortPress(1, [backlight]() { backlight->off(); });
+
+>>>>>>> develop
     buttons->start();
 }
 

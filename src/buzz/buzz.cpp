@@ -30,11 +30,12 @@ static constexpr uint32_t BUZZ_DEFAULT_START_BOOST_MS = 800;
 
 // Standard note durations at 240 BPM (easier to read/understand than 480 BPM)
 // These match musical notation more intuitively
-static constexpr int DURATION_1_8 = 125;  // 1/8 note
-static constexpr int DURATION_1_4 = 250;  // 1/4 note
-static constexpr int DURATION_1_2 = 500;  // 1/2 note
-static constexpr int DURATION_3_4 = 750;  // 3/4 note
-static constexpr int DURATION_1_1 = 1000; // whole note
+static constexpr int DURATION_1_16 = 62;   // 1/16 note
+static constexpr int DURATION_1_8 = 125;   // 1/8 note
+static constexpr int DURATION_1_4 = 250;   // 1/4 note
+static constexpr int DURATION_1_2 = 500;   // 1/2 note
+static constexpr int DURATION_3_4 = 750;   // 3/4 note
+static constexpr int DURATION_1_1 = 1000;  // whole note
 
 // ==============================================================================
 // Note Frequencies (scientific pitch notation)
@@ -71,6 +72,43 @@ static constexpr int NOTE_B4 = 494;
 // Octave 5 (needed for startup melody)
 static constexpr int NOTE_C5 = 523;
 static constexpr int NOTE_CS5 = 554;
+static constexpr int NOTE_D5 = 587;
+static constexpr int NOTE_DS5 = 622;
+static constexpr int NOTE_E5 = 659;
+static constexpr int NOTE_F5 = 698;
+static constexpr int NOTE_FS5 = 740;
+static constexpr int NOTE_G5 = 784;
+static constexpr int NOTE_GS5 = 831;
+static constexpr int NOTE_A5 = 880;
+static constexpr int NOTE_AS5 = 932;
+static constexpr int NOTE_B5 = 988;
+
+// Octave 6
+static constexpr int NOTE_C6 = 1047;
+static constexpr int NOTE_CS6 = 1109;
+static constexpr int NOTE_D6 = 1175;
+static constexpr int NOTE_DS6 = 1245;
+static constexpr int NOTE_E6 = 1319;
+static constexpr int NOTE_F6 = 1397;
+static constexpr int NOTE_FS6 = 1480;
+static constexpr int NOTE_G6 = 1568;
+static constexpr int NOTE_GS6 = 1661;
+static constexpr int NOTE_A6 = 1760;
+static constexpr int NOTE_AS6 = 1865;
+static constexpr int NOTE_B6 = 1976;
+
+// Octave 7
+static constexpr int NOTE_C7 = 2093;
+static constexpr int NOTE_CS7 = 2217;
+static constexpr int NOTE_D7 = 2349;
+static constexpr int NOTE_DS7 = 2489;
+static constexpr int NOTE_E7 = 2637;
+static constexpr int NOTE_F7 = 2794;
+static constexpr int NOTE_FS7 = 2960;
+static constexpr int NOTE_G7 = 3136;
+
+// Special
+static constexpr int NOTE_SILENT = 0;
 
 // ==============================================================================
 // I2S/RTTL Audio System
@@ -200,6 +238,38 @@ static const NoteToken NOTE_MAP[] = {
     // Octave 5
     {NOTE_C5, "c", 5},
     {NOTE_CS5, "c#", 5},
+    {NOTE_D5, "d", 5},
+    {NOTE_DS5, "d#", 5},
+    {NOTE_E5, "e", 5},
+    {NOTE_F5, "f", 5},
+    {NOTE_FS5, "f#", 5},
+    {NOTE_G5, "g", 5},
+    {NOTE_GS5, "g#", 5},
+    {NOTE_A5, "a", 5},
+    {NOTE_AS5, "a#", 5},
+    {NOTE_B5, "b", 5},
+    // Octave 6
+    {NOTE_C6, "c", 6},
+    {NOTE_CS6, "c#", 6},
+    {NOTE_D6, "d", 6},
+    {NOTE_DS6, "d#", 6},
+    {NOTE_E6, "e", 6},
+    {NOTE_F6, "f", 6},
+    {NOTE_FS6, "f#", 6},
+    {NOTE_G6, "g", 6},
+    {NOTE_GS6, "g#", 6},
+    {NOTE_A6, "a", 6},
+    {NOTE_AS6, "a#", 6},
+    {NOTE_B6, "b", 6},
+    // Octave 7
+    {NOTE_C7, "c", 7},
+    {NOTE_CS7, "c#", 7},
+    {NOTE_D7, "d", 7},
+    {NOTE_DS7, "d#", 7},
+    {NOTE_E7, "e", 7},
+    {NOTE_F7, "f", 7},
+    {NOTE_FS7, "f#", 7},
+    {NOTE_G7, "g", 7},
 };
 
 // Find the closest note for a given frequency
@@ -445,8 +515,8 @@ void playTones(const ToneDuration *tone_durations, int size)
 
 void playBeep()
 {
-    ToneDuration melody[] = {{NOTE_B3, DURATION_1_8}};
-    LOG_DEBUG("playBeep: NOTE_B3=%d, DURATION_1_8=%d, melody[0].freq=%d, melody[0].dur=%d", NOTE_B3, DURATION_1_8,
+    ToneDuration melody[] = {{NOTE_B3, DURATION_1_16}};
+    LOG_DEBUG("playBeep: NOTE_B3=%d, DURATION_1_16=%d, melody[0].freq=%d, melody[0].dur=%d", NOTE_B3, DURATION_1_16,
               melody[0].frequency_khz, melody[0].duration_ms);
     playMelody(melody, sizeof(melody) / sizeof(ToneDuration), "beep");
 }
@@ -497,8 +567,16 @@ void playShutdownMelody()
 
 void playChirp()
 {
-    ToneDuration melody[] = {{NOTE_AS3, 20}};
+    // A short, friendly "chirp" sound for key presses
+    ToneDuration melody[] = {{NOTE_AS3, 20}}; // Short AS3 note
     playMelody(melody, sizeof(melody) / sizeof(ToneDuration), "chirp");
+}
+
+void playClick()
+{
+    // A very short "click" sound with minimum delay; ideal for rotary encoder events
+    ToneDuration melody[] = {{NOTE_AS3, 1}}; // Very Short AS3
+    playMelody(melody, sizeof(melody) / sizeof(ToneDuration), "click");
 }
 
 void playBoop()
@@ -541,4 +619,18 @@ void playComboTune()
 {
     ToneDuration melody[] = {{NOTE_G3, 80}, {NOTE_B3, 60}, {NOTE_CS4, 80}, {NOTE_G3, 60}, {NOTE_CS4, 60}, {NOTE_B3, 120}};
     playMelody(melody, sizeof(melody) / sizeof(ToneDuration), "combo");
+}
+
+void play4ClickDown()
+{
+    ToneDuration melody[] = {{NOTE_G5, 55}, {NOTE_E5, 55}, {NOTE_C5, 60},  {NOTE_A4, 55},  {NOTE_G4, 55},
+                             {NOTE_E4, 65}, {NOTE_C4, 80}, {NOTE_G3, 120}, {NOTE_E3, 160}, {NOTE_SILENT, 120}};
+    playMelody(melody, sizeof(melody) / sizeof(ToneDuration), "4down");
+}
+
+void play4ClickUp()
+{
+    // Quick high-pitched notes with trills
+    ToneDuration melody[] = {{NOTE_F5, 50}, {NOTE_G6, 45}, {NOTE_E7, 60}};
+    playMelody(melody, sizeof(melody) / sizeof(ToneDuration), "4up");
 }

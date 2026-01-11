@@ -79,8 +79,9 @@ static inline size_t strlcpy(char *dst, const char *src, size_t size)
 SerialModule *serialModule;
 SerialModuleRadio *serialModuleRadio;
 
-#if defined(TTGO_T_ECHO) || defined(TTGO_T_ECHO_PLUS) || defined(CANARYONE) || defined(MESHLINK) || defined(ELECROW_ThinkNode_M1) ||                          \
-    defined(ELECROW_ThinkNode_M5) || defined(HELTEC_MESH_SOLAR) || defined(T_ECHO_LITE) || defined(ELECROW_ThinkNode_M3) || defined(MUZI_BASE)
+#if defined(TTGO_T_ECHO) || defined(TTGO_T_ECHO_PLUS) || defined(CANARYONE) || defined(MESHLINK) ||                              \
+    defined(ELECROW_ThinkNode_M1) || defined(ELECROW_ThinkNode_M5) || defined(HELTEC_MESH_SOLAR) || defined(T_ECHO_LITE) ||      \
+    defined(ELECROW_ThinkNode_M3) || defined(MUZI_BASE)
 SerialModule::SerialModule() : StreamAPI(&Serial), concurrency::OSThread("Serial")
 {
     api_type = TYPE_SERIAL;
@@ -220,7 +221,8 @@ int32_t SerialModule::runOnce()
                 Serial.setTimeout(moduleConfig.serial.timeout > 0 ? moduleConfig.serial.timeout : TIMEOUT);
             }
 #elif !defined(TTGO_T_ECHO) && !defined(TTGO_T_ECHO_PLUS) && !defined(T_ECHO_LITE) && !defined(CANARYONE) &&                     \
-    !defined(MESHLINK) && !defined(ELECROW_ThinkNode_M1) && !defined(ELECROW_ThinkNode_M5) && !defined(ELECROW_ThinkNode_M5) && !defined(MUZI_BASE)
+    !defined(MESHLINK) && !defined(ELECROW_ThinkNode_M1) && !defined(ELECROW_ThinkNode_M3) && !defined(ELECROW_ThinkNode_M5) &&  \
+    !defined(MUZI_BASE)
             if (moduleConfig.serial.rxd && moduleConfig.serial.txd) {
 #ifdef ARCH_RP2040
                 Serial2.setFIFOSize(RX_BUFFER);
@@ -277,7 +279,7 @@ int32_t SerialModule::runOnce()
             }
 
 #if !defined(TTGO_T_ECHO) && !defined(TTGO_T_ECHO_PLUS) && !defined(T_ECHO_LITE) && !defined(CANARYONE) && !defined(MESHLINK) && \
-    !defined(ELECROW_ThinkNode_M1) && !defined(ELECROW_ThinkNode_M5) && !defined(ELECROW_ThinkNode_M5) && !defined(MUZI_BASE)
+    !defined(ELECROW_ThinkNode_M1) && !defined(ELECROW_ThinkNode_M3) && !defined(ELECROW_ThinkNode_M5) && !defined(MUZI_BASE)
             else if ((moduleConfig.serial.mode == meshtastic_ModuleConfig_SerialConfig_Serial_Mode_WS85)) {
                 processWXSerial();
 

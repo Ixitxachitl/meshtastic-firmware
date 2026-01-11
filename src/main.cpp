@@ -112,6 +112,10 @@ NRF52Bluetooth *nrf52Bluetooth = nullptr;
 
 #if defined(BUTTON_PIN_TOUCH)
 ButtonThread *TouchButtonThread = nullptr;
+#if defined(TTGO_T_ECHO_PLUS) && defined(PIN_EINK_EN)
+static bool touchBacklightWasOn = false;
+static bool touchBacklightActive = false;
+#endif
 #endif
 
 #if defined(BUTTON_PIN) || defined(ARCH_PORTDUINO)
@@ -216,7 +220,7 @@ ScanI2C::FoundDevice rgb_found = ScanI2C::FoundDevice(ScanI2C::DeviceType::NONE,
 /// The I2C address of our Air Quality Indicator (if found)
 ScanI2C::DeviceAddress aqi_found = ScanI2C::ADDRESS_NONE;
 
-#if defined(T_WATCH_S3) || defined(T_LORA_PAGER) || defined(TTGO_T_ECHO_PLUS)
+#ifdef HAS_DRV2605
 Adafruit_DRV2605 drv;
 #endif
 
@@ -896,10 +900,11 @@ void setup()
 #endif
 #endif
 
-#if defined(T_WATCH_S3) || defined(T_LORA_PAGER) || defined(TTGO_T_ECHO_PLUS)
-#ifdef PIN_VIBRATION_EN
-    pinMode(PIN_VIBRATION_EN, OUTPUT);
-    digitalWrite(PIN_VIBRATION_EN, HIGH); // Enable DRV2605
+#ifdef HAS_DRV2605
+#if defined(PIN_DRV_EN)
+    pinMode(PIN_DRV_EN, OUTPUT);
+    digitalWrite(PIN_DRV_EN, HIGH);
+    delay(10);
 #endif
     drv.begin();
     drv.selectLibrary(1);
@@ -936,7 +941,7 @@ SPI1.begin();
 SPI.begin();
 #endif
 #else
-    // ESP32
+// ESP32
 #if defined(HW_SPI1_DEVICE)
 SPI1.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
 LOG_DEBUG("SPI1.begin(SCK=%d, MISO=%d, MOSI=%d, NSS=%d)", LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
@@ -1119,7 +1124,24 @@ SPI.setFrequency(4000000);
     };
     touchConfig.singlePress = INPUT_BROKER_NONE;
     touchConfig.longPress = INPUT_BROKER_BACK;
-#if defined(PIN_EINK_EN)
+#if defined(TTGO_T_ECHO_PLUS) && defined(PIN_EINK_EN)
+    // On T-Echo Plus the touch pad should only drive the backlight, not UI navigation/sounds
+    touchConfig.longPress = INPUT_BROKER_NONE;
+    touchConfig.suppressLeadUpSound = true;
+    touchConfig.onPress = []() {
+        touchBacklightWasOn = uiconfig.screen_brightness == 1;
+        if (!touchBacklightWasOn) {
+            digitalWrite(PIN_EINK_EN, HIGH);
+        }
+        touchBacklightActive = true;
+    };
+    touchConfig.onRelease = []() {
+        if (touchBacklightActive && !touchBacklightWasOn) {
+            digitalWrite(PIN_EINK_EN, LOW);
+        }
+        touchBacklightActive = false;
+    };
+#elif defined(PIN_EINK_EN)
     // T-Echo: 3-second hold toggles backlight
     touchConfig.longLongPress = INPUT_BROKER_BACKLIGHT_TOGGLE;
     touchConfig.longLongPressTime = 3000;
