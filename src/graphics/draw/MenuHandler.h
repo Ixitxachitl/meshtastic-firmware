@@ -58,7 +58,8 @@ class menuHandler
         FrameToggles,
         DisplayUnits,
         env_menu,
-        env_source_picker
+        env_source_picker,
+        screen_timeout_picker
     };
     static screenMenus menuQueue;
 
@@ -95,6 +96,7 @@ class menuHandler
     static void nodeListMenu();
     static void resetNodeDBMenu();
     static void BrightnessPickerMenu();
+    static void ScreenTimeoutPickerMenu();
     static void rebootMenu();
     static void shutdownMenu();
     static void addFavoriteMenu();
