@@ -144,7 +144,8 @@ bool EInkDisplay::connect()
     // ThinkNode M1 has a hardware dimmable backlight. Start enabled
     digitalWrite(PIN_EINK_EN, HIGH);
 #else
-    digitalWrite(PIN_EINK_EN, LOW);
+    // Respect user's saved brightness preference
+    digitalWrite(PIN_EINK_EN, uiconfig.screen_brightness > 0 ? HIGH : LOW);
 #endif
 #endif
 
