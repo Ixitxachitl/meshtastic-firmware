@@ -385,6 +385,10 @@ extern const unsigned char one_hundred[] PROGMEM;
 #define ogre_width 16
 #define ogre_height 16
 extern const unsigned char ogre[] PROGMEM;
+
+#define potato_width 16
+#define potato_height 16
+extern const unsigned char potato[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
 } // namespace graphics
