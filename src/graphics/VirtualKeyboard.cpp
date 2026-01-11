@@ -33,12 +33,12 @@ VirtualKeyboard::~VirtualKeyboard() {}
 
 void VirtualKeyboard::initializeKeyboard()
 {
-    // 4 row keyboard: rows 0-1 have 11 columns, row 2 has 12 (adds space), row 3 has 12 (adds emote + ESC)
+    // 4 row keyboard: rows 0-3 have 13 columns (10 chars + symbol + action keys)
     static const char LAYOUT[KEYBOARD_ROWS][KEYBOARD_COLS] = {
-        {'1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '\b', 0},
-        {'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '\n', 0},
-        {'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', ' ', 0},
-        {'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', '\x10', '\x1b'}}; // emote, ESC
+        {'1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '\b', 0},
+        {'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '=', '\n', 0},
+        {'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', ' ', 0},
+        {'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', '\\', '\x10', '\x1b'}}; // backslash, emote, ESC
 
     // Derive layout dimensions and assert they match the configured keyboard grid
     constexpr int LAYOUT_ROWS = (int)(sizeof(LAYOUT) / sizeof(LAYOUT[0]));
@@ -105,8 +105,8 @@ void VirtualKeyboard::draw(OLEDDisplay *display, int16_t offsetX, int16_t offset
     const int wESC = display->getStringWidth("ESC") + 2; // Reduced padding
 
     // Calculate cell width based on character keys only
-    const int charCols = 10; // Number of character columns per row (0-9)
-    int cellW = 9;           // Base cell width for character keys
+    const int charCols = 11; // Number of character columns per row (0-9 plus symbol column)
+    int cellW = KEY_WIDTH;   // Use the constant defined in header
 
     // Calculate total width for each row type
     const int row11Width = charCols * cellW + wBACK;         // Rows 0, 1 width
@@ -640,6 +640,14 @@ char VirtualKeyboard::getCharForKey(const VirtualKey &key, bool isLongPress)
             c = '>';
         else if (c == '/')
             c = '?';
+        else if (c == '-')
+            c = '_';
+        else if (c == '=')
+            c = '+';
+        else if (c == '\'')
+            c = '"';
+        else if (c == '\\')
+            c = '|';
     }
 
     return c;

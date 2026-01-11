@@ -49,8 +49,9 @@ class VirtualKeyboard
 
   private:
     static const uint8_t KEYBOARD_ROWS = 4;
-    static const uint8_t KEYBOARD_COLS = 12; // Row 2 has 12 columns (chars + space), row 3 has 12 (chars + emote + ESC)
-    static const uint8_t KEY_WIDTH = 9;
+    static const uint8_t KEYBOARD_COLS =
+        13; // Row 2 has 13 columns (chars + symbols + space), row 3 has 13 (chars + symbols + emote + ESC)
+    static const uint8_t KEY_WIDTH = 8;
     static const uint8_t KEY_HEIGHT = 9;        // Compressed to fit 5 rows on displays
     static const uint8_t KEYBOARD_START_Y = 26; // Start just below input box bottom
 
