@@ -309,17 +309,26 @@ void menuHandler::TwelveHourPicker()
     screen->showOverlayBanner(bannerOptions);
 }
 
+// Static storage for confirmation callback to avoid nested std::function heap issues on nRF52
+static std::function<void()> pendingConfirmCallback = nullptr;
+
 // Reusable confirmation prompt function
 void menuHandler::showConfirmationBanner(const char *message, std::function<void()> onConfirm)
 {
     static const char *confirmOptions[] = {"No", "Yes"};
+    // Store callback in static to avoid nested lambda capture issues
+    pendingConfirmCallback = std::move(onConfirm);
     BannerOverlayOptions confirmBanner;
     confirmBanner.message = message;
     confirmBanner.optionsArrayPtr = confirmOptions;
     confirmBanner.optionsCount = 2;
-    confirmBanner.bannerCallback = [onConfirm](int confirmSelected) -> void {
-        if (confirmSelected == 1) {
-            onConfirm();
+    confirmBanner.bannerCallback = [](int confirmSelected) -> void {
+        if (confirmSelected == 1 && pendingConfirmCallback) {
+            auto callback = std::move(pendingConfirmCallback);
+            pendingConfirmCallback = nullptr;
+            callback();
+        } else {
+            pendingConfirmCallback = nullptr;
         }
     };
     screen->showOverlayBanner(confirmBanner);

@@ -295,18 +295,10 @@ int CannedMessageModule::splitConfiguredMessages()
 }
 void CannedMessageModule::drawHeader(OLEDDisplay *display, int16_t x, int16_t y, char *buffer)
 {
-    if (graphics::currentResolution == graphics::ScreenResolution::High) {
-        if (this->dest == NODENUM_BROADCAST) {
-            display->drawStringf(x, y, buffer, "To: #%s", channels.getName(this->channel));
-        } else {
-            display->drawStringf(x, y, buffer, "To: %s", getNodeName(this->dest));
-        }
+    if (this->dest == NODENUM_BROADCAST) {
+        display->drawStringf(x, y, buffer, "To: #%s", channels.getName(this->channel));
     } else {
-        if (this->dest == NODENUM_BROADCAST) {
-            display->drawStringf(x, y, buffer, "To: #%.5s", channels.getName(this->channel));
-        } else {
-            display->drawStringf(x, y, buffer, "To: %s", getNodeName(this->dest));
-        }
+        display->drawStringf(x, y, buffer, "To: %s", getNodeName(this->dest));
     }
 }
 
@@ -898,16 +890,20 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
             // Show confirmation dialog before sending canned message
             NodeNum destNode = dest;
             ChannelIndex chan = channel;
-            graphics::menuHandler::showConfirmationBanner("Send message?", [this, destNode, chan, current]() {
-                this->sendText(destNode, chan, current, false);
-                payload = runState;
+            // Copy the message content, not the pointer - the pointer may become invalid
+            // before the confirmation callback is executed (dangling pointer crash)
+            std::string messageToSend(current);
+            graphics::menuHandler::showConfirmationBanner("Send message?", [this, destNode, chan, messageToSend]() {
+                this->sendText(destNode, chan, messageToSend.c_str(), false);
+                // Match the non-confirmation path behavior:
+                // Set state to INACTIVE but DON'T regenerate frameset
+                // This keeps MessageRenderer active to show the sent message
+                payload = 0;
                 runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
                 currentMessageIndex = -1;
-
-                // Notify UI to regenerate frame set and redraw
-                UIFrameEvent e;
-                e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
-                notifyObservers(&e);
+                freetext = "";
+                cursor = 0;
+                // No REGENERATE_FRAMESET - MessageRenderer stays active (matches line ~1780)
                 IF_SCREEN(screen->forceDisplay());
             });
 #else
