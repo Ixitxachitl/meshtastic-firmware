@@ -492,7 +492,6 @@ void menuHandler::messageResponseMenu()
     optionsArray[options] = "Message Order";
     optionsEnumArray[options++] = MessageOrder;
 
-
     // Delete submenu
     optionsArray[options] = "Delete";
     optionsEnumArray[options++] = 900;

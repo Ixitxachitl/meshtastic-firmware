@@ -30,12 +30,12 @@ static constexpr uint32_t BUZZ_DEFAULT_START_BOOST_MS = 800;
 
 // Standard note durations at 240 BPM (easier to read/understand than 480 BPM)
 // These match musical notation more intuitively
-static constexpr int DURATION_1_16 = 62;   // 1/16 note
-static constexpr int DURATION_1_8 = 125;   // 1/8 note
-static constexpr int DURATION_1_4 = 250;   // 1/4 note
-static constexpr int DURATION_1_2 = 500;   // 1/2 note
-static constexpr int DURATION_3_4 = 750;   // 3/4 note
-static constexpr int DURATION_1_1 = 1000;  // whole note
+static constexpr int DURATION_1_16 = 62;  // 1/16 note
+static constexpr int DURATION_1_8 = 125;  // 1/8 note
+static constexpr int DURATION_1_4 = 250;  // 1/4 note
+static constexpr int DURATION_1_2 = 500;  // 1/2 note
+static constexpr int DURATION_3_4 = 750;  // 3/4 note
+static constexpr int DURATION_1_1 = 1000; // whole note
 
 // ==============================================================================
 // Note Frequencies (scientific pitch notation)
