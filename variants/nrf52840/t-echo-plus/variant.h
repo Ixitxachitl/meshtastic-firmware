@@ -222,32 +222,13 @@ External serial flash WP25R1635FZUIL0
 #define VBAT_AR_INTERNAL AR_INTERNAL_3_0
 #define ADC_MULTIPLIER (2.0F)
 
-<<<<<<< HEAD
-// #define NO_EXT_GPIO 1
-
 #define HAS_RTC 1
 
-    // Arduino SPI pin compatibility for SensorLib (must be before closing brace)
-    static const uint8_t MOSI = PIN_SPI_MOSI;
+// Arduino SPI pin compatibility for SensorLib (must be before closing brace)
+static const uint8_t MOSI = PIN_SPI_MOSI;
 static const uint8_t MISO = PIN_SPI_MISO;
 static const uint8_t SCK = PIN_SPI_SCK;
 static const uint8_t SS = 0xFF; // Not used, dummy value
-
-=======
-// NFC
-#define PIN_NFC1 (9)
-#define PIN_NFC2 (10)
-
-// I2C (IMU BHI260AP, RTC, etc.)
-#define WIRE_INTERFACES_COUNT 1
-#define PIN_WIRE_SDA (0 + 26)
-#define PIN_WIRE_SCL (0 + 27)
-#define HAS_BHI260AP
-
-#define TP_SER_IO (0 + 11)
-
-// RTC interrupt
-#define PIN_RTC_INT (0 + 16)
 
 // QSPI flash
 #define PIN_QSPI_SCK (32 + 14)
@@ -280,9 +261,6 @@ static const uint8_t SS = 0xFF; // Not used, dummy value
 #define PIN_SPI_SCK (0 + 19)
 
 // E-paper (1.54" per pinmap)
-// Alias PIN_EINK_EN to keep common eink power control code working
-#define PIN_EINK_BL (32 + 11) // backlight / panel power switch
-#define PIN_EINK_EN PIN_EINK_BL
 #define PIN_EINK_CS (0 + 30)
 #define PIN_EINK_BUSY (0 + 3)
 #define PIN_EINK_DC (0 + 28)
@@ -318,16 +296,8 @@ static const uint8_t SS = 0xFF; // Not used, dummy value
 // Battery / ADC already defined above
 #define HAS_RTC 1
 
->>>>>>> develop
 #ifdef __cplusplus
 }
 #endif
 
-<<<<<<< HEAD
-/*----------------------------------------------------------------------------
- *        Arduino objects - C++ only
- *----------------------------------------------------------------------------*/
-
-=======
->>>>>>> develop
 #endif
