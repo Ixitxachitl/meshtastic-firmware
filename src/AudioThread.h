@@ -41,6 +41,12 @@ class AudioThread : public concurrency::OSThread
 
     void beginRttl(const void *data, uint32_t len)
     {
+        // Safety check: don't play if data is invalid or empty
+        if (!data || len == 0) {
+            LOG_WARN("AudioThread: beginRttl called with invalid data or zero length");
+            return;
+        }
+
         // Stop any existing playback first to prevent pops and memory leaks
         // Use stopPlaybackOnly() to avoid unnecessary amp/CPU toggling
         stopPlaybackOnly();
