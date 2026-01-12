@@ -998,13 +998,8 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
             payload = 0x08;
             shift = false;
             valid = true;
-        } else if (keyTapped == "123" || keyTapped == "ABC") {
-            highlight = -1;
-            payload = 0x00;
-            charSet = (charSet == 0 ? 1 : 0);
-            valid = true;
-        } else if (keyTapped == "BACK") {
-            // Exit freetext mode (back button)
+        } else if (keyTapped == "ESC") {
+            // Exit freetext mode (ESC button)
             runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
             freetext = "";
             cursor = 0;
@@ -1015,7 +1010,7 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
             notifyObservers(&e);
             IF_SCREEN(screen->forceDisplay());
             return true;
-        } else if (keyTapped == "😊") {
+        } else if (keyTapped == "\U0001F60A") {
             // Open emote picker
             runState = CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER;
             requestFocus();
@@ -1049,8 +1044,8 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
 #endif
             // Apply shift mapping for symbols
             char c = keyTapped[0];
-            if (shift && charSet == 0) {
-                // ABC keyboard with shift - apply symbol variants
+            if (shift) {
+                // Shift pressed - apply symbol variants
                 switch (c) {
                 case '1':
                     payload = '!';
@@ -1121,7 +1116,7 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
                     break;
                 }
             } else {
-                // No shift or 123 keyboard - letters go lowercase, symbols as-is
+                // No shift - letters go lowercase, symbols as-is
                 payload = (c >= 'A' && c <= 'Z') ? std::tolower(c) : c;
             }
             shift = false;
@@ -2008,13 +2003,13 @@ int CannedMessageModule::getPrevIndex()
 
 String CannedMessageModule::keyForCoordinates(uint x, uint y)
 {
-    int outerSize = *(&this->keyboard[this->charSet] + 1) - this->keyboard[this->charSet];
+    int outerSize = *(&this->keyboard[0] + 1) - this->keyboard[0];
 
     for (int8_t outerIndex = 0; outerIndex < outerSize; outerIndex++) {
-        int innerSize = *(&this->keyboard[this->charSet][outerIndex] + 1) - this->keyboard[this->charSet][outerIndex];
+        int innerSize = *(&this->keyboard[0][outerIndex] + 1) - this->keyboard[0][outerIndex];
 
         for (int8_t innerIndex = 0; innerIndex < innerSize; innerIndex++) {
-            Letter letter = this->keyboard[this->charSet][outerIndex][innerIndex];
+            Letter letter = this->keyboard[0][outerIndex][innerIndex];
 
             if (x > letter.rectX && x < (letter.rectX + letter.rectWidth) && y > letter.rectY &&
                 y < (letter.rectY + letter.rectHeight)) {
@@ -2028,7 +2023,7 @@ String CannedMessageModule::keyForCoordinates(uint x, uint y)
 
 void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-    int outerSize = *(&this->keyboard[this->charSet] + 1) - this->keyboard[this->charSet];
+    int outerSize = *(&this->keyboard[0] + 1) - this->keyboard[0];
 
     int xOffset = 0;
 
@@ -2105,38 +2100,38 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
     for (int8_t outerIndex = 0; outerIndex < outerSize; outerIndex++) {
         yOffset += outerIndex > 0 ? cellHeight : 0;
 
-        int innerSizeBound = *(&this->keyboard[this->charSet][outerIndex] + 1) - this->keyboard[this->charSet][outerIndex];
+        int innerSizeBound = *(&this->keyboard[0][outerIndex] + 1) - this->keyboard[0][outerIndex];
 
         int innerSize = 0;
 
         for (int8_t innerIndex = 0; innerIndex < innerSizeBound; innerIndex++) {
-            if (this->keyboard[this->charSet][outerIndex][innerIndex].character != "") {
+            if (this->keyboard[0][outerIndex][innerIndex].character != "") {
                 innerSize++;
             }
         }
 
         for (int8_t innerIndex = 0; innerIndex < innerSize; innerIndex++) {
-            Letter letter = this->keyboard[this->charSet][outerIndex][innerIndex];
+            Letter letter = this->keyboard[0][outerIndex][innerIndex];
 
             int cellWidth;
             // Special handling for bottom row (row 4) with custom button sizes
             if (outerIndex == 4) {
-                // Bottom row: BACK (75px) | emote/ABC (40px) | SPACE (75% of remaining) | enter (25% of remaining)
-                int backButtonWidth = 75;
+                // Bottom row: ESC (75px) | emote/ABC (40px) | SPACE (75% of remaining) | enter (25% of remaining)
+                int escButtonWidth = 75;
                 int emoteButtonWidth = 40;
-                int remainingWidth = display->width() - (backButtonWidth + emoteButtonWidth);
+                int remainingWidth = display->width() - (escButtonWidth + emoteButtonWidth);
 
-                if (innerIndex == 0) { // BACK button
+                if (innerIndex == 0) { // ESC button
                     xOffset = 0;
-                    cellWidth = backButtonWidth;
+                    cellWidth = escButtonWidth;
                 } else if (innerIndex == 1) { // Emote or ABC button
-                    xOffset = backButtonWidth;
+                    xOffset = escButtonWidth;
                     cellWidth = emoteButtonWidth;
                 } else if (innerIndex == 2) { // SPACE button (75%)
-                    xOffset = backButtonWidth + emoteButtonWidth;
+                    xOffset = escButtonWidth + emoteButtonWidth;
                     cellWidth = (remainingWidth * 3) / 4;
                 } else if (innerIndex == 3) { // Enter button (25%)
-                    xOffset = backButtonWidth + emoteButtonWidth + (remainingWidth * 3) / 4;
+                    xOffset = escButtonWidth + emoteButtonWidth + (remainingWidth * 3) / 4;
                     cellWidth = remainingWidth - ((remainingWidth * 3) / 4);
                 } else {
                     // Skip remaining empty slots
@@ -2157,7 +2152,7 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
                 updatedLetter.rectHeight = 240 - yOffset;
             }
 #endif
-            this->keyboard[this->charSet][outerIndex][innerIndex] = updatedLetter;
+            this->keyboard[0][outerIndex][innerIndex] = updatedLetter;
 
             // Calculate center position for this cell
             int centerX = xOffset + cellWidth / 2;
@@ -2210,11 +2205,11 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
                 drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
                                 cellHeight - buttonPadding * 2, buttonRadius);
                 drawEnterIcon(display, iconX, iconY, enterIconScale);
-            } else if (letter.character == "BACK") {
+            } else if (letter.character == "ESC") {
                 drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
                                 cellHeight - buttonPadding * 2, buttonRadius);
                 display->setTextAlignment(TEXT_ALIGN_CENTER);
-                display->drawString(centerX, centerY - keyboardFontHeight / 2, "BACK");
+                display->drawString(centerX, centerY - keyboardFontHeight / 2, "ESC");
             } else if (letter.character == "SPACE") {
                 drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
                                 cellHeight - buttonPadding * 2, buttonRadius);
@@ -2233,18 +2228,8 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
                         break;
                     }
                 }
-            } else if (letter.character == "ABC") {
-                drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
-                                cellHeight - buttonPadding * 2, buttonRadius);
-                display->setTextAlignment(TEXT_ALIGN_CENTER);
-                display->drawString(centerX, centerY - keyboardFontHeight / 2, "ABC");
-            } else if (letter.character == "123") {
-                drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
-                                cellHeight - buttonPadding * 2, buttonRadius);
-                display->setTextAlignment(TEXT_ALIGN_CENTER);
-                display->drawString(centerX, centerY - keyboardFontHeight / 2, "123");
             } else {
-                // Determine what to display on the key based on shift and charset state
+                // Determine what to display on the key based on shift state
                 String displayChar;
                 if (letter.character == " ") {
                     displayChar = "space";
@@ -2256,8 +2241,8 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
                     if (c >= 'A' && c <= 'Z') {
                         // Letter keys - show lowercase unless shift is pressed
                         displayChar = shift ? String(c) : String((char)(c + 32));
-                    } else if (shift && charSet == 0) {
-                        // ABC keyboard with shift - show symbol variants
+                    } else if (shift) {
+                        // Shift pressed - show symbol variants
                         switch (c) {
                         case '1':
                             displayChar = "!";
@@ -2327,7 +2312,7 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
                             break;
                         }
                     } else {
-                        // No shift, or not ABC charset - show the key as-is
+                        // No shift - show the key as-is
                         displayChar = String(c);
                     }
                 }
