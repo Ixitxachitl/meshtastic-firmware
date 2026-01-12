@@ -1980,11 +1980,16 @@ void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const mesht
         if (availWidth < 0)
             availWidth = 0;
 
-        size_t origLen = strlen(longName);
-        while (longName[0] && display->getStringWidth(longName) > availWidth) {
-            longName[strlen(longName) - 1] = '\0';
+        // Fit node name to available width - truncate by UTF-8 characters (emoji count as 1 char)
+        size_t origCharCount = utf8CharCount(longName);
+        size_t charCount = origCharCount;
+        while (longName[0] && display->getStringWidth(longName) > availWidth && charCount > 0) {
+            charCount--;
+            utf8Truncate(longName, charCount);
         }
-        if (strlen(longName) < origLen) {
+
+        // If we actually truncated, append "..."
+        if (charCount < origCharCount && strlen(longName) + 3 < 256) {
             strcat(longName, "...");
         }
         const char *msgRaw = reinterpret_cast<const char *>(packet.decoded.payload.bytes);
