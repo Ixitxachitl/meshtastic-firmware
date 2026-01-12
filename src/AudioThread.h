@@ -16,7 +16,8 @@
 extern ExtensionIOXL9555 io;
 #endif
 
-#define AUDIO_THREAD_INTERVAL_MS 100
+// Thread interval when idle (faster when playing to keep DMA fed)
+#define AUDIO_THREAD_INTERVAL_MS 50
 
 class AudioThread : public concurrency::OSThread
 {
@@ -40,6 +41,10 @@ class AudioThread : public concurrency::OSThread
 
     void beginRttl(const void *data, uint32_t len)
     {
+        // Stop any existing playback first to prevent pops and memory leaks
+        // Use stopPlaybackOnly() to avoid unnecessary amp/CPU toggling
+        stopPlaybackOnly();
+
 #ifdef T_LORA_PAGER
         io.digitalWrite(EXPANDS_AMP_EN, HIGH);
 #endif
@@ -79,11 +84,8 @@ class AudioThread : public concurrency::OSThread
 
     void readAloud(const char *text)
     {
-        if (i2sRtttl != nullptr) {
-            i2sRtttl->stop();
-            delete i2sRtttl;
-            i2sRtttl = nullptr;
-        }
+        // Stop any existing RTTTL playback first
+        stopPlaybackOnly();
 
 #ifdef T_LORA_PAGER
         io.digitalWrite(EXPANDS_AMP_EN, HIGH);
@@ -100,7 +102,6 @@ class AudioThread : public concurrency::OSThread
   protected:
     int32_t runOnce() override
     {
-        canSleep = true; // by default we allow sleep
         if (i2sRtttl && i2sRtttl->isRunning()) {
             canSleep = false;
             // Ask buzzer module if we should over-prefill right now.
@@ -117,22 +118,39 @@ class AudioThread : public concurrency::OSThread
             // Tick faster while boosting to keep DMA topped up.
             return boost ? 2 : 3;
         }
-        return AUDIO_THREAD_INTERVAL_MS; // e.g. 100 ms idle
+
+        canSleep = true;
+        return AUDIO_THREAD_INTERVAL_MS;
     }
 
   private:
     volatile uint32_t pump_tick_count_ = 0;
+
+    // Internal helper to stop playback without affecting amp/CPU state
+    // Used when transitioning between tones to prevent pops
+    void stopPlaybackOnly()
+    {
+        if (i2sRtttl != nullptr) {
+            i2sRtttl->stop();
+            delete i2sRtttl;
+            i2sRtttl = nullptr;
+        }
+
+        if (rtttlFile != nullptr) {
+            delete rtttlFile;
+            rtttlFile = nullptr;
+        }
+    }
 
     void initOutput()
     {
         audioOut = new AudioOutputI2S(1, AudioOutputI2S::EXTERNAL_I2S);
         audioOut->SetPinout(DAC_I2S_BCK, DAC_I2S_WS, DAC_I2S_DOUT, DAC_I2S_MCLK);
         audioOut->SetGain(0.2);
-    };
+    }
 
     AudioGeneratorRTTTL *i2sRtttl = nullptr;
     AudioOutputI2S *audioOut = nullptr;
-
     AudioFileSourcePROGMEM *rtttlFile = nullptr;
 };
 
