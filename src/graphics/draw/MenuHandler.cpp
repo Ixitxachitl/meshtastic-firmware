@@ -2558,12 +2558,8 @@ void menuHandler::envTelemetryMenu()
     bannerOptions.bannerCallback = [](int selected) -> void {
         if (selected == SendTelemetry) {
             if (environmentTelemetryModule) {
+                // sendTelemetry already sets s_lastSource to self, so auto mode will show our telemetry
                 bool sent = environmentTelemetryModule->sendTelemetry(NODENUM_BROADCAST, false);
-                // Switch to auto mode after send to show our own telemetry on next screen update
-                // This prevents display issues when other node's telemetry was on screen
-                if (sent) {
-                    environmentTelemetryModule->setEnvDisplaySource(0);
-                }
                 // Queue banner to show after menu closes and screen updates
                 menuHandler::menuQueue = sent ? menuHandler::telemetry_sent_banner : menuHandler::telemetry_no_sensors_banner;
                 screen->runNow();

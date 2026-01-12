@@ -558,13 +558,11 @@ static inline const char *getSenderName(uint32_t nodeNum)
             if (ln && ln[0])
                 return ln;
         } else {
-            // On wider screens, prefer long_name; otherwise short_name.
-            if (SCREEN_WIDTH >= 200 && ln && ln[0])
+            // On Low and High resolution screens, prefer long_name for readability
+            if (ln && ln[0])
                 return ln;
             if (sn && sn[0])
                 return sn;
-            if (ln && ln[0])
-                return ln; // last resort if short_name empty
         }
     }
 
@@ -1244,6 +1242,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         }
 
         // Cache sender name (only changes when sender changes)
+        // Use full name since this code path is only for scrollable layouts (Low/High res)
         strncpy(s_displayCache.leftStr, getSenderName(sourceNode), sizeof(s_displayCache.leftStr) - 1);
         s_displayCache.leftStr[sizeof(s_displayCache.leftStr) - 1] = '\0';
     }
@@ -1519,7 +1518,8 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         // === SCROLLABLE LAYOUT with small sparklines (High and Low resolution, except UltraLow) ===
 
         // Calculate available scroll area (starts right after header)
-        int scrollTop = currentY;
+        // Add spacing to prevent drawing over the status bar
+        int scrollTop = currentY + 2;
         int scrollBottom = SCREEN_HEIGHT;
         int visibleHeight = scrollBottom - scrollTop;
 
@@ -1553,7 +1553,9 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         // Sparkline width: remaining space minus padding and scrollbar
         const int kPadding = 6; // space between label and graph
         const int kScrollbarWidth = 3;
-        const int kSparkW = std::max(50, SCREEN_WIDTH - maxLabelWidth - kPadding - x - kScrollbarWidth - 2);
+        // Use smaller minimum spark width for Low resolution screens (128x64) to prevent label overlap
+        const int minSparkW = (graphics::currentResolution == graphics::ScreenResolution::Low) ? 30 : 50;
+        const int kSparkW = std::max(minSparkW, SCREEN_WIDTH - maxLabelWidth - kPadding - x - kScrollbarWidth - 2);
         const int graphX = SCREEN_WIDTH - kSparkW - kScrollbarWidth - 2;
 
         // Build list of all metric rows with sparklines (use fixed array to avoid heap allocation)
@@ -1746,7 +1748,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     }
 
     // Redraw header on top of scrollable content to prevent scrolled items from appearing over it
-    if (graphics::isHighResolution()) {
+    if (graphics::isHighResolution() || graphics::currentResolution == graphics::ScreenResolution::Low) {
         graphics::drawCommonHeader(display, x, y, titleStr);
     }
 
