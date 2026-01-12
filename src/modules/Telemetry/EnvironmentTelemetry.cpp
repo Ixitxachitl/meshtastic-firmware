@@ -551,21 +551,21 @@ static inline const char *getSenderName(uint32_t nodeNum)
         const char *ln = node->user.long_name;
         const char *sn = node->user.short_name;
 
-#if defined(M5STACK_UNITC6L)
-        // On this target, MessageRenderer prefers short_name.
-        if (sn && sn[0])
-            return sn;
-        if (ln && ln[0])
-            return ln;
-#else
-        // On wider screens, prefer long_name; otherwise short_name.
-        if (SCREEN_WIDTH >= 200 && ln && ln[0])
-            return ln;
-        if (sn && sn[0])
-            return sn;
-        if (ln && ln[0])
-            return ln; // last resort if short_name empty
-#endif
+        // On UltraLow resolution displays, prefer short_name for space
+        if (graphics::currentResolution == graphics::ScreenResolution::UltraLow) {
+            if (sn && sn[0])
+                return sn;
+            if (ln && ln[0])
+                return ln;
+        } else {
+            // On wider screens, prefer long_name; otherwise short_name.
+            if (SCREEN_WIDTH >= 200 && ln && ln[0])
+                return ln;
+            if (sn && sn[0])
+                return sn;
+            if (ln && ln[0])
+                return ln; // last resort if short_name empty
+        }
     }
 
     // Fallback: hex node id like "ABCDEF12"
@@ -1067,11 +1067,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     graphics::drawCommonHeader(display, x, y, titleStr);
 
     // === Row spacing setup ===
-#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
-    const int rowHeight = 7;
-#else
-    const int rowHeight = FONT_HEIGHT_SMALL - 4;
-#endif
+    const int rowHeight = (graphics::currentResolution == graphics::ScreenResolution::UltraLow) ? 7 : FONT_HEIGHT_SMALL - 4;
     int currentY = graphics::getTextPositions(display)[line++];
 
     // === Determine which node's telemetry to show ===
@@ -1165,19 +1161,21 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         // Build entries array for other metrics
         s_displayCache.entryCount = 0;
 
-#if !defined(M5STACK_UNITC6L)
-        // Dew point
-        if (m.has_temperature && m.has_relative_humidity && m.relative_humidity > 0.0f) {
-            const float dpC = dewPointC(m.temperature, m.relative_humidity);
-            if (!isnan(dpC)) {
-                char buf[48];
-                if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
-                    const float dpF = dpC * 9.0f / 5.0f + 32.0f;
-                    snprintf(buf, sizeof(buf), "Dew: %.1f°F", dpF);
-                } else {
-                    snprintf(buf, sizeof(buf), "Dew: %.1f°C", dpC);
+        // Skip dew point on UltraLow resolution displays (too little space)
+        if (graphics::currentResolution != graphics::ScreenResolution::UltraLow) {
+            // Dew point
+            if (m.has_temperature && m.has_relative_humidity && m.relative_humidity > 0.0f) {
+                const float dpC = dewPointC(m.temperature, m.relative_humidity);
+                if (!isnan(dpC)) {
+                    char buf[48];
+                    if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
+                        const float dpF = dpC * 9.0f / 5.0f + 32.0f;
+                        snprintf(buf, sizeof(buf), "Dew: %.1f°F", dpF);
+                    } else {
+                        snprintf(buf, sizeof(buf), "Dew: %.1f°C", dpC);
+                    }
+                    s_displayCache.addEntry(buf);
                 }
-                s_displayCache.addEntry(buf);
             }
         }
 
@@ -1190,7 +1188,6 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
             snprintf(buf, sizeof(buf), "Gas: %.2f kΩ", m.gas_resistance);
             s_displayCache.addEntry(buf);
         }
-#endif
 
         // Other metrics
         if (m.voltage != 0 || m.current != 0) {
@@ -1289,7 +1286,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     isLargeDisplay = true;
 #endif
 
-    // Use advanced display with sparklines only on high-resolution screens
+    // Use advanced display with sparklines on high-resolution and low-resolution screens (except UltraLow)
     if (graphics::isHighResolution() && isLargeDisplay) {
         // === LARGE DISPLAY SCROLLABLE LAYOUT with graphs for all metrics ===
 
@@ -1518,8 +1515,8 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
                 display->setPixel(scrollbarX + 1, thumbY + i);
             }
         }
-    } else if (graphics::isHighResolution()) {
-        // === SCROLLABLE HIGH-RES LAYOUT with sparklines for all metrics ===
+    } else if (graphics::isHighResolution() || graphics::currentResolution == graphics::ScreenResolution::Low) {
+        // === SCROLLABLE LAYOUT with small sparklines (High and Low resolution, except UltraLow) ===
 
         // Calculate available scroll area (starts right after header)
         int scrollTop = currentY;
@@ -1696,7 +1693,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
             }
         }
     } else {
-        // Simple display for low-resolution screens (like develop branch)
+        // Simple display for UltraLow-resolution screens (M5STACK_UNITC6L and similar)
         // Build all metrics list using fixed array
         const char *allMetrics[20];
         size_t metricCount = 0;
@@ -1713,39 +1710,14 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
             allMetrics[metricCount++] = s_displayCache.entries[i];
         }
 
-        // First row: sender/time on left, first metric right-aligned on right (if available)
+        // UltraLow resolution: sender/time on first line, then all metrics on separate lines (single column)
         graphics::MessageRenderer::drawStringWithEmotes(display, x, currentY, displayStr, emotes, numEmotes);
-
-#if defined(M5STACK_UNITC6L)
-        // For M5STACK_UNITC6L only: put sender/time on first line, then all metrics on separate lines
         currentY += rowHeight;
+
         for (size_t i = 0; i < metricCount; i++) {
             drawStringWithOhm(display, x, currentY, allMetrics[i]);
             currentY += rowHeight;
         }
-#else
-        size_t startIdx = 0;
-        if (metricCount > 0) {
-            int rightX = SCREEN_WIDTH - display->getStringWidth(allMetrics[0]);
-            drawStringWithOhm(display, rightX, currentY, allMetrics[0]);
-            startIdx = 1;
-        }
-        currentY += rowHeight;
-
-        // Remaining metrics in 2-column format
-        const int splitX = SCREEN_WIDTH / 2;
-        for (size_t i = startIdx; i < metricCount; i += 2) {
-            // Left column
-            drawStringWithOhm(display, x, currentY, allMetrics[i]);
-
-            // Right column
-            if (i + 1 < metricCount) {
-                drawStringWithOhm(display, splitX, currentY, allMetrics[i + 1]);
-            }
-
-            currentY += rowHeight;
-        }
-#endif
     }
 
     // === IAQ alert logic (banner/beep for dangerous levels) ===
