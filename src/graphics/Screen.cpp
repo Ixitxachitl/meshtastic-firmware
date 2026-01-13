@@ -61,6 +61,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "mesh/Channels.h"
 #include "mesh/generated/meshtastic/deviceonly.pb.h"
 #include "modules/ExternalNotificationModule.h"
+#include "modules/Telemetry/EnvironmentTelemetry.h"
 #include "modules/TextMessageModule.h"
 #include "modules/WaypointModule.h"
 #include "sleep.h"
@@ -186,7 +187,7 @@ void Screen::showNodePicker(const char *message, uint32_t durationMs, std::funct
     NotificationRenderer::alertBannerUntil = (durationMs == 0) ? 0 : millis() + durationMs;
     NotificationRenderer::alertBannerCallback = bannerCallback;
     NotificationRenderer::pauseBanner = false;
-    NotificationRenderer::curSelected = 0;
+    NotificationRenderer::curSelected = 1; // Start on first node (index 0 is "Back")
     NotificationRenderer::current_notification_type = notificationTypeEnum::node_picker;
 
     static OverlayCallback overlays[] = {graphics::UIRenderer::drawNavigationBar, NotificationRenderer::drawBannercallback};
@@ -459,7 +460,7 @@ void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
 #endif
 
             dispdev->displayOn();
-#if defined(HELTEC_TRACKER_V1_X) || defined(HELTEC_WIRELESS_TRACKER_V2)
+#ifdef HELTEC_TRACKER_V1_X
             ui->init();
 #endif
 #ifdef USE_ST7789
@@ -467,7 +468,11 @@ void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
             digitalWrite(VTFT_CTRL, LOW);
             ui->init();
 #ifdef ESP_PLATFORM
+#if defined(M5STACK_CARDPUTER_ADV)
+            analogWrite(VTFT_LEDA, uiconfig.screen_brightness);
+#else
             analogWrite(VTFT_LEDA, BRIGHTNESS_DEFAULT);
+#endif
 #else
             pinMode(VTFT_LEDA, OUTPUT);
             digitalWrite(VTFT_LEDA, TFT_BACKLIGHT_ON);
@@ -485,6 +490,7 @@ void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
             enabled = true;
             setInterval(0); // Draw ASAP
             runASAP = true;
+            graphics::MessageRenderer::resetScrollState();
         } else {
             powerMon->clearState(meshtastic_PowerMon_State_Screen_On);
 #ifdef USE_EINK
@@ -875,6 +881,7 @@ int32_t Screen::runOnce()
             break;
         case Cmd::STOP_ALERT_FRAME:
             NotificationRenderer::pauseBanner = false;
+            setFrames(); // Restore normal screen frames
             break;
         case Cmd::STOP_BOOT_SCREEN:
             EINK_ADD_FRAMEFLAG(dispdev, COSMETIC); // E-Ink: Explicitly use full-refresh for next frame
@@ -1100,6 +1107,12 @@ void Screen::setFrames(FrameFocus focus)
         normalFrames[numframes++] = graphics::UIRenderer::drawCompassAndLocationScreen;
         indicatorIcons.push_back(icon_compass);
     }
+#if defined(M5STACK_UNITC6L)
+    // Add dedicated compass screen after GPS for small displays
+    fsi.positions.compass = numframes;
+    normalFrames[numframes++] = graphics::UIRenderer::drawCompassScreen;
+    indicatorIcons.push_back(compass_ball);
+#endif
 #endif
     if (RadioLibInterface::instance && !hiddenFrames.lora) {
         fsi.positions.lora = numframes;
@@ -1155,6 +1168,9 @@ void Screen::setFrames(FrameFocus focus)
                 fsi.positions.focusedModule = numframes;
             if (m && m == waypointModule)
                 fsi.positions.waypoint = numframes;
+            if (m && m == environmentTelemetryModule->asMesh()) {
+                fsi.positions.environment = numframes;
+            }
 
             indicatorIcons.push_back(icon_module);
             numframes++;
@@ -1229,19 +1245,14 @@ void Screen::setFrames(FrameFocus focus)
         break;
 
     case FOCUS_PRESERVE:
-        //  No more adjustment — force stay on same index
-        if (previousFrameCount > fsi.frameCount) {
-            ui->switchToFrame(originalPosition - 1);
-        } else if (previousFrameCount < fsi.frameCount) {
-            ui->switchToFrame(originalPosition + 1);
-        } else {
-            ui->switchToFrame(originalPosition);
-        }
+        ui->switchToFrame(originalPosition);
         break;
     }
 
     // Store the info about this frameset, for future setFrames calls
     this->framesetInfo = fsi;
+    graphics::setMessagesFrameIndex(fsi.positions.textMessage);
+    graphics::setEnvTelemetryFrameIndex(fsi.positions.environment);
 
     setFastFramerate(); // Draw ASAP
 }
@@ -1498,87 +1509,9 @@ int Screen::handleTextMessage(const meshtastic_MeshPacket *packet)
                     }
                 }
 
-            // Unlike generic messages, alerts (when enabled via the ext notif module) ignore any
-            // 'mute' preferences set to any specific node or channel.
-            // If on-screen keyboard is active, show a transient popup over keyboard instead of interrupting it
-            if (NotificationRenderer::current_notification_type == notificationTypeEnum::text_input) {
-                // Wake and force redraw so popup is visible immediately
-                if (shouldWakeOnReceivedMessage()) {
-                    setOn(true);
-                    forceDisplay();
-                }
-
-                // Build popup: title = message source name, content = message text (sanitized)
-                // Title
-                char titleBuf[64] = {0};
-                if (longName && longName[0]) {
-                    // Sanitize sender name
-                    std::string t = sanitizeString(longName);
-                    strncpy(titleBuf, t.c_str(), sizeof(titleBuf) - 1);
-                } else {
-                    strncpy(titleBuf, "Message", sizeof(titleBuf) - 1);
-                }
-
-                // Content: payload bytes may not be null-terminated, remove ASCII_BELL and sanitize
-                char content[256] = {0};
-                {
-                    std::string raw;
-                    raw.reserve(packet->decoded.payload.size);
-                    for (size_t i = 0; i < packet->decoded.payload.size; ++i) {
-                        char c = msgRaw[i];
-                        if (c == ASCII_BELL)
-                            continue; // strip bell
-                        raw.push_back(c);
-                    }
-                    std::string sanitized = sanitizeString(raw);
-                    strncpy(content, sanitized.c_str(), sizeof(content) - 1);
-                }
-
-                NotificationRenderer::showKeyboardMessagePopupWithTitle(titleBuf, content, 3000);
-
-// Maintain existing buzzer behavior on M5 if applicable
-#if defined(M5STACK_UNITC6L)
-                if (config.device.buzzer_mode != meshtastic_Config_DeviceConfig_BuzzerMode_DIRECT_MSG_ONLY ||
-                    (isAlert && moduleConfig.external_notification.alert_bell_buzzer) ||
-                    (!isBroadcast(packet->to) && isToUs(packet))) {
-                    playLongBeep();
-                }
-#endif
-            } else {
-                // No keyboard active: use regular banner flow, respecting mute settings
-                if (isAlert) {
-                    if (longName && longName[0]) {
-                        snprintf(banner, sizeof(banner), "Alert Received from\n%s", longName);
-                    } else {
-                        strcpy(banner, "Alert Received");
-                    }
-                    screen->showSimpleBanner(banner, 3000);
-                } else if (!channel.settings.has_module_settings || !channel.settings.module_settings.is_muted) {
-                    if (longName && longName[0]) {
-                        if (currentResolution == ScreenResolution::UltraLow) {
-                            strcpy(banner, "New Message");
-                        } else {
-                            snprintf(banner, sizeof(banner), "New Message from\n%s", longName);
-                        }
-                    } else {
-                        strcpy(banner, "New Message");
-                    }
-#if defined(M5STACK_UNITC6L)
-                    screen->setOn(true);
-                    screen->showSimpleBanner(banner, 1500);
-                    if (config.device.buzzer_mode != meshtastic_Config_DeviceConfig_BuzzerMode_DIRECT_MSG_ONLY ||
-                        (isAlert && moduleConfig.external_notification.alert_bell_buzzer) ||
-                        (!isBroadcast(packet->to) && isToUs(packet))) {
-                        // Beep if not in DIRECT_MSG_ONLY mode or if in DIRECT_MSG_ONLY mode and either
-                        // - packet contains an alert and alert bell buzzer is enabled
-                        // - packet is a non-broadcast that is addressed to this node
-                        playLongBeep();
-                    }
-#else
-                    screen->showSimpleBanner(banner, 3000);
-#endif
-                }
-            }
+            // MessageRenderer now handles all notification display (banners and keyboard popups)
+            // This block is disabled to prevent duplicate notifications
+            // See MessageRenderer::handleNewMessage() for the unified notification logic
         }
     }
 
@@ -1611,9 +1544,12 @@ int Screen::handleUIFrameEvent(const UIFrameEvent *event)
 
         // Jump directly to the Text Message screen
         else if (event->action == UIFrameEvent::Action::SWITCH_TO_TEXTMESSAGE) {
+            setOn(true);               // ensure display is on
             setFrames(FOCUS_PRESERVE); // preserve current frame ordering
             ui->switchToFrame(framesetInfo.positions.textMessage);
-            setFastFramerate(); // force redraw ASAP
+            setFastFramerate();            // draw ASAP
+            forceDisplay(true);            // commit the frame
+            powerFSM.trigger(EVENT_PRESS); // reset auto-off timer
         }
     }
 
@@ -1653,11 +1589,26 @@ int Screen::handleInputEvent(const InputEvent *event)
         return 0;
     }
     // UP/DOWN in message screen scrolls through message threads
-    if (ui->getUiState()->currentFrame == framesetInfo.positions.textMessage) {
+    // BUT: if overlay/menu is active, pass through to menu handler instead
+    // Also: if canned message module is active, skip this handler entirely so events pass through
+    bool cannedActive = cannedMessageModule->isCannedMessageActive();
+    if (ui->getUiState()->currentFrame == framesetInfo.positions.textMessage && !graphics::isOverlayActive() && !cannedActive) {
+
+#if HAS_TOUCHSCREEN
+        // Precise touch scrolling for touchscreen devices
+        if (event->inputEvent == INPUT_BROKER_SCROLL_DRAG) {
+            if (!messageStore.getMessages().empty()) {
+                graphics::MessageRenderer::adjustScroll(event->deltaY);
+                setFastFramerate();
+                return 0;
+            }
+        }
+#endif
 
         if (event->inputEvent == INPUT_BROKER_UP) {
             if (messageStore.getMessages().empty()) {
-                cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST);
+                // Swallow UP input when no messages to prevent preset menu from opening
+                return 1;
             } else {
                 graphics::MessageRenderer::scrollUp();
                 setFastFramerate(); // match existing behavior
@@ -1667,7 +1618,8 @@ int Screen::handleInputEvent(const InputEvent *event)
 
         if (event->inputEvent == INPUT_BROKER_DOWN) {
             if (messageStore.getMessages().empty()) {
-                cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST);
+                // Swallow DOWN input when no messages to prevent preset menu from opening
+                return 1;
             } else {
                 graphics::MessageRenderer::scrollDown();
                 setFastFramerate();
@@ -1694,6 +1646,32 @@ int Screen::handleInputEvent(const InputEvent *event)
             return 0;
         }
     }
+
+    // UP/DOWN in environment telemetry screen scrolls through metrics
+    if (ui->getUiState()->currentFrame == framesetInfo.positions.environment) {
+
+#if HAS_TOUCHSCREEN
+        // Precise touch scrolling for touchscreen devices
+        if (event->inputEvent == INPUT_BROKER_SCROLL_DRAG) {
+            EnvironmentTelemetryModule::handleScrollDrag(event->deltaY);
+            setFastFramerate();
+            return 0;
+        }
+#endif
+
+        if (event->inputEvent == INPUT_BROKER_UP) {
+            EnvironmentTelemetryModule::scrollUp();
+            setFastFramerate();
+            return 0;
+        }
+
+        if (event->inputEvent == INPUT_BROKER_DOWN) {
+            EnvironmentTelemetryModule::scrollDown();
+            setFastFramerate();
+            return 0;
+        }
+    }
+
     // Use left or right input from a keyboard to move between frames,
     // so long as a mesh module isn't using these events for some other purpose
     if (showingNormalScreen) {
@@ -1737,9 +1715,6 @@ int Screen::handleInputEvent(const InputEvent *event)
             } else if (event->inputEvent == INPUT_BROKER_DOWN_LONG) {
                 // Long press down button for fast frame switching
                 showNextFrame();
-            } else if ((event->inputEvent == INPUT_BROKER_UP || event->inputEvent == INPUT_BROKER_DOWN) &&
-                       this->ui->getUiState()->currentFrame == framesetInfo.positions.home) {
-                cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST);
             } else if (event->inputEvent == INPUT_BROKER_SELECT) {
                 if (this->ui->getUiState()->currentFrame == framesetInfo.positions.home) {
                     menuHandler::homeBaseMenu();
@@ -1748,20 +1723,22 @@ int Screen::handleInputEvent(const InputEvent *event)
 #if HAS_GPS
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.gps && gps) {
                     menuHandler::positionBaseMenu();
+#if defined(M5STACK_UNITC6L)
+                } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.compass && gps) {
+                    menuHandler::positionBaseMenu();
+#endif
 #endif
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.clock) {
                     menuHandler::clockMenu();
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.lora) {
                     menuHandler::loraMenu();
+                } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.environment) {
+                    menuHandler::envTelemetryMenu();
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.textMessage) {
                     if (!messageStore.getMessages().empty()) {
                         menuHandler::messageResponseMenu();
                     } else {
-                        if (currentResolution == ScreenResolution::UltraLow) {
-                            menuHandler::textMessageMenu();
-                        } else {
-                            menuHandler::textMessageBaseMenu();
-                        }
+                        menuHandler::textMessageBaseMenu();
                     }
                 } else if (framesetInfo.positions.firstFavorite != 255 &&
                            this->ui->getUiState()->currentFrame >= framesetInfo.positions.firstFavorite &&
@@ -1778,11 +1755,33 @@ int Screen::handleInputEvent(const InputEvent *event)
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.wifi) {
                     menuHandler::wifiBaseMenu();
                 }
+            } else if (event->inputEvent == INPUT_BROKER_SELECT_LONG) {
+                // Long press on messages screen opens menu (for devices with scrolling like T-Deck)
+                if (this->ui->getUiState()->currentFrame == framesetInfo.positions.textMessage) {
+                    if (!messageStore.getMessages().empty()) {
+                        menuHandler::messageResponseMenu();
+                    } else {
+                        menuHandler::textMessageBaseMenu();
+                    }
+                }
             } else if (event->inputEvent == INPUT_BROKER_BACK) {
                 showFrame(FrameDirection::PREVIOUS);
             } else if (event->inputEvent == INPUT_BROKER_CANCEL) {
                 setOn(false);
             }
+#if defined(PIN_EINK_EN)
+            else if (event->inputEvent == INPUT_BROKER_BACKLIGHT_TOGGLE) {
+                // Toggle E-Ink backlight
+                if (uiconfig.screen_brightness == 1) {
+                    uiconfig.screen_brightness = 0;
+                    digitalWrite(PIN_EINK_EN, LOW);
+                } else {
+                    uiconfig.screen_brightness = 1;
+                    digitalWrite(PIN_EINK_EN, HIGH);
+                }
+                menuHandler::saveUIConfig();
+            }
+#endif
         }
     }
 
@@ -1820,13 +1819,9 @@ bool shouldWakeOnReceivedMessage()
 {
     /*
     The goal here is to determine when we do NOT wake up the screen on message received:
-    - Any ext. notifications are turned on
     - If role is not CLIENT / CLIENT_MUTE / CLIENT_HIDDEN / CLIENT_BASE
     - If the battery level is very low
     */
-    if (moduleConfig.external_notification.enabled) {
-        return false;
-    }
     if (!IS_ONE_OF(config.device.role, meshtastic_Config_DeviceConfig_Role_CLIENT,
                    meshtastic_Config_DeviceConfig_Role_CLIENT_MUTE, meshtastic_Config_DeviceConfig_Role_CLIENT_HIDDEN,
                    meshtastic_Config_DeviceConfig_Role_CLIENT_BASE)) {

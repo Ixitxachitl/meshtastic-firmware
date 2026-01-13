@@ -87,6 +87,11 @@ bool OnScreenKeyboardModule::processVirtualKeyboardInput(const InputEvent &event
     if (!targetKeyboard)
         return false;
 
+    // Skip processing for special header navigation events (no sound, handled by CannedMessageModule)
+    if (event.kbchar == INPUT_BROKER_EVENT_NAV_SELECT_DESTINATION) {
+        return false;
+    }
+
     switch (event.inputEvent) {
     case INPUT_BROKER_UP:
     case INPUT_BROKER_UP_LONG:

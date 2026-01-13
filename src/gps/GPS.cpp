@@ -42,7 +42,11 @@ template <typename T, std::size_t N> std::size_t array_count(const T (&)[N])
 #define GPS_SERIAL_PORT Serial1
 #endif
 
-#if defined(ARCH_NRF52)
+#ifdef SENSECAP_INDICATOR
+// SenseCAP Indicator uses FakeUART to communicate with RP2040 companion processor
+#include "mesh/comms/FakeUART.h"
+HardwareSerial *GPS::_serial_gps = nullptr; // Will be set to fakeUART later
+#elif defined(ARCH_NRF52)
 Uart *GPS::_serial_gps = &GPS_SERIAL_PORT;
 #elif defined(ARCH_ESP32) || defined(ARCH_PORTDUINO) || defined(ARCH_STM32WL)
 HardwareSerial *GPS::_serial_gps = &GPS_SERIAL_PORT;
@@ -1061,6 +1065,17 @@ void GPS::down()
     }
 }
 
+bool GPS::feedNMEA(const char *nmea)
+{
+    bool isValid = false;
+    if (nmea) {
+        while (*nmea) {
+            isValid |= reader.encode(*nmea++);
+        }
+    }
+    return isValid;
+}
+
 void GPS::publishUpdate()
 {
     if (shouldPublish) {
@@ -1080,6 +1095,7 @@ void GPS::publishUpdate()
 
 int32_t GPS::runOnce()
 {
+#if !defined(SENSECAP_INDICATOR)
     if (!GPSInitFinished) {
         if (!_serial_gps || config.position.gps_mode == meshtastic_Config_PositionConfig_GpsMode_NOT_PRESENT) {
             LOG_INFO("GPS set to not-present. Skip probe");
@@ -1095,6 +1111,7 @@ int32_t GPS::runOnce()
         GPSInitFinished = true;
         publishUpdate();
     }
+#endif
 
     // ======================== GPS_ACTIVE state ========================
     // In GPS_ACTIVE state, GPS is powered on and we're receiving NMEA messages.
@@ -1215,12 +1232,22 @@ int32_t GPS::runOnce()
 // clear the GPS rx/tx buffer as quickly as possible
 void GPS::clearBuffer()
 {
-#ifdef ARCH_ESP32
-    _serial_gps->flush(false);
+#ifdef SENSECAP_INDICATOR
+    // For SenseCAP Indicator using FakeUART, just read available bytes
+    if (_serial_gps) {
+        int x = _serial_gps->available();
+        while (x--)
+            _serial_gps->read();
+    }
+#elif defined(ARCH_ESP32)
+    if (_serial_gps)
+        _serial_gps->flush(false);
 #else
-    int x = _serial_gps->available();
-    while (x--)
-        _serial_gps->read();
+    if (_serial_gps) {
+        int x = _serial_gps->available();
+        while (x--)
+            _serial_gps->read();
+    }
 #endif
 }
 

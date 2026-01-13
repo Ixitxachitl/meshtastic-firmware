@@ -26,6 +26,9 @@ class BMM150Singleton : public DFRobot_BMM150_I2C
     // Create a singleton instance (not thread safe)
     static BMM150Singleton *GetInstance(ScanI2C::FoundDevice device);
 
+    // Get existing instance without creating (returns nullptr if not yet created)
+    static BMM150Singleton *GetExistingInstance() { return pinstance; }
+
     // Singletons should not be cloneable.
     BMM150Singleton(BMM150Singleton &other) = delete;
 

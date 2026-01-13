@@ -163,12 +163,27 @@ int32_t ButtonThread::runOnce()
         }
     }
 
+    // Fire longLongPress immediately when threshold is reached (don't wait for release)
+    if (buttonCurrentlyPressed && millis() > 30000 && _longLongPress != INPUT_BROKER_NONE && !longLongPressFired &&
+        (millis() - buttonPressStartTime) >= _longLongPressTime && leadUpPlayed) {
+        InputEvent evt;
+        evt.source = _originName;
+        evt.inputEvent = _longLongPress;
+        evt.kbchar = 0;
+        evt.touchX = 0;
+        evt.touchY = 0;
+        this->notifyObservers(&evt);
+        longLongPressFired = true;
+        longPressDeferred = false; // Cancel the deferred long press
+    }
+
     // Reset when button is released
     if (!buttonCurrentlyPressed && buttonWasPressed) {
         if (_releaseHandler)
             _releaseHandler();
         leadUpSequenceActive = false;
         resetLeadUpSequence();
+        longLongPressFired = false;
     }
 
     buttonWasPressed = buttonCurrentlyPressed;
@@ -211,9 +226,15 @@ int32_t ButtonThread::runOnce()
                 break;
             }
             if (_longPress != INPUT_BROKER_NONE) {
-                // Forward long press to InputBroker (but NOT as DOWN/SELECT, just forward a "button long press" event)
-                evt.inputEvent = _longPress;
-                this->notifyObservers(&evt);
+                // If longLongPress is configured, defer the longPress until button release
+                // This allows the user to continue holding for longLongPress without triggering longPress
+                if (_longLongPress != INPUT_BROKER_NONE) {
+                    longPressDeferred = true;
+                } else {
+                    // Forward long press to InputBroker (but NOT as DOWN/SELECT, just forward a "button long press" event)
+                    evt.inputEvent = _longPress;
+                    this->notifyObservers(&evt);
+                }
             }
             // Reset combination tracking
             waitingForLongPress = false;
@@ -276,14 +297,18 @@ int32_t ButtonThread::runOnce()
         case BUTTON_EVENT_LONG_RELEASED: {
 
             LOG_INFO("LONG PRESS RELEASE AFTER %u MILLIS", millis() - buttonPressStartTime);
-            if (millis() > 30000 && _longLongPress != INPUT_BROKER_NONE &&
-                (millis() - buttonPressStartTime) >= _longLongPressTime && leadUpPlayed) {
-                evt.inputEvent = _longLongPress;
+            // longLongPress is now fired immediately when threshold is reached (in runOnce)
+            // Only fire deferred longPress if longLongPress wasn't triggered
+            if (!longLongPressFired && longPressDeferred && _longPress != INPUT_BROKER_NONE) {
+                // Fire the deferred long press since user released before longLongPress threshold
+                evt.inputEvent = _longPress;
                 this->notifyObservers(&evt);
             }
             // Reset combination tracking
             waitingForLongPress = false;
             leadUpPlayed = false;
+            longPressDeferred = false;
+            longLongPressFired = false;
 
             break;
         }

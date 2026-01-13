@@ -40,10 +40,48 @@ extern MessageStore messageStore;
 #endif
 
 #include "graphics/ScreenFonts.h"
+#include "meshUtils.h"
 #include <Throttle.h>
 
 // Remove Canned message screen if no action is taken for some milliseconds
 #define INACTIVATE_AFTER_MS 20000
+
+// Helper functions for rounded rectangles
+static void fillRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r)
+{
+    // Clamp radius to half the smallest dimension
+    int maxR = std::min(w, h) / 2;
+    if (r > maxR)
+        r = maxR;
+    if (r < 1)
+        r = 1;
+
+    // Fill main rectangle body (center strip full height)
+    display->fillRect(x + r, y, w - r * 2, h);
+    // Fill left and right side strips (between corners)
+    display->fillRect(x, y + r, r, h - r * 2);
+    display->fillRect(x + w - r, y + r, r, h - r * 2);
+    // Fill corners with filled circles
+    display->fillCircle(x + r, y + r, r);
+    display->fillCircle(x + w - 1 - r, y + r, r);
+    display->fillCircle(x + r, y + h - 1 - r, r);
+    display->fillCircle(x + w - 1 - r, y + h - 1 - r, r);
+}
+
+static void drawRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r)
+{
+    // Top and bottom lines
+    display->drawHorizontalLine(x + r, y, w - r * 2);
+    display->drawHorizontalLine(x + r, y + h - 1, w - r * 2);
+    // Left and right lines
+    display->drawVerticalLine(x, y + r, h - r * 2);
+    display->drawVerticalLine(x + w - 1, y + r, h - r * 2);
+    // Draw rounded corners using circle arcs (1=top-right, 2=top-left, 4=bottom-left, 8=bottom-right)
+    display->drawCircleQuads(x + r, y + r, r, 2);                 // Top-left
+    display->drawCircleQuads(x + w - 1 - r, y + r, r, 1);         // Top-right
+    display->drawCircleQuads(x + r, y + h - 1 - r, r, 4);         // Bottom-left
+    display->drawCircleQuads(x + w - 1 - r, y + h - 1 - r, r, 8); // Bottom-right
+}
 
 // Tokenize a message string into emote/text segments
 static std::vector<std::pair<bool, String>> tokenizeMessageWithEmotes(const char *msg)
@@ -144,12 +182,13 @@ CannedMessageModule::CannedMessageModule()
 
 void CannedMessageModule::LaunchWithDestination(NodeNum newDest, uint8_t newChannel)
 {
-    // Do NOT override explicit broadcast replies
-    // Only reuse lastDest in LaunchRepeatDestination()
-
+    // Use the requested destination, unless it's "broadcast" and we have a previous node/channel
+    if (newDest == NODENUM_BROADCAST && lastDestSet) {
+        newDest = lastDest;
+        newChannel = lastChannel;
+    }
     dest = newDest;
     channel = newChannel;
-
     lastDest = dest;
     lastChannel = channel;
     lastDestSet = true;
@@ -170,8 +209,6 @@ void CannedMessageModule::LaunchWithDestination(NodeNum newDest, uint8_t newChan
     UIFrameEvent e;
     e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
     notifyObservers(&e);
-
-    LOG_DEBUG("[CannedMessage] LaunchWithDestination dest=0x%08x ch=%d", dest, channel);
 }
 
 void CannedMessageModule::LaunchRepeatDestination()
@@ -187,10 +224,8 @@ void CannedMessageModule::LaunchFreetextWithDestination(NodeNum newDest, uint8_t
 {
     // Do NOT override explicit broadcast replies
     // Only reuse lastDest in LaunchRepeatDestination()
-
     dest = newDest;
     channel = newChannel;
-
     lastDest = dest;
     lastChannel = channel;
     lastDestSet = true;
@@ -211,7 +246,7 @@ bool hasKeyForNode(const meshtastic_NodeInfoLite *node)
 }
 /**
  * @brief Items in array this->messages will be set to be pointing on the right
- *     starting points of the string this->messageStore
+ *     starting points of the string this->messageBuffer
  *
  * @return int Returns the number of messages found.
  */
@@ -228,16 +263,9 @@ int CannedMessageModule::splitConfiguredMessages()
     // Temporary array to allow for insertion
     const char *tempMessages[CANNED_MESSAGE_MODULE_MESSAGE_MAX_COUNT + 3] = {0};
     int tempCount = 0;
-    // Insert at position 0 (top)
+
+    // Insert [Select Destination] at position 0 (top)
     tempMessages[tempCount++] = "[Select Destination]";
-#if defined(USE_VIRTUAL_KEYBOARD)
-    // Add a "Free Text" entry at the top if using a touch screen virtual keyboard
-    tempMessages[tempCount++] = "[-- Free Text --]";
-#else
-    if (osk_found && screen) {
-        tempMessages[tempCount++] = "[-- Free Text --]";
-    }
-#endif
 
     // First message always starts at buffer start
     tempMessages[tempCount++] = this->messageBuffer;
@@ -267,23 +295,17 @@ int CannedMessageModule::splitConfiguredMessages()
 }
 void CannedMessageModule::drawHeader(OLEDDisplay *display, int16_t x, int16_t y, char *buffer)
 {
-    if (graphics::currentResolution == graphics::ScreenResolution::High) {
-        if (this->dest == NODENUM_BROADCAST) {
-            display->drawStringf(x, y, buffer, "To: #%s", channels.getName(this->channel));
-        } else {
-            display->drawStringf(x, y, buffer, "To: @%s", getNodeName(this->dest));
-        }
+    if (this->dest == NODENUM_BROADCAST) {
+        display->drawStringf(x, y, buffer, "To: #%s", channels.getName(this->channel));
     } else {
-        if (this->dest == NODENUM_BROADCAST) {
-            display->drawStringf(x, y, buffer, "To: #%.20s", channels.getName(this->channel));
-        } else {
-            display->drawStringf(x, y, buffer, "To: @%s", getNodeName(this->dest));
-        }
+        display->drawStringf(x, y, buffer, "To: %s", getNodeName(this->dest));
     }
 }
 
 void CannedMessageModule::resetSearch()
 {
+    LOG_INFO("Resetting search, restoring full destination list");
+
     int previousDestIndex = destIndex;
 
     searchQuery = "";
@@ -291,7 +313,13 @@ void CannedMessageModule::resetSearch()
 
     // Adjust scrollIndex so previousDestIndex is still visible
     int totalEntries = activeChannelIndices.size() + filteredNodes.size();
-    this->visibleRows = (displayHeight - FONT_HEIGHT_SMALL * 2) / FONT_HEIGHT_SMALL;
+#if defined(USE_TINY_FONT) || defined(M5STACK_UNITC6L)
+    // Tiny fonts need full height + spacing for readability
+    const int rowSpacing = FONT_HEIGHT_SMALL + 1;
+#else
+    const int rowSpacing = FONT_HEIGHT_SMALL;
+#endif
+    this->visibleRows = (displayHeight - FONT_HEIGHT_SMALL * 2) / rowSpacing;
     if (this->visibleRows < 1)
         this->visibleRows = 1;
     int maxScrollIndex = std::max(0, totalEntries - visibleRows);
@@ -345,10 +373,6 @@ void CannedMessageModule::updateDestinationSelectionList()
         }
     }
 
-    meshtastic_MeshPacket *p = allocDataPacket();
-    p->pki_encrypted = true;
-    p->channel = 0;
-
     // Populate active channels
     std::vector<String> seenChannels;
     seenChannels.reserve(channels.getNumChannels());
@@ -360,11 +384,20 @@ void CannedMessageModule::updateDestinationSelectionList()
         }
     }
 
+    /* As the nodeDB is sorted, can skip this step
+    // Sort by favorite, then last heard
+    std::sort(this->filteredNodes.begin(), this->filteredNodes.end(), [](const NodeEntry &a, const NodeEntry &b) {
+        if (a.node->is_favorite != b.node->is_favorite)
+            return a.node->is_favorite > b.node->is_favorite;
+        return a.lastHeard < b.lastHeard;
+    });
+    */
+
     scrollIndex = 0; // Show first result at the top
     destIndex = 0;   // Highlight the first entry
     if (nodesChanged && runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION) {
         LOG_INFO("Nodes changed, forcing UI refresh.");
-        screen->forceDisplay();
+        IF_SCREEN(screen->forceDisplay());
     }
 }
 
@@ -380,8 +413,28 @@ bool CannedMessageModule::isCharInputAllowed() const
  */
 int CannedMessageModule::handleInputEvent(const InputEvent *event)
 {
+    // Safety check: ensure event is valid
+    if (!event) {
+        return 0;
+    }
+
     // Block ALL input if an alert banner is active
     if (screen && screen->isOverlayBannerShowing()) {
+        return 0;
+    }
+
+    // Swallow UP/DOWN when there are no real messages to prevent preset menu from opening
+    if (messagesCount <= 2 && runState == CANNED_MESSAGE_RUN_STATE_ACTIVE) {
+        if (event->inputEvent == INPUT_BROKER_UP || event->inputEvent == INPUT_BROKER_UP_LONG ||
+            event->inputEvent == INPUT_BROKER_DOWN || event->inputEvent == INPUT_BROKER_DOWN_LONG) {
+            return 1; // Swallow UP/DOWN to prevent preset menu
+        }
+    }
+
+    // If module is inactive, block all long press and touch-only events
+    if (runState == CANNED_MESSAGE_RUN_STATE_INACTIVE &&
+        (event->inputEvent == INPUT_BROKER_SELECT_LONG || event->inputEvent == INPUT_BROKER_ALT_LONG ||
+         (event->touchX != 0 && event->touchY != 0 && event->inputEvent == 0))) {
         return 0;
     }
 
@@ -414,23 +467,82 @@ int CannedMessageModule::handleInputEvent(const InputEvent *event)
 
     // Free text input mode: Handles character input, cancel, backspace, select, etc.
     case CANNED_MESSAGE_RUN_STATE_FREETEXT:
+        // If VirtualKeyboard is active AND no external keyboard (CardKB), use virtual keyboard
+        // When CardKB is connected, prefer it over the virtual keyboard
+        if (osk_found && !kb_found && graphics::NotificationRenderer::virtualKeyboard) {
+            // Emote picker request should be handled by CannedMessageModule
+            if (event->kbchar == INPUT_BROKER_MSG_EMOTE_LIST) {
+                return handleFreeTextInput(event);
+            }
+            // SELECT when header is focused - open destination picker
+            if (headerFocused && (event->inputEvent == INPUT_BROKER_SELECT || event->inputEvent == INPUT_BROKER_USER_PRESS)) {
+                headerFocused = false;
+                // Save the current input text before closing the keyboard
+                if (graphics::NotificationRenderer::virtualKeyboard) {
+                    freetext = graphics::NotificationRenderer::virtualKeyboard->getInputText().c_str();
+                }
+                // Close the VirtualKeyboard before switching (don't call empty callback)
+                graphics::OnScreenKeyboardModule::instance().stop(false);
+                graphics::NotificationRenderer::virtualKeyboard = nullptr;
+
+                runState = CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION;
+                destIndex = 0;
+                scrollIndex = 0;
+                updateDestinationSelectionList(); // Populate the destination list
+                requestFocus();
+                UIFrameEvent e;
+                e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+                notifyObservers(&e);
+                IF_SCREEN(screen->forceDisplay(true));
+                return 1;
+            }
+            // Destination selection request from VirtualKeyboard (UP from row 0)
+            if (event->kbchar == INPUT_BROKER_EVENT_NAV_SELECT_DESTINATION) {
+                if (headerFocused) {
+                    // Pressing UP again when header is focused - wrap back to keyboard N key
+                    headerFocused = false;
+                    if (graphics::NotificationRenderer::virtualKeyboard) {
+                        graphics::NotificationRenderer::virtualKeyboard->setHeaderFocused(false);
+                        graphics::NotificationRenderer::virtualKeyboard->setCursorPosition(3, 5); // Row 3, N key
+                    }
+                    IF_SCREEN(screen->forceDisplay(true));
+                } else {
+                    // First UP press - highlight the header
+                    headerFocused = true;
+                    if (graphics::NotificationRenderer::virtualKeyboard) {
+                        graphics::NotificationRenderer::virtualKeyboard->setHeaderFocused(true);
+                    }
+                    IF_SCREEN(screen->forceDisplay(true));
+                }
+                return 1;
+            }
+            // DOWN when header is focused - go back to keyboard top row
+            if (headerFocused && (event->inputEvent == INPUT_BROKER_DOWN || event->inputEvent == INPUT_BROKER_USER_PRESS)) {
+                headerFocused = false;
+                if (graphics::NotificationRenderer::virtualKeyboard) {
+                    graphics::NotificationRenderer::virtualKeyboard->setHeaderFocused(false);
+                    graphics::NotificationRenderer::virtualKeyboard->setCursorPosition(0, 5); // Top row, middle (H key)
+                }
+                IF_SCREEN(screen->forceDisplay(true));
+                return 1;
+            }
+            // Otherwise delegate to VirtualKeyboard (unless it's a header nav event already handled)
+            if (event->kbchar != INPUT_BROKER_EVENT_NAV_SELECT_DESTINATION) {
+                InputEvent brokerEvent;
+                brokerEvent.inputEvent = event->inputEvent;
+                brokerEvent.kbchar = event->kbchar;
+                graphics::OnScreenKeyboardModule::instance().handleInput(brokerEvent);
+            }
+            return 1; // Input handled by keyboard
+        }
         return handleFreeTextInput(event); // All allowed input for this state
 
-    // Virtual keyboard mode: Show virtual keyboard and handle input
+        // Virtual keyboard mode: Show virtual keyboard and handle input
 
-    // If sending, block all input except global/system (handled above)
-    case CANNED_MESSAGE_RUN_STATE_SENDING_ACTIVE:
-        return 1;
-
-    // If sending, block all input except global/system (handled above)
     case CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER:
         return handleEmotePickerInput(event);
 
     case CANNED_MESSAGE_RUN_STATE_INACTIVE:
-        if (event->inputEvent == INPUT_BROKER_ALT_LONG) {
-            LaunchWithDestination(NODENUM_BROADCAST);
-            return 1;
-        }
         // Printable char (ASCII) opens free text compose
         if (event->kbchar >= 32 && event->kbchar <= 126) {
             runState = CANNED_MESSAGE_RUN_STATE_FREETEXT;
@@ -441,7 +553,6 @@ int CannedMessageModule::handleInputEvent(const InputEvent *event)
             // Immediately process the input in the new state (freetext)
             return handleFreeTextInput(event);
         }
-        return 0;
         break;
 
     // (Other states can be added here as needed)
@@ -461,15 +572,13 @@ int CannedMessageModule::handleInputEvent(const InputEvent *event)
 bool CannedMessageModule::isUpEvent(const InputEvent *event)
 {
     return event->inputEvent == INPUT_BROKER_UP ||
-           ((runState == CANNED_MESSAGE_RUN_STATE_ACTIVE || runState == CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER ||
-             runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION) &&
+           ((runState == CANNED_MESSAGE_RUN_STATE_ACTIVE || runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION) &&
             (event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_ALT_PRESS));
 }
 bool CannedMessageModule::isDownEvent(const InputEvent *event)
 {
     return event->inputEvent == INPUT_BROKER_DOWN ||
-           ((runState == CANNED_MESSAGE_RUN_STATE_ACTIVE || runState == CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER ||
-             runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION) &&
+           ((runState == CANNED_MESSAGE_RUN_STATE_ACTIVE || runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION) &&
             (event->inputEvent == INPUT_BROKER_RIGHT || event->inputEvent == INPUT_BROKER_USER_PRESS));
 }
 bool CannedMessageModule::isSelectEvent(const InputEvent *event)
@@ -495,7 +604,7 @@ bool CannedMessageModule::handleTabSwitch(const InputEvent *event)
     UIFrameEvent e;
     e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
     notifyObservers(&e);
-    screen->forceDisplay();
+    IF_SCREEN(screen->forceDisplay());
     return true;
 }
 
@@ -554,7 +663,7 @@ int CannedMessageModule::handleDestinationSelectionInput(const InputEvent *event
         else if ((destIndex / columns) >= (scrollIndex + visibleRows))
             scrollIndex = (destIndex / columns) - visibleRows + 1;
 
-        screen->forceDisplay(true);
+        IF_SCREEN(screen->forceDisplay(true));
         return 1;
     }
 
@@ -569,7 +678,7 @@ int CannedMessageModule::handleDestinationSelectionInput(const InputEvent *event
         if ((destIndex / columns) >= (scrollIndex + visibleRows))
             scrollIndex = (destIndex / columns) - visibleRows + 1;
 
-        screen->forceDisplay(true);
+        IF_SCREEN(screen->forceDisplay(true));
         return 1;
     }
 
@@ -596,22 +705,38 @@ int CannedMessageModule::handleDestinationSelectionInput(const InputEvent *event
             }
         }
 
-        runState = returnToCannedList ? CANNED_MESSAGE_RUN_STATE_ACTIVE : CANNED_MESSAGE_RUN_STATE_FREETEXT;
+        // Return to keyboard if we came from keyboard, otherwise to canned list
+        // Only use OSK if no external keyboard is connected - prefer physical keyboard
+        runState = (osk_found && !kb_found && !returnToCannedList)
+                       ? CANNED_MESSAGE_RUN_STATE_FREETEXT
+                       : (returnToCannedList ? CANNED_MESSAGE_RUN_STATE_ACTIVE : CANNED_MESSAGE_RUN_STATE_FREETEXT);
         returnToCannedList = false;
-        screen->forceDisplay(true);
+
+        // Regenerate frames to show keyboard again
+        UIFrameEvent e;
+        e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+        notifyObservers(&e);
+
+        IF_SCREEN(screen->forceDisplay(true));
         return 1;
     }
 
     // CANCEL
     if (event->inputEvent == INPUT_BROKER_CANCEL || event->inputEvent == INPUT_BROKER_ALT_LONG) {
-        runState = returnToCannedList ? CANNED_MESSAGE_RUN_STATE_ACTIVE : CANNED_MESSAGE_RUN_STATE_FREETEXT;
+        // Return to keyboard if we came from keyboard, otherwise to canned list
+        // Only use OSK if no external keyboard is connected - prefer physical keyboard
+        runState = (osk_found && !kb_found && !returnToCannedList)
+                       ? CANNED_MESSAGE_RUN_STATE_FREETEXT
+                       : (returnToCannedList ? CANNED_MESSAGE_RUN_STATE_ACTIVE : CANNED_MESSAGE_RUN_STATE_FREETEXT);
         returnToCannedList = false;
         searchQuery = "";
 
-        // UIFrameEvent e;
-        // e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
-        // notifyObservers(&e);
-        screen->forceDisplay(true);
+        // Regenerate frames to show keyboard again
+        UIFrameEvent e;
+        e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+        notifyObservers(&e);
+
+        IF_SCREEN(screen->forceDisplay(true));
         return 1;
     }
 
@@ -629,10 +754,16 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
         }
     }
 
+    // Ignore long press in canned message list (prevents opening menus)
+    if (runState == CANNED_MESSAGE_RUN_STATE_ACTIVE &&
+        (event->inputEvent == INPUT_BROKER_SELECT_LONG || event->inputEvent == INPUT_BROKER_ALT_LONG)) {
+        return false;
+    }
+
     if (runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION)
         return false;
 
-    // Handle Cancel key: go inactive, clear UI state
+    // === Handle Cancel key: go inactive, clear UI state ===
     if (runState != CANNED_MESSAGE_RUN_STATE_INACTIVE &&
         (event->inputEvent == INPUT_BROKER_CANCEL || event->inputEvent == INPUT_BROKER_ALT_LONG)) {
         runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
@@ -645,9 +776,13 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
         UIFrameEvent e;
         e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
         notifyObservers(&e);
-        screen->forceDisplay();
+        IF_SCREEN(screen->forceDisplay());
         return true;
     }
+
+    // Only handle navigation if we're actually in the active canned message list
+    if (runState != CANNED_MESSAGE_RUN_STATE_ACTIVE)
+        return false;
 
     bool handled = false;
 
@@ -658,21 +793,24 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
     } else if (isDown && messagesCount > 0) {
         runState = CANNED_MESSAGE_RUN_STATE_ACTION_DOWN;
         handled = true;
+    } else if ((isUp || isDown) && messagesCount == 0) {
+        // Swallow navigation on empty list
+        handled = true;
     } else if (isSelect) {
         const char *current = messages[currentMessageIndex];
 
-        // [Select Destination] triggers destination selection UI
+        // === [Select Destination] triggers destination selection UI ===
         if (strcmp(current, "[Select Destination]") == 0) {
             returnToCannedList = true;
             runState = CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION;
             destIndex = 0;
             scrollIndex = 0;
             updateDestinationSelectionList(); // Make sure list is fresh
-            screen->forceDisplay();
+            IF_SCREEN(screen->forceDisplay());
             return true;
         }
 
-        // [Exit] returns to the main/inactive screen
+        // === [Exit] returns to the main/inactive screen ===
         if (strcmp(current, "[Exit]") == 0) {
             // Set runState to inactive so we return to main UI
             runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
@@ -682,11 +820,11 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
             UIFrameEvent e;
             e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
             notifyObservers(&e);
-            screen->forceDisplay();
+            IF_SCREEN(screen->forceDisplay());
             return true;
         }
 
-        // [Free Text] triggers the free text input (virtual keyboard)
+        // === [Free Text] triggers the free text input (virtual keyboard) ===
 #if defined(USE_VIRTUAL_KEYBOARD)
         if (strcmp(current, "[-- Free Text --]") == 0) {
             runState = CANNED_MESSAGE_RUN_STATE_FREETEXT;
@@ -698,12 +836,13 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
         }
 #else
         if (strcmp(current, "[-- Free Text --]") == 0) {
-            if (osk_found && screen) {
+            // Only use OSK if no external keyboard is connected - prefer physical keyboard
+            if (osk_found && !kb_found && screen) {
                 char headerBuffer[64];
                 if (this->dest == NODENUM_BROADCAST) {
                     snprintf(headerBuffer, sizeof(headerBuffer), "To: #%s", channels.getName(this->channel));
                 } else {
-                    snprintf(headerBuffer, sizeof(headerBuffer), "To: @%s", getNodeName(this->dest));
+                    snprintf(headerBuffer, sizeof(headerBuffer), "To: %s", getNodeName(this->dest));
                 }
                 screen->showTextInput(headerBuffer, "", 300000, [this](const std::string &text) {
                     if (!text.empty()) {
@@ -715,7 +854,7 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
                         UIFrameEvent e;
                         e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
                         this->notifyObservers(&e);
-                        screen->forceDisplay();
+                        IF_SCREEN(screen->forceDisplay());
 
                         setIntervalFromNow(500);
                         return;
@@ -735,7 +874,7 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
                         UIFrameEvent e;
                         e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
                         this->notifyObservers(&e);
-                        screen->forceDisplay();
+                        IF_SCREEN(screen->forceDisplay());
 
                         // Schedule cleanup for next loop iteration to ensure safe deletion
                         setIntervalFromNow(50);
@@ -752,12 +891,24 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
         if (runState == CANNED_MESSAGE_RUN_STATE_INACTIVE || runState == CANNED_MESSAGE_RUN_STATE_DISABLED) {
         } else {
 #if CANNED_MESSAGE_ADD_CONFIRMATION
-            const int savedIndex = currentMessageIndex;
-            graphics::menuHandler::showConfirmationBanner("Send message?", [this, savedIndex]() {
-                this->currentMessageIndex = savedIndex;
-                this->payload = this->runState;
-                this->runState = CANNED_MESSAGE_RUN_STATE_ACTION_SELECT;
-                this->setIntervalFromNow(0);
+            // Show confirmation dialog before sending canned message
+            NodeNum destNode = dest;
+            ChannelIndex chan = channel;
+            // Copy the message content, not the pointer - the pointer may become invalid
+            // before the confirmation callback is executed (dangling pointer crash)
+            std::string messageToSend(current);
+            graphics::menuHandler::showConfirmationBanner("Send message?", [this, destNode, chan, messageToSend]() {
+                this->sendText(destNode, chan, messageToSend.c_str(), false);
+                // Match the non-confirmation path behavior:
+                // Set state to INACTIVE but DON'T regenerate frameset
+                // This keeps MessageRenderer active to show the sent message
+                payload = 0;
+                runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
+                currentMessageIndex = -1;
+                freetext = "";
+                cursor = 0;
+                // No REGENERATE_FRAMESET - MessageRenderer stays active (matches line ~1780)
+                IF_SCREEN(screen->forceDisplay());
             });
 #else
             payload = runState;
@@ -785,6 +936,22 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
         return false;
 
 #if defined(USE_VIRTUAL_KEYBOARD)
+    // Long press closes the keyboard (check first before other touch handling)
+    if (event->inputEvent == INPUT_BROKER_SELECT_LONG || event->inputEvent == INPUT_BROKER_ALT_LONG) {
+        runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
+        freetext = "";
+        cursor = 0;
+        payload = 0;
+        currentMessageIndex = -1;
+
+        // Notify UI that we want to redraw/close this screen
+        UIFrameEvent e;
+        e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+        notifyObservers(&e);
+        IF_SCREEN(screen->forceDisplay());
+        return true;
+    }
+
     // Cancel (dismiss freetext screen)
     if (event->inputEvent == INPUT_BROKER_LEFT) {
         runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
@@ -797,12 +964,25 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
         UIFrameEvent e;
         e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
         notifyObservers(&e);
-        screen->forceDisplay();
+        IF_SCREEN(screen->forceDisplay());
         return true;
     }
     // Touch input (virtual keyboard) handling
     // Only handle if touch coordinates present (CardKB won't set these)
     if (event->touchX != 0 || event->touchY != 0) {
+        // Check if tap is on destination header (top ~16px of screen)
+        if (event->touchY < FONT_HEIGHT_SMALL + 2) {
+            // Switch to destination selection page
+            this->runState = CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION;
+            this->destIndex = 0;
+            this->scrollIndex = 0;
+            this->currentMessageIndex = -1;
+            updateDestinationSelectionList();
+            requestFocus();
+            IF_SCREEN(screen->forceDisplay(true));
+            return true;
+        }
+
         String keyTapped = keyForCoordinates(event->touchX, event->touchY);
         bool valid = false;
 
@@ -818,10 +998,30 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
             payload = 0x08;
             shift = false;
             valid = true;
-        } else if (keyTapped == "123" || keyTapped == "ABC") {
-            highlight = -1;
-            payload = 0x00;
-            charSet = (charSet == 0 ? 1 : 0);
+        } else if (keyTapped == "ESC") {
+            // Exit freetext mode (ESC button)
+            runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
+            freetext = "";
+            cursor = 0;
+            payload = 0;
+            currentMessageIndex = -1;
+            UIFrameEvent e;
+            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+            notifyObservers(&e);
+            IF_SCREEN(screen->forceDisplay());
+            return true;
+        } else if (keyTapped == "\U0001F60A") {
+            // Open emote picker
+            runState = CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER;
+            requestFocus();
+            IF_SCREEN(screen->forceDisplay(true));
+            return true;
+        } else if (keyTapped == "SPACE") {
+#ifndef RAK14014
+            highlight = ' ';
+#endif
+            payload = ' ';
+            shift = false;
             valid = true;
         } else if (keyTapped == " ") {
 #ifndef RAK14014
@@ -842,7 +1042,83 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
 #ifndef RAK14014
             highlight = keyTapped[0];
 #endif
-            payload = shift ? keyTapped[0] : std::tolower(keyTapped[0]);
+            // Apply shift mapping for symbols
+            char c = keyTapped[0];
+            if (shift) {
+                // Shift pressed - apply symbol variants
+                switch (c) {
+                case '1':
+                    payload = '!';
+                    break;
+                case '2':
+                    payload = '@';
+                    break;
+                case '3':
+                    payload = '#';
+                    break;
+                case '4':
+                    payload = '$';
+                    break;
+                case '5':
+                    payload = '%';
+                    break;
+                case '6':
+                    payload = '^';
+                    break;
+                case '7':
+                    payload = '&';
+                    break;
+                case '8':
+                    payload = '*';
+                    break;
+                case '9':
+                    payload = '(';
+                    break;
+                case '0':
+                    payload = ')';
+                    break;
+                case ';':
+                    payload = ':';
+                    break;
+                case '-':
+                    payload = '_';
+                    break;
+                case '=':
+                    payload = '+';
+                    break;
+                case '[':
+                    payload = '{';
+                    break;
+                case ']':
+                    payload = '}';
+                    break;
+                case '\\':
+                    payload = '|';
+                    break;
+                case '\'':
+                    payload = '"';
+                    break;
+                case ',':
+                    payload = '<';
+                    break;
+                case '.':
+                    payload = '>';
+                    break;
+                case '/':
+                    payload = '?';
+                    break;
+                case '`':
+                    payload = '~';
+                    break;
+                default:
+                    // For letters, keep uppercase if shift pressed
+                    payload = (c >= 'A' && c <= 'Z') ? c : keyTapped[0];
+                    break;
+                }
+            } else {
+                // No shift - letters go lowercase, symbols as-is
+                payload = (c >= 'A' && c <= 'Z') ? std::tolower(c) : c;
+            }
             shift = false;
             valid = true;
         }
@@ -853,15 +1129,60 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
             payload = 0;
             return true; // STOP: We handled a VKB touch
         }
+
+        // If touch was on blank space (not a key), consume the event to prevent other handlers
+        // This prevents long press on blank space from opening menus
+        return true;
     }
 #endif // USE_VIRTUAL_KEYBOARD
 
-    // All hardware keys fall through to here (CardKB, physical, etc.)
+    // Touch input handling for devices with physical keyboards but touch screens (e.g., T-Deck)
+#if HAS_PHYSICAL_KEYBOARD
+    if (event->touchX != 0 || event->touchY != 0) {
+        // Check if tap is on destination header (top ~16px of screen)
+        if (event->touchY < FONT_HEIGHT_SMALL + 2) {
+            // Switch to destination selection page
+            this->runState = CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION;
+            this->destIndex = 0;
+            this->scrollIndex = 0;
+            this->currentMessageIndex = -1;
+            updateDestinationSelectionList();
+            requestFocus();
+            IF_SCREEN(screen->forceDisplay(true));
+            return true;
+        }
+
+        // Check if tap is on emote button (bottom right corner)
+        const int buttonSize = 24;
+        const int margin = 2;
+        const int buttonX = displayWidth - buttonSize - margin;
+        const int buttonY = displayHeight - buttonSize - margin;
+
+        if (event->touchX >= buttonX && event->touchX <= buttonX + buttonSize && event->touchY >= buttonY &&
+            event->touchY <= buttonY + buttonSize) {
+            // Open emote picker
+            runState = CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER;
+            requestFocus();
+            IF_SCREEN(screen->forceDisplay(true));
+            return true;
+        }
+
+        // Consume all other touch events to prevent them from opening menus
+        return true;
+    }
+#endif // HAS_PHYSICAL_KEYBOARD
+
+    // ---- All hardware keys fall through to here (CardKB, physical, etc.) ----
 
     if (event->kbchar == INPUT_BROKER_MSG_EMOTE_LIST) {
+        // Get current text from VirtualKeyboard before switching to emote picker
+        if (graphics::NotificationRenderer::virtualKeyboard) {
+            freetext = graphics::NotificationRenderer::virtualKeyboard->getInputText().c_str();
+            cursor = freetext.length(); // Set cursor to end since VirtualKeyboard doesn't track cursor
+        }
         runState = CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER;
         requestFocus();
-        screen->forceDisplay();
+        IF_SCREEN(screen->forceDisplay());
         return true;
     }
     // Confirm select (Enter)
@@ -879,7 +1200,7 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
         currentMessageIndex = -1;
         runState = CANNED_MESSAGE_RUN_STATE_ACTION_SELECT;
         lastTouchMillis = millis();
-        runOnce();
+        runOnce(); // Process immediately (like touch enter does)
         return true;
     }
 
@@ -909,8 +1230,9 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
         return true;
     }
 
-    // Cancel (dismiss freetext screen)
+    // Cancel (dismiss freetext screen) - includes long press
     if (event->inputEvent == INPUT_BROKER_CANCEL || event->inputEvent == INPUT_BROKER_ALT_LONG ||
+        event->inputEvent == INPUT_BROKER_SELECT_LONG ||
         (event->inputEvent == INPUT_BROKER_BACK && this->freetext.length() == 0)) {
         runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
         freetext = "";
@@ -922,7 +1244,7 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
         UIFrameEvent e;
         e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
         notifyObservers(&e);
-        screen->forceDisplay();
+        IF_SCREEN(screen->forceDisplay());
         return true;
     }
 
@@ -944,51 +1266,336 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
 
 int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
 {
-    int numEmotes = graphics::numEmotes;
+    // Handle scroll drag events for smooth touchscreen scrolling
+#if HAS_TOUCHSCREEN
+    if (event->inputEvent == INPUT_BROKER_SCROLL_DRAG) {
+        // Convert pixel deltaY to row offset
+        int cellSize = emoteCellSize > 0 ? emoteCellSize : 30; // Fallback if not initialized
+        float rowDelta = -event->deltaY / (float)cellSize;     // Negative for natural scrolling
 
-    // Override isDown and isSelect ONLY for emote picker behavior
-    bool isUp = isUpEvent(event);
-    bool isDown = isDownEvent(event);
+        emoteScrollOffset += rowDelta;
+
+        // Clamp to valid range
+        int cols = emoteGridCols > 0 ? emoteGridCols : 10;
+        int rows = emoteGridRows > 0 ? emoteGridRows : 5;
+
+        // Count unique emotes (same logic as drawing)
+        int numUniqueEmotes = 0;
+        for (int i = 0; i < graphics::numEmotes; ++i) {
+            const unsigned char *bitmap = graphics::emotes[i].bitmap;
+            bool isDuplicate = false;
+            for (int j = 0; j < i; ++j) {
+                if (graphics::emotes[j].bitmap == bitmap) {
+                    isDuplicate = true;
+                    break;
+                }
+            }
+            if (!isDuplicate)
+                numUniqueEmotes++;
+        }
+
+        int totalRows = (numUniqueEmotes + cols - 1) / cols;
+        float maxScrollOffset = totalRows - rows;
+        if (maxScrollOffset < 0)
+            maxScrollOffset = 0;
+
+        if (emoteScrollOffset < 0)
+            emoteScrollOffset = 0;
+        if (emoteScrollOffset > maxScrollOffset)
+            emoteScrollOffset = maxScrollOffset;
+
+        requestFocus();
+        IF_SCREEN(screen->forceDisplay(true));
+        return 1;
+    }
+#endif
+
+    // Build deduplicated count (matches drawEmotePickerScreen logic)
+    static int numUniqueEmotes = 0;
+    static bool needsCount = true;
+    if (needsCount) {
+        numUniqueEmotes = 0;
+        for (int i = 0; i < graphics::numEmotes; ++i) {
+            const unsigned char *bitmap = graphics::emotes[i].bitmap;
+            bool isDuplicate = false;
+            for (int j = 0; j < i; ++j) {
+                if (graphics::emotes[j].bitmap == bitmap) {
+                    isDuplicate = true;
+                    break;
+                }
+            }
+            if (!isDuplicate)
+                numUniqueEmotes++;
+        }
+        needsCount = false;
+    }
+
+    // Use grid dimensions calculated during drawing
+    // These are set by drawEmotePickerScreen to ensure consistency
+    const int headerFontHeight = FONT_HEIGHT_SMALL;
+    const int headerMargin = 2;
+    int cols = emoteGridCols;
+    int rows = emoteGridRows;
+    int cellSize = emoteCellSize;
+
+    // Fallback if draw hasn't been called yet (shouldn't happen in normal flow)
+    if (cols == 0 || rows == 0 || cellSize == 0) {
+        LOG_WARN("Emote picker input called before drawing - using defaults");
+        cols = 10;
+        rows = 5;
+        cellSize = 20;
+    }
+
+    // Define grid positioning constants once for use throughout function
+    int gridX = 2; // Left margin
+    int gridTop = headerFontHeight + headerMargin;
+
+    // Navigation keys and swipe gestures
+    // For emote picker, use raw directional inputs (no remapping)
+    bool isUp = (event->inputEvent == INPUT_BROKER_UP);
+    bool isDown = (event->inputEvent == INPUT_BROKER_DOWN);
+    bool isLeft = (event->inputEvent == INPUT_BROKER_LEFT);
+    bool isRight = (event->inputEvent == INPUT_BROKER_RIGHT);
     bool isSelect = isSelectEvent(event);
-    if (runState == CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER) {
-        if (event->inputEvent == INPUT_BROKER_USER_PRESS) {
-            isDown = true;
-        } else if (event->inputEvent == INPUT_BROKER_SELECT) {
-            isSelect = true;
+
+    // Touch input handling for emote picker
+    // Tap highlights emote, long press/select inserts it (prevents accidental selection)
+    // Don't process tap if it's actually a select/long press event
+    // Also ignore touches with deltaY movement (part of scroll gesture)
+    if ((event->touchX != 0 || event->touchY != 0) && !isUp && !isDown && !isLeft && !isRight && !isSelect &&
+        event->inputEvent != INPUT_BROKER_SELECT_LONG && event->inputEvent != INPUT_BROKER_SCROLL_DRAG && event->deltaY == 0) {
+        // Calculate which emote was touched based on grid layout
+        // Account for smooth scroll offset
+        int pixelOffset = (int)((emoteScrollOffset - (int)emoteScrollOffset) * cellSize);
+        int touchCol = (event->touchX - gridX) / cellSize;
+
+        // Allow tapping partially visible emotes by including rows just outside visible area
+        // Calculate touch row including emotes that are partially scrolled off screen
+        int touchRow = (event->touchY - gridTop + pixelOffset) / cellSize;
+
+        LOG_DEBUG("Touch: raw x=%d y=%d, gridX=%d gridTop=%d, touchCol=%d touchRow=%d, cellSize=%d, scrollOffset=%.2f",
+                  event->touchX, event->touchY, gridX, gridTop, touchCol, touchRow, cellSize, emoteScrollOffset);
+
+        // Validate touch column is within grid
+        if (touchCol >= 0 && touchCol < cols) {
+            // Calculate which emote was touched using current scroll offset
+            int topRow = (int)emoteScrollOffset;
+            int firstVisibleIdx = topRow * cols;
+
+            int touchedIdx = firstVisibleIdx + touchRow * cols + touchCol;
+
+            // Validate touched emote exists (allow any valid index, even if partially visible)
+            if (touchedIdx >= 0 && touchedIdx < numUniqueEmotes) {
+                // Tap: highlight the emote (move cursor to it)
+                emotePickerIndex = touchedIdx;
+
+                // If tapped emote is off-center, smoothly scroll to center it
+                int touchedRow = touchedIdx / cols;
+                float centerOffset = touchedRow - (rows / 2.0f);
+
+                // Clamp to valid scroll range
+                int totalRows = (numUniqueEmotes + cols - 1) / cols;
+                float maxScrollOffset = totalRows - rows;
+                if (maxScrollOffset < 0)
+                    maxScrollOffset = 0;
+
+                if (centerOffset < 0)
+                    centerOffset = 0;
+                if (centerOffset > maxScrollOffset)
+                    centerOffset = maxScrollOffset;
+
+                // Update scroll position to center the tapped emote
+                emoteScrollOffset = centerOffset;
+
+                LOG_DEBUG("Touch selected emote index=%d, centered at scroll offset=%.2f", touchedIdx, emoteScrollOffset);
+                requestFocus();
+                IF_SCREEN(screen->forceDisplay(true));
+                return 1;
+            }
         }
     }
 
-    // Scroll emote list
-    if (isUp && emotePickerIndex > 0) {
-        emotePickerIndex--;
-        screen->forceDisplay();
-        return 1;
-    }
-    if (isDown && emotePickerIndex < numEmotes - 1) {
-        emotePickerIndex++;
-        screen->forceDisplay();
-        return 1;
+    // Grid navigation with row/col boundary checks
+    // Skip if this is a touch swipe gesture (has touch coordinates) - those are consumed
+    // But allow trackball, keyboard, and button inputs (no touch coordinates)
+    bool isTouchSwipe = (event->touchX != 0 || event->touchY != 0) && (isUp || isDown || isLeft || isRight);
+    if (!isTouchSwipe) {
+        int currentCol = emotePickerIndex % cols;
+
+        if (isUp && emotePickerIndex >= cols) {
+            emotePickerIndex -= cols;
+
+            // Update scroll to keep selected emote centered
+            int selectedRow = emotePickerIndex / cols;
+            float centerOffset = selectedRow - (rows / 2.0f);
+            int totalRows = (numUniqueEmotes + cols - 1) / cols;
+            float maxScrollOffset = totalRows - rows;
+            if (maxScrollOffset < 0)
+                maxScrollOffset = 0;
+            if (centerOffset < 0)
+                centerOffset = 0;
+            if (centerOffset > maxScrollOffset)
+                centerOffset = maxScrollOffset;
+            emoteScrollOffset = centerOffset;
+
+            requestFocus();
+            IF_SCREEN(screen->forceDisplay(true));
+            return 1;
+        }
+        if (isDown) {
+            int targetIdx = emotePickerIndex + cols;
+            // If moving down would go past the last emote, try to find an emote in the same column on the next row
+            if (targetIdx >= numUniqueEmotes) {
+                // Check if there's any emote below in the same column
+                int nextRowStart = ((emotePickerIndex / cols) + 1) * cols;
+                int targetInSameCol = nextRowStart + currentCol;
+                if (targetInSameCol < numUniqueEmotes) {
+                    emotePickerIndex = targetInSameCol;
+                } else if (nextRowStart < numUniqueEmotes) {
+                    // Move to the last emote if the same column doesn't exist
+                    emotePickerIndex = numUniqueEmotes - 1;
+                }
+                // else: already on last row, don't move
+            } else {
+                emotePickerIndex = targetIdx;
+            }
+
+            // Update scroll to keep selected emote centered
+            int selectedRow = emotePickerIndex / cols;
+            float centerOffset = selectedRow - (rows / 2.0f);
+            int totalRows = (numUniqueEmotes + cols - 1) / cols;
+            float maxScrollOffset = totalRows - rows;
+            if (maxScrollOffset < 0)
+                maxScrollOffset = 0;
+            if (centerOffset < 0)
+                centerOffset = 0;
+            if (centerOffset > maxScrollOffset)
+                centerOffset = maxScrollOffset;
+            emoteScrollOffset = centerOffset;
+
+            requestFocus();
+            IF_SCREEN(screen->forceDisplay(true));
+            return 1;
+        }
+        if (isLeft && currentCol > 0) {
+            emotePickerIndex--;
+
+            // Update scroll to keep selected emote visible (center it)
+            int selectedRow = emotePickerIndex / cols;
+            float centerOffset = selectedRow - (rows / 2.0f);
+            int totalRows = (numUniqueEmotes + cols - 1) / cols;
+            float maxScrollOffset = totalRows - rows;
+            if (maxScrollOffset < 0)
+                maxScrollOffset = 0;
+            if (centerOffset < 0)
+                centerOffset = 0;
+            if (centerOffset > maxScrollOffset)
+                centerOffset = maxScrollOffset;
+            emoteScrollOffset = centerOffset;
+
+            requestFocus();
+            IF_SCREEN(screen->forceDisplay(true));
+            return 1;
+        }
+        if (isRight && currentCol < cols - 1 && emotePickerIndex < numUniqueEmotes - 1) {
+            emotePickerIndex++;
+
+            // Update scroll to keep selected emote visible (center it)
+            int selectedRow = emotePickerIndex / cols;
+            float centerOffset = selectedRow - (rows / 2.0f);
+            int totalRows = (numUniqueEmotes + cols - 1) / cols;
+            float maxScrollOffset = totalRows - rows;
+            if (maxScrollOffset < 0)
+                maxScrollOffset = 0;
+            if (centerOffset < 0)
+                centerOffset = 0;
+            if (centerOffset > maxScrollOffset)
+                centerOffset = maxScrollOffset;
+            emoteScrollOffset = centerOffset;
+
+            requestFocus();
+            IF_SCREEN(screen->forceDisplay(true));
+            return 1;
+        }
     }
 
-    // Select emote: insert into freetext at cursor and return to freetext
-    if (isSelect) {
-        String label = graphics::emotes[emotePickerIndex].label;
-        String emoteInsert = label; // Just the text label, e.g., ":thumbsup:"
-        if (cursor == freetext.length()) {
+    // Select emote: find the unique emote and insert its label
+    // Triggered by: button press, encoder press, or long tap on touchscreen
+    if (isSelect || event->inputEvent == INPUT_BROKER_SELECT_LONG) {
+        // If this is a long press with touch coordinates, first update selection to the touched emote
+        if ((event->touchX != 0 || event->touchY != 0)) {
+            int pixelOffset = (int)((emoteScrollOffset - (int)emoteScrollOffset) * cellSize);
+            int touchCol = (event->touchX - gridX) / cellSize;
+            int touchRow = (event->touchY - gridTop + pixelOffset) / cellSize;
+
+            if (touchCol >= 0 && touchCol < cols && touchRow >= 0 && touchRow < rows) {
+                int topRow = (int)emoteScrollOffset;
+                int firstVisibleIdx = topRow * cols;
+
+                int touchedIdx = firstVisibleIdx + touchRow * cols + touchCol;
+
+                if (touchedIdx >= 0 && touchedIdx < numUniqueEmotes) {
+                    emotePickerIndex = touchedIdx;
+                    LOG_DEBUG("Long press updated selection to index=%d", touchedIdx);
+                }
+            }
+        }
+
+        // Now insert the currently selected emote
+        // Map emotePickerIndex (unique index) back to actual emote
+        int uniqueIdx = 0;
+        int actualEmoteIdx = 0;
+        for (int i = 0; i < graphics::numEmotes; ++i) {
+            const unsigned char *bitmap = graphics::emotes[i].bitmap;
+            bool isDuplicate = false;
+            for (int j = 0; j < i; ++j) {
+                if (graphics::emotes[j].bitmap == bitmap) {
+                    isDuplicate = true;
+                    break;
+                }
+            }
+            if (!isDuplicate) {
+                if (uniqueIdx == emotePickerIndex) {
+                    actualEmoteIdx = i;
+                    break;
+                }
+                uniqueIdx++;
+            }
+        }
+
+        String label = graphics::emotes[actualEmoteIdx].label;
+        String emoteInsert = label;
+        LOG_DEBUG("Selected emote: label='%s', index=%d, cursor=%d", label.c_str(), actualEmoteIdx, cursor);
+
+        // For VirtualKeyboard (trackball devices), always append at the end since it doesn't support cursor positioning
+        // Only use OSK if no external keyboard is connected - prefer physical keyboard
+        if (osk_found && !kb_found && graphics::NotificationRenderer::virtualKeyboard) {
             freetext += emoteInsert;
+            cursor = freetext.length();
+            graphics::NotificationRenderer::virtualKeyboard->setInputText(freetext.c_str());
         } else {
-            freetext = freetext.substring(0, cursor) + emoteInsert + freetext.substring(cursor);
+            // For other keyboards, insert at cursor position
+            if (cursor == freetext.length()) {
+                freetext += emoteInsert;
+            } else {
+                freetext = freetext.substring(0, cursor) + emoteInsert + freetext.substring(cursor);
+            }
+            cursor += emoteInsert.length();
         }
-        cursor += emoteInsert.length();
+        LOG_DEBUG("After insert: freetext='%s', cursor=%d", freetext.c_str(), cursor);
+
         runState = CANNED_MESSAGE_RUN_STATE_FREETEXT;
-        screen->forceDisplay();
+        requestFocus();
+        IF_SCREEN(screen->forceDisplay(true));
         return 1;
     }
 
-    // Cancel returns to freetext
-    if (event->inputEvent == INPUT_BROKER_CANCEL || event->inputEvent == INPUT_BROKER_ALT_LONG) {
+    // Cancel or backspace returns to freetext
+    if (event->inputEvent == INPUT_BROKER_CANCEL || event->inputEvent == INPUT_BROKER_ALT_LONG ||
+        event->inputEvent == INPUT_BROKER_BACK) {
         runState = CANNED_MESSAGE_RUN_STATE_FREETEXT;
-        screen->forceDisplay();
+        requestFocus();
+        IF_SCREEN(screen->forceDisplay(true));
         return 1;
     }
 
@@ -1000,45 +1607,38 @@ void CannedMessageModule::sendText(NodeNum dest, ChannelIndex channel, const cha
     lastDest = dest;
     lastChannel = channel;
     lastDestSet = true;
-
+    // === Prepare packet ===
     meshtastic_MeshPacket *p = allocDataPacket();
     p->to = dest;
     p->channel = channel;
     p->want_ack = true;
-    p->decoded.dest = dest; // Mirror picker: NODENUM_BROADCAST or node->num
 
+    // Save destination for ACK/NACK UI fallback
     this->lastSentNode = dest;
     this->incoming = dest;
 
-    // Manually find the node by number to check PKI capability
-    meshtastic_NodeInfoLite *node = nullptr;
-    size_t numMeshNodes = nodeDB->getNumMeshNodes();
-    for (size_t i = 0; i < numMeshNodes; ++i) {
-        meshtastic_NodeInfoLite *n = nodeDB->getMeshNodeByIndex(i);
-        if (n && n->num == dest) {
-            node = n;
-            break;
-        }
-    }
-
+    // Check if PKI encryption is possible for this node (must happen BEFORE sending)
+    const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(dest);
     NodeNum myNodeNum = nodeDB->getNodeNum();
     if (node && node->num != myNodeNum && node->has_user && node->user.public_key.size == 32) {
         p->pki_encrypted = true;
         p->channel = 0; // force PKI
     }
 
-    // Track this packet’s request ID for matching ACKs
+    // Track this packet's request ID for matching ACKs
     this->lastRequestId = p->id;
 
-    // Copy payload
+    // Copy message payload
     p->decoded.payload.size = strlen(message);
     memcpy(p->decoded.payload.bytes, message, p->decoded.payload.size);
 
+    // Optionally add bell character
     if (moduleConfig.canned_message.send_bell && p->decoded.payload.size < meshtastic_Constants_DATA_PAYLOAD_LEN) {
-        p->decoded.payload.bytes[p->decoded.payload.size++] = 7;
-        p->decoded.payload.bytes[p->decoded.payload.size] = '\0';
+        p->decoded.payload.bytes[p->decoded.payload.size++] = 7;  // Bell
+        p->decoded.payload.bytes[p->decoded.payload.size] = '\0'; // Null-terminate
     }
 
+    // Mark as waiting for ACK to trigger ACK/NACK banner
     this->waitingForAck = true;
 
     // Send to mesh (PKI-encrypted if conditions above matched)
@@ -1096,14 +1696,14 @@ void CannedMessageModule::sendText(NodeNum dest, ChannelIndex channel, const cha
 
     this->runState = CANNED_MESSAGE_RUN_STATE_SENDING_ACTIVE;
     this->payload = wantReplies ? 1 : 0;
-    requestFocus();
+    // Don't requestFocus() here - we're switching to MessageRenderer frame,
+    // and holding focus would block navigation after ACK
 
     // Tell Screen to switch to TextMessage frame via UIFrameEvent
     UIFrameEvent e;
     e.action = UIFrameEvent::Action::SWITCH_TO_TEXTMESSAGE;
     notifyObservers(&e);
 }
-
 int32_t CannedMessageModule::runOnce()
 {
     if (this->runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION && needsUpdate) {
@@ -1141,35 +1741,35 @@ int32_t CannedMessageModule::runOnce()
                 graphics::NotificationRenderer::resetBanner();
             }
 
-            // Clear payload to indicate virtual keyboard processing is complete
-            // But keep SENDING_ACTIVE state to show "Sending..." screen for 2 seconds
-            this->payload = 0;
+            // sendText() set payload=1 and SENDING_ACTIVE, clear our fields
+            this->currentMessageIndex = -1;
+            this->freetext = "";
+            this->cursor = 0;
+            // Fall through to transition block below (payload is now 1, not FREETEXT)
         } else {
             // Empty message, just go inactive
             LOG_INFO("Empty freetext detected in delayed processing, returning to inactive state");
             this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
+            this->currentMessageIndex = -1;
+            this->freetext = "";
+            this->cursor = 0;
+            return INT32_MAX;
         }
-
-        UIFrameEvent e;
-        e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
-        this->currentMessageIndex = -1;
-        this->freetext = "";
-        this->cursor = 0;
-        this->notifyObservers(&e);
-        return 2000;
     }
 
     UIFrameEvent e;
+    // Transition from SENDING_ACTIVE to INACTIVE immediately (like develop)
+    // waitingForAck only controls whether handleReceived() processes routing packets for ACK banner
     if ((this->runState == CANNED_MESSAGE_RUN_STATE_SENDING_ACTIVE && this->payload != 0 &&
          this->payload != CANNED_MESSAGE_RUN_STATE_FREETEXT) ||
         (this->runState == CANNED_MESSAGE_RUN_STATE_ACK_NACK_RECEIVED) ||
         (this->runState == CANNED_MESSAGE_RUN_STATE_MESSAGE_SELECTION)) {
         this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
-        e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
         this->currentMessageIndex = -1;
         this->freetext = "";
         this->cursor = 0;
-        this->notifyObservers(&e);
+        this->payload = 0;
+        return INT32_MAX; // No REGENERATE_FRAMESET - MessageRenderer stays active
     }
     // Handle SENDING_ACTIVE state transition after virtual keyboard message
     else if (this->runState == CANNED_MESSAGE_RUN_STATE_SENDING_ACTIVE && this->payload == 0) {
@@ -1178,23 +1778,6 @@ int32_t CannedMessageModule::runOnce()
         this->freetext = "";
         this->cursor = 0;
         return INT32_MAX;
-    } else if (((this->runState == CANNED_MESSAGE_RUN_STATE_ACTIVE) || (this->runState == CANNED_MESSAGE_RUN_STATE_FREETEXT)) &&
-               !Throttle::isWithinTimespanMs(this->lastTouchMillis, INACTIVATE_AFTER_MS)) {
-        // Reset module on inactivity
-        e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
-        this->currentMessageIndex = -1;
-        this->freetext = "";
-        this->cursor = 0;
-        this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
-
-        // Clean up virtual keyboard if it exists during timeout
-        if (graphics::NotificationRenderer::virtualKeyboard) {
-            LOG_INFO("Cleaning up virtual keyboard due to module timeout");
-            graphics::OnScreenKeyboardModule::instance().stop(false);
-            graphics::NotificationRenderer::resetBanner();
-        }
-
-        this->notifyObservers(&e);
     } else if (this->runState == CANNED_MESSAGE_RUN_STATE_ACTION_SELECT) {
         if (this->payload == 0) {
             // [Exit] button pressed - return to inactive state
@@ -1203,21 +1786,9 @@ int32_t CannedMessageModule::runOnce()
         } else if (this->payload == CANNED_MESSAGE_RUN_STATE_FREETEXT) {
             if (this->freetext.length() > 0) {
                 sendText(this->dest, this->channel, this->freetext.c_str(), true);
-
-                // Clean up state but *don’t* deactivate yet
-                this->currentMessageIndex = -1;
-                this->freetext = "";
-                this->cursor = 0;
-
-                // Tell Screen to jump straight to the TextMessage frame
-                UIFrameEvent e;
-                e.action = UIFrameEvent::Action::SWITCH_TO_TEXTMESSAGE;
-                this->notifyObservers(&e);
-
-                // Now deactivate this module
+                // sendText sets runState=SENDING_ACTIVE, payload=1
+                // Go directly to INACTIVE since we're switching to MessageRenderer
                 this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
-
-                return INT32_MAX; // don’t fall back into canned list
             } else {
                 this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
             }
@@ -1231,59 +1802,39 @@ int32_t CannedMessageModule::runOnce()
                     return INT32_MAX;
                 } else {
                     sendText(this->dest, this->channel, this->messages[this->currentMessageIndex], true);
-
-                    // Clean up state
-                    this->currentMessageIndex = -1;
-                    this->freetext = "";
-                    this->cursor = 0;
-
-                    // Tell Screen to jump straight to the TextMessage frame
-                    UIFrameEvent e;
-                    e.action = UIFrameEvent::Action::SWITCH_TO_TEXTMESSAGE;
-                    this->notifyObservers(&e);
-
-                    // Now deactivate this module
-                    this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
-
-                    return INT32_MAX; // don’t fall back into canned list
                 }
+                // sendText sets runState=SENDING_ACTIVE, payload=1
+                // Go directly to INACTIVE since we're switching to MessageRenderer
+                this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
             } else {
                 this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
             }
         }
-        // fallback clean-up if nothing above returned
         this->currentMessageIndex = -1;
         this->freetext = "";
         this->cursor = 0;
-
-        UIFrameEvent e;
-        e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
-        this->notifyObservers(&e);
-
-        // Immediately stop, don’t linger on canned screen
+        this->payload = 0;
         return INT32_MAX;
     }
     // Highlight [Select Destination] initially when entering the message list
     else if ((this->runState != CANNED_MESSAGE_RUN_STATE_FREETEXT) && (this->currentMessageIndex == -1)) {
-        // Only auto-highlight [Select Destination] if we’re ACTIVELY browsing,
-        // not when coming back from a sent message.
-        if (this->runState == CANNED_MESSAGE_RUN_STATE_ACTIVE) {
-            int selectDestination = 0;
-            for (int i = 0; i < this->messagesCount; ++i) {
-                if (strcmp(this->messages[i], "[Select Destination]") == 0) {
-                    selectDestination = i;
-                    break;
-                }
+        int selectDestination = 0;
+        for (int i = 0; i < this->messagesCount; ++i) {
+            if (strcmp(this->messages[i], "[Select Destination]") == 0) {
+                selectDestination = i;
+                break;
             }
-            this->currentMessageIndex = selectDestination;
-            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
         }
+        this->currentMessageIndex = selectDestination;
+        e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+        this->runState = CANNED_MESSAGE_RUN_STATE_ACTIVE;
     } else if (this->runState == CANNED_MESSAGE_RUN_STATE_ACTION_UP) {
         if (this->messagesCount > 0) {
             this->currentMessageIndex = getPrevIndex();
             this->freetext = "";
             this->cursor = 0;
             this->runState = CANNED_MESSAGE_RUN_STATE_ACTIVE;
+            LOG_DEBUG("MOVE UP (%d):%s", this->currentMessageIndex, this->getCurrentMessage());
         }
     } else if (this->runState == CANNED_MESSAGE_RUN_STATE_ACTION_DOWN) {
         if (this->messagesCount > 0) {
@@ -1291,6 +1842,7 @@ int32_t CannedMessageModule::runOnce()
             this->freetext = "";
             this->cursor = 0;
             this->runState = CANNED_MESSAGE_RUN_STATE_ACTIVE;
+            LOG_DEBUG("MOVE DOWN (%d):%s", this->currentMessageIndex, this->getCurrentMessage());
         }
     } else if (this->runState == CANNED_MESSAGE_RUN_STATE_FREETEXT || this->runState == CANNED_MESSAGE_RUN_STATE_ACTIVE) {
         switch (this->payload) {
@@ -1313,13 +1865,36 @@ int32_t CannedMessageModule::runOnce()
             case 0x08: // backspace
                 if (this->freetext.length() > 0) {
                     if (this->cursor > 0) {
+                        // Find start of UTF-8 character before cursor
+                        int deletePos = this->cursor - 1;
+                        // Walk backwards while we're in the middle of a UTF-8 sequence
+                        // UTF-8 continuation bytes start with bits 10xxxxxx (0x80-0xBF)
+                        while (deletePos > 0 && (this->freetext[deletePos] & 0xC0) == 0x80) {
+                            deletePos--;
+                        }
+
+                        // Check if the character before this is a variation selector base
+                        // If we just deleted a variation selector (U+FE0F, U+FE0E, etc: 0xEF 0xB8 0x8E-0x8F)
+                        // check if there's a base character before it that should also be deleted
+                        if (deletePos >= 3 && (unsigned char)this->freetext[deletePos] == 0xEF &&
+                            (unsigned char)this->freetext[deletePos + 1] == 0xB8 &&
+                            ((unsigned char)this->freetext[deletePos + 2] == 0x8E ||
+                             (unsigned char)this->freetext[deletePos + 2] == 0x8F)) {
+                            // This is a variation selector - delete the base char before it too
+                            int baseEnd = deletePos - 1;
+                            while (baseEnd > 0 && (this->freetext[baseEnd] & 0xC0) == 0x80) {
+                                baseEnd--;
+                            }
+                            deletePos = baseEnd;
+                        }
+
                         if (this->cursor == this->freetext.length()) {
-                            this->freetext = this->freetext.substring(0, this->freetext.length() - 1);
+                            this->freetext = this->freetext.substring(0, deletePos);
                         } else {
-                            this->freetext = this->freetext.substring(0, this->cursor - 1) +
+                            this->freetext = this->freetext.substring(0, deletePos) +
                                              this->freetext.substring(this->cursor, this->freetext.length());
                         }
-                        this->cursor--;
+                        this->cursor = deletePos;
                     }
                 } else {
                 }
@@ -1340,7 +1915,7 @@ int32_t CannedMessageModule::runOnce()
                                          this->freetext.substring(this->cursor);
                     }
                     this->cursor++;
-                    const uint16_t maxChars = 200 - (moduleConfig.canned_message.send_bell ? 1 : 0);
+                    uint16_t maxChars = meshtastic_Constants_DATA_PAYLOAD_LEN - (moduleConfig.canned_message.send_bell ? 1 : 0);
                     if (this->freetext.length() > maxChars) {
                         this->cursor = maxChars;
                         this->freetext = this->freetext.substring(0, maxChars);
@@ -1396,10 +1971,7 @@ const char *CannedMessageModule::getNodeName(NodeNum node)
 
 bool CannedMessageModule::shouldDraw()
 {
-    // Only allow drawing when we're in an interactive UI state.
-    return (this->runState == CANNED_MESSAGE_RUN_STATE_ACTIVE || this->runState == CANNED_MESSAGE_RUN_STATE_FREETEXT ||
-            this->runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION ||
-            this->runState == CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER);
+    return (currentMessageIndex != -1) || (this->runState != CANNED_MESSAGE_RUN_STATE_INACTIVE);
 }
 
 // Has the user defined any canned messages?
@@ -1431,13 +2003,13 @@ int CannedMessageModule::getPrevIndex()
 
 String CannedMessageModule::keyForCoordinates(uint x, uint y)
 {
-    int outerSize = *(&this->keyboard[this->charSet] + 1) - this->keyboard[this->charSet];
+    int outerSize = *(&this->keyboard[0] + 1) - this->keyboard[0];
 
     for (int8_t outerIndex = 0; outerIndex < outerSize; outerIndex++) {
-        int innerSize = *(&this->keyboard[this->charSet][outerIndex] + 1) - this->keyboard[this->charSet][outerIndex];
+        int innerSize = *(&this->keyboard[0][outerIndex] + 1) - this->keyboard[0][outerIndex];
 
         for (int8_t innerIndex = 0; innerIndex < innerSize; innerIndex++) {
-            Letter letter = this->keyboard[this->charSet][outerIndex][innerIndex];
+            Letter letter = this->keyboard[0][outerIndex][innerIndex];
 
             if (x > letter.rectX && x < (letter.rectX + letter.rectWidth) && y > letter.rectY &&
                 y < (letter.rectY + letter.rectHeight)) {
@@ -1451,11 +2023,9 @@ String CannedMessageModule::keyForCoordinates(uint x, uint y)
 
 void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-    int outerSize = *(&this->keyboard[this->charSet] + 1) - this->keyboard[this->charSet];
+    int outerSize = *(&this->keyboard[0] + 1) - this->keyboard[0];
 
     int xOffset = 0;
-
-    int yOffset = 56;
 
     display->setTextAlignment(TEXT_ALIGN_LEFT);
 
@@ -1463,34 +2033,117 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
 
     display->setColor(OLEDDISPLAY_COLOR::WHITE);
 
-    display->drawStringMaxWidth(0, 0, display->getWidth(),
-                                cannedMessageModule->drawWithCursor(cannedMessageModule->freetext, cannedMessageModule->cursor));
+    // Draw destination header at the top
+    char headerBuffer[64];
+    if (this->dest == NODENUM_BROADCAST) {
+        snprintf(headerBuffer, sizeof(headerBuffer), "To: #%s", channels.getName(this->channel));
+    } else {
+        snprintf(headerBuffer, sizeof(headerBuffer), "To: %s", getNodeName(this->dest));
+    }
+    display->drawString(0, 0, headerBuffer);
 
-    display->setFont(FONT_MEDIUM);
+    // Draw character counter in top right
+    const uint16_t maxChars = 233;
+    char counterBuffer[16];
+    snprintf(counterBuffer, sizeof(counterBuffer), "%d/%d", (int)this->freetext.length(), maxChars);
+    int counterWidth = display->getStringWidth(counterBuffer);
+    display->drawString(display->getWidth() - counterWidth, 0, counterBuffer);
 
-    int cellHeight = round((display->height() - 64) / outerSize);
+    // Draw input text area with cursor - positioned below header
+    int textAreaY = FONT_HEIGHT_SMALL + 2;
+    String displayText = cannedMessageModule->drawWithCursor(cannedMessageModule->freetext, cannedMessageModule->cursor);
+    std::string displayStr = displayText.c_str();
+    graphics::MessageRenderer::drawStringWithEmotes(display, 0, textAreaY, displayStr, graphics::emotes, graphics::numEmotes);
 
-    int yCorrection = 8;
+    // Start keyboard lower to maximize text area but use available space efficiently
+    int yOffset = display->height() / 2 + 4;
+
+    // Select keyboard font based on screen size
+    // Large screens (>=400px width, e.g. Indicator 480x480): FONT_MEDIUM (24pt on large screens)
+    // Medium screens (>=280px width, e.g. T-Deck 320x240): FONT_SMALL (16pt on large screens, 10pt on small)
+    // Small screens (<280px): FONT_SMALL_LOCAL (10pt always)
+    const int screenWidth = display->getWidth();
+    int keyboardFontHeight;
+    if (screenWidth >= 400) {
+        display->setFont(FONT_MEDIUM);
+        keyboardFontHeight = FONT_HEIGHT_MEDIUM;
+    } else if (screenWidth >= 280) {
+        display->setFont(FONT_SMALL);
+        keyboardFontHeight = FONT_HEIGHT_SMALL;
+    } else {
+        display->setFont(FONT_SMALL_LOCAL);
+        keyboardFontHeight = _fontHeight(FONT_SMALL_LOCAL);
+    }
+
+    // Calculate keyboard height to fit within available space with minimal bottom margin
+    int availableHeight = display->height() - yOffset - 2; // Leave only 2px bottom margin
+    int cellHeight = availableHeight / outerSize;
+    if (cellHeight < 20)
+        cellHeight = 20; // Minimum height
+    if (cellHeight > 45)
+        cellHeight = 45; // Maximum height
+
+    const int buttonPadding = 1; // Padding around buttons
+    const int buttonRadius = 7;  // Rounded corner radius
+
+    // Scale icon sizes based on screen size
+    float iconScale;
+    if (screenWidth >= 400) {
+        iconScale = 1.2f; // Large screens
+    } else if (screenWidth >= 280) {
+        iconScale = 1.0f; // Medium screens (T-Deck)
+    } else {
+        iconScale = 0.8f; // Small screens
+    }
+    float enterIconScale = iconScale * 1.4f; // Enter icon is larger
 
     for (int8_t outerIndex = 0; outerIndex < outerSize; outerIndex++) {
         yOffset += outerIndex > 0 ? cellHeight : 0;
 
-        int innerSizeBound = *(&this->keyboard[this->charSet][outerIndex] + 1) - this->keyboard[this->charSet][outerIndex];
+        int innerSizeBound = *(&this->keyboard[0][outerIndex] + 1) - this->keyboard[0][outerIndex];
 
         int innerSize = 0;
 
         for (int8_t innerIndex = 0; innerIndex < innerSizeBound; innerIndex++) {
-            if (this->keyboard[this->charSet][outerIndex][innerIndex].character != "") {
+            if (this->keyboard[0][outerIndex][innerIndex].character != "") {
                 innerSize++;
             }
         }
 
-        int cellWidth = display->width() / innerSize;
-
         for (int8_t innerIndex = 0; innerIndex < innerSize; innerIndex++) {
-            xOffset += innerIndex > 0 ? cellWidth : 0;
+            Letter letter = this->keyboard[0][outerIndex][innerIndex];
 
-            Letter letter = this->keyboard[this->charSet][outerIndex][innerIndex];
+            int cellWidth;
+            // Special handling for bottom row (row 4) with custom button sizes
+            if (outerIndex == 4) {
+                // Bottom row: ESC (75px) | emote/ABC (40px) | SPACE (75% of remaining) | enter (25% of remaining)
+                int escButtonWidth = 75;
+                int emoteButtonWidth = 40;
+                int remainingWidth = display->width() - (escButtonWidth + emoteButtonWidth);
+
+                if (innerIndex == 0) { // ESC button
+                    xOffset = 0;
+                    cellWidth = escButtonWidth;
+                } else if (innerIndex == 1) { // Emote or ABC button
+                    xOffset = escButtonWidth;
+                    cellWidth = emoteButtonWidth;
+                } else if (innerIndex == 2) { // SPACE button (75%)
+                    xOffset = escButtonWidth + emoteButtonWidth;
+                    cellWidth = (remainingWidth * 3) / 4;
+                } else if (innerIndex == 3) { // Enter button (25%)
+                    xOffset = escButtonWidth + emoteButtonWidth + (remainingWidth * 3) / 4;
+                    cellWidth = remainingWidth - ((remainingWidth * 3) / 4);
+                } else {
+                    // Skip remaining empty slots
+                    continue;
+                }
+            } else {
+                // Calculate position and width to evenly distribute cells across screen width
+                int startX = (innerIndex * display->width()) / innerSize;
+                int endX = ((innerIndex + 1) * display->width()) / innerSize;
+                cellWidth = endX - startX;
+                xOffset = startX;
+            }
 
             Letter updatedLetter = {letter.character, letter.width, xOffset, yOffset, cellWidth, cellHeight};
 
@@ -1499,61 +2152,186 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
                 updatedLetter.rectHeight = 240 - yOffset;
             }
 #endif
-            this->keyboard[this->charSet][outerIndex][innerIndex] = updatedLetter;
+            this->keyboard[0][outerIndex][innerIndex] = updatedLetter;
 
-            float characterOffset = ((cellWidth / 2) - (letter.width / 2));
+            // Calculate center position for this cell
+            int centerX = xOffset + cellWidth / 2;
+            int centerY = yOffset + cellHeight / 2;
 
             if (letter.character == "⇧") {
+                // Calculate icon dimensions for centering (shift icon is ~15x12 at scale 1.0)
+                int iconWidth = (int)(15 * iconScale);
+                int iconHeight = (int)(12 * iconScale);
+                int iconX = centerX - iconWidth / 2;
+                int iconY = centerY - iconHeight / 2;
+
                 if (this->shift) {
-                    display->fillRect(xOffset, yOffset, cellWidth, cellHeight);
-
+                    fillRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
+                                    cellHeight - buttonPadding * 2, buttonRadius);
                     display->setColor(OLEDDISPLAY_COLOR::BLACK);
-
-                    drawShiftIcon(display, xOffset + characterOffset, yOffset + yCorrection + 5, 1.2);
-
+                    drawShiftIcon(display, iconX, iconY, iconScale);
                     display->setColor(OLEDDISPLAY_COLOR::WHITE);
                 } else {
-                    display->drawRect(xOffset, yOffset, cellWidth, cellHeight);
-
-                    drawShiftIcon(display, xOffset + characterOffset, yOffset + yCorrection + 5, 1.2);
+                    drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
+                                    cellHeight - buttonPadding * 2, buttonRadius);
+                    drawShiftIcon(display, iconX, iconY, iconScale);
                 }
             } else if (letter.character == "⌫") {
+                // Calculate icon dimensions for centering (backspace icon is ~15x12 at scale 1.0)
+                int iconWidth = (int)(15 * iconScale);
+                int iconHeight = (int)(12 * iconScale);
+                int iconX = centerX - iconWidth / 2;
+                int iconY = centerY - iconHeight / 2;
+
                 if (this->highlight == letter.character[0]) {
-                    display->fillRect(xOffset, yOffset, cellWidth, cellHeight);
-
+                    fillRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
+                                    cellHeight - buttonPadding * 2, buttonRadius);
                     display->setColor(OLEDDISPLAY_COLOR::BLACK);
-
-                    drawBackspaceIcon(display, xOffset + characterOffset, yOffset + yCorrection + 5, 1.2);
-
+                    drawBackspaceIcon(display, iconX, iconY, iconScale);
                     display->setColor(OLEDDISPLAY_COLOR::WHITE);
-
                     setIntervalFromNow(0);
                 } else {
-                    display->drawRect(xOffset, yOffset, cellWidth, cellHeight);
-
-                    drawBackspaceIcon(display, xOffset + characterOffset, yOffset + yCorrection + 5, 1.2);
+                    drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
+                                    cellHeight - buttonPadding * 2, buttonRadius);
+                    drawBackspaceIcon(display, iconX, iconY, iconScale);
                 }
             } else if (letter.character == "↵") {
-                display->drawRect(xOffset, yOffset, cellWidth, cellHeight);
+                // Calculate icon dimensions for centering (enter icon is ~15x12 at scale 1.0)
+                int iconWidth = (int)(15 * enterIconScale);
+                int iconHeight = (int)(12 * enterIconScale);
+                int iconX = centerX - iconWidth / 2;
+                int iconY = centerY - iconHeight / 2;
 
-                drawEnterIcon(display, xOffset + characterOffset, yOffset + yCorrection + 5, 1.7);
+                drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
+                                cellHeight - buttonPadding * 2, buttonRadius);
+                drawEnterIcon(display, iconX, iconY, enterIconScale);
+            } else if (letter.character == "ESC") {
+                drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
+                                cellHeight - buttonPadding * 2, buttonRadius);
+                display->setTextAlignment(TEXT_ALIGN_CENTER);
+                display->drawString(centerX, centerY - keyboardFontHeight / 2, "ESC");
+            } else if (letter.character == "SPACE") {
+                drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
+                                cellHeight - buttonPadding * 2, buttonRadius);
+                display->setTextAlignment(TEXT_ALIGN_CENTER);
+                display->drawString(centerX, centerY - keyboardFontHeight / 2, "SPACE");
+            } else if (letter.character == "😊") {
+                drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
+                                cellHeight - buttonPadding * 2, buttonRadius);
+                // Find and draw the Smiling_Eyes emoji bitmap centered
+                for (int i = 0; i < graphics::numEmotes; i++) {
+                    if (strcmp(graphics::emotes[i].label, "\U0001F60A") == 0) {
+                        int emojiX = centerX - graphics::emotes[i].width / 2;
+                        int emojiY = centerY - graphics::emotes[i].height / 2;
+                        display->drawXbm(emojiX, emojiY, graphics::emotes[i].width, graphics::emotes[i].height,
+                                         graphics::emotes[i].bitmap);
+                        break;
+                    }
+                }
             } else {
+                // Determine what to display on the key based on shift state
+                String displayChar;
+                if (letter.character == " ") {
+                    displayChar = "space";
+                } else if (letter.character == "SPACE") {
+                    displayChar = "SPACE";
+                } else {
+                    char c = letter.character[0];
+                    // Check if it's a letter key (A-Z in the keyboard array)
+                    if (c >= 'A' && c <= 'Z') {
+                        // Letter keys - show lowercase unless shift is pressed
+                        displayChar = shift ? String(c) : String((char)(c + 32));
+                    } else if (shift) {
+                        // Shift pressed - show symbol variants
+                        switch (c) {
+                        case '1':
+                            displayChar = "!";
+                            break;
+                        case '2':
+                            displayChar = "@";
+                            break;
+                        case '3':
+                            displayChar = "#";
+                            break;
+                        case '4':
+                            displayChar = "$";
+                            break;
+                        case '5':
+                            displayChar = "%";
+                            break;
+                        case '6':
+                            displayChar = "^";
+                            break;
+                        case '7':
+                            displayChar = "&";
+                            break;
+                        case '8':
+                            displayChar = "*";
+                            break;
+                        case '9':
+                            displayChar = "(";
+                            break;
+                        case '0':
+                            displayChar = ")";
+                            break;
+                        case ';':
+                            displayChar = ":";
+                            break;
+                        case '-':
+                            displayChar = "_";
+                            break;
+                        case '=':
+                            displayChar = "+";
+                            break;
+                        case '[':
+                            displayChar = "{";
+                            break;
+                        case ']':
+                            displayChar = "}";
+                            break;
+                        case '\\':
+                            displayChar = "|";
+                            break;
+                        case '\'':
+                            displayChar = "\"";
+                            break;
+                        case ',':
+                            displayChar = "<";
+                            break;
+                        case '.':
+                            displayChar = ">";
+                            break;
+                        case '/':
+                            displayChar = "?";
+                            break;
+                        case '`':
+                            displayChar = "~";
+                            break;
+                        default:
+                            displayChar = String(c);
+                            break;
+                        }
+                    } else {
+                        // No shift - show the key as-is
+                        displayChar = String(c);
+                    }
+                }
+
                 if (this->highlight == letter.character[0]) {
-                    display->fillRect(xOffset, yOffset, cellWidth, cellHeight);
+                    fillRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
+                                    cellHeight - buttonPadding * 2, buttonRadius);
 
                     display->setColor(OLEDDISPLAY_COLOR::BLACK);
-
-                    display->drawString(xOffset + characterOffset, yOffset + yCorrection,
-                                        letter.character == " " ? "space" : letter.character);
-
+                    display->setTextAlignment(TEXT_ALIGN_CENTER);
+                    display->drawString(centerX, centerY - keyboardFontHeight / 2, displayChar);
                     display->setColor(OLEDDISPLAY_COLOR::WHITE);
 
                     setIntervalFromNow(0);
                 } else {
-                    display->drawRect(xOffset, yOffset, cellWidth, cellHeight);
-
-                    display->drawString(xOffset + characterOffset, yOffset + yCorrection,
-                                        letter.character == " " ? "space" : letter.character);
+                    drawRoundedRect(display, xOffset + buttonPadding, yOffset + buttonPadding, cellWidth - buttonPadding * 2,
+                                    cellHeight - buttonPadding * 2, buttonRadius);
+                    display->setTextAlignment(TEXT_ALIGN_CENTER);
+                    display->drawString(centerX, centerY - keyboardFontHeight / 2, displayChar);
                 }
             }
         }
@@ -1561,6 +2339,8 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
         xOffset = 0;
     }
 
+    // Restore default text alignment
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
     this->highlight = 0x00;
 }
 
@@ -1648,7 +2428,7 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
 
-    // Header
+    // === Header ===
     int titleY = 2;
     String titleText = "Select Destination";
     titleText += searchQuery.length() > 0 ? " [" + searchQuery + "]" : " [ ]";
@@ -1656,16 +2436,23 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
     display->drawString(display->getWidth() / 2, titleY, titleText);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
 
-    // List Items
+    // === List Items ===
+#if defined(USE_TINY_FONT) || defined(M5STACK_UNITC6L)
+    // Tiny fonts (6px height) need full height + 1px spacing for readability
+    const int rowSpacing = FONT_HEIGHT_SMALL + 1;
+    int rowYOffset = titleY + FONT_HEIGHT_SMALL + 1;
+#else
+    const int rowSpacing = FONT_HEIGHT_SMALL - 4;
     int rowYOffset = titleY + (FONT_HEIGHT_SMALL - 4);
+#endif
     int numActiveChannels = this->activeChannelIndices.size();
     int totalEntries = numActiveChannels + this->filteredNodes.size();
     int columns = 1;
-    this->visibleRows = (display->getHeight() - (titleY + FONT_HEIGHT_SMALL)) / (FONT_HEIGHT_SMALL - 4);
+    this->visibleRows = (display->getHeight() - (titleY + FONT_HEIGHT_SMALL)) / rowSpacing;
     if (this->visibleRows < 1)
         this->visibleRows = 1;
 
-    // Clamp scrolling
+    // === Clamp scrolling ===
     if (scrollIndex > totalEntries / columns)
         scrollIndex = totalEntries / columns;
     if (scrollIndex < 0)
@@ -1677,7 +2464,7 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
             break;
 
         int xOffset = 0;
-        int yOffset = row * (FONT_HEIGHT_SMALL - 4) + rowYOffset;
+        int yOffset = row * rowSpacing + rowYOffset;
         char entryText[64] = "";
 
         // Draw Channels First
@@ -1690,37 +2477,19 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
             int nodeIndex = itemIndex - numActiveChannels;
             if (nodeIndex >= 0 && nodeIndex < static_cast<int>(this->filteredNodes.size())) {
                 meshtastic_NodeInfoLite *node = this->filteredNodes[nodeIndex].node;
-                if (node && node->user.long_name) {
-                    strncpy(entryText, node->user.long_name, sizeof(entryText) - 1);
-                    entryText[sizeof(entryText) - 1] = '\0';
-                }
-                int availWidth = display->getWidth() -
-                                 ((graphics::currentResolution == graphics::ScreenResolution::High) ? 40 : 20) -
-                                 ((node && node->is_favorite) ? 10 : 0);
-                if (availWidth < 0)
-                    availWidth = 0;
-
-                size_t origLen = strlen(entryText);
-                while (entryText[0] && display->getStringWidth(entryText) > availWidth) {
-                    entryText[strlen(entryText) - 1] = '\0';
-                }
-                if (strlen(entryText) < origLen) {
-                    strcat(entryText, "...");
-                }
-
-                // Prepend "* " if this is a favorite
-                if (node && node->is_favorite) {
-                    size_t len = strlen(entryText);
-                    if (len + 2 < sizeof(entryText)) {
-                        memmove(entryText + 2, entryText, len + 1);
-                        entryText[0] = '*';
-                        entryText[1] = ' ';
-                    }
-                }
                 if (node) {
-                    if (display->getWidth() <= 64) {
+                    if (node->is_favorite) {
+#if defined(M5STACK_UNITC6L)
+                        snprintf(entryText, sizeof(entryText), "* %s", node->user.short_name);
+                    } else {
                         snprintf(entryText, sizeof(entryText), "%s", node->user.short_name);
                     }
+#else
+                        snprintf(entryText, sizeof(entryText), "* %s", node->user.long_name);
+                    } else {
+                        snprintf(entryText, sizeof(entryText), "%s", node->user.long_name);
+                    }
+#endif
                 }
             }
         }
@@ -1728,26 +2497,34 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
         if (strlen(entryText) == 0 || strcmp(entryText, "Unknown") == 0)
             strcpy(entryText, "?");
 
-        // Highlight background (if selected)
+        // === Highlight background (if selected) ===
         if (itemIndex == destIndex) {
             int scrollPadding = 8; // Reserve space for scrollbar
+#if defined(USE_TINY_FONT) || defined(M5STACK_UNITC6L)
+            // For tiny fonts, highlight the full row including spacing
+            display->fillRect(0, yOffset - 1, display->getWidth() - scrollPadding, rowSpacing - 1);
+#else
             display->fillRect(0, yOffset + 2, display->getWidth() - scrollPadding, FONT_HEIGHT_SMALL - 5);
+#endif
             display->setColor(BLACK);
         }
 
-        // Draw entry text
+        // === Draw entry text ===
         display->drawString(xOffset + 2, yOffset, entryText);
         display->setColor(WHITE);
 
-        // Draw key icon (after highlight)
-        /*
+        // === Draw key icon (after highlight) ===
         if (itemIndex >= numActiveChannels) {
             int nodeIndex = itemIndex - numActiveChannels;
             if (nodeIndex >= 0 && nodeIndex < static_cast<int>(this->filteredNodes.size())) {
                 const meshtastic_NodeInfoLite *node = this->filteredNodes[nodeIndex].node;
                 if (node && hasKeyForNode(node)) {
                     int iconX = display->getWidth() - key_symbol_width - 15;
+#if defined(USE_TINY_FONT) || defined(M5STACK_UNITC6L)
+                    int iconY = yOffset + (rowSpacing - key_symbol_height) / 2;
+#else
                     int iconY = yOffset + (FONT_HEIGHT_SMALL - key_symbol_height) / 2;
+#endif
 
                     if (itemIndex == destIndex) {
                         display->setColor(INVERSE);
@@ -1758,12 +2535,11 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
                 }
             }
         }
-        */
     }
 
     // Scrollbar
     if (totalEntries > visibleRows) {
-        int scrollbarHeight = visibleRows * (FONT_HEIGHT_SMALL - 4);
+        int scrollbarHeight = visibleRows * rowSpacing;
         int totalScrollable = totalEntries;
         int scrollTrackX = display->getWidth() - 6;
         display->drawRect(scrollTrackX, rowYOffset, 4, scrollbarHeight);
@@ -1775,83 +2551,187 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
 
 void CannedMessageModule::drawEmotePickerScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-    const int headerFontHeight = FONT_HEIGHT_SMALL; // Make sure this matches your actual small font height
-    const int headerMargin = 2;                     // Extra pixels below header
-    const int labelGap = 6;
-    const int bitmapGapX = 4;
+    // Store frame offsets for touch coordinate translation
+    emoteFrameX = x;
+    emoteFrameY = y;
 
-    // Find max emote height (assume all same, or precalculated)
-    int maxEmoteHeight = 0;
-    for (int i = 0; i < graphics::numEmotes; ++i)
-        if (graphics::emotes[i].height > maxEmoteHeight)
-            maxEmoteHeight = graphics::emotes[i].height;
+    const int headerFontHeight = FONT_HEIGHT_SMALL;
+    const int headerMargin = 2;
+    const int cellPadding = 2;
 
-    const int rowHeight = maxEmoteHeight + 2;
+    // Scale emotes on larger screens for better visibility and touch targeting
+    // Touchscreens: 4x for large (480x480 Indicator), 2x for medium (320x240 T-Deck)
+    // Non-touch: 1x for encoder/button navigation
+    const int screenWidth = display->getWidth();
+#if HAS_TOUCHSCREEN
+    const int emoteScale = (screenWidth >= 400) ? 4 : 2;
+#else
+    const int emoteScale = 1;
+#endif
+    const int emoteSize = 16 * emoteScale; // Base 16x16, scale up based on screen size
+    const int cellSize = emoteSize + cellPadding * 2;
 
-    // Place header at top, then compute start of emote list
-    int headerY = y;
-    int listTop = headerY + headerFontHeight + headerMargin;
+    // Build deduplicated list (only first occurrence of each bitmap)
+    static int uniqueEmotes[256]; // indices into graphics::emotes
+    static int numUniqueEmotes = 0;
+    static bool needsRebuild = true;
 
-    int _visibleRows = (display->getHeight() - listTop - 2) / rowHeight;
-    int numEmotes = graphics::numEmotes;
-
-    // keep member variable in sync
-    this->visibleRows = _visibleRows;
-
-    // Clamp highlight index
-    if (emotePickerIndex < 0)
-        emotePickerIndex = 0;
-    if (emotePickerIndex >= numEmotes)
-        emotePickerIndex = numEmotes - 1;
-
-    // Determine which emote is at the top
-    int topIndex = emotePickerIndex - _visibleRows / 2;
-    if (topIndex < 0)
-        topIndex = 0;
-    if (topIndex > numEmotes - _visibleRows)
-        topIndex = std::max(0, numEmotes - _visibleRows);
-
-    // Draw header/title
-    display->setFont(FONT_SMALL);
-    display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->drawString(display->getWidth() / 2, headerY, "Select Emote");
-
-    // Draw emote rows
-    display->setTextAlignment(TEXT_ALIGN_LEFT);
-
-    for (int vis = 0; vis < _visibleRows; ++vis) {
-        int emoteIdx = topIndex + vis;
-        if (emoteIdx >= numEmotes)
-            break;
-        const graphics::Emote &emote = graphics::emotes[emoteIdx];
-        int rowY = listTop + vis * rowHeight;
-
-        // Draw highlight box 2px taller than emote (1px margin above and below)
-        if (emoteIdx == emotePickerIndex) {
-            display->fillRect(x, rowY, display->getWidth() - 8, emote.height + 2);
-            display->setColor(BLACK);
+    if (needsRebuild) {
+        numUniqueEmotes = 0;
+        for (int i = 0; i < graphics::numEmotes; ++i) {
+            const unsigned char *bitmap = graphics::emotes[i].bitmap;
+            bool isDuplicate = false;
+            for (int j = 0; j < numUniqueEmotes; ++j) {
+                if (graphics::emotes[uniqueEmotes[j]].bitmap == bitmap) {
+                    isDuplicate = true;
+                    break;
+                }
+            }
+            if (!isDuplicate) {
+                uniqueEmotes[numUniqueEmotes++] = i;
+            }
         }
-
-        // Emote bitmap (left), 1px margin from highlight bar top
-        int emoteY = rowY + 1;
-        display->drawXbm(x + bitmapGapX, emoteY, emote.width, emote.height, emote.bitmap);
-
-        // Emote label (right of bitmap)
-        display->setFont(FONT_MEDIUM);
-        int labelY = rowY + ((rowHeight - FONT_HEIGHT_MEDIUM) / 2);
-        display->drawString(x + bitmapGapX + emote.width + labelGap, labelY, emote.label);
-
-        if (emoteIdx == emotePickerIndex)
-            display->setColor(WHITE);
+        needsRebuild = false;
     }
 
-    // Draw scrollbar if needed
-    if (numEmotes > _visibleRows) {
-        int scrollbarHeight = _visibleRows * rowHeight;
+    // Calculate grid dimensions
+    int headerY = y;
+    int gridTop = headerY + headerFontHeight + headerMargin;
+    int availableHeight = display->getHeight() - gridTop - 2;
+    int availableWidth = display->getWidth() - 4;
+
+    int cols = availableWidth / cellSize;
+    int rows = availableHeight / cellSize;
+
+    // Store dimensions for input handler
+    emoteGridCols = cols;
+    emoteGridRows = rows;
+    emoteCellSize = cellSize;
+
+    // Clamp selection
+    if (emotePickerIndex < 0)
+        emotePickerIndex = 0;
+    if (emotePickerIndex >= numUniqueEmotes)
+        emotePickerIndex = numUniqueEmotes - 1;
+
+    // Calculate scroll position - use direct emoteScrollOffset for touch, or center selected for keyboard
+    int totalRows = (numUniqueEmotes + cols - 1) / cols;
+    int selectedRow = emotePickerIndex / cols;
+
+    // If keyboard navigation moved the selection, update scroll to keep it visible
+    float targetScrollOffset = selectedRow - rows / 2.0f;
+    if (targetScrollOffset < 0)
+        targetScrollOffset = 0;
+    float maxScrollOffset = totalRows - rows;
+    if (maxScrollOffset < 0)
+        maxScrollOffset = 0;
+    if (targetScrollOffset > maxScrollOffset)
+        targetScrollOffset = maxScrollOffset;
+
+    // Snap scroll position to center selected item (no animation)
+    // But preserve scroll offset if user is touch-scrolling
+    if (emoteScrollOffset < 0 || emoteScrollOffset > maxScrollOffset) {
+        // Clamp if out of bounds
+        emoteScrollOffset = targetScrollOffset;
+    }
+    // Otherwise keep whatever scroll position the user set via touch drag
+
+    int topRow = (int)emoteScrollOffset;
+    int firstVisibleIdx = topRow * cols;
+
+    // Draw grid with smooth scrolling (support fractional scroll offset)
+    int pixelOffset = (int)((emoteScrollOffset - topRow) * cellSize);
+
+    for (int row = 0; row < rows + 2; ++row) { // +2 to draw partial rows at both top and bottom during smooth scrolling
+        for (int col = 0; col < cols; ++col) {
+            int idx = firstVisibleIdx + row * cols + col;
+            if (idx >= numUniqueEmotes)
+                break;
+
+            int emoteIdx = uniqueEmotes[idx];
+            const graphics::Emote &emote = graphics::emotes[emoteIdx];
+
+            int cellX = x + 2 + col * cellSize;
+            int cellY = gridTop + row * cellSize - pixelOffset; // Apply smooth scroll offset
+
+            // Calculate actual rendered bounds (emote size, not just cell size)
+            // Emotes are centered in cell, so actual rendered area depends on emoteSize
+            int emoteX = cellX + (cellSize - emoteSize) / 2;
+            int emoteY = cellY + (cellSize - emoteSize) / 2;
+            int emoteBottom = emoteY + emoteSize; // Actual bottom of rendered pixels
+
+            // Skip drawing if emote is completely outside visible area (allow partial visibility)
+            // Use actual emote rendering bounds, not cell bounds
+            if (emoteY >= gridTop + availableHeight || emoteBottom <= gridTop)
+                continue;
+
+            // Highlight selected emote with filled rect
+            if (idx == emotePickerIndex) {
+                display->fillRect(cellX, cellY, cellSize, cellSize);
+                display->setColor(BLACK);
+            }
+
+            // Draw with scaling on large screens
+            if (emoteScale > 1) {
+                // Draw scaled blocks (4x4 for 4x scaling, 2x2 for 2x scaling)
+                for (int sy = 0; sy < emote.height; sy++) {
+                    for (int sx = 0; sx < emote.width; sx++) {
+                        int byteIdx = sy * ((emote.width + 7) / 8) + sx / 8;
+                        int bitIdx = sx % 8;
+                        if (emote.bitmap[byteIdx] & (1 << bitIdx)) {
+                            // Draw emoteScale x emoteScale pixel block for each source pixel
+                            for (int dy = 0; dy < emoteScale; dy++) {
+                                for (int dx = 0; dx < emoteScale; dx++) {
+                                    int pixelY = emoteY + sy * emoteScale + dy;
+                                    // Clip pixels that would overlap header area
+                                    if (pixelY >= gridTop) {
+                                        display->setPixel(emoteX + sx * emoteScale + dx, pixelY);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                // For unscaled emotes, only draw pixels below header
+                for (int sy = 0; sy < emote.height; sy++) {
+                    int pixelY = emoteY + sy;
+                    if (pixelY >= gridTop) {
+                        for (int sx = 0; sx < emote.width; sx++) {
+                            int byteIdx = sy * ((emote.width + 7) / 8) + sx / 8;
+                            int bitIdx = sx % 8;
+                            if (emote.bitmap[byteIdx] & (1 << bitIdx)) {
+                                display->setPixel(emoteX + sx, pixelY);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (idx == emotePickerIndex)
+                display->setColor(WHITE);
+        }
+    }
+
+    // Draw header with background AFTER grid so it appears on top
+    display->setFont(FONT_SMALL);
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    char headerText[32];
+    snprintf(headerText, sizeof(headerText), "Emotes (%d/%d)", emotePickerIndex + 1, numUniqueEmotes);
+
+    // Draw filled background behind header to prevent emote overlap (just font height, no extra margin)
+    display->fillRect(0, headerY, display->getWidth(), headerFontHeight);
+    display->setColor(BLACK);
+    display->drawString(display->getWidth() / 2, headerY, headerText);
+    display->setColor(WHITE);
+
+    // Draw scrollbar if needed (position below header, use smooth scroll offset)
+    if (totalRows > rows) {
+        int scrollbarHeight = availableHeight;
         int scrollTrackX = display->getWidth() - 6;
-        display->drawRect(scrollTrackX, listTop, 4, scrollbarHeight);
-        int scrollBarLen = std::max(6, (scrollbarHeight * _visibleRows) / numEmotes);
-        int scrollBarPos = listTop + (scrollbarHeight * topIndex) / numEmotes;
+        display->drawRect(scrollTrackX, gridTop, 4, scrollbarHeight);
+        int scrollBarLen = std::max(6, (scrollbarHeight * rows) / totalRows);
+        int scrollBarPos = gridTop + (int)((scrollbarHeight * emoteScrollOffset) / totalRows);
         display->fillRect(scrollTrackX, scrollBarPos, 4, scrollBarLen);
     }
 }
@@ -1859,6 +2739,7 @@ void CannedMessageModule::drawEmotePickerScreen(OLEDDisplay *display, OLEDDispla
 void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     this->displayHeight = display->getHeight(); // Store display height for later use
+    this->displayWidth = display->getWidth();   // Store display width for later use
     char buffer[50];
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
@@ -1869,19 +2750,19 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
         return; // bail if not in a UI state that should render
     }
 
-    // Emote Picker Screen
+    // === Emote Picker Screen ===
     if (this->runState == CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER) {
         drawEmotePickerScreen(display, state, x, y); // <-- Call your emote picker drawer here
         return;
     }
 
-    // Destination Selection
+    // === Destination Selection ===
     if (this->runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION) {
         drawDestinationSelectionScreen(display, state, x, y);
         return;
     }
 
-    // Disabled Screen
+    // === Disabled Screen ===
     if (this->runState == CANNED_MESSAGE_RUN_STATE_DISABLED) {
         display->setTextAlignment(TEXT_ALIGN_LEFT);
         display->setFont(FONT_SMALL);
@@ -1889,7 +2770,7 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
         return;
     }
 
-    // Free Text Input Screen
+    // === Free Text Input Screen ===
     if (this->runState == CANNED_MESSAGE_RUN_STATE_FREETEXT) {
         requestFocus();
 #if defined(USE_EINK) && defined(USE_EINK_DYNAMICDISPLAY)
@@ -1899,13 +2780,60 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
 #if defined(USE_VIRTUAL_KEYBOARD)
         drawKeyboard(display, state, 0, 0);
 #else
+        // For trackball devices, show the button-navigated virtual keyboard
+        // Only if no external keyboard (CardKB) is connected - prefer physical keyboard
+        if (osk_found && !kb_found) {
+            // Ensure OnScreenKeyboardModule is started
+            if (!graphics::NotificationRenderer::virtualKeyboard) {
+                char header[64];
+                const char *nodeName = getNodeName(dest);
+                if (dest == NODENUM_BROADCAST) {
+                    snprintf(header, sizeof(header), "To: #%s", channels.getName(channel));
+                } else {
+                    snprintf(header, sizeof(header), "To: @%s", nodeName ? nodeName : "Unknown");
+                }
+
+                LOG_INFO("Starting VirtualKeyboard for trackball device");
+                graphics::OnScreenKeyboardModule::instance().start(header, freetext.c_str(),
+                                                                   0, // No timeout for trackball devices
+                                                                   [this](const std::string &text) {
+                                                                       if (!text.empty()) {
+                                                                           this->freetext = text.c_str();
+                                                                           this->payload = CANNED_MESSAGE_RUN_STATE_FREETEXT;
+                                                                           this->currentMessageIndex = -1;
+                                                                           this->runState =
+                                                                               CANNED_MESSAGE_RUN_STATE_SENDING_ACTIVE;
+                                                                           this->lastTouchMillis = millis();
+                                                                       } else {
+                                                                           this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
+                                                                           this->freetext = "";
+                                                                           this->cursor = 0;
+                                                                       }
+                                                                       // Regenerate frames when done
+                                                                       UIFrameEvent e;
+                                                                       e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+                                                                       notifyObservers(&e);
+                                                                       // Trigger runOnce to process SENDING_ACTIVE state
+                                                                       // immediately
+                                                                       this->setIntervalFromNow(0);
+                                                                   });
+                // Disable timeout for trackball devices
+                if (graphics::NotificationRenderer::virtualKeyboard) {
+                    graphics::NotificationRenderer::virtualKeyboard->disableTimeout();
+                }
+            }
+            // Draw the virtual keyboard
+            graphics::OnScreenKeyboardModule::instance().draw(display);
+            return;
+        }
+
         display->setTextAlignment(TEXT_ALIGN_LEFT);
         display->setFont(FONT_SMALL);
 
-        // Draw node/channel header at the top
+        // --- Draw node/channel header at the top ---
         drawHeader(display, x, y, buffer);
 
-        // Char count right-aligned
+        // --- Char count right-aligned ---
         if (runState != CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION) {
             uint16_t charsLeft =
                 meshtastic_Constants_DATA_PAYLOAD_LEN - this->freetext.length() - (moduleConfig.canned_message.send_bell ? 1 : 0);
@@ -1956,7 +2884,11 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
             int16_t labelW = display->getStringWidth(label);
 
             // triangle size visually matches glyph height, not full line height
+#if defined(USE_TINY_FONT) || defined(M5STACK_UNITC6L)
+            const int triH = FONT_HEIGHT_SMALL; // Use full height for tiny fonts
+#else
             const int triH = FONT_HEIGHT_SMALL - 3;
+#endif
             const int triW = triH * 0.7;
 
             const int16_t padX = 3;
@@ -2001,10 +2933,51 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
             String msgWithCursor = this->drawWithCursor(this->freetext, this->cursor);
 
             // Tokenize input into (isEmote, token) pairs
+            std::vector<std::pair<bool, String>> tokens;
             const char *msg = msgWithCursor.c_str();
-            std::vector<std::pair<bool, String>> tokens = tokenizeMessageWithEmotes(msg);
+            int msgLen = strlen(msg);
+            int pos = 0;
+            while (pos < msgLen) {
+                const graphics::Emote *foundEmote = nullptr;
+                int foundLen = 0;
+                for (int j = 0; j < graphics::numEmotes; j++) {
+                    const char *label = graphics::emotes[j].label;
+                    int labelLen = strlen(label);
+                    if (labelLen == 0)
+                        continue;
+                    if (strncmp(msg + pos, label, labelLen) == 0) {
+                        if (!foundEmote || labelLen > foundLen) {
+                            foundEmote = &graphics::emotes[j];
+                            foundLen = labelLen;
+                        }
+                    }
+                }
+                if (foundEmote) {
+                    tokens.emplace_back(true, String(foundEmote->label));
+                    pos += foundLen;
+                } else {
+                    // Find next emote
+                    int nextEmote = msgLen;
+                    for (int j = 0; j < graphics::numEmotes; j++) {
+                        const char *label = graphics::emotes[j].label;
+                        if (!label || !*label)
+                            continue;
+                        const char *found = strstr(msg + pos, label);
+                        if (found && (found - msg) < nextEmote) {
+                            nextEmote = found - msg;
+                        }
+                    }
+                    int textLen = (nextEmote > pos) ? (nextEmote - pos) : (msgLen - pos);
+                    if (textLen > 0) {
+                        tokens.emplace_back(false, String(msg + pos).substring(0, textLen));
+                        pos += textLen;
+                    } else {
+                        break;
+                    }
+                }
+            }
 
-            // Advanced word-wrapping (emotes + text, split by word, wrap inside word if needed)
+            // ===== Advanced word-wrapping (emotes + text, split by word, wrap by char if needed) =====
             std::vector<std::vector<std::pair<bool, String>>> lines;
             std::vector<std::pair<bool, String>> currentLine;
             int lineWidth = 0;
@@ -2029,7 +3002,7 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
                 } else {
                     // Text: split by words and wrap inside word if needed
                     String text = token.second;
-                    int pos = 0;
+                    pos = 0;
                     while (pos < static_cast<int>(text.length())) {
                         // Find next space (or end)
                         int spacePos = text.indexOf(' ', pos);
@@ -2075,8 +3048,18 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
                 int nextX = x;
                 for (const auto &token : line) {
                     if (token.first) {
-                        // Emote rendering centralized in helper
-                        renderEmote(display, nextX, yLine, rowHeight, token.second);
+                        const graphics::Emote *emote = nullptr;
+                        for (int j = 0; j < graphics::numEmotes; j++) {
+                            if (token.second == graphics::emotes[j].label) {
+                                emote = &graphics::emotes[j];
+                                break;
+                            }
+                        }
+                        if (emote) {
+                            int emoteYOffset = (rowHeight - emote->height) / 2;
+                            display->drawXbm(nextX, yLine + emoteYOffset, emote->width, emote->height, emote->bitmap);
+                            nextX += emote->width + 2;
+                        }
                     } else {
                         display->drawString(nextX, yLine, token.second);
                         nextX += display->getStringWidth(token.second);
@@ -2085,17 +3068,49 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
                 yLine += rowHeight;
             }
         }
-#endif
+
+        // Draw emote button in bottom right corner for devices with physical keyboard + touchscreen
+#if HAS_PHYSICAL_KEYBOARD && HAS_TOUCHSCREEN
+        {
+            display->setColor(WHITE);
+            const int buttonSize = 24;
+            const int margin = 2;
+            const int buttonX = x + displayWidth - buttonSize - margin;
+            const int buttonY = y + displayHeight - buttonSize - margin;
+
+            // Draw rounded button border (outline only)
+            drawRoundedRect(display, buttonX, buttonY, buttonSize, buttonSize, 7);
+
+            // Draw smiley emoji in center
+            for (int i = 0; i < graphics::numEmotes; i++) {
+                if (strcmp(graphics::emotes[i].label, "\U0001F60A") == 0) { // Smiling Face emoji
+                    int emoteX = buttonX + (buttonSize - graphics::emotes[i].width) / 2;
+                    int emoteY = buttonY + (buttonSize - graphics::emotes[i].height) / 2;
+                    display->drawXbm(emoteX, emoteY, graphics::emotes[i].width, graphics::emotes[i].height,
+                                     graphics::emotes[i].bitmap);
+                    break;
+                }
+            }
+        }
+#endif // HAS_PHYSICAL_KEYBOARD && HAS_TOUCHSCREEN
+#endif // !defined(USE_VIRTUAL_KEYBOARD)
         return;
     }
 
-    // Canned Messages List
+    // === Canned Messages List ===
     if (this->messagesCount > 0) {
         display->setTextAlignment(TEXT_ALIGN_LEFT);
         display->setFont(FONT_SMALL);
 
-        // Precompute per-row heights based on emotes (centered if present)
+        // ====== Precompute per-row heights based on emotes (centered if present) ======
+#if defined(USE_TINY_FONT) || defined(M5STACK_UNITC6L)
+        // Tiny fonts (6px height) need full height + 1px spacing for readability
+        const int baseRowSpacing = FONT_HEIGHT_SMALL + 1;
+        const int headerToListGap = 1; // Minimal gap after header
+#else
         const int baseRowSpacing = FONT_HEIGHT_SMALL - 4;
+        const int headerToListGap = -3; // Shift message list upward to reduce spacing
+#endif
 
         int topMsg;
         std::vector<int> rowHeights;
@@ -2104,8 +3119,8 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
         // Draw header (To: ...)
         drawHeader(display, x, y, buffer);
 
-        // Shift message list upward by 3 pixels to reduce spacing between header and first message
-        const int listYOffset = y + FONT_HEIGHT_SMALL - 3;
+        // Position list below header
+        const int listYOffset = y + FONT_HEIGHT_SMALL + headerToListGap;
         _visibleRows = (display->getHeight() - listYOffset) / baseRowSpacing;
 
         // Figure out which messages are visible and their needed heights
@@ -2114,7 +3129,7 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
                      : 0;
         int countRows = std::min(messagesCount, _visibleRows);
 
-        // Build per-row max height based on all emotes in line
+        // --- Build per-row max height based on all emotes in line ---
         for (int i = 0; i < countRows; i++) {
             const char *msg = getMessageByIndex(topMsg + i);
             int maxEmoteHeight = 0;
@@ -2132,7 +3147,7 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
             rowHeights.push_back(std::max(baseRowSpacing, maxEmoteHeight + 2));
         }
 
-        // Draw all message rows with multi-emote support
+        // --- Draw all message rows with multi-emote support ---
         int yCursor = listYOffset;
         for (int vis = 0; vis < countRows; vis++) {
             int msgIdx = topMsg + vis;
@@ -2141,8 +3156,52 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
             int rowHeight = rowHeights[vis];
             bool _highlight = (msgIdx == currentMessageIndex);
 
-            // Multi-emote tokenization
-            std::vector<std::pair<bool, String>> tokens = tokenizeMessageWithEmotes(msg);
+            // --- Multi-emote tokenization ---
+            std::vector<std::pair<bool, String>> tokens; // (isEmote, token)
+            int pos = 0;
+            int msgLen = strlen(msg);
+            while (pos < msgLen) {
+                const graphics::Emote *foundEmote = nullptr;
+                int foundLen = 0;
+
+                // Look for any emote label at this pos (prefer longest match)
+                for (int j = 0; j < graphics::numEmotes; j++) {
+                    const char *label = graphics::emotes[j].label;
+                    int labelLen = strlen(label);
+                    if (labelLen == 0)
+                        continue;
+                    if (strncmp(msg + pos, label, labelLen) == 0) {
+                        if (!foundEmote || labelLen > foundLen) {
+                            foundEmote = &graphics::emotes[j];
+                            foundLen = labelLen;
+                        }
+                    }
+                }
+                if (foundEmote) {
+                    tokens.emplace_back(true, String(foundEmote->label));
+                    pos += foundLen;
+                } else {
+                    // Find next emote
+                    int nextEmote = msgLen;
+                    for (int j = 0; j < graphics::numEmotes; j++) {
+                        const char *label = graphics::emotes[j].label;
+                        if (label[0] == 0)
+                            continue;
+                        const char *found = strstr(msg + pos, label);
+                        if (found && (found - msg) < nextEmote) {
+                            nextEmote = found - msg;
+                        }
+                    }
+                    int textLen = (nextEmote > pos) ? (nextEmote - pos) : (msgLen - pos);
+                    if (textLen > 0) {
+                        tokens.emplace_back(false, String(msg + pos).substring(0, textLen));
+                        pos += textLen;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            // --- End multi-emote tokenization ---
 
             // Vertically center based on rowHeight
             int textYOffset = (rowHeight - FONT_HEIGHT_SMALL) / 2;
@@ -2154,7 +3213,12 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
 #else
             int scrollPadding = 8;
             if (_highlight) {
+#if defined(USE_TINY_FONT) || defined(M5STACK_UNITC6L)
+                // For tiny fonts, draw highlight to match text position exactly
+                display->fillRect(x + 0, lineY + textYOffset - 1, display->getWidth() - scrollPadding, FONT_HEIGHT_SMALL);
+#else
                 display->fillRect(x + 0, lineY, display->getWidth() - scrollPadding, rowHeight);
+#endif
                 display->setColor(BLACK);
             }
             int nextX = x + (_highlight ? 2 : 0);
@@ -2163,8 +3227,19 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
             // Draw all tokens left to right
             for (const auto &token : tokens) {
                 if (token.first) {
-                    // Emote rendering centralized in helper
-                    renderEmote(display, nextX, lineY, rowHeight, token.second);
+                    // Emote
+                    const graphics::Emote *emote = nullptr;
+                    for (int j = 0; j < graphics::numEmotes; j++) {
+                        if (token.second == graphics::emotes[j].label) {
+                            emote = &graphics::emotes[j];
+                            break;
+                        }
+                    }
+                    if (emote) {
+                        int emoteYOffset = (rowHeight - emote->height) / 2;
+                        display->drawXbm(nextX, lineY + emoteYOffset, emote->width, emote->height, emote->bitmap);
+                        nextX += emote->width + 2;
+                    }
                 } else {
                     // Text
                     display->drawString(nextX, lineY + textYOffset, token.second);
@@ -2191,7 +3266,6 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
     }
 }
 
-// Return SNR limit based on modem preset
 static float getSnrLimit(meshtastic_Config_LoRaConfig_ModemPreset preset)
 {
     switch (preset) {
@@ -2235,65 +3309,28 @@ static const char *getSignalGrade(float snr, int32_t rssi, float snrLimit, int &
 
 ProcessMessage CannedMessageModule::handleReceived(const meshtastic_MeshPacket &mp)
 {
-    // Only process routing ACK/NACK packets that are responses to our own outbound
-    if (mp.decoded.portnum == meshtastic_PortNum_ROUTING_APP && waitingForAck && mp.to == nodeDB->getNodeNum() &&
-        mp.decoded.request_id == this->lastRequestId) // only ACKs for our last sent packet
-    {
+    if (mp.decoded.portnum == meshtastic_PortNum_ROUTING_APP && waitingForAck) {
         if (mp.decoded.request_id != 0) {
             // Decode the routing response
             meshtastic_Routing decoded = meshtastic_Routing_init_default;
             pb_decode_from_bytes(mp.decoded.payload.bytes, mp.decoded.payload.size, meshtastic_Routing_fields, &decoded);
 
-            // Determine ACK/NACK status
+            // Determine ACK status
             bool isAck = (decoded.error_reason == meshtastic_Routing_Error_NONE);
             bool isFromDest = (mp.from == this->lastSentNode);
             bool wasBroadcast = (this->lastSentNode == NODENUM_BROADCAST);
 
             // Identify the responding node
             if (wasBroadcast && mp.from != nodeDB->getNodeNum()) {
-                this->incoming = mp.from; // relayed by another node
+                this->incoming = mp.from; // Relayed by another node
             } else {
-                this->incoming = this->lastSentNode; // direct reply
+                this->incoming = this->lastSentNode; // Direct reply
             }
 
-            // Final ACK/NACK logic
-            if (wasBroadcast) {
-                // Any ACK counts for broadcast
-                this->ack = isAck;
-                waitingForAck = false;
-            } else if (isFromDest) {
-                // Only ACK from destination counts as final
-                this->ack = isAck;
-                waitingForAck = false;
-            } else if (isAck) {
-                // Relay ACK → mark as RELAYED, still no final ACK
-                this->ack = false;
-                waitingForAck = false;
-            } else {
-                // Explicit failure
-                this->ack = false;
-                waitingForAck = false;
-            }
+            // Final ACK confirmation logic
+            this->ack = isAck && (wasBroadcast || isFromDest);
 
-            // Update last sent StoredMessage with ACK/NACK/RELAYED result
-            if (!messageStore.getMessages().empty()) {
-                StoredMessage &last = const_cast<StoredMessage &>(messageStore.getMessages().back());
-                if (last.sender == nodeDB->getNodeNum()) { // only update our own messages
-                    if (wasBroadcast && isAck) {
-                        last.ackStatus = AckStatus::ACKED;
-                    } else if (isFromDest && isAck) {
-                        last.ackStatus = AckStatus::ACKED;
-                    } else if (!isFromDest && isAck) {
-                        last.ackStatus = AckStatus::RELAYED;
-                    } else {
-                        last.ackStatus = AckStatus::NACKED;
-                    }
-                }
-            }
-
-            // Capture radio metrics
-            this->lastRxRssi = mp.rx_rssi;
-            this->lastRxSnr = mp.rx_snr;
+            waitingForAck = false;
 
             // Show overlay banner
             if (screen) {
