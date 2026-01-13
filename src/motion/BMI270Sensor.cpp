@@ -2,21 +2,92 @@
 #include "detect/ScanI2C.h"
 #include "graphics/draw/Math3D.h"
 
-// Global variables for magnetometer heading (shared with BMM150Sensor and other mag sensors)
+// Global variables for magnetometer heading (defined here, used by CompassRenderer)
 extern "C" {
-extern volatile bool g_hasMagHeading;
-extern volatile float g_magHeadingRad; // radians, 0 = North, +CW
+volatile bool g_hasMagHeading = false;
+volatile float g_magHeadingRad = 0.0f; // radians, 0 = North, +CW
 }
+
+// BMM150 magnetometer support for tilt-compensated compass
+#if !defined(ARCH_STM32WL) && !MESHTASTIC_EXCLUDE_I2C && __has_include(<DFRobot_BMM150.h>)
+#define HAS_BMM150_MAG 1
+#include "BMM150Sensor.h"
+#else
+#define HAS_BMM150_MAG 0
+#endif
+
+#if HAS_BMM150_MAG
+// Magnetometer calibration state
+namespace
+{
+struct MagCal {
+    float offset[3] = {0, 0, 0};
+    float scale[3] = {1, 1, 1};
+    bool valid = false;
+};
+MagCal s_magCal;
+bool s_magCalActive = false;
+uint32_t s_magCalEndMs = 0;
+uint32_t s_magCalSamples = 0;
+float s_magMin[3] = {1e9f, 1e9f, 1e9f};
+float s_magMax[3] = {-1e9f, -1e9f, -1e9f};
+
+void magCalReset()
+{
+    s_magCalActive = false;
+    s_magCalEndMs = 0;
+    s_magCalSamples = 0;
+    s_magMin[0] = s_magMin[1] = s_magMin[2] = 1e9f;
+    s_magMax[0] = s_magMax[1] = s_magMax[2] = -1e9f;
+}
+
+void magCalPush(float mx, float my, float mz)
+{
+    if (mx < s_magMin[0])
+        s_magMin[0] = mx;
+    if (mx > s_magMax[0])
+        s_magMax[0] = mx;
+    if (my < s_magMin[1])
+        s_magMin[1] = my;
+    if (my > s_magMax[1])
+        s_magMax[1] = my;
+    if (mz < s_magMin[2])
+        s_magMin[2] = mz;
+    if (mz > s_magMax[2])
+        s_magMax[2] = mz;
+    ++s_magCalSamples;
+}
+
+void magCalSolve()
+{
+    for (int i = 0; i < 3; ++i)
+        s_magCal.offset[i] = 0.5f * (s_magMax[i] + s_magMin[i]);
+    float r[3] = {0.5f * (s_magMax[0] - s_magMin[0]), 0.5f * (s_magMax[1] - s_magMin[1]), 0.5f * (s_magMax[2] - s_magMin[2])};
+    float rmean = (r[0] + r[1] + r[2]) / 3.0f;
+    for (int i = 0; i < 3; ++i)
+        s_magCal.scale[i] = (r[i] > 1e-3f) ? (rmean / r[i]) : 1.0f;
+    s_magCal.valid = true;
+    s_magCalActive = false;
+}
+} // namespace
+#endif // HAS_BMM150_MAG
 
 #if !defined(ARCH_STM32WL) && !MESHTASTIC_EXCLUDE_I2C && __has_include(<bmi2.h>)
 
 // Use tinyu-zhao BMI270 library exclusively
+#include "buzz/buzz.h"
+#include "graphics/Screen.h"
 #include <Arduino.h>
 #include <Wire.h>
 #include <bmi2.h>
 #include <bmi270.h>
 #include <bmi2_defs.h>
 #include <math.h>
+
+// Screen instance from main.cpp
+#if !defined(MESHTASTIC_EXCLUDE_SCREEN)
+extern graphics::Screen *screen;
+#endif
 
 #define HAS_BMI270_TINYU 1
 
@@ -356,45 +427,94 @@ int32_t BMI270Sensor::runOnce()
             // Hardware interrupts only - no software motion detection
 
             // ------------------------ Fake compass (gyro-only yaw) ------------------------
-            // ---- Instant anchor: lock current facing as "north" (no countdown) ----
-            if (s_anchorRequested) {
-                // 1) Freeze gyro bias to current sample (assumes user is holding still)
-                s_biasX = gx;
-                s_biasY = gy;
-                s_biasZ = gz;
+            // Skip fake compass integration entirely if real magnetometer is available
 
-                // 2) Make "north" *immediately* equal to what we're facing now
-                s_yawZeroDeg = s_yawDeg;
-                s_yawDeg = s_yawZeroDeg; // ensures rel = 0 this frame (instant snap)
+            if (!g_hasMagHeading) {
+                // ---- Instant anchor: lock current facing as "north" (no countdown) ----
+                if (s_anchorRequested) {
+                    // 1) Freeze gyro bias to current sample (assumes user is holding still)
+                    s_biasX = gx;
+                    s_biasY = gy;
+                    s_biasZ = gz;
 
-                // 3) Guard against a big first dt after anchoring
-                s_lastMicros = micros();
+                    // 2) Make "north" *immediately* equal to what we're facing now
+                    s_yawZeroDeg = s_yawDeg;
+                    s_yawDeg = s_yawZeroDeg; // ensures rel = 0 this frame (instant snap)
 
-                // 4) Clear request - calibration is instant, no UI needed
-                s_anchorRequested = false;
+                    // 3) Guard against a big first dt after anchoring
+                    s_lastMicros = micros();
+
+                    // 4) Clear request - calibration is instant, no UI needed
+                    s_anchorRequested = false;
 #if !defined(MESHTASTIC_EXCLUDE_SCREEN) && HAS_SCREEN
-                if (screen && !ScanI2C::hasMagnetometer()) {
-                    screen->setHeading(0.0f); // force the snap visually this frame
+                    if (screen) {
+                        screen->setHeading(0.0f); // force the snap visually this frame
+                        screen->forceDisplay(true);
+                    }
+#endif
+
+                    LOG_DEBUG("BMI270: anchored & snapped (bias=%.3f, %.3f, %.3f dps, zero=%.1f deg)", s_biasX, s_biasY, s_biasZ,
+                              s_yawZeroDeg);
+                }
+
+                // --- Tilt-compensated yaw integration ---
+                uint32_t nowUs = micros();
+                if (s_lastMicros == 0)
+                    s_lastMicros = nowUs;
+                float dt = (nowUs - s_lastMicros) * 1e-6f;
+                s_lastMicros = nowUs;
+
+                // 1) Always update gravity estimate with low-pass filter (like before)
+                float aMag = sqrtf(ax * ax + ay * ay + az * az); // g
+                bool aLooksLikeGravity = fabsf(aMag - 1.0f) < G_VALID_TOL_G;
+
+                // 2) Project gyro onto gravity to get world-yaw rate
+                float gxUnb = gx - s_biasX;
+                float gyUnb = gy - s_biasY;
+                float gzUnb = gz - s_biasZ;
+                float yawRateDegPerSec = (gxUnb * s_gxLP + gyUnb * s_gyLP + gzUnb * s_gzLP);
+
+                // 3) Integrate
+                s_yawDeg += yawRateDegPerSec * dt;
+
+                // 4) Leaky Integrator: Apply a weak pull-to-zero to counteract long-term drift.
+                // This acts as a final software correction for any residual gyro bias.
+                constexpr float YAW_DRIFT_CORRECTION_STRENGTH = 0.002f; // Corrects 0.2% of the drift error per second
+                float yaw_error_deg = s_yawDeg - s_yawZeroDeg;
+                s_yawDeg -= yaw_error_deg * YAW_DRIFT_CORRECTION_STRENGTH * dt;
+
+                // 5) Keep angle in [-180, 180)
+                if (s_yawDeg > 180.0f)
+                    s_yawDeg -= 360.0f;
+                if (s_yawDeg <= -180.0f)
+                    s_yawDeg += 360.0f;
+
+                // 6) Bias self-trim while still (use original still threshold)
+                if (fabsf(gx) + fabsf(gy) + fabsf(gz) < STILL_THR_DPS && aLooksLikeGravity) {
+                    // Nudge bias toward current gyro (like your existing single-axis trim)
+                    s_biasX += (gx - s_biasX) * GYRO_DRIFT_TRIM;
+                    s_biasY += (gy - s_biasY) * GYRO_DRIFT_TRIM;
+                    s_biasZ += (gz - s_biasZ) * GYRO_DRIFT_TRIM;
+                }
+
+                // 7) Present heading
+                float rel = s_yawDeg - s_yawZeroDeg;
+                while (rel < 0.0f)
+                    rel += 360.0f;
+                while (rel >= 360.0f)
+                    rel -= 360.0f;
+                float heading = 360.0f - rel;
+                if (heading >= 360.0f)
+                    heading -= 360.0f;
+#if !defined(MESHTASTIC_EXCLUDE_SCREEN) && HAS_SCREEN
+                if (screen) {
+                    screen->setHeading(heading);
                     screen->forceDisplay(true);
                 }
 #endif
+            } // End fake compass integration (only when no real magnetometer)
 
-                LOG_DEBUG("BMI270: anchored & snapped (bias=%.3f, %.3f, %.3f dps, zero=%.1f deg)", s_biasX, s_biasY, s_biasZ,
-                          s_yawZeroDeg);
-            }
-
-            // --- Tilt-compensated yaw integration ---
-            uint32_t nowUs = micros();
-            if (s_lastMicros == 0)
-                s_lastMicros = nowUs;
-            float dt = (nowUs - s_lastMicros) * 1e-6f;
-            s_lastMicros = nowUs;
-
-            // 1) Always update gravity estimate with low-pass filter (like before)
-            float aMag = sqrtf(ax * ax + ay * ay + az * az); // g
-            bool aLooksLikeGravity = fabsf(aMag - 1.0f) < G_VALID_TOL_G;
-
-            // Always update gravity vector (not tied to calibration)
+            // Always update gravity vector (needed for tilt compensation)
             s_gxLP = s_gxLP + G_LPF_ALPHA * (ax - s_gxLP);
             s_gyLP = s_gyLP + G_LPF_ALPHA * (ay - s_gyLP);
             s_gzLP = s_gzLP + G_LPF_ALPHA * (az - s_gzLP);
@@ -406,62 +526,143 @@ int32_t BMI270Sensor::runOnce()
                 s_gzLP /= gn;
             }
 
-            // 2) Project gyro onto gravity to get world-yaw rate
-            float gxUnb = gx - s_biasX;
-            float gyUnb = gy - s_biasY;
-            float gzUnb = gz - s_biasZ;
-            float yawRateDegPerSec = (gxUnb * s_gxLP + gyUnb * s_gyLP + gzUnb * s_gzLP);
+#if HAS_BMM150_MAG
+            // Get BMM150 singleton (already initialized by BMM150Sensor)
+            static BMM150Singleton *bmm150 = nullptr;
+            static uint32_t bmm150_retry_time = 0;
 
-            // 3) Integrate
-            s_yawDeg += yawRateDegPerSec * dt;
-
-            // 4) Leaky Integrator: Apply a weak pull-to-zero to counteract long-term drift.
-            // This acts as a final software correction for any residual gyro bias.
-            constexpr float YAW_DRIFT_CORRECTION_STRENGTH = 0.002f; // Corrects 0.2% of the drift error per second
-            float yaw_error_deg = s_yawDeg - s_yawZeroDeg;
-            s_yawDeg -= yaw_error_deg * YAW_DRIFT_CORRECTION_STRENGTH * dt;
-
-            // 5) Keep angle in [-180, 180)
-            if (s_yawDeg > 180.0f)
-                s_yawDeg -= 360.0f;
-            if (s_yawDeg <= -180.0f)
-                s_yawDeg += 360.0f;
-
-            // 6) Bias self-trim while still (use original still threshold)
-            if (fabsf(gx) + fabsf(gy) + fabsf(gz) < STILL_THR_DPS && aLooksLikeGravity) {
-                // Nudge bias toward current gyro (like your existing single-axis trim)
-                s_biasX += (gx - s_biasX) * GYRO_DRIFT_TRIM;
-                s_biasY += (gy - s_biasY) * GYRO_DRIFT_TRIM;
-                s_biasZ += (gz - s_biasZ) * GYRO_DRIFT_TRIM;
+            // Retry getting the existing singleton periodically
+            if (!bmm150 && millis() > bmm150_retry_time) {
+                bmm150_retry_time = millis() + 500; // Retry every 500ms
+                bmm150 = BMM150Singleton::GetExistingInstance();
+                if (bmm150) {
+                    LOG_INFO("BMI270: Got existing BMM150 singleton");
+                }
             }
 
-            // 6) Present heading (unchanged)
-            float rel = s_yawDeg - s_yawZeroDeg;
-            while (rel < 0.0f)
-                rel += 360.0f;
-            while (rel >= 360.0f)
-                rel -= 360.0f;
-            float heading = 360.0f - rel;
-            if (heading >= 360.0f)
-                heading -= 360.0f;
-#if !defined(MESHTASTIC_EXCLUDE_SCREEN) && HAS_SCREEN
-            if (screen && !ScanI2C::hasMagnetometer()) {
-                screen->setHeading(heading);
-                screen->forceDisplay(true);
+            if (bmm150) {
+                // Read raw magnetometer data
+                sBmm150MagData_t mag = bmm150->getGeomagneticData();
+                float mx = mag.x, my = mag.y, mz = mag.z;
+
+                // Skip if data looks invalid (all zeros or very small)
+                float magMag = mx * mx + my * my + mz * mz;
+                if (magMag < 1.0f) {
+                    // Data invalid, skip this sample
+                    if (s_magCalActive) {
+                        LOG_DEBUG("BMM150: Invalid data mx=%.1f my=%.1f mz=%.1f", mx, my, mz);
+                    }
+                } else {
+                    // Handle calibration sampling
+                    if (s_magCalActive) {
+                        magCalPush(mx, my, mz);
+                        if ((int32_t)(millis() - s_magCalEndMs) >= 0) {
+                            // Calibration time ended - check if we got good data
+                            float spanX = s_magMax[0] - s_magMin[0];
+                            float spanY = s_magMax[1] - s_magMin[1];
+                            float spanZ = s_magMax[2] - s_magMin[2];
+                            if (s_magCalSamples >= 50 && spanX > 20 && spanY > 20 && spanZ > 20) {
+                                magCalSolve();
+                                LOG_INFO("BMM150 calibration complete: offset=[%.1f,%.1f,%.1f] scale=[%.2f,%.2f,%.2f]",
+                                         s_magCal.offset[0], s_magCal.offset[1], s_magCal.offset[2], s_magCal.scale[0],
+                                         s_magCal.scale[1], s_magCal.scale[2]);
+                                playBeep(); // Confirmation beep
+                            } else {
+                                LOG_WARN("BMM150 calibration failed: samples=%u spans=[%.1f,%.1f,%.1f]", s_magCalSamples, spanX,
+                                         spanY, spanZ);
+                                s_magCalActive = false;
+                            }
+                        }
+                    }
+
+                    // Only compute heading if calibration is valid
+                    if (s_magCal.valid) {
+                        // Apply calibration
+                        float mxc = (mx - s_magCal.offset[0]) * s_magCal.scale[0];
+                        float myc = (my - s_magCal.offset[1]) * s_magCal.scale[1];
+                        float mzc = (mz - s_magCal.offset[2]) * s_magCal.scale[2];
+
+                        // BMI270 gravity: X=left, Y=forward, Z=up
+                        // Compute pitch and roll from BMI270 gravity
+                        float pitch = asinf(-s_gyLP);        // Pitch from Y (forward component)
+                        float roll = atan2f(s_gxLP, s_gzLP); // Roll from X (left) and Z (up)
+
+                        float cp = cosf(pitch), sp = sinf(pitch);
+                        float cr = cosf(roll), sr = sinf(roll);
+
+                        // BMM150 magnetometer: X=up, Y=left, Z=forward
+                        // Tilt compensation - rotate magnetometer to horizontal plane
+                        // Horizontal forward = mzc * cp + mxc * sp
+                        // Horizontal left = myc * cr - mxc * sr * cp + mzc * sr * sp
+                        float mag_forward = mzc * cp + mxc * sp;
+                        float mag_left = myc * cr - mxc * sr * cp + mzc * sr * sp;
+
+                        // Heading from horizontal components (0=North at top, clockwise)
+                        // atan2(left, forward) gives angle from forward axis
+                        float headingDeg = atan2f(mag_left, mag_forward) * 180.0f / (float)M_PI;
+                        if (headingDeg < 0)
+                            headingDeg += 360.0f;
+
+                        // Set global heading for CompassRenderer
+                        g_magHeadingRad = headingDeg * (float)M_PI / 180.0f;
+                        g_hasMagHeading = true;
+                    }
+                } // end if magMag valid
             }
-#endif
+#endif // HAS_BMM150_MAG
         }
     }
 #endif
-    return MOTION_SENSOR_CHECK_INTERVAL_MS;
+    // Update rate depends on whether we have a calibrated magnetometer
+    return (g_hasMagHeading || s_magCalActive) ? 100 : MOTION_SENSOR_CHECK_INTERVAL_MS;
 }
 
-void BMI270Sensor::calibrate(uint16_t /*forSeconds*/)
+void BMI270Sensor::calibrate(uint16_t forSeconds)
 {
-    // Instant "face north and calibrate": just anchor on next IMU sample.
-    // Don't show calibration UI since it's instant and would just cause screen to jump
+#if HAS_BMM150_MAG
+    // Start magnetometer calibration with countdown
+    uint16_t calTime = (forSeconds > 0) ? forSeconds : 10;
+
+    // Get BMM150 singleton (should be created by BMM150Sensor thread)
+    BMM150Singleton *bmm150 = BMM150Singleton::GetExistingInstance();
+    if (!bmm150) {
+        LOG_WARN("BMM150 singleton not available for calibration");
+    }
+
+    if (bmm150) {
+        bmm150->setOperationMode(BMM150_POWERMODE_NORMAL);
+        bmm150->setPresetMode(BMM150_PRESETMODE_HIGHACCURACY);
+        bmm150->setRate(BMM150_DATA_RATE_30HZ); // Fast rate for calibration
+        bmm150->setMeasurementXYZ();            // REQUIRED: re-enable measurements after config change
+        LOG_DEBUG("BMM150 configured for calibration: 30Hz, high accuracy");
+
+        s_magCalActive = true;
+        s_magCalEndMs = millis() + (uint32_t)calTime * 1000u;
+        s_magCalSamples = 0;
+        s_magMin[0] = s_magMin[1] = s_magMin[2] = 1e9f;
+        s_magMax[0] = s_magMax[1] = s_magMax[2] = -1e9f;
+        g_hasMagHeading = false; // Use fake compass during calibration
+
+        // Show calibration banner
+#if !defined(MESHTASTIC_EXCLUDE_SCREEN) && HAS_SCREEN
+        if (screen) {
+            char bannerMsg[64];
+            snprintf(bannerMsg, sizeof(bannerMsg), "Calibrating compass...\nRotate device in all\ndirections for %us", calTime);
+            screen->showSimpleBanner(bannerMsg, calTime * 1000);
+        }
+#endif
+        playBeep(); // Start beep
+        LOG_INFO("BMM150 calibration started for %u seconds - rotate device in all directions", calTime);
+    } else {
+        // No magnetometer available - fall back to fake compass calibration
+        LOG_DEBUG("BMI270: No BMM150 available, using instant calibrate (anchor current facing as north)");
+        s_anchorRequested = true;
+    }
+#else
+    // No magnetometer - just anchor fake compass
     LOG_DEBUG("BMI270: instant calibrate requested (anchor current facing as north)");
     s_anchorRequested = true;
+#endif
 }
 
 #endif // !defined(ARCH_STM32WL) && !MESHTASTIC_EXCLUDE_I2C && __has_include(<bmi2.h>)

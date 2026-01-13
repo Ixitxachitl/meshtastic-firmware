@@ -26,6 +26,9 @@ class BMM150Singleton : public DFRobot_BMM150_I2C
     // Create a singleton instance (not thread safe)
     static BMM150Singleton *GetInstance(ScanI2C::FoundDevice device);
 
+    // Get existing instance without creating (returns nullptr if not yet created)
+    static BMM150Singleton *GetExistingInstance() { return pinstance; }
+
     // Singletons should not be cloneable.
     BMM150Singleton(BMM150Singleton &other) = delete;
 
@@ -41,23 +44,6 @@ class BMM150Sensor : public MotionSensor
   private:
     BMM150Singleton *sensor = nullptr;
     bool showingScreen = false;
-    
-    // --- Calibration state (background) ---
-    struct MagCal {
-      float offset[3] = {0,0,0};   // hard-iron offsets (uT)
-      float scale[3]  = {1,1,1};   // per-axis scale (soft-iron, simple diag)
-      bool  valid     = false;
-    } cal_;
-
-    bool     calActive_ = false;
-    uint32_t calEndMs_  = 0;
-    float    min_[3] = {+1e9f,+1e9f,+1e9f};
-    float    max_[3] = {-1e9f,-1e9f,-1e9f};
-    uint32_t calSamples_ = 0;
-
-    void     calReset_();
-    void     calPush_(float mx, float my, float mz);
-    void     calSolve_();
 
   public:
     explicit BMM150Sensor(ScanI2C::FoundDevice foundDevice);
@@ -67,9 +53,6 @@ class BMM150Sensor : public MotionSensor
 
     // Called each time our sensor gets a chance to run
     virtual int32_t runOnce() override;
-    
-    // Trigger background auto-cal for N seconds (e.g., 10)
-    void calibrate(uint16_t seconds) override;
 };
 
 #endif

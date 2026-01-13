@@ -134,6 +134,7 @@ ButtonThread *CancelButtonThread = nullptr;
 #if !defined(ARCH_STM32WL) && !MESHTASTIC_EXCLUDE_I2C
 #include "motion/AccelerometerThread.h"
 AccelerometerThread *accelerometerThread = nullptr;
+AccelerometerThread *magnetometerThread = nullptr; // For BMM150 when BMI270 is primary accelerometer
 #endif
 
 #ifdef HAS_I2S
@@ -884,6 +885,15 @@ void setup()
 #if !defined(ARCH_STM32WL)
     if (acc_info.type != ScanI2C::DeviceType::NONE) {
         accelerometerThread = new AccelerometerThread(acc_info.type);
+
+        // If BMI270 is the accelerometer, also create BMM150 thread if BMM150 exists
+        if (acc_info.type == ScanI2C::DeviceType::BMI270) {
+            auto bmm_info = i2cScanner->find(ScanI2C::DeviceType::BMM150);
+            if (bmm_info.type != ScanI2C::DeviceType::NONE) {
+                LOG_INFO("Creating separate magnetometer thread for BMM150");
+                magnetometerThread = new AccelerometerThread(bmm_info);
+            }
+        }
     }
 #endif
 

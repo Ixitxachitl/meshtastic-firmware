@@ -1262,7 +1262,7 @@ void menuHandler::positionBaseMenu()
             break;
         case PositionAction::CompassCalibrate:
             if (accelerometerThread) {
-                accelerometerThread->calibrate(30);
+                accelerometerThread->calibrate(10);
             }
             break;
         case PositionAction::GPSSmartPosition:
