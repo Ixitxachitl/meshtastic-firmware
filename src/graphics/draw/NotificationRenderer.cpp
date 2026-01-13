@@ -246,6 +246,8 @@ void NotificationRenderer::drawNumberPicker(OLEDDisplay *display, OLEDDisplayUiS
 void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiState *state)
 {
     static uint32_t selectedNodenum = 0;
+    static uint16_t cachedMaxWidth = 0;
+    static int cachedNodeCount = 0;
 
     // === Layout Configuration ===
     constexpr uint16_t vPadding = 2;
@@ -253,7 +255,39 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
     int numNodes = nodeDB->getNumMeshNodes() - 1; // exclude self
     alertBannerOptions = numNodes + 1;            // nodes + "Back" option
 
-    // let the box drawing function calculate the widths?
+    // Only re-calculate maximum width if node count changed (cache for performance)
+    uint16_t maxWidth = cachedMaxWidth;
+    if (cachedNodeCount != alertBannerOptions || cachedMaxWidth == 0) {
+        uint16_t maxNodeNameWidth = 0;
+        uint16_t arrowsWidth = display->getStringWidth(">  <", 4, true);
+
+        for (int i = 0; i < alertBannerOptions; i++) {
+            char temp_name[40] = {0};
+            if (i == 0) {
+                strncpy(temp_name, "Back", sizeof(temp_name) - 1);
+            } else {
+                auto node = nodeDB->getMeshNodeByIndex(i);
+                if (node && node->has_user) {
+                    std::string sanitized = sanitizeString(node->user.long_name);
+                    // Use utf8Substr to properly truncate at character boundaries with ellipsis
+                    if (graphics::MessageRenderer::utf8CharCount(sanitized.c_str()) > 18) {
+                        sanitized = graphics::MessageRenderer::utf8Substr(sanitized, 18) + "...";
+                    }
+                    strncpy(temp_name, sanitized.c_str(), sizeof(temp_name) - 1);
+                } else if (node) {
+                    snprintf(temp_name, sizeof(temp_name), "(%04X)", (uint16_t)(node->num & 0xFFFF));
+                }
+            }
+            uint16_t nodeWidth = display->getStringWidth(temp_name, strlen(temp_name), true);
+            if (nodeWidth > maxNodeNameWidth)
+                maxNodeNameWidth = nodeWidth;
+        }
+
+        // Cache the calculated values
+        maxWidth = maxNodeNameWidth + arrowsWidth;
+        cachedMaxWidth = maxWidth;
+        cachedNodeCount = alertBannerOptions;
+    }
 
     const char *lineStarts[MAX_LINES + 1] = {0};
     uint16_t lineCount = 0;
@@ -285,8 +319,9 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
         alertBannerCallback(selectedNodenum);
         resetBanner();
         return;
-    } else if ((inEvent.inputEvent == INPUT_BROKER_CANCEL || inEvent.inputEvent == INPUT_BROKER_ALT_LONG) &&
-               alertBannerUntil != 0) {
+    } else if (inEvent.inputEvent == INPUT_BROKER_CANCEL || inEvent.inputEvent == INPUT_BROKER_ALT_LONG ||
+               inEvent.inputEvent == INPUT_BROKER_BACK || (inEvent.inputEvent == INPUT_BROKER_ANYKEY && inEvent.kbchar == 0x08)) {
+        // Backspace/Cancel/Back acts like selecting "Back"
         resetBanner();
         return;
     }
@@ -349,7 +384,7 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
     int scratchLineNum = 0;
     uint8_t linesShown = lineCount;
     for (int i = firstOptionToShow; i < alertBannerOptions && scratchLineNum < visibleOptions; i++, linesShown++) {
-        char temp_name[16] = {0};
+        char temp_name[40] = {0};
 
         if (i == 0) {
             // "Back" option at index 0
@@ -359,6 +394,10 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
             auto node = nodeDB->getMeshNodeByIndex(i);
             if (node && node->has_user) {
                 std::string sanitized = sanitizeString(node->user.long_name);
+                // Use utf8Substr to properly truncate at character boundaries with ellipsis
+                if (graphics::MessageRenderer::utf8CharCount(sanitized.c_str()) > 18) {
+                    sanitized = graphics::MessageRenderer::utf8Substr(sanitized, 18) + "...";
+                }
                 strncpy(temp_name, sanitized.c_str(), sizeof(temp_name) - 1);
             } else if (node) {
                 snprintf(temp_name, sizeof(temp_name), "(%04X)", (uint16_t)(node->num & 0xFFFF));
@@ -390,7 +429,7 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
     }
 
     uint16_t totalLines = lineCount + alertBannerOptions;
-    drawNotificationBox(display, state, linePointers, totalLines, firstOptionToShow);
+    drawNotificationBox(display, state, linePointers, totalLines, firstOptionToShow, maxWidth);
 }
 
 void NotificationRenderer::drawAlertBannerOverlay(OLEDDisplay *display, OLEDDisplayUiState *state)

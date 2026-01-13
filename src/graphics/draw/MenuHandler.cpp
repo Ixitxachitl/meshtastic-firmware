@@ -844,7 +844,7 @@ void menuHandler::messageViewModeMenu()
         auto node = nodeDB->getMeshNode(peer);
         std::string name;
         if (node && node->has_user)
-            name = sanitizeString(node->user.long_name).substr(0, 15);
+            name = graphics::MessageRenderer::utf8Substr(sanitizeString(node->user.long_name), 15);
         else {
             char buf[20];
             snprintf(buf, sizeof(buf), "Node %08X", peer);
@@ -2090,7 +2090,7 @@ void menuHandler::addFavoriteMenu()
     } else {
         NODE_PICKER_TITLE = "Node To Favorite";
     }
-    screen->showNodePicker(NODE_PICKER_TITLE, 30000, [](uint32_t nodenum) -> void {
+    screen->showNodePicker(NODE_PICKER_TITLE, 0, [](uint32_t nodenum) -> void {
         LOG_WARN("Nodenum: %u", nodenum);
         nodeDB->set_favorite(true, nodenum);
         graphics::setOverlayActive(false);
@@ -2106,7 +2106,7 @@ void menuHandler::removeFavoriteMenu()
     std::string message = "Unfavorite This Node?\n";
     auto node = nodeDB->getMeshNode(graphics::UIRenderer::currentFavoriteNodeNum);
     if (node && node->has_user) {
-        message += sanitizeString(node->user.long_name).substr(0, 15);
+        message += graphics::MessageRenderer::utf8Substr(sanitizeString(node->user.long_name), 15);
     }
     bannerOptions.message = message.c_str();
     bannerOptions.optionsArrayPtr = optionsArray;
@@ -2124,7 +2124,7 @@ void menuHandler::removeFavoriteMenu()
 void menuHandler::traceRouteMenu()
 {
     graphics::setOverlayActive(true);
-    screen->showNodePicker("Node to Trace", 30000, [](uint32_t nodenum) -> void {
+    screen->showNodePicker("Node to Trace", 0, [](uint32_t nodenum) -> void {
         LOG_INFO("Menu: Node picker selected node 0x%08x, traceRouteModule=%p", nodenum, traceRouteModule);
         if (traceRouteModule) {
             traceRouteModule->startTraceRoute(nodenum);
@@ -2339,7 +2339,7 @@ void menuHandler::powerMenu()
 
 void menuHandler::keyVerificationInitMenu()
 {
-    screen->showNodePicker("Node to Verify", 30000,
+    screen->showNodePicker("Node to Verify", 0,
                            [](uint32_t selected) -> void { keyVerificationModule->sendInitialRequest(selected); });
 }
 

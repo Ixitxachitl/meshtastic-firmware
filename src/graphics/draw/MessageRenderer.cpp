@@ -238,7 +238,7 @@ static inline size_t utf8CharLen(uint8_t c)
 }
 
 // Count UTF-8 characters (treating multi-byte sequences including emoji as 1 character)
-static size_t utf8CharCount(const char *str)
+size_t utf8CharCount(const char *str)
 {
     size_t count = 0;
     for (size_t i = 0; str[i];) {
@@ -247,6 +247,19 @@ static size_t utf8CharCount(const char *str)
         count++;
     }
     return count;
+}
+
+// Return substring with at most maxChars UTF-8 characters (emojis count as 1 char)
+std::string utf8Substr(const std::string &str, size_t maxChars)
+{
+    size_t count = 0;
+    size_t i = 0;
+    while (i < str.size() && count < maxChars) {
+        size_t len = utf8CharLen((uint8_t)str[i]);
+        i += len;
+        count++;
+    }
+    return str.substr(0, i);
 }
 
 // Truncate string to specified number of UTF-8 characters (in-place)

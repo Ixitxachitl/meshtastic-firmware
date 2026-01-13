@@ -142,20 +142,27 @@ const char *getSafeNodeName(OLEDDisplay *display, meshtastic_NodeInfoLite *node,
 
         const size_t beforeLen = std::strlen(nodeName);
 
-        // Trim from the end until it fits or is empty
-        size_t len = beforeLen;
-        while (len && display->getStringWidth(nodeName) > availWidth) {
-            nodeName[--len] = '\0';
+        // Trim from the end one UTF-8 character at a time until it fits
+        // Use getStringWidthWithEmotes to properly account for emoji rendering
+        size_t bytePos = beforeLen;
+        int currentWidth = graphics::MessageRenderer::getStringWidthWithEmotes(display, std::string(nodeName), emotes, numEmotes);
+        while (bytePos > 0 && currentWidth > availWidth) {
+            // Back up to the start of the previous UTF-8 character
+            do {
+                --bytePos;
+            } while (bytePos > 0 && (nodeName[bytePos] & 0xC0) == 0x80); // Skip continuation bytes
+            nodeName[bytePos] = '\0';
+            currentWidth = graphics::MessageRenderer::getStringWidthWithEmotes(display, std::string(nodeName), emotes, numEmotes);
         }
 
         // If truncated, append "..." (respect buffer size)
-        if (len < beforeLen) {
+        if (bytePos < beforeLen) {
             // Make sure there's room for "..." and '\0'
             const size_t capForText = sizeof(nodeName) - 1; // leaving space for '\0'
             const size_t needed = 3;                        // "..."
-            if (len > capForText - needed) {
-                len = capForText - needed;
-                nodeName[len] = '\0';
+            if (bytePos > capForText - needed) {
+                bytePos = capForText - needed;
+                nodeName[bytePos] = '\0';
             }
             std::strcat(nodeName, "...");
         }

@@ -78,6 +78,10 @@ void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const mesht
 // Clear Message Line Cache from Message Renderer
 void clearMessageCache();
 
+// UTF-8 string helpers
+size_t utf8CharCount(const char *str);
+std::string utf8Substr(const std::string &str, size_t maxChars);
+
 } // namespace MessageRenderer
 } // namespace graphics
 #endif
