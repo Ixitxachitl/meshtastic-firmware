@@ -461,7 +461,7 @@ void menuHandler::clockMenu()
 }
 void menuHandler::messageResponseMenu()
 {
-    enum optionsNumbers { Back = 0, ViewMode, DeleteAll, DeleteOldest, ReplyMenu, MuteChannel, Aloud, MessageOrder, enumEnd };
+    enum optionsNumbers { Back = 0, ViewMode, DeleteMenu, ReplyMenu, MuteChannel, Aloud, MessageOrder, enumEnd };
 
     static const char *optionsArray[enumEnd];
     static int optionsEnumArray[enumEnd];
@@ -494,7 +494,7 @@ void menuHandler::messageResponseMenu()
 
     // Delete submenu
     optionsArray[options] = "Delete";
-    optionsEnumArray[options++] = 900;
+    optionsEnumArray[options++] = DeleteMenu;
 
 #ifdef HAS_I2S
     optionsArray[options] = "Read Aloud";
@@ -540,8 +540,7 @@ void menuHandler::messageResponseMenu()
             menuHandler::menuQueue = menuHandler::message_order_menu;
             screen->runNow();
 
-            // Delete submenu
-        } else if (selected == 900) {
+        } else if (selected == DeleteMenu) {
             menuHandler::menuQueue = menuHandler::delete_messages_menu;
             screen->runNow();
 
@@ -749,7 +748,6 @@ void menuHandler::deleteMessagesMenu()
             } else if (mode == graphics::MessageRenderer::ThreadMode::DIRECT) {
                 messageStore.deleteOldestMessageWithPeer(peer);
             }
-
             return;
         }
 
@@ -762,7 +760,6 @@ void menuHandler::deleteMessagesMenu()
             } else if (mode == graphics::MessageRenderer::ThreadMode::DIRECT) {
                 messageStore.deleteAllMessagesWithPeer(peer);
             }
-
             return;
         }
     };

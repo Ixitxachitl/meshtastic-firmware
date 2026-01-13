@@ -43,6 +43,9 @@
 #include "target_specific.h"
 #include <memory>
 #include <utility>
+#if HAS_SCREEN
+#include "MessageStore.h"
+#endif
 
 #ifdef ELECROW_ThinkNode_M5
 PCA9557 io(0x18, &Wire);
@@ -1762,9 +1765,10 @@ void loop()
             static_cast<TFTDisplay *>(dispdev)->sdlLoop();
     }
 #endif
-
-    // Calculate the delay based on scheduler
-    int32_t delayMsec = mainController.runOrDelay();
+#if HAS_SCREEN && ENABLE_MESSAGE_PERSISTENCE
+    messageStoreAutosaveTick();
+#endif
+    long delayMsec = mainController.runOrDelay();
 
     // We want to sleep as long as possible here - because it saves power
     if (!runASAP && loopCanSleep()) {
