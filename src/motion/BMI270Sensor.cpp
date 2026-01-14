@@ -632,6 +632,14 @@ int32_t BMI270Sensor::runOnce()
                         // Set global heading for CompassRenderer
                         g_magHeadingRad = headingDeg * (float)M_PI / 180.0f;
                         g_hasMagHeading = true;
+
+                        // Update screen with calibrated magnetometer heading
+#if !defined(MESHTASTIC_EXCLUDE_SCREEN) && HAS_SCREEN
+                        if (screen) {
+                            screen->setHeading(headingDeg);
+                            screen->forceDisplay(true);
+                        }
+#endif
                     }
                 } // end if magMag valid
             }
