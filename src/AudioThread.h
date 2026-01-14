@@ -1,5 +1,6 @@
 #pragma once
 #include "PowerFSM.h"
+#include "concurrency/LockGuard.h"
 #include "concurrency/OSThread.h"
 #include "configuration.h"
 #include "main.h"
@@ -47,6 +48,8 @@ class AudioThread : public concurrency::OSThread
             return;
         }
 
+        concurrency::LockGuard lock(&audioMutex);
+
         // Stop any existing playback first to prevent pops and memory leaks
         // Use stopPlaybackOnly() to avoid unnecessary amp/CPU toggling
         stopPlaybackOnly();
@@ -63,6 +66,7 @@ class AudioThread : public concurrency::OSThread
     // Also handles actually playing the RTTTL, needs to be called in loop
     bool isPlaying()
     {
+        concurrency::LockGuard lock(&audioMutex);
         if (i2sRtttl != nullptr) {
             return i2sRtttl->isRunning() && i2sRtttl->loop();
         }
@@ -71,6 +75,8 @@ class AudioThread : public concurrency::OSThread
 
     void stop()
     {
+        concurrency::LockGuard lock(&audioMutex);
+
         if (i2sRtttl != nullptr) {
             i2sRtttl->stop();
             delete i2sRtttl;
@@ -90,6 +96,8 @@ class AudioThread : public concurrency::OSThread
 
     void readAloud(const char *text)
     {
+        concurrency::LockGuard lock(&audioMutex);
+
         // Stop any existing RTTTL playback first
         stopPlaybackOnly();
 
@@ -108,6 +116,8 @@ class AudioThread : public concurrency::OSThread
   protected:
     int32_t runOnce() override
     {
+        concurrency::LockGuard lock(&audioMutex);
+
         if (i2sRtttl && i2sRtttl->isRunning()) {
             canSleep = false;
             // Ask buzzer module if we should over-prefill right now.
@@ -158,6 +168,9 @@ class AudioThread : public concurrency::OSThread
     AudioGeneratorRTTTL *i2sRtttl = nullptr;
     AudioOutputI2S *audioOut = nullptr;
     AudioFileSourcePROGMEM *rtttlFile = nullptr;
+
+    // Mutex to protect audio state from concurrent access across threads
+    concurrency::Lock audioMutex;
 };
 
 #endif
