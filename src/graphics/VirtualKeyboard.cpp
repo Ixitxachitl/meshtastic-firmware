@@ -21,7 +21,8 @@ static const int emote_icon_width = 8;
 static const int emote_icon_height = 8;
 
 VirtualKeyboard::VirtualKeyboard()
-    : cursorRow(0), cursorCol(0), lastActivityTime(millis()), headerFocused(false), shiftActive(false), timeoutDisabled(false)
+    : cursorRow(0), cursorCol(0), lastActivityTime(millis()), headerFocused(false), shiftActive(false), timeoutDisabled(false),
+      cachedTextWidth(0)
 {
     initializeKeyboard();
     // Set cursor to H(2, 5)
@@ -295,8 +296,10 @@ void VirtualKeyboard::drawInputArea(OLEDDisplay *display, int16_t offsetX, int16
         const int innerBottom = boxY + boxHeight - 2;
 
         // Wrap text greedily into lines that fit maxTextWidth
+        // Use cached result if input text hasn't changed
         std::vector<std::string> lines;
-        {
+        if (inputText != cachedInputText) {
+            cachedLines.clear();
             std::string remaining = inputText;
             while (!remaining.empty()) {
                 int bestLen = 0;
@@ -311,10 +314,12 @@ void VirtualKeyboard::drawInputArea(OLEDDisplay *display, int16_t offsetX, int16
                     // At least show one character to make progress
                     bestLen = 1;
                 }
-                lines.emplace_back(remaining.substr(0, bestLen));
+                cachedLines.emplace_back(remaining.substr(0, bestLen));
                 remaining.erase(0, bestLen);
             }
+            cachedInputText = inputText;
         }
+        lines = cachedLines;
 
         const bool scrolledUp = ((int)lines.size() > maxLines);
         int caretX = textX;
@@ -374,32 +379,44 @@ void VirtualKeyboard::drawInputArea(OLEDDisplay *display, int16_t offsetX, int16
             display->drawVerticalLine(caretX, cursorTop, cursorH);
         }
     } else {
-        std::string displayText = inputText;
-        int textW =
-            graphics::MessageRenderer::getStringWidthWithEmotes(display, displayText, graphics::emotes, graphics::numEmotes);
-        std::string scrolled = displayText;
-        if (textW > maxTextWidth) {
-            // Trim from the left until it fits
-            while (textW > maxTextWidth && !scrolled.empty()) {
-                scrolled.erase(0, 1);
-                textW =
-                    graphics::MessageRenderer::getStringWidthWithEmotes(display, scrolled, graphics::emotes, graphics::numEmotes);
-            }
-            // Add leading ellipsis and ensure it still fits
-            if (scrolled != displayText) {
-                scrolled = "..." + scrolled;
-                textW =
-                    graphics::MessageRenderer::getStringWidthWithEmotes(display, scrolled, graphics::emotes, graphics::numEmotes);
-                // If adding ellipsis causes overflow, trim more after the ellipsis
-                while (textW > maxTextWidth && scrolled.size() > 3) {
-                    scrolled.erase(3, 1); // remove chars after the ellipsis
+        // Use cached result if input text hasn't changed
+        std::string scrolled;
+        int textW;
+        if (inputText != cachedInputText) {
+            std::string displayText = inputText;
+            textW =
+                graphics::MessageRenderer::getStringWidthWithEmotes(display, displayText, graphics::emotes, graphics::numEmotes);
+            scrolled = displayText;
+            if (textW > maxTextWidth) {
+                // Trim from the left until it fits
+                while (textW > maxTextWidth && !scrolled.empty()) {
+                    scrolled.erase(0, 1);
                     textW = graphics::MessageRenderer::getStringWidthWithEmotes(display, scrolled, graphics::emotes,
                                                                                 graphics::numEmotes);
                 }
+                // Add leading ellipsis and ensure it still fits
+                if (scrolled != displayText) {
+                    scrolled = "..." + scrolled;
+                    textW = graphics::MessageRenderer::getStringWidthWithEmotes(display, scrolled, graphics::emotes,
+                                                                                graphics::numEmotes);
+                    // If adding ellipsis causes overflow, trim more after the ellipsis
+                    while (textW > maxTextWidth && scrolled.size() > 3) {
+                        scrolled.erase(3, 1); // remove chars after the ellipsis
+                        textW = graphics::MessageRenderer::getStringWidthWithEmotes(display, scrolled, graphics::emotes,
+                                                                                    graphics::numEmotes);
+                    }
+                }
+            } else {
+                // Keep textW in sync with what we draw
+                textW =
+                    graphics::MessageRenderer::getStringWidthWithEmotes(display, scrolled, graphics::emotes, graphics::numEmotes);
             }
+            cachedScrolledText = scrolled;
+            cachedTextWidth = textW;
+            cachedInputText = inputText;
         } else {
-            // Keep textW in sync with what we draw
-            textW = graphics::MessageRenderer::getStringWidthWithEmotes(display, scrolled, graphics::emotes, graphics::numEmotes);
+            scrolled = cachedScrolledText;
+            textW = cachedTextWidth;
         }
 
         int textY;

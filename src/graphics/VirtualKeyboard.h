@@ -71,6 +71,12 @@ class VirtualKeyboard
     static const uint32_t TIMEOUT_MS = 0; // Disabled timeout for trackball devices
     bool timeoutDisabled;
 
+    // Cache for text rendering to avoid recalculating every frame
+    std::string cachedInputText;
+    std::vector<std::string> cachedLines; // For multi-line mode
+    std::string cachedScrolledText;       // For single-line mode
+    int cachedTextWidth;                  // Width of cached text
+
     void initializeKeyboard();
     void drawKey(OLEDDisplay *display, const VirtualKey &key, bool selected, int16_t x, int16_t y, uint8_t w, uint8_t h,
                  bool isLastCol);
