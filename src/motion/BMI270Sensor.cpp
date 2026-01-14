@@ -556,6 +556,22 @@ int32_t BMI270Sensor::runOnce()
                     // Handle calibration sampling
                     if (s_magCalActive) {
                         magCalPush(mx, my, mz);
+
+                        // Update countdown banner every second
+                        static uint32_t lastBannerUpdateMs = 0;
+                        uint32_t remainingSec = (s_magCalEndMs > millis()) ? (s_magCalEndMs - millis()) / 1000 : 0;
+                        if (millis() - lastBannerUpdateMs > 1000) {
+#if !defined(MESHTASTIC_EXCLUDE_SCREEN) && HAS_SCREEN
+                            if (screen && remainingSec > 0) {
+                                char bannerMsg[64];
+                                snprintf(bannerMsg, sizeof(bannerMsg),
+                                         "Calibrating compass...\nRotate device in all\ndirections for %us", remainingSec);
+                                screen->showSimpleBanner(bannerMsg, remainingSec * 1000);
+                            }
+#endif
+                            lastBannerUpdateMs = millis();
+                        }
+
                         if ((int32_t)(millis() - s_magCalEndMs) >= 0) {
                             // Calibration time ended - check if we got good data
                             float spanX = s_magMax[0] - s_magMin[0];
@@ -566,10 +582,20 @@ int32_t BMI270Sensor::runOnce()
                                 LOG_INFO("BMM150 calibration complete: offset=[%.1f,%.1f,%.1f] scale=[%.2f,%.2f,%.2f]",
                                          s_magCal.offset[0], s_magCal.offset[1], s_magCal.offset[2], s_magCal.scale[0],
                                          s_magCal.scale[1], s_magCal.scale[2]);
+#if !defined(MESHTASTIC_EXCLUDE_SCREEN) && HAS_SCREEN
+                                if (screen) {
+                                    screen->showSimpleBanner("Compass calibration\nSUCCESS!", 3000);
+                                }
+#endif
                                 playBeep(); // Confirmation beep
                             } else {
                                 LOG_WARN("BMM150 calibration failed: samples=%u spans=[%.1f,%.1f,%.1f]", s_magCalSamples, spanX,
                                          spanY, spanZ);
+#if !defined(MESHTASTIC_EXCLUDE_SCREEN) && HAS_SCREEN
+                                if (screen) {
+                                    screen->showSimpleBanner("Compass calibration\nFAILED\nTry again", 3000);
+                                }
+#endif
                                 s_magCalActive = false;
                             }
                         }

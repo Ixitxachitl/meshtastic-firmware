@@ -23,6 +23,17 @@ extern "C" Quat GetAttitudeForRenderer(); // accessor provided by BMI270Sensor.c
 extern "C" Vec3 GetGravityForRenderer();
 extern "C" float GetHeadingRadiansForRenderer();
 
+// External global indicating if we have a valid magnetometer heading
+extern bool g_hasMagHeading;
+
+// Magnet icon bitmap (8x8) - indicates magnetometer is calibrated (low-res displays)
+static const unsigned char magnet_icon[] PROGMEM = {0x00, 0x3C, 0x7E, 0x66, 0x66, 0x00, 0x66, 0x00};
+
+// Magnet icon bitmap (16x16) - indicates magnetometer is calibrated (high-res displays)
+static const unsigned char magnet_large[] PROGMEM = {0x00, 0x00, 0x00, 0x00, 0xC0, 0x07, 0xF0, 0x1F, 0xF8, 0x3F, 0xF8,
+                                                     0x3F, 0x7C, 0x7C, 0x3C, 0x78, 0x3C, 0x78, 0x3C, 0x78, 0x00, 0x00,
+                                                     0x3C, 0x78, 0x3C, 0x48, 0x3C, 0x48, 0x3C, 0x78, 0x00, 0x00};
+
 namespace
 {
 // Simple Point helper class for fallback compass (used on low-resolution displays)
@@ -667,6 +678,23 @@ uint16_t getCompassDiam(uint32_t displayWidth, uint32_t displayHeight)
 void setTopDownView(bool enable)
 {
     g_forceTopDownView = enable;
+}
+
+void drawMagnetIndicator(OLEDDisplay *display, int16_t x, int16_t y)
+{
+    // Only draw if magnetometer is calibrated
+    if (g_hasMagHeading) {
+#if !defined(USE_EINK)
+        if (graphics::isHighResolution()) {
+            // Use larger 16x16 icon for high-resolution displays
+            display->drawXbm(x, y, 16, 16, magnet_large);
+        } else
+#endif
+        {
+            // Use smaller 8x8 icon for low-resolution displays
+            display->drawXbm(x, y, 8, 8, magnet_icon);
+        }
+    }
 }
 
 // Runtime-detected compass functions (simple overloads)

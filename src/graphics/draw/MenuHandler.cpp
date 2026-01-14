@@ -64,6 +64,7 @@ menuHandler::screenMenus menuHandler::menuQueue = menu_none;
 bool test_enabled = false;
 uint8_t test_count = 0;
 static menuHandler::screenMenus displayUnitsParentMenu = menuHandler::screen_options_menu;
+static uint32_t pendingCompassCalibrationMs = 0;
 
 void menuHandler::loraMenu()
 {
@@ -1258,9 +1259,8 @@ void menuHandler::positionBaseMenu()
             screen->runNow();
             break;
         case PositionAction::CompassCalibrate:
-            if (accelerometerThread) {
-                accelerometerThread->calibrate(10);
-            }
+            // Delay calibration start to allow menu to close first
+            pendingCompassCalibrationMs = millis() + 500;
             break;
         case PositionAction::GPSSmartPosition:
             menuQueue = gps_smart_position_menu;
@@ -2677,6 +2677,14 @@ void menuHandler::envTelemetrySourceMenu()
 
 void menuHandler::handleMenuSwitch(OLEDDisplay *display)
 {
+    // Check for pending compass calibration
+    if (pendingCompassCalibrationMs > 0 && millis() >= pendingCompassCalibrationMs) {
+        pendingCompassCalibrationMs = 0;
+        if (accelerometerThread) {
+            accelerometerThread->calibrate(10);
+        }
+    }
+
     if (menuQueue != menu_none)
         test_count = 0;
     switch (menuQueue) {

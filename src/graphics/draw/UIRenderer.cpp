@@ -660,6 +660,8 @@ void UIRenderer::drawNodeInfo(OLEDDisplay *display, const OLEDDisplayUiState *st
         // else show nothing
     }
 #endif
+    // Show magnet icon in bottom right corner if magnetometer is calibrated
+    CompassRenderer::drawMagnetIndicator(display, x + SCREEN_WIDTH - 18, y + SCREEN_HEIGHT - 18);
     graphics::drawCommonFooter(display, x, y);
 }
 
@@ -1351,6 +1353,9 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
                 }
             }
 
+            // Show magnet icon in bottom right corner if magnetometer is calibrated
+            CompassRenderer::drawMagnetIndicator(display, x + SCREEN_WIDTH - 18, y + SCREEN_HEIGHT - 18);
+
         } else {
             // Portrait or square: put compass at the bottom and centered, scaled to fit available space
             // For E-Ink screens, account for navigation bar at the bottom!
@@ -1483,6 +1488,9 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
                     CompassRenderer::drawNodeHeading(display, compassX, compassY, compassRadius * 2, -needleHeading);
                 }
             }
+
+            // Show magnet icon in bottom right corner if magnetometer is calibrated
+            CompassRenderer::drawMagnetIndicator(display, x + SCREEN_WIDTH - 18, y + SCREEN_HEIGHT - 18);
         }
     }
 #endif
@@ -1614,6 +1622,9 @@ void UIRenderer::drawCompassScreen(OLEDDisplay *display, OLEDDisplayUiState *sta
         display->fillRect(wX - boxWidth / 2 - 1, wY - 1, boxWidth, boxHeight);
         display->setColor(WHITE);
         display->drawString(wX, wY, "W");
+
+        // Show magnet icon in bottom right corner if magnetometer is calibrated
+        CompassRenderer::drawMagnetIndicator(display, x + SCREEN_WIDTH - 18, y + SCREEN_HEIGHT - 18);
     } else {
         // No valid heading - show message
         display->setFont(FONT_SMALL);

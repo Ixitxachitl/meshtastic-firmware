@@ -190,5 +190,8 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     display->drawString(0, graphics::getTextPositions(display)[line++], wp.name);
     display->drawString(0, graphics::getTextPositions(display)[line++], wp.description);
     display->drawString(0, graphics::getTextPositions(display)[line++], distStr);
+
+    // Show magnet icon in bottom right corner if magnetometer is calibrated
+    graphics::CompassRenderer::drawMagnetIndicator(display, x + w - 18, y + h - 18);
 }
 #endif

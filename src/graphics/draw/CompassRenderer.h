@@ -43,6 +43,9 @@ void drawCompassSphere(OLEDDisplay *display, int16_t cx, int16_t cy, uint16_t ra
 // Control functions for compass rendering mode
 void setTopDownView(bool enable);
 
+// Draw magnetometer calibration indicator icon
+void drawMagnetIndicator(OLEDDisplay *display, int16_t x, int16_t y);
+
 } // namespace CompassRenderer
 
 } // namespace graphics
