@@ -291,7 +291,7 @@ bool CardputerAdvKeyboard::handleFnShortcutOnPress(uint8_t key_idx)
     // fn + c  → calibrate compass (30s)
     if (base == 'c' || base == 'C') {
         if (accelerometerThread) {
-            accelerometerThread->calibrate(10);
+            accelerometerThread->calibrate(15);
         }
         return true; // consumed
     }

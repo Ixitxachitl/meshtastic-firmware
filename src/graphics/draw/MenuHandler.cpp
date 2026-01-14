@@ -2681,7 +2681,7 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
     if (pendingCompassCalibrationMs > 0 && millis() >= pendingCompassCalibrationMs) {
         pendingCompassCalibrationMs = 0;
         if (accelerometerThread) {
-            accelerometerThread->calibrate(10);
+            accelerometerThread->calibrate(15);
         }
     }
 

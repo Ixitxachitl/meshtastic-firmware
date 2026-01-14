@@ -543,7 +543,20 @@ int32_t BMI270Sensor::runOnce()
             if (bmm150) {
                 // Read raw magnetometer data
                 sBmm150MagData_t mag = bmm150->getGeomagneticData();
-                float mx = mag.x, my = mag.y, mz = mag.z;
+
+                // Both BMI270 and BMM150 use same coordinate system:
+                // X=backward, Y=left, Z=up (when device flat, screen up)
+                float mx = mag.x; // backward
+                float my = mag.y; // left
+                float mz = mag.z; // up
+
+                // Debug: show raw readings from both sensors
+                static uint32_t lastRawDebugMs = 0;
+                if (millis() - lastRawDebugMs > 2000) {
+                    LOG_DEBUG("BMI270 accel: [%.2f,%.2f,%.2f] | BMM150 raw: [%d,%d,%d] → used: [%.1f,%.1f,%.1f]", ax, ay, az,
+                              mag.x, mag.y, mag.z, mx, my, mz);
+                    lastRawDebugMs = millis();
+                }
 
                 // Skip if data looks invalid (all zeros or very small)
                 float magMag = mx * mx + my * my + mz * mz;
@@ -609,19 +622,19 @@ int32_t BMI270Sensor::runOnce()
                         float mzc = (mz - s_magCal.offset[2]) * s_magCal.scale[2];
 
                         // BMI270 gravity: X=left, Y=forward, Z=up
-                        // Compute pitch and roll from BMI270 gravity
-                        float pitch = asinf(-s_gyLP);        // Pitch from Y (forward component)
-                        float roll = atan2f(s_gxLP, s_gzLP); // Roll from X (left) and Z (up)
+                        // Both BMI270 and BMM150: X=backward, Y=left, Z=up
+                        // Pitch = forward/backward tilt (X becomes vertical)
+                        // Roll = left/right tilt (Y becomes vertical)
+                        float pitch = atan2f(-s_gxLP, sqrtf(s_gyLP * s_gyLP + s_gzLP * s_gzLP));
+                        float roll = atan2f(s_gyLP, s_gzLP);
 
                         float cp = cosf(pitch), sp = sinf(pitch);
                         float cr = cosf(roll), sr = sinf(roll);
 
-                        // BMM150 magnetometer: X=up, Y=left, Z=forward
-                        // Tilt compensation - rotate magnetometer to horizontal plane
-                        // Horizontal forward = mzc * cp + mxc * sp
-                        // Horizontal left = myc * cr - mxc * sr * cp + mzc * sr * sp
-                        float mag_forward = mzc * cp + mxc * sp;
-                        float mag_left = myc * cr - mxc * sr * cp + mzc * sr * sp;
+                        // Tilt compensation: project magnetometer to horizontal plane
+                        // Forward is -X (since X points backward), Left is Y
+                        float mag_forward = -mxc * cp + myc * sp * sr + mzc * sp * cr;
+                        float mag_left = myc * cr - mzc * sr;
 
                         // Heading from horizontal components (0=North at top, clockwise)
                         // atan2(left, forward) gives angle from forward axis
