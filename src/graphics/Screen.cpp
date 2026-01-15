@@ -167,7 +167,7 @@ void Screen::showOverlayBanner(BannerOverlayOptions banner_overlay_options)
     NotificationRenderer::alertBannerCallback = banner_overlay_options.bannerCallback;
     NotificationRenderer::curSelected = banner_overlay_options.InitialSelected;
     NotificationRenderer::pauseBanner = false;
-    NotificationRenderer::current_notification_type = notificationTypeEnum::selection_picker;
+    NotificationRenderer::current_notification_type = banner_overlay_options.notificationType;
     static OverlayCallback overlays[] = {graphics::UIRenderer::drawNavigationBar, NotificationRenderer::drawBannercallback};
     ui->setOverlays(overlays, sizeof(overlays) / sizeof(overlays[0]));
     ui->setTargetFPS(60);
@@ -1575,14 +1575,29 @@ int Screen::handleInputEvent(const InputEvent *event)
     setFastFramerate();                       // Draw ASAP
 #endif
     if (NotificationRenderer::isOverlayBannerShowing()) {
-        NotificationRenderer::inEvent = *event;
-        static OverlayCallback overlays[] = {graphics::UIRenderer::drawNavigationBar, NotificationRenderer::drawBannercallback};
-        ui->setOverlays(overlays, sizeof(overlays) / sizeof(overlays[0]));
-        setFastFramerate(); // Draw ASAP
-        ui->update();
+        // For simple text banners (like "New Message"), allow scroll events to pass through
+        // so users can continue navigating messages while the notification is displayed
+        bool isTextBanner = (NotificationRenderer::current_notification_type == notificationTypeEnum::text_banner);
+        bool isScrollEvent = (event->inputEvent == INPUT_BROKER_UP || event->inputEvent == INPUT_BROKER_DOWN);
+        bool onMessageScreen = (ui->getUiState()->currentFrame == framesetInfo.positions.textMessage);
 
-        menuHandler::handleMenuSwitch(dispdev);
-        return 0;
+        if (isTextBanner && isScrollEvent && onMessageScreen) {
+            // Don't consume scroll events - let them fall through to message handler below
+            // But still update the overlay for drawing
+            static OverlayCallback overlays[] = {graphics::UIRenderer::drawNavigationBar,
+                                                 NotificationRenderer::drawBannercallback};
+            ui->setOverlays(overlays, sizeof(overlays) / sizeof(overlays[0]));
+        } else {
+            NotificationRenderer::inEvent = *event;
+            static OverlayCallback overlays[] = {graphics::UIRenderer::drawNavigationBar,
+                                                 NotificationRenderer::drawBannercallback};
+            ui->setOverlays(overlays, sizeof(overlays) / sizeof(overlays[0]));
+            setFastFramerate(); // Draw ASAP
+            ui->update();
+
+            menuHandler::handleMenuSwitch(dispdev);
+            return 0;
+        }
     }
     // UP/DOWN in message screen scrolls through message threads
     // BUT: if overlay/menu is active, pass through to menu handler instead

@@ -797,6 +797,13 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
         // Swallow navigation on empty list
         handled = true;
     } else if (isSelect) {
+        // Bounds check before accessing messages array
+        if (currentMessageIndex < 0 || currentMessageIndex >= messagesCount) {
+            LOG_WARN("Invalid currentMessageIndex %d in handleMessageSelectorInput, returning to inactive", currentMessageIndex);
+            runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
+            currentMessageIndex = -1;
+            return true;
+        }
         const char *current = messages[currentMessageIndex];
 
         // === [Select Destination] triggers destination selection UI ===
@@ -898,17 +905,17 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
             // before the confirmation callback is executed (dangling pointer crash)
             std::string messageToSend(current);
             graphics::menuHandler::showConfirmationBanner("Send message?", [this, destNode, chan, messageToSend]() {
-                this->sendText(destNode, chan, messageToSend.c_str(), false);
-                // Match the non-confirmation path behavior:
-                // Set state to INACTIVE but DON'T regenerate frameset
-                // This keeps MessageRenderer active to show the sent message
-                payload = 0;
-                runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
-                currentMessageIndex = -1;
-                freetext = "";
-                cursor = 0;
-                // No REGENERATE_FRAMESET - MessageRenderer stays active (matches line ~1780)
-                IF_SCREEN(screen->forceDisplay());
+                // deferBanner=true because we're inside a banner callback - queue banner for after resetBanner()
+                this->sendText(destNode, chan, messageToSend.c_str(), false, true);
+                // sendText already triggers SWITCH_TO_TEXTMESSAGE and sets SENDING_ACTIVE
+                // Just clean up our state - don't force display update (sendText handles UI transition)
+                this->payload = 0;
+                this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
+                this->currentMessageIndex = -1;
+                this->freetext = "";
+                this->cursor = 0;
+                // Schedule runOnce to show the deferred "Sending..." banner
+                this->setIntervalFromNow(0);
             });
 #else
             payload = runState;
@@ -1602,7 +1609,7 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
     return 0;
 }
 
-void CannedMessageModule::sendText(NodeNum dest, ChannelIndex channel, const char *message, bool wantReplies)
+void CannedMessageModule::sendText(NodeNum dest, ChannelIndex channel, const char *message, bool wantReplies, bool deferBanner)
 {
     lastDest = dest;
     lastChannel = channel;
@@ -1644,11 +1651,14 @@ void CannedMessageModule::sendText(NodeNum dest, ChannelIndex channel, const cha
     // Send to mesh (PKI-encrypted if conditions above matched)
     service->sendToMesh(p, RX_SRC_LOCAL, true);
 
-    // Show banner immediately
-    if (screen) {
+    // Show banner immediately, or queue for after confirmation dialog closes
+    if (deferBanner) {
+        pendingSendingBanner = true;
+    } else if (screen) {
         graphics::BannerOverlayOptions opts;
         opts.message = "Sending...";
         opts.durationMs = 2000;
+        opts.notificationType = graphics::notificationTypeEnum::text_banner;
         screen->showOverlayBanner(opts);
     }
 
@@ -1683,13 +1693,18 @@ void CannedMessageModule::sendText(NodeNum dest, ChannelIndex channel, const cha
     }
     sm.ackStatus = AckStatus::NONE;
 
+    // Auto-switch thread view on outgoing message (must check BEFORE std::move)
+    MessageType msgType = sm.type;
+    ChannelIndex msgChannel = sm.channelIndex;
+    NodeNum msgDest = sm.dest;
+
     messageStore.addLiveMessage(std::move(sm));
 
-    // Auto-switch thread view on outgoing message
-    if (sm.type == MessageType::BROADCAST) {
-        graphics::MessageRenderer::setThreadMode(graphics::MessageRenderer::ThreadMode::CHANNEL, sm.channelIndex);
+    // Use the saved values since sm was moved
+    if (msgType == MessageType::BROADCAST) {
+        graphics::MessageRenderer::setThreadMode(graphics::MessageRenderer::ThreadMode::CHANNEL, msgChannel);
     } else {
-        graphics::MessageRenderer::setThreadMode(graphics::MessageRenderer::ThreadMode::DIRECT, -1, sm.dest);
+        graphics::MessageRenderer::setThreadMode(graphics::MessageRenderer::ThreadMode::DIRECT, -1, msgDest);
     }
 
     playComboTune();
@@ -1706,6 +1721,18 @@ void CannedMessageModule::sendText(NodeNum dest, ChannelIndex channel, const cha
 }
 int32_t CannedMessageModule::runOnce()
 {
+    // Show deferred "Sending..." banner (queued from confirmation callback)
+    if (pendingSendingBanner) {
+        pendingSendingBanner = false;
+        if (screen) {
+            graphics::BannerOverlayOptions opts;
+            opts.message = "Sending...";
+            opts.durationMs = 2000;
+            opts.notificationType = graphics::notificationTypeEnum::text_banner;
+            screen->showOverlayBanner(opts);
+        }
+    }
+
     if (this->runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION && needsUpdate) {
         updateDestinationSelectionList();
         needsUpdate = false;
@@ -1793,11 +1820,15 @@ int32_t CannedMessageModule::runOnce()
                 this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
             }
         } else {
-            if (strcmp(this->messages[this->currentMessageIndex], "[Select Destination]") == 0) {
+            // Bounds check: ensure currentMessageIndex is valid before accessing messages array
+            if (this->currentMessageIndex < 0 || this->currentMessageIndex >= this->messagesCount) {
+                LOG_WARN("Invalid currentMessageIndex %d (messagesCount=%d), returning to inactive", this->currentMessageIndex,
+                         this->messagesCount);
+                this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
+            } else if (strcmp(this->messages[this->currentMessageIndex], "[Select Destination]") == 0) {
                 this->runState = CANNED_MESSAGE_RUN_STATE_ACTIVE;
                 return INT32_MAX;
-            }
-            if ((this->messagesCount > this->currentMessageIndex) && (strlen(this->messages[this->currentMessageIndex]) > 0)) {
+            } else if (strlen(this->messages[this->currentMessageIndex]) > 0) {
                 if (strcmp(this->messages[this->currentMessageIndex], "~") == 0) {
                     return INT32_MAX;
                 } else {

@@ -125,7 +125,9 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
     virtual int32_t runOnce() override;
 
     // === Transmission ===
-    void sendText(NodeNum dest, ChannelIndex channel, const char *message, bool wantReplies);
+    void sendText(NodeNum dest, ChannelIndex channel, const char *message, bool wantReplies, bool deferBanner = false);
+
+    bool pendingSendingBanner = false; // Set true to show "Sending..." banner on next runOnce
     void drawHeader(OLEDDisplay *display, int16_t x, int16_t y, char *buffer);
     int splitConfiguredMessages();
     int getNextIndex();

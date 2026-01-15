@@ -22,7 +22,7 @@ struct BannerOverlayOptions {
     uint8_t optionsCount = 0;
     std::function<void(int)> bannerCallback = nullptr;
     int8_t InitialSelected = 0;
-    notificationTypeEnum notificationType = notificationTypeEnum::text_banner;
+    notificationTypeEnum notificationType = notificationTypeEnum::selection_picker;
 };
 } // namespace graphics
 
