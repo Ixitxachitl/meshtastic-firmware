@@ -60,7 +60,8 @@ class menuHandler
         DisplayUnits,
         env_menu,
         env_source_picker,
-        screen_timeout_picker
+        screen_timeout_picker,
+        screen_timeout_picker_menu
     };
     static screenMenus menuQueue;
     static uint32_t pickedNodeNum; // node selected by NodePicker for ManageNodeMenu

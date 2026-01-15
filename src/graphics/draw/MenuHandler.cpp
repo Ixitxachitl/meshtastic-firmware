@@ -1862,6 +1862,53 @@ void menuHandler::GPSPositionBroadcastMenu()
 
 #endif
 
+void menuHandler::ScreenTimeoutPickerMenu()
+{
+    static const char *optionsArray[] = {"Back", "5 Seconds", "10 Seconds", "30 Seconds", "1 Minute", "Always On"};
+
+    // Get current timeout to set initial selection
+    int currentSelection = 0; // Default to Back
+    if (config.display.screen_on_secs == 0) {
+        currentSelection = 5; // Always On
+    } else if (config.display.screen_on_secs <= 5) {
+        currentSelection = 1; // 5 Seconds
+    } else if (config.display.screen_on_secs <= 10) {
+        currentSelection = 2; // 10 Seconds
+    } else if (config.display.screen_on_secs <= 30) {
+        currentSelection = 3; // 30 Seconds
+    } else if (config.display.screen_on_secs <= 60) {
+        currentSelection = 4; // 1 Minute
+    }
+
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = "Screen Timeout";
+    bannerOptions.optionsArrayPtr = optionsArray;
+    bannerOptions.optionsCount = 6;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        if (selected == 1) { // 5 Seconds
+            config.display.screen_on_secs = 5;
+        } else if (selected == 2) { // 10 Seconds
+            config.display.screen_on_secs = 10;
+        } else if (selected == 3) { // 30 Seconds
+            config.display.screen_on_secs = 30;
+        } else if (selected == 4) { // 1 Minute
+            config.display.screen_on_secs = 60;
+        } else if (selected == 5) { // Always On
+            config.display.screen_on_secs = 0;
+        }
+
+        if (selected != 0) { // Not "Back"
+            // Save to device and reload config
+            service->reloadConfig(SEGMENT_CONFIG);
+            // Screen timeout changes require a reboot to take effect
+            rebootAtMsec = (millis() + DEFAULT_REBOOT_SECONDS * 1000);
+            LOG_INFO("Screen timeout set to %d seconds - rebooting", config.display.screen_on_secs);
+        }
+    };
+    bannerOptions.InitialSelected = currentSelection;
+    screen->showOverlayBanner(bannerOptions);
+}
+
 void menuHandler::BluetoothToggleMenu()
 {
     static const char *optionsArray[] = {"Back", "Enabled", "Disabled"};
@@ -2248,9 +2295,9 @@ void menuHandler::screenOptionsMenu()
     hasSupportBrightness = false;
 #endif
 
-    enum optionsNumbers { Back, Brightness, ScreenColor, FrameToggles, DisplayUnits };
-    static const char *optionsArray[5] = {"Back"};
-    static int optionsEnumArray[5] = {Back};
+    enum optionsNumbers { Back, Brightness, ScreenColor, ScreenTimeout, FrameToggles, DisplayUnits };
+    static const char *optionsArray[6] = {"Back"};
+    static int optionsEnumArray[6] = {Back};
     int options = 1;
 
     // Only show brightness for B&W displays
@@ -2265,6 +2312,9 @@ void menuHandler::screenOptionsMenu()
     optionsArray[options] = "Screen Color";
     optionsEnumArray[options++] = ScreenColor;
 #endif
+
+    optionsArray[options] = "Screen Timeout";
+    optionsEnumArray[options++] = ScreenTimeout;
 
     optionsArray[options] = "Frame Visibility";
     optionsEnumArray[options++] = FrameToggles;
@@ -2283,6 +2333,9 @@ void menuHandler::screenOptionsMenu()
             screen->runNow();
         } else if (selected == ScreenColor) {
             menuHandler::menuQueue = menuHandler::tftcolormenupicker;
+            screen->runNow();
+        } else if (selected == ScreenTimeout) {
+            menuHandler::menuQueue = menuHandler::screen_timeout_picker;
             screen->runNow();
         } else if (selected == FrameToggles) {
             menuHandler::menuQueue = menuHandler::FrameToggles;
@@ -2765,6 +2818,9 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
         break;
     case brightness_picker:
         BrightnessPickerMenu();
+        break;
+    case screen_timeout_picker:
+        ScreenTimeoutPickerMenu();
         break;
     case node_name_length_menu:
         nodeNameLengthMenu();
