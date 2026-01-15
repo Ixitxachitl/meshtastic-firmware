@@ -85,10 +85,13 @@ class EnvironmentTelemetryModule : private concurrency::OSThread,
     uint32_t screenUpdateIntervalMs = SECONDS_IN_MINUTE * 1000; // Update screen data every minute
     uint32_t lastSentToMesh = 0;
     uint32_t lastSentToPhone = 0;
+<<<<<<< HEAD
     uint32_t lastScreenUpdate = 0;
     uint32_t meshBroadcastStartTime = 0; // When mesh broadcasts should start (after stagger delay)
     uint32_t sensor_read_error_count = 0;
     uint32_t selectedSource = 0; // 0 = Auto (most recent), otherwise a nodenum
+=======
+>>>>>>> origin/develop
 };
 
 extern EnvironmentTelemetryModule *environmentTelemetryModule;

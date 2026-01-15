@@ -33,7 +33,8 @@ class menuHandler
         brightness_picker,
         reboot_menu,
         shutdown_menu,
-        add_favorite,
+        NodePicker_menu,
+        Manage_Node_menu,
         remove_favorite,
         test_menu,
         number_test,
@@ -62,6 +63,7 @@ class menuHandler
         screen_timeout_picker
     };
     static screenMenus menuQueue;
+    static uint32_t pickedNodeNum; // node selected by NodePicker for ManageNodeMenu
 
     static void OnboardMessage();
     static void LoraRegionPicker(uint32_t duration = 30000);
@@ -99,6 +101,8 @@ class menuHandler
     static void ScreenTimeoutPickerMenu();
     static void rebootMenu();
     static void shutdownMenu();
+    static void NodePicker();
+    static void ManageNodeMenu();
     static void addFavoriteMenu();
     static void removeFavoriteMenu();
     static void traceRouteMenu();
@@ -160,6 +164,7 @@ using GPSToggleOption = MenuOption<meshtastic_Config_PositionConfig_GpsMode>;
 using GPSFormatOption = MenuOption<meshtastic_DeviceUIConfig_GpsCoordinateFormat>;
 using NodeNameOption = MenuOption<bool>;
 using PositionMenuOption = MenuOption<int>;
+using ManageNodeOption = MenuOption<int>;
 using ClockFaceOption = MenuOption<bool>;
 
 } // namespace graphics
