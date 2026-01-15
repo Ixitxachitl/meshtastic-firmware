@@ -660,8 +660,9 @@ int32_t BMI270Sensor::runOnce()
         }
     }
 #endif
-    // Update rate depends on whether we have a calibrated magnetometer
-    return (g_hasMagHeading || s_magCalActive) ? 100 : MOTION_SENSOR_CHECK_INTERVAL_MS;
+    // Update rate: 50ms for fake gyro compass (smoother), 100ms for magnetometer or idle
+    // Fake compass needs faster updates for smooth rotation tracking
+    return g_hasMagHeading ? 100 : (s_magCalActive ? 100 : 50);
 }
 
 void BMI270Sensor::calibrate(uint16_t forSeconds)
