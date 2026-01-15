@@ -14,6 +14,9 @@
 #include "graphics/emotes.h"
 #include "graphics/images.h"
 #include "main.h"
+#if !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
+#include "modules/Telemetry/EnvironmentTelemetry.h"
+#endif
 #include "target_specific.h"
 #include <OLEDDisplay.h>
 #include <RTC.h>
@@ -1716,7 +1719,14 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
         graphics::setMessagesScreenActive(state->currentFrame == msgIdx);
 
         const int envIdx = graphics::getEnvTelemetryFrameIndex();
-        graphics::setEnvTelemetryScreenActive(state->currentFrame == envIdx);
+        const bool isEnvScreen = (state->currentFrame == envIdx);
+        graphics::setEnvTelemetryScreenActive(isEnvScreen);
+#if !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
+        // Reset scroll to top when switching to environment telemetry screen
+        if (isEnvScreen) {
+            EnvironmentTelemetryModule::resetScroll();
+        }
+#endif
     }
 
     const int iconSize = (currentResolution == ScreenResolution::High) ? 16 : 8;
