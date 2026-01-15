@@ -554,8 +554,12 @@ void menuHandler::replyMenu()
     optionsArray[options] = "With Preset";
     optionsEnumArray[options++] = ReplyPreset;
 
-    // Freetext reply (only when keyboard exists)
+    // Freetext reply (only when keyboard or button input exists)
+#if HAS_TRACKBALL || HAS_TOUCHSCREEN || defined(HAS_PHYSICAL_KEYBOARD)
+    if (kb_found || osk_found) {
+#else
     if (kb_found) {
+#endif
         optionsArray[options] = "With Freetext";
         optionsEnumArray[options++] = ReplyFreetext;
     }
@@ -952,7 +956,11 @@ void menuHandler::textMessageBaseMenu()
     int options = 1;
     optionsArray[options] = "New Preset Msg";
     optionsEnumArray[options++] = Preset;
+#if HAS_TRACKBALL || HAS_TOUCHSCREEN || defined(HAS_PHYSICAL_KEYBOARD)
+    if (kb_found || osk_found) {
+#else
     if (kb_found) {
+#endif
         optionsArray[options] = "New Freetext Msg";
         optionsEnumArray[options++] = Freetext;
     }
@@ -1075,7 +1083,11 @@ void menuHandler::favoriteBaseMenu()
     }
     optionsEnumArray[options++] = Preset;
 
+#if HAS_TRACKBALL || HAS_TOUCHSCREEN || defined(HAS_PHYSICAL_KEYBOARD)
+    if (kb_found || osk_found) {
+#else
     if (kb_found) {
+#endif
         optionsArray[options] = "New Freetext Msg";
         optionsEnumArray[options++] = Freetext;
     }
@@ -2628,31 +2640,18 @@ void menuHandler::envTelemetrySourceMenu()
     optionsArray[count] = "Back";
     optionsEnumArray[count++] = -1;
 
-    // Node names (only sources with env telemetry) - respect use_long_node_name setting
+    // Node short names (only sources with env telemetry)
     for (uint32_t num : sources) {
         if (count >= kMax - 1)
             break; // leave room for Exit
 
         const meshtastic_NodeInfoLite *n = nodeDB->getMeshNode(num);
         std::string label;
-        if (n && n->has_user) {
-            const char *name = config.display.use_long_node_name ? n->user.long_name : n->user.short_name;
-            if (name && name[0]) {
-                label = name;
-            } else {
-                // Fallback: try the other name if preferred is empty
-                const char *altName = config.display.use_long_node_name ? n->user.short_name : n->user.long_name;
-                if (altName && altName[0]) {
-                    label = altName;
-                } else {
-                    char buf[16];
-                    snprintf(buf, sizeof(buf), "%08x", (unsigned int)num); // hex fallback
-                    label = buf;
-                }
-            }
+        if (n && n->has_user && n->user.short_name && n->user.short_name[0]) {
+            label = n->user.short_name; // short name only
         } else {
             char buf[16];
-            snprintf(buf, sizeof(buf), "%08x", (unsigned int)num); // hex fallback
+            snprintf(buf, sizeof(buf), "%08X", num); // hex fallback
             label = buf;
         }
 
