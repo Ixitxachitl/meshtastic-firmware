@@ -692,7 +692,12 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
             if (strchr(lineBuffer, 'p') || strchr(lineBuffer, 'g') || strchr(lineBuffer, 'y') || strchr(lineBuffer, 'j')) {
                 background_yOffset = -1;
             }
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+            // Make header background taller for tiny fonts
+            display->fillRect(boxLeft, boxTop + 1, boxWidth, effectiveLineHeight + 1 - background_yOffset);
+#else
             display->fillRect(boxLeft, boxTop + 1, boxWidth, effectiveLineHeight - background_yOffset);
+#endif
             display->setColor(BLACK);
 #if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
             int yOffset = 1; // Consistent spacing for tiny fonts (FONT_HEIGHT_TINY is 6, so 6-5=1 for proper alignment)

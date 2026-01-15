@@ -230,7 +230,11 @@ void AudioModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int
 
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
+#if defined(USE_TINY_FONT)
+    display->fillRect(0 + x, 0 + y, x + display->getWidth(), y + FONT_HEIGHT_TINY);
+#else
     display->fillRect(0 + x, 0 + y, x + display->getWidth(), y + FONT_HEIGHT_SMALL);
+#endif
     display->setColor(BLACK);
     display->drawStringf(0 + x, 0 + y, buffer, "Codec2 Mode %d Audio",
                          (moduleConfig.audio.bitrate ? moduleConfig.audio.bitrate : AUDIO_MODULE_MODE) - 1);
@@ -239,10 +243,18 @@ void AudioModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     switch (radio_state) {
     case RadioState::tx:
+#if defined(USE_TINY_FONT)
+        display->drawString(display->getWidth() / 2 + x, (display->getHeight() - FONT_HEIGHT_TINY) / 2 + y, "PTT");
+#else
         display->drawString(display->getWidth() / 2 + x, (display->getHeight() - FONT_HEIGHT_SMALL) / 2 + y, "PTT");
+#endif
         break;
     default:
+#if defined(USE_TINY_FONT)
+        display->drawString(display->getWidth() / 2 + x, (display->getHeight() - FONT_HEIGHT_TINY) / 2 + y, "Receive");
+#else
         display->drawString(display->getWidth() / 2 + x, (display->getHeight() - FONT_HEIGHT_SMALL) / 2 + y, "Receive");
+#endif
         break;
     }
 }

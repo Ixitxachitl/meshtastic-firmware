@@ -1430,10 +1430,6 @@ void Screen::showFrame(FrameDirection direction)
 
 void Screen::setFastFramerate()
 {
-#if defined(M5STACK_UNITC6L)
-    dispdev->clear();
-    dispdev->display();
-#endif
     // We are about to start a transition so speed up fps
     targetFramerate = SCREEN_TRANSITION_FRAMERATE;
 

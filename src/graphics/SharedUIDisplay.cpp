@@ -159,7 +159,11 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
     display->setTextAlignment(TEXT_ALIGN_LEFT);
 
     const int xOffset = 4;
+#if defined(USE_TINY_FONT)
+    const int highlightHeight = FONT_HEIGHT_TINY - 1;
+#else
     const int highlightHeight = FONT_HEIGHT_SMALL - 1;
+#endif
     const bool isInverted = (config.display.displaymode != meshtastic_Config_DisplayConfig_DisplayMode_INVERTED);
     const bool isBold = config.display.heading_bold;
 
@@ -237,7 +241,11 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
 
     bool useHorizontalBattery = (currentResolution == ScreenResolution::High && screenW >= screenH);
 #if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+#if defined(USE_TINY_FONT)
+    const int textY = y + (highlightHeight - FONT_HEIGHT_TINY) / 2 + 1; // Skip first padding row
+#else
     const int textY = y + (highlightHeight - FONT_HEIGHT_SMALL) / 2 + 1; // Skip first padding row
+#endif
 #else
     const int textY = y + (highlightHeight - FONT_HEIGHT_SMALL) / 2;
 #endif
@@ -256,12 +264,32 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
         batteryX += usb_tiny_width + 1;
     } else {
         batteryX += 1;
-        batteryY += 1;
-        display->drawXbm(batteryX, batteryY, battery_tiny_width, battery_tiny_height, battery_tiny);
-        // Simple fill for charge level (3 pixels wide)
-        int fillWidth = 3 * chargePercent / 100;
-        display->fillRect(batteryX + 1, batteryY + 1, fillWidth, 2);
-        batteryX += battery_tiny_width + 1;
+        // Select battery icon based on charge level
+        const unsigned char *batteryIcon;
+        int iconWidth, iconHeight;
+        if (chargePercent >= 90) {
+            batteryIcon = tiny_battery_100;
+            iconWidth = tiny_battery_100_width;
+            iconHeight = tiny_battery_100_height;
+        } else if (chargePercent >= 65) {
+            batteryIcon = tiny_battery_75;
+            iconWidth = tiny_battery_75_width;
+            iconHeight = tiny_battery_75_height;
+        } else if (chargePercent >= 40) {
+            batteryIcon = tiny_battery_50;
+            iconWidth = tiny_battery_50_width;
+            iconHeight = tiny_battery_50_height;
+        } else if (chargePercent >= 15) {
+            batteryIcon = tiny_battery_25;
+            iconWidth = tiny_battery_25_width;
+            iconHeight = tiny_battery_25_height;
+        } else {
+            batteryIcon = tiny_battery_0;
+            iconWidth = tiny_battery_0_width;
+            iconHeight = tiny_battery_0_height;
+        }
+        display->drawXbm(batteryX, batteryY, iconWidth, iconHeight, batteryIcon);
+        batteryX += iconWidth + 1;
     }
 
     // Show battery percentage for USE_TINY_FONT devices
@@ -401,7 +429,11 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
 #endif
             if (showMail) {
                 int iconX = timeX - envelope_width - 2; // Position to left of time
+#if defined(USE_TINY_FONT)
+                int iconY = textY + (FONT_HEIGHT_TINY - envelope_height) / 2;
+#else
                 int iconY = textY + (FONT_HEIGHT_SMALL - envelope_height) / 2;
+#endif
                 if (isInverted && !force_no_invert) {
                     display->setColor(WHITE);
                     display->fillRect(iconX - 1, iconY - 1, envelope_width + 2, envelope_height + 2);
@@ -453,7 +485,11 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
                 display->drawLine(iconX + iconW, iconY, iconX + iconW / 2, iconY + iconH - 4);
             } else {
                 int iconX = iconRightEdge - (mail_width - 2);
+#if defined(USE_TINY_FONT)
+                int iconY = textY + (FONT_HEIGHT_TINY - mail_height) / 2;
+#else
                 int iconY = textY + (FONT_HEIGHT_SMALL - mail_height) / 2;
+#endif
                 if (isInverted && !force_no_invert) {
                     display->setColor(WHITE);
                     display->fillRect(iconX - 1, iconY - 1, mail_width + 2, mail_height + 2);
@@ -468,7 +504,11 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
         } else if (externalNotificationModule->getMute()) {
             if (currentResolution == ScreenResolution::High) {
                 int iconX = iconRightEdge - mute_symbol_big_width;
+#if defined(USE_TINY_FONT)
+                int iconY = textY + (FONT_HEIGHT_TINY - mute_symbol_big_height) / 2;
+#else
                 int iconY = textY + (FONT_HEIGHT_SMALL - mute_symbol_big_height) / 2;
+#endif
 
                 if (isInverted && !force_no_invert) {
                     display->setColor(WHITE);
@@ -482,7 +522,11 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
                 display->drawXbm(iconX, iconY, mute_symbol_big_width, mute_symbol_big_height, mute_symbol_big);
             } else {
                 int iconX = iconRightEdge - mute_symbol_width;
+#if defined(USE_TINY_FONT)
+                int iconY = textY + (FONT_HEIGHT_TINY - mail_height) / 2;
+#else
                 int iconY = textY + (FONT_HEIGHT_SMALL - mail_height) / 2;
+#endif
 
                 if (isInverted && !force_no_invert) {
                     display->setColor(WHITE);
@@ -541,19 +585,31 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
             if (useHorizontalBattery) {
                 int iconW = 16, iconH = 12;
                 int iconX = iconRightEdge - iconW;
+#if defined(USE_TINY_FONT)
+                int iconY = textY + (FONT_HEIGHT_TINY - iconH) / 2 - 1;
+#else
                 int iconY = textY + (FONT_HEIGHT_SMALL - iconH) / 2 - 1;
+#endif
                 display->drawRect(iconX, iconY, iconW + 1, iconH);
                 display->drawLine(iconX, iconY, iconX + iconW / 2, iconY + iconH - 4);
                 display->drawLine(iconX + iconW, iconY, iconX + iconW / 2, iconY + iconH - 4);
             } else {
                 int iconX = iconRightEdge - mail_width;
+#if defined(USE_TINY_FONT)
+                int iconY = textY + (FONT_HEIGHT_TINY - mail_height) / 2;
+#else
                 int iconY = textY + (FONT_HEIGHT_SMALL - mail_height) / 2;
+#endif
                 display->drawXbm(iconX, iconY, mail_width, mail_height, mail);
             }
         } else if (externalNotificationModule->getMute()) {
             if (currentResolution == ScreenResolution::High) {
                 int iconX = iconRightEdge - mute_symbol_big_width;
+#if defined(USE_TINY_FONT)
+                int iconY = textY + (FONT_HEIGHT_TINY - mute_symbol_big_height) / 2;
+#else
                 int iconY = textY + (FONT_HEIGHT_SMALL - mute_symbol_big_height) / 2;
+#endif
                 display->drawXbm(iconX, iconY, mute_symbol_big_width, mute_symbol_big_height, mute_symbol_big);
             } else {
                 int iconX = iconRightEdge - mute_symbol_width;

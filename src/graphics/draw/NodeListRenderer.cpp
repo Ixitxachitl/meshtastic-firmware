@@ -28,9 +28,6 @@ using graphics::Emote;
 using graphics::emotes;
 using graphics::numEmotes;
 
-#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
-static uint32_t lastSwitchTime = 0;
-#endif
 namespace graphics
 {
 namespace NodeListRenderer
@@ -683,13 +680,6 @@ void drawDynamicListScreen_Nodes(OLEDDisplay *display, OLEDDisplayUiState *state
 
     unsigned long now = millis();
 
-#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
-    display->clear();
-    if (now - lastSwitchTime >= 3000) {
-        display->display();
-        lastSwitchTime = now;
-    }
-#endif
     // On very first call (on boot or state enter)
     if (lastRenderedMode == MODE_COUNT_NODE) {
         currentMode_Nodes = MODE_LAST_HEARD;
@@ -719,13 +709,6 @@ void drawDynamicListScreen_Location(OLEDDisplay *display, OLEDDisplayUiState *st
 
     unsigned long now = millis();
 
-#if defined(M5STACK_UNITC6L)
-    display->clear();
-    if (now - lastSwitchTime >= 3000) {
-        display->display();
-        lastSwitchTime = now;
-    }
-#endif
     // On very first call (on boot or state enter)
     if (lastRenderedMode == MODE_COUNT_LOCATION) {
         currentMode_Location = MODE_DISTANCE;
@@ -784,14 +767,6 @@ void drawNodeListWithCompasses(OLEDDisplay *display, OLEDDisplayUiState *state, 
     double lat = DegD(ourNode->position.latitude_i);
     double lon = DegD(ourNode->position.longitude_i);
 
-#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
-    display->clear();
-    uint32_t now = millis();
-    if (now - lastSwitchTime >= 2000) {
-        display->display();
-        lastSwitchTime = now;
-    }
-#endif
     if (uiconfig.compass_mode != meshtastic_CompassMode_FREEZE_HEADING) {
 #if HAS_GPS
         if (screen->hasHeading()) {

@@ -67,9 +67,17 @@ void drawCompassNorth(OLEDDisplay *display, int16_t compassX, int16_t compassY, 
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     display->setColor(BLACK);
     if (isHighResolution()) {
+#if defined(USE_TINY_FONT)
+        display->fillRect(north.x - 8, north.y - 1, display->getStringWidth("N") + 3, FONT_HEIGHT_TINY - 6);
+#else
         display->fillRect(north.x - 8, north.y - 1, display->getStringWidth("N") + 3, FONT_HEIGHT_SMALL - 6);
+#endif
     } else {
+#if defined(USE_TINY_FONT)
+        display->fillRect(north.x - 4, north.y - 1, display->getStringWidth("N") + 2, FONT_HEIGHT_TINY - 6);
+#else
         display->fillRect(north.x - 4, north.y - 1, display->getStringWidth("N") + 2, FONT_HEIGHT_SMALL - 6);
+#endif
     }
     display->setColor(WHITE);
     display->drawString(north.x, north.y - 3, "N");

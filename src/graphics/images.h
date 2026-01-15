@@ -25,6 +25,28 @@ const unsigned char usb_tiny[] PROGMEM = {0x18, 0x0E, 0x19, 0x01};
 const int usb_tiny_width = 5;
 const int usb_tiny_height = 4;
 
+// Battery levels for tiny font (8 pixels wide, 6 pixels tall)
+const unsigned char tiny_battery_100[] PROGMEM = {0x00, 0x3E, 0x7E, 0x7E, 0x3E, 0x00};
+const int tiny_battery_100_width = 8;
+const int tiny_battery_100_height = 6;
+
+const unsigned char tiny_battery_75[] PROGMEM = {0x00, 0x3E, 0x5E, 0x5E, 0x3E, 0x00};
+const int tiny_battery_75_width = 8;
+const int tiny_battery_75_height = 6;
+
+const unsigned char tiny_battery_50[] PROGMEM = {0x00, 0x3E, 0x4E, 0x4E, 0x3E, 0x00};
+const int tiny_battery_50_width = 8;
+const int tiny_battery_50_height = 6;
+
+const unsigned char tiny_battery_25[] PROGMEM = {0x00, 0x3E, 0x46, 0x46, 0x3E, 0x00};
+const int tiny_battery_25_width = 8;
+const int tiny_battery_25_height = 6;
+
+const unsigned char tiny_battery_0[] PROGMEM = {0x00, 0x3E, 0x42, 0x42, 0x3E, 0x00};
+const int tiny_battery_0_width = 8;
+const int tiny_battery_0_height = 6;
+
+// Legacy single battery icon (kept for compatibility)
 const unsigned char battery_tiny[] PROGMEM = {0x0F, 0x1F, 0x1F, 0x0F};
 const int battery_tiny_width = 5;
 const int battery_tiny_height = 4;

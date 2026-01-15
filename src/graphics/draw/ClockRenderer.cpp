@@ -337,7 +337,7 @@ void drawDigitalClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int1
     }
 
 #if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
-    int labelYPos = (display->getHeight() - hourMinuteTextY) - 1 - 4; // Move up 4 pixels with clock
+    int labelYPos = (display->getHeight() - hourMinuteTextY) - 1;
 #else
     int labelYPos = (display->getHeight() - hourMinuteTextY) - 1;
 #endif

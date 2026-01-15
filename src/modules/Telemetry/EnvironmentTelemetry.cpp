@@ -224,12 +224,14 @@ static void drawStringWithOhm(OLEDDisplay *display, int16_t x, int16_t y, const 
     // Select appropriate Ohm bitmap based on font height
     const uint8_t *ohmBitmap;
     int ohmWidth, ohmHeight;
+    int ohmYAdjust = 0;
 
     if (fontHeight <= 7) {
         // Tiny font (TomThumb, height ~6)
         ohmBitmap = OhmBitmap_Tiny;
         ohmWidth = OhmWidth_Tiny;
         ohmHeight = OhmHeight_Tiny;
+        ohmYAdjust = -1; // Move up 1 pixel for better alignment
     } else if (fontHeight <= 14) {
         // Small font (ArialMT_Plain_10, height ~13)
         ohmBitmap = OhmBitmap_10;
@@ -249,7 +251,7 @@ static void drawStringWithOhm(OLEDDisplay *display, int16_t x, int16_t y, const 
 
     // Draw Ohm symbol bitmap, vertically centered with text
     x += 1; // 1px gap after 'k'
-    int ohmY = y + (fontHeight - ohmHeight) / 2;
+    int ohmY = y + (fontHeight - ohmHeight) / 2 + ohmYAdjust;
     display->drawXbm(x, ohmY, ohmWidth, ohmHeight, ohmBitmap);
     x += ohmWidth;
 
@@ -1065,7 +1067,14 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     graphics::drawCommonHeader(display, x, y, titleStr);
 
     // === Row spacing setup ===
+#if defined(USE_TINY_FONT)
+    // For tiny font on small screens, use tighter spacing with sparklines
+    const int rowHeight = (graphics::currentResolution == graphics::ScreenResolution::UltraLow) ? 7
+                          : (graphics::currentResolution == graphics::ScreenResolution::Low)    ? FONT_HEIGHT_TINY + 1
+                                                                                                : FONT_HEIGHT_TINY - 4;
+#else
     const int rowHeight = (graphics::currentResolution == graphics::ScreenResolution::UltraLow) ? 7 : FONT_HEIGHT_SMALL - 4;
+#endif
     int currentY = graphics::getTextPositions(display)[line++];
 
     // === Determine which node's telemetry to show ===
@@ -1438,7 +1447,11 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
 
         // Add IAQ as last scrollable row with ruler (no sparkline)
         bool hasIAQRow = false;
+#if defined(USE_TINY_FONT)
+        const int iaqRulerHeight = kRulerBaselineOfs + kNeedleH + FONT_HEIGHT_TINY + 4;
+#else
         const int iaqRulerHeight = kRulerBaselineOfs + kNeedleH + FONT_HEIGHT_SMALL + 4;
+#endif
         if (m.iaq != 0 && metricRowCount < MAX_METRIC_ROWS) {
             // Use cached string if available, otherwise create temporary label
             if (s_displayCache.iaqStr[0] != '\0') {
@@ -1634,7 +1647,11 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         int totalContentHeight = 0;
         for (size_t i = 0; i < metricRowCount; i++) {
             bool isIAQRow = hasIAQRow && (i == metricRowCount - 1);
+#if defined(USE_TINY_FONT)
+            int rowHeightForCalc = isIAQRow ? (kRulerBaselineOfs + kNeedleH + FONT_HEIGHT_TINY + 4) : rowHeight;
+#else
             int rowHeightForCalc = isIAQRow ? (kRulerBaselineOfs + kNeedleH + FONT_HEIGHT_SMALL + 4) : rowHeight;
+#endif
             totalContentHeight += rowHeightForCalc;
         }
 
@@ -1647,9 +1664,13 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         if (s_scrollY > maxScroll)
             s_scrollY = maxScroll;
 
-        // Render visible metric rows with offset (convert float to int for rendering)
-        // Calculate IAQ ruler actual height
+            // Render visible metric rows with offset (convert float to int for rendering)
+            // Calculate IAQ ruler actual height
+#if defined(USE_TINY_FONT)
+        const int iaqRulerHeight = kRulerBaselineOfs + kNeedleH + FONT_HEIGHT_TINY + 4;
+#else
         const int iaqRulerHeight = kRulerBaselineOfs + kNeedleH + FONT_HEIGHT_SMALL + 4;
+#endif
 
         int yOffset = scrollTop - (int)s_scrollY;
         int cumulativeY = 0; // Track actual Y position accounting for variable row heights
@@ -1669,8 +1690,15 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
                     const int rulerW = SCREEN_WIDTH - 2 * x;
                     drawIAQRuler(display, x, rowY, rulerW, m.iaq, metricRows[i].label);
                 } else {
+#if defined(USE_TINY_FONT)
+                    // For tiny font: keep node name at original position, move other labels down to align with sparklines
+                    bool isNodeName = (i == 0); // First row is sender/timestamp
+                    int textY = isNodeName ? rowY : rowY + (rowHeight - FONT_HEIGHT_TINY) / 2 + 1;
+                    drawStringWithOhm(display, x, textY, metricRows[i].label);
+#else
                     // Draw label (use Ohm-aware function for gas resistance)
                     drawStringWithOhm(display, x, rowY, metricRows[i].label);
+#endif
 
                     // Draw sparkline if history data exists (no offset, 1px gap comes from rowHeight spacing)
                     if (metricRows[i].hist && metricRows[i].hist->len >= 2) {
