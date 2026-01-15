@@ -2628,18 +2628,31 @@ void menuHandler::envTelemetrySourceMenu()
     optionsArray[count] = "Back";
     optionsEnumArray[count++] = -1;
 
-    // Node short names (only sources with env telemetry)
+    // Node names (only sources with env telemetry) - respect use_long_node_name setting
     for (uint32_t num : sources) {
         if (count >= kMax - 1)
             break; // leave room for Exit
 
         const meshtastic_NodeInfoLite *n = nodeDB->getMeshNode(num);
         std::string label;
-        if (n && n->has_user && n->user.short_name && n->user.short_name[0]) {
-            label = n->user.short_name; // short name only
+        if (n && n->has_user) {
+            const char *name = config.display.use_long_node_name ? n->user.long_name : n->user.short_name;
+            if (name && name[0]) {
+                label = name;
+            } else {
+                // Fallback: try the other name if preferred is empty
+                const char *altName = config.display.use_long_node_name ? n->user.short_name : n->user.long_name;
+                if (altName && altName[0]) {
+                    label = altName;
+                } else {
+                    char buf[16];
+                    snprintf(buf, sizeof(buf), "%08x", (unsigned int)num); // hex fallback
+                    label = buf;
+                }
+            }
         } else {
             char buf[16];
-            snprintf(buf, sizeof(buf), "%08X", num); // hex fallback
+            snprintf(buf, sizeof(buf), "%08x", (unsigned int)num); // hex fallback
             label = buf;
         }
 
