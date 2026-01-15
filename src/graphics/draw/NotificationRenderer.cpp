@@ -628,6 +628,14 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
 
     uint16_t boxWidth = hPadding * 2 + maxWidth;
 
+    // Constrain box width to screen width minus margins
+    uint16_t screenWidth = display->width();
+    uint16_t maxAllowedWidth = screenWidth - 8; // Leave 4px margin on each side
+    if (boxWidth > maxAllowedWidth) {
+        boxWidth = maxAllowedWidth;
+        maxWidth = boxWidth - hPadding * 2;
+    }
+
     if (needs_bell) {
         if ((currentResolution == ScreenResolution::High) && boxWidth <= 150)
             boxWidth += 26;
