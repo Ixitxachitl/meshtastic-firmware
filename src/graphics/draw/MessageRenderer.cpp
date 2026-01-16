@@ -275,7 +275,7 @@ static void utf8Truncate(char *str, size_t maxChars)
     str[i] = '\0';
 }
 
-// Remove variation selectors (FE0F) and skin tone modifiers from emoji so they match your labels
+// Remove variation selectors (FE0F), skin tone modifiers, and keycap modifiers from emoji so they match your labels
 std::string normalizeEmoji(const std::string &s)
 {
     std::string out;
@@ -287,6 +287,13 @@ std::string normalizeEmoji(const std::string &s)
 
         // Skip variation selector (U+FE0F): EF B8 8F
         if (c == 0xEF && i + 2 < s.size() && (uint8_t)s[i + 1] == 0xB8 && (uint8_t)s[i + 2] == 0x8F) {
+            i += 3;
+            continue;
+        }
+
+        // Skip combining enclosing keycap (U+20E3): E2 83 A3
+        // This converts keycap emoji like 1️⃣ to just "1" by stripping the keycap modifier
+        if (c == 0xE2 && i + 2 < s.size() && (uint8_t)s[i + 1] == 0x83 && (uint8_t)s[i + 2] == 0xA3) {
             i += 3;
             continue;
         }
@@ -967,7 +974,9 @@ static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &
 {
     ensureEmoteLabelsNormalized(); // Ensure cache is ready
 
-    std::string normalized = normalizeEmoji(line);
+    // Use replaceUnknownEmoji to match how text is actually rendered
+    // This ensures width calculation is consistent with drawStringWithEmotes
+    std::string normalized = replaceUnknownEmoji(line, emotes, emoteCount);
     int totalWidth = 0;
 
     size_t i = 0;
@@ -985,20 +994,12 @@ static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &
         }
         if (!matched) {
             size_t charLen = utf8CharLen(static_cast<uint8_t>(normalized[i]));
-
-            // Check if this is likely an emoji (4-byte UTF-8 starting with 0xF0, or 3-byte symbols)
-            if ((charLen >= 4 && (uint8_t)normalized[i] == 0xF0) ||
-                (charLen == 3 && ((uint8_t)normalized[i] == 0xE2 || (uint8_t)normalized[i] == 0xEF))) {
-                // Unknown emoji: use a reasonable width estimate
-                totalWidth += 16 + 1; // Most emojis are 16px + spacing
-            } else {
-                // Regular character - use actual font width
+            // Regular character (including ¿ replacement for unknown emoji) - use actual font width
 #if defined(OLED_UA) || defined(OLED_RU)
-                totalWidth += display->getStringWidth(normalized.substr(i, charLen).c_str(), charLen, true);
+            totalWidth += display->getStringWidth(normalized.substr(i, charLen).c_str(), charLen, true);
 #else
-                totalWidth += display->getStringWidth(normalized.substr(i, charLen).c_str());
+            totalWidth += display->getStringWidth(normalized.substr(i, charLen).c_str());
 #endif
-            }
             i += charLen;
         }
     }

@@ -393,6 +393,10 @@ extern const unsigned char potato[] PROGMEM;
 #define cold_face_width 16
 #define cold_face_height 16
 extern const unsigned char cold_face[] PROGMEM;
+
+#define antenna_bars_width 16
+#define antenna_bars_height 16
+extern const unsigned char antenna_bars[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
 } // namespace graphics

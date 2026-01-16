@@ -2684,14 +2684,14 @@ void menuHandler::envTelemetrySourceMenu()
     static const char *optionsArray[kMax];
     static int optionsEnumArray[kMax];
 
-    // Clear arrays first to prevent stale pointers
-    int count = 0;
-    memset(optionsArray, 0, sizeof(optionsArray));
-    memset(optionsEnumArray, 0, sizeof(optionsEnumArray));
-
-    // Keep strings alive for c_str() - clear after arrays are zeroed
+    // Keep strings alive for c_str() - must be static to persist
     static std::vector<std::string> nameStorage;
+
+    // Clear and rebuild everything fresh
     nameStorage.clear();
+    nameStorage.reserve(sources.size() + 2); // Reserve space for all entries
+
+    int count = 0;
 
     // Back sentinel = -1
     optionsArray[count] = "Back";

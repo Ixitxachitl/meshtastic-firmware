@@ -23,9 +23,10 @@ const Emote emotes[] = {
     {"\U0001F976", cold_face, cold_face_width, cold_face_height},       // 🥶 Cold Face
 
     // --- Question/Alert ---
-    {"\u2753", question, question_width, question_height},    // ❓ Question Mark
-    {"\u203C\uFE0F", bang, bang_width, bang_height},          // ‼️ Double Exclamation Mark
-    {"\u26A0\uFE0F", caution, caution_width, caution_height}, // ⚠️ Warning Sign
+    {"\u2753", question, question_width, question_height},                 // ❓ Question Mark
+    {"\u203C\uFE0F", bang, bang_width, bang_height},                       // ‼️ Double Exclamation Mark
+    {"\u26A0\uFE0F", caution, caution_width, caution_height},              // ⚠️ Warning Sign
+    {"\U0001F4F6", antenna_bars, antenna_bars_width, antenna_bars_height}, // 📶 Antenna Bars
 
     // --- Laughing Faces ---
     {"\U0001F602", haha, haha_width, haha_height}, // 😂 Face with Tears of Joy
@@ -558,6 +559,10 @@ const unsigned char potato[] PROGMEM = {0x00, 0x1E, 0x00, 0x21, 0x80, 0x40, 0x80
 const unsigned char cold_face[] PROGMEM = {0xE0, 0x03, 0x18, 0x0D, 0x14, 0x11, 0x02, 0x20, 0x32, 0x26, 0x79,
                                            0x4F, 0x49, 0x49, 0x31, 0x46, 0x01, 0x40, 0xF1, 0x47, 0xA9, 0x4A,
                                            0xAB, 0x6A, 0xF3, 0x27, 0x06, 0x10, 0x1A, 0x2C, 0xE8, 0x23};
+
+const unsigned char antenna_bars[] PROGMEM = {0x00, 0x00, 0x00, 0x00, 0x00, 0x60, 0x00, 0x60, 0x00, 0x60, 0x00,
+                                              0x60, 0x00, 0x66, 0x00, 0x66, 0x00, 0x66, 0x60, 0x66, 0x60, 0x66,
+                                              0x60, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x00, 0x00};
 #endif
 
 } // namespace graphics
