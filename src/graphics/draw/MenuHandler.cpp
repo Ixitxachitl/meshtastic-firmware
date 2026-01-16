@@ -2697,22 +2697,34 @@ void menuHandler::envTelemetrySourceMenu()
     optionsArray[count] = "Back";
     optionsEnumArray[count++] = -1;
 
-    // Node short names (only sources with env telemetry)
+    // Node names (only sources with env telemetry) - respect use_long_node_name setting
     for (uint32_t num : sources) {
         if (count >= kMax - 1)
             break; // leave room for Exit
 
         const meshtastic_NodeInfoLite *n = nodeDB->getMeshNode(num);
-        std::string label;
-        if (n && n->has_user && n->user.short_name && n->user.short_name[0]) {
-            label = n->user.short_name; // short name only
-        } else {
-            char buf[16];
-            snprintf(buf, sizeof(buf), "%08X", num); // hex fallback
-            label = buf;
+        char buf[40]; // Match long_name buffer size from protobuf
+        buf[0] = '\0';
+
+        if (n && n->has_user) {
+            const char *name = config.display.use_long_node_name ? n->user.long_name : n->user.short_name;
+            if (name && name[0]) {
+                snprintf(buf, sizeof(buf), "%s", name);
+            } else {
+                // Fallback: try the other name if preferred is empty
+                const char *altName = config.display.use_long_node_name ? n->user.short_name : n->user.long_name;
+                if (altName && altName[0]) {
+                    snprintf(buf, sizeof(buf), "%s", altName);
+                }
+            }
         }
 
-        nameStorage.push_back(label);
+        // If still empty, use hex fallback
+        if (buf[0] == '\0') {
+            snprintf(buf, sizeof(buf), "%08x", (unsigned int)num);
+        }
+
+        nameStorage.push_back(std::string(buf));
         optionsArray[count] = nameStorage.back().c_str();
         optionsEnumArray[count++] = static_cast<int>(num); // real nodenum
     }
