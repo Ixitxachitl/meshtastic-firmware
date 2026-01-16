@@ -164,7 +164,7 @@ static constexpr size_t kMaxHistNodes = 16; // Moderate increase for PSRAM-equip
 #else
 static constexpr size_t kMaxHistNodes = 5; // Conservative limit for devices with limited heap
 #endif
-static constexpr uint32_t kNodeStaleTimeout = 3600000; // 1 hour - evict nodes not updated in this time
+static constexpr uint32_t kNodeStaleTimeout = 43200000; // 12 hours - evict nodes not updated in this time
 
 // Reserve map capacity on first use to avoid dynamic reallocation
 static bool s_histReserved = false;
@@ -176,7 +176,13 @@ static uint32_t s_lastSource = 0;
 static void cleanupStaleNodes()
 {
     uint32_t now = millis();
+    uint32_t ourNode = nodeDB->getNodeNum();
     for (auto it = s_hist.begin(); it != s_hist.end();) {
+        // Never evict our own node's telemetry
+        if (it->first == ourNode) {
+            ++it;
+            continue;
+        }
         if (now - it->second.lastUpdate > kNodeStaleTimeout) {
             LOG_DEBUG("EnvironmentTelemetry: Evicting stale node 0x%08x (last update %lums ago)", it->first,
                       now - it->second.lastUpdate);
@@ -1800,9 +1806,13 @@ bool EnvironmentTelemetryModule::handleReceivedProtobuf(const meshtastic_MeshPac
 
         // If new node and at capacity, evict stalest to make room
         if (isNewNode && s_hist.size() >= kMaxHistNodes) {
+            uint32_t ourNode = nodeDB->getNodeNum();
             uint32_t stalestNode = 0;
             uint32_t stalestTime = UINT32_MAX;
             for (const auto &kv : s_hist) {
+                // Skip our own node when looking for candidates to evict
+                if (kv.first == ourNode)
+                    continue;
                 if (kv.second.lastUpdate < stalestTime) {
                     stalestTime = kv.second.lastUpdate;
                     stalestNode = kv.first;
