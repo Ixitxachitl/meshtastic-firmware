@@ -2484,12 +2484,14 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
         this->visibleRows = 1;
 
     // === Clamp scrolling ===
-    if (scrollIndex > totalEntries / columns)
-        scrollIndex = totalEntries / columns;
+    int maxScrollIndex = std::max(0, totalEntries - visibleRows);
+    if (scrollIndex > maxScrollIndex)
+        scrollIndex = maxScrollIndex;
     if (scrollIndex < 0)
         scrollIndex = 0;
 
-    for (int row = 0; row < visibleRows; row++) {
+    // Render one extra row to prevent items from "popping in" during scroll
+    for (int row = 0; row < visibleRows + 1; row++) {
         int itemIndex = scrollIndex + row;
         if (itemIndex >= totalEntries)
             break;
@@ -2570,12 +2572,16 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
 
     // Scrollbar
     if (totalEntries > visibleRows) {
-        int scrollbarHeight = visibleRows * rowSpacing;
-        int totalScrollable = totalEntries;
+        int scrollbarHeight = display->getHeight() - rowYOffset - 2; // Extend to bottom of screen
         int scrollTrackX = display->getWidth() - 6;
         display->drawRect(scrollTrackX, rowYOffset, 4, scrollbarHeight);
-        int scrollHeight = (scrollbarHeight * visibleRows) / totalScrollable;
-        int scrollPos = rowYOffset + (scrollbarHeight * scrollIndex) / totalScrollable;
+        // Calculate scrollbar position based on scroll progress (0 to maxScrollIndex)
+        int scrollHeight = std::max(6, (scrollbarHeight * visibleRows) / totalEntries);
+        int scrollableRange = scrollbarHeight - scrollHeight;
+        int scrollPos = rowYOffset;
+        if (maxScrollIndex > 0) {
+            scrollPos = rowYOffset + (scrollableRange * scrollIndex) / maxScrollIndex;
+        }
         display->fillRect(scrollTrackX, scrollPos, 4, scrollHeight);
     }
 }
