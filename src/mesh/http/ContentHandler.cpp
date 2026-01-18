@@ -179,7 +179,7 @@ void handleAPIv1FromRadio(HTTPRequest *req, HTTPResponse *res)
 
     if (req->getMethod() == "OPTIONS") {
         res->setStatusCode(204); // Success with no content
-        // res->print(""); @todo remove
+        res->print("");
         return;
     }
 
@@ -229,7 +229,7 @@ void handleAPIv1ToRadio(HTTPRequest *req, HTTPResponse *res)
 
     if (req->getMethod() == "OPTIONS") {
         res->setStatusCode(204); // Success with no content
-        // res->print(""); @todo remove
+        res->print("");
         return;
     }
 
