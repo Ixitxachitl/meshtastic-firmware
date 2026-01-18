@@ -544,17 +544,14 @@ int32_t BMI270Sensor::runOnce()
                 // Read raw magnetometer data
                 sBmm150MagData_t mag = bmm150->getGeomagneticData();
 
-                // Both BMI270 and BMM150 use same coordinate system:
-                // X=backward, Y=left, Z=up (when device flat, screen up)
-                float mx = mag.x; // backward
-                float my = mag.y; // left
-                float mz = mag.z; // up
+                float mx = mag.x;
+                float my = mag.y;
+                float mz = mag.z;
 
-                // Debug: show raw readings from both sensors
+                // Debug: show raw mag readings periodically
                 static uint32_t lastRawDebugMs = 0;
                 if (millis() - lastRawDebugMs > 2000) {
-                    LOG_DEBUG("BMI270 accel: [%.2f,%.2f,%.2f] | BMM150 raw: [%d,%d,%d] → used: [%.1f,%.1f,%.1f]", ax, ay, az,
-                              mag.x, mag.y, mag.z, mx, my, mz);
+                    LOG_DEBUG("BMM150 raw: [%d, %d, %d]", mag.x, mag.y, mag.z);
                     lastRawDebugMs = millis();
                 }
 
@@ -621,26 +618,45 @@ int32_t BMI270Sensor::runOnce()
                         float myc = (my - s_magCal.offset[1]) * s_magCal.scale[1];
                         float mzc = (mz - s_magCal.offset[2]) * s_magCal.scale[2];
 
-                        // BMI270 gravity: X=left, Y=forward, Z=up
-                        // Both BMI270 and BMM150: X=backward, Y=left, Z=up
-                        // Pitch = forward/backward tilt (X becomes vertical)
-                        // Roll = left/right tilt (Y becomes vertical)
-                        float pitch = atan2f(-s_gxLP, sqrtf(s_gyLP * s_gyLP + s_gzLP * s_gzLP));
-                        float roll = atan2f(s_gyLP, s_gzLP);
+                        // Tilt-compensated compass using standard formula
+                        // Device coordinate system (observed from data):
+                        //   - X points backward, Y points left, Z points down (when flat)
+                        //   - Forward = -X direction
+                        //   - Gravity when flat: [0, 0, 1]
+                        //   - Gravity when tilted back (screen facing user): [0, 1, 0]
+                        //
+                        // Standard tilt compensation formula:
+                        //   pitch = atan2(gy, gz)  -- forward/back tilt
+                        //   roll = atan2(-gx, sqrt(gy^2 + gz^2))  -- left/right tilt
+                        //   Xh = -mx*cos(pitch) + my*sin(roll)*sin(pitch) + mz*cos(roll)*sin(pitch)
+                        //   Yh = my*cos(roll) - mz*sin(roll)
 
-                        float cp = cosf(pitch), sp = sinf(pitch);
-                        float cr = cosf(roll), sr = sinf(roll);
+                        // Pitch: forward/back tilt
+                        float pitch = atan2f(s_gyLP, s_gzLP);
+                        float cp = cosf(pitch);
+                        float sp = sinf(pitch);
 
-                        // Tilt compensation: project magnetometer to horizontal plane
-                        // Forward is -X (since X points backward), Left is Y
-                        float mag_forward = -mxc * cp + myc * sp * sr + mzc * sp * cr;
-                        float mag_left = myc * cr - mzc * sr;
+                        // Roll: left/right tilt
+                        float roll = atan2f(-s_gxLP, sqrtf(s_gyLP * s_gyLP + s_gzLP * s_gzLP));
+                        float cr = cosf(roll);
+                        float sr = sinf(roll);
 
-                        // Heading from horizontal components (0=North at top, clockwise)
-                        // atan2(left, forward) gives angle from forward axis
-                        float headingDeg = atan2f(mag_left, mag_forward) * 180.0f / (float)M_PI;
+                        // Standard tilt compensation
+                        float Xh = -mxc * cp + myc * sr * sp + mzc * cr * sp;
+                        float Yh = myc * cr - mzc * sr;
+
+                        // Heading from horizontal components (0=North, clockwise positive)
+                        float headingDeg = atan2f(Yh, Xh) * 180.0f / (float)M_PI;
                         if (headingDeg < 0)
                             headingDeg += 360.0f;
+
+                        // Debug: log computed values periodically
+                        static uint32_t lastHeadingDebugMs = 0;
+                        if (millis() - lastHeadingDebugMs > 2000) {
+                            LOG_DEBUG("Tilt-comp: heading=%.1f° Xh=%.1f Yh=%.1f | pitch=%.0f° roll=%.0f° | grav=[%.2f,%.2f,%.2f]",
+                                      headingDeg, Xh, Yh, pitch * 180.0f / M_PI, roll * 180.0f / M_PI, s_gxLP, s_gyLP, s_gzLP);
+                            lastHeadingDebugMs = millis();
+                        }
 
                         // Set global heading for CompassRenderer
                         g_magHeadingRad = headingDeg * (float)M_PI / 180.0f;
