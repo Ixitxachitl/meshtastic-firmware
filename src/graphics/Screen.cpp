@@ -158,7 +158,8 @@ void Screen::showOverlayBanner(BannerOverlayOptions banner_overlay_options)
 #endif
     // Store the message and set the expiration timestamp
     strncpy(NotificationRenderer::alertBannerMessage, banner_overlay_options.message, 255);
-    NotificationRenderer::alertBannerMessage[255] = '\0'; // Ensure null termination
+    NotificationRenderer::alertBannerMessage[255] = '\0';                          // Ensure null termination
+    NotificationRenderer::alertBannerDuration = banner_overlay_options.durationMs; // Store duration for inactivity reset
     NotificationRenderer::alertBannerUntil =
         (banner_overlay_options.durationMs == 0) ? 0 : millis() + banner_overlay_options.durationMs;
     NotificationRenderer::optionsArrayPtr = banner_overlay_options.optionsArrayPtr;

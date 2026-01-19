@@ -47,8 +47,9 @@ int bannerSignalBars = -1;
 InputEvent NotificationRenderer::inEvent;
 int8_t NotificationRenderer::curSelected = 0;
 char NotificationRenderer::alertBannerMessage[256] = {0};
-uint32_t NotificationRenderer::alertBannerUntil = 0;  // 0 is a special case meaning forever
-uint8_t NotificationRenderer::alertBannerOptions = 0; // last x lines are seelctable options
+uint32_t NotificationRenderer::alertBannerUntil = 0;    // 0 is a special case meaning forever
+uint32_t NotificationRenderer::alertBannerDuration = 0; // Store the original duration for resetting on input
+uint8_t NotificationRenderer::alertBannerOptions = 0;   // last x lines are seelctable options
 const char **NotificationRenderer::optionsArrayPtr = nullptr;
 const int *NotificationRenderer::optionsEnumPtr = nullptr;
 std::function<void(int)> NotificationRenderer::alertBannerCallback = NULL;
@@ -58,6 +59,14 @@ uint32_t NotificationRenderer::numDigits = 0;
 uint32_t NotificationRenderer::currentNumber = 0;
 VirtualKeyboard *NotificationRenderer::virtualKeyboard = nullptr;
 std::function<void(const std::string &)> NotificationRenderer::textInputCallback = nullptr;
+
+// Helper to reset the inactivity timeout when user provides input
+static void resetInactivityTimeout()
+{
+    if (NotificationRenderer::alertBannerDuration > 0) {
+        NotificationRenderer::alertBannerUntil = millis() + NotificationRenderer::alertBannerDuration;
+    }
+}
 
 uint32_t pow_of_10(uint32_t n)
 {
@@ -107,6 +116,7 @@ void NotificationRenderer::resetBanner()
     pauseBanner = false;
     numDigits = 0;
     currentNumber = 0;
+    alertBannerDuration = 0; // Reset stored duration
 
     nodeDB->pause_sort(false);
 
@@ -181,6 +191,7 @@ void NotificationRenderer::drawNumberPicker(OLEDDisplay *display, OLEDDisplayUiS
     // Handle input
     if (inEvent.inputEvent == INPUT_BROKER_UP || inEvent.inputEvent == INPUT_BROKER_ALT_PRESS ||
         inEvent.inputEvent == INPUT_BROKER_UP_LONG) {
+        resetInactivityTimeout();
         if (this_digit == 9) {
             currentNumber -= 9 * (pow_of_10(numDigits - curSelected - 1));
         } else {
@@ -188,6 +199,7 @@ void NotificationRenderer::drawNumberPicker(OLEDDisplay *display, OLEDDisplayUiS
         }
     } else if (inEvent.inputEvent == INPUT_BROKER_DOWN || inEvent.inputEvent == INPUT_BROKER_USER_PRESS ||
                inEvent.inputEvent == INPUT_BROKER_DOWN_LONG) {
+        resetInactivityTimeout();
         if (this_digit == 0) {
             currentNumber += 9 * (pow_of_10(numDigits - curSelected - 1));
         } else {
@@ -195,13 +207,16 @@ void NotificationRenderer::drawNumberPicker(OLEDDisplay *display, OLEDDisplayUiS
         }
     } else if (inEvent.inputEvent == INPUT_BROKER_ANYKEY) {
         if (inEvent.kbchar > 47 && inEvent.kbchar < 58) { // have a digit
+            resetInactivityTimeout();
             currentNumber -= this_digit * (pow_of_10(numDigits - curSelected - 1));
             currentNumber += (inEvent.kbchar - 48) * (pow_of_10(numDigits - curSelected - 1));
             curSelected++;
         }
     } else if (inEvent.inputEvent == INPUT_BROKER_SELECT || inEvent.inputEvent == INPUT_BROKER_RIGHT) {
+        resetInactivityTimeout();
         curSelected++;
     } else if (inEvent.inputEvent == INPUT_BROKER_LEFT) {
+        resetInactivityTimeout();
         curSelected--;
     } else if ((inEvent.inputEvent == INPUT_BROKER_CANCEL || inEvent.inputEvent == INPUT_BROKER_ALT_LONG) &&
                alertBannerUntil != 0) {
@@ -306,9 +321,11 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
     // Handle input
     if (inEvent.inputEvent == INPUT_BROKER_UP || inEvent.inputEvent == INPUT_BROKER_LEFT ||
         inEvent.inputEvent == INPUT_BROKER_ALT_PRESS || inEvent.inputEvent == INPUT_BROKER_UP_LONG) {
+        resetInactivityTimeout();
         curSelected--;
     } else if (inEvent.inputEvent == INPUT_BROKER_DOWN || inEvent.inputEvent == INPUT_BROKER_RIGHT ||
                inEvent.inputEvent == INPUT_BROKER_USER_PRESS || inEvent.inputEvent == INPUT_BROKER_DOWN_LONG) {
+        resetInactivityTimeout();
         curSelected++;
     } else if (inEvent.inputEvent == INPUT_BROKER_SELECT) {
         if (curSelected == 0) {
@@ -474,9 +491,11 @@ void NotificationRenderer::drawAlertBannerOverlay(OLEDDisplay *display, OLEDDisp
     if (alertBannerOptions > 0) {
         if (inEvent.inputEvent == INPUT_BROKER_UP || inEvent.inputEvent == INPUT_BROKER_LEFT ||
             inEvent.inputEvent == INPUT_BROKER_ALT_PRESS || inEvent.inputEvent == INPUT_BROKER_UP_LONG) {
+            resetInactivityTimeout();
             curSelected--;
         } else if (inEvent.inputEvent == INPUT_BROKER_DOWN || inEvent.inputEvent == INPUT_BROKER_RIGHT ||
                    inEvent.inputEvent == INPUT_BROKER_USER_PRESS || inEvent.inputEvent == INPUT_BROKER_DOWN_LONG) {
+            resetInactivityTimeout();
             curSelected++;
         } else if (inEvent.inputEvent == INPUT_BROKER_SELECT) {
             if (optionsEnumPtr != nullptr) {

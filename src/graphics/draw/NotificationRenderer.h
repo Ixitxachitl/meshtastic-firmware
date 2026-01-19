@@ -19,7 +19,8 @@ class NotificationRenderer
     static char inKeypress;
     static int8_t curSelected;
     static char alertBannerMessage[256];
-    static uint32_t alertBannerUntil; // 0 is a special case meaning forever
+    static uint32_t alertBannerUntil;    // 0 is a special case meaning forever
+    static uint32_t alertBannerDuration; // Store the original duration for resetting on input
     static const char **optionsArrayPtr;
     static const int *optionsEnumPtr;
     static uint8_t alertBannerOptions; // last x lines are seelctable options
