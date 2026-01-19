@@ -706,6 +706,8 @@ void menuHandler::replyMenu()
 
         // Preset reply
         if (selected == ReplyPreset) {
+            // Mark that we're launching from MessageRenderer for proper return navigation
+            cannedMessageModule->setLaunchedFromMessageRenderer(true);
 
             if (mode == graphics::MessageRenderer::ThreadMode::CHANNEL) {
                 cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST, ch);
@@ -714,12 +716,8 @@ void menuHandler::replyMenu()
                 cannedMessageModule->LaunchWithDestination(peer);
 
             } else {
-                // Fallback for last received message
-                if (devicestate.rx_text_message.to == NODENUM_BROADCAST) {
-                    cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST, devicestate.rx_text_message.channel);
-                } else {
-                    cannedMessageModule->LaunchWithDestination(devicestate.rx_text_message.from);
-                }
+                // View All mode - use channel 0 (primary channel)
+                cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST, 0);
             }
 
             return;
@@ -727,6 +725,8 @@ void menuHandler::replyMenu()
 
         // Freetext reply
         if (selected == ReplyFreetext) {
+            // Mark that we're launching from MessageRenderer for proper return navigation
+            cannedMessageModule->setLaunchedFromMessageRenderer(true);
 
             if (mode == graphics::MessageRenderer::ThreadMode::CHANNEL) {
                 cannedMessageModule->LaunchFreetextWithDestination(NODENUM_BROADCAST, ch);
@@ -735,12 +735,8 @@ void menuHandler::replyMenu()
                 cannedMessageModule->LaunchFreetextWithDestination(peer);
 
             } else {
-                // Fallback for last received message
-                if (devicestate.rx_text_message.to == NODENUM_BROADCAST) {
-                    cannedMessageModule->LaunchFreetextWithDestination(NODENUM_BROADCAST, devicestate.rx_text_message.channel);
-                } else {
-                    cannedMessageModule->LaunchFreetextWithDestination(devicestate.rx_text_message.from);
-                }
+                // View All mode - use channel 0 (primary channel)
+                cannedMessageModule->LaunchFreetextWithDestination(NODENUM_BROADCAST, 0);
             }
 
             return;

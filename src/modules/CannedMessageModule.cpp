@@ -159,6 +159,7 @@ static const char *cannedMessagesConfigFile = "/prefs/cannedConf.proto";
 static NodeNum lastDest = NODENUM_BROADCAST;
 static uint8_t lastChannel = 0;
 static bool lastDestSet = false;
+static bool launchedFromMessageRenderer = false; // Track if we should return to MessageRenderer on cancel
 
 meshtastic_CannedMessageModuleConfig cannedMessageModuleConfig;
 
@@ -182,11 +183,8 @@ CannedMessageModule::CannedMessageModule()
 
 void CannedMessageModule::LaunchWithDestination(NodeNum newDest, uint8_t newChannel)
 {
-    // Use the requested destination, unless it's "broadcast" and we have a previous node/channel
-    if (newDest == NODENUM_BROADCAST && lastDestSet) {
-        newDest = lastDest;
-        newChannel = lastChannel;
-    }
+    // Use the explicitly passed destination and channel
+    // Don't override - the caller knows what they want
     dest = newDest;
     channel = newChannel;
     lastDest = dest;
@@ -237,6 +235,11 @@ void CannedMessageModule::LaunchFreetextWithDestination(NodeNum newDest, uint8_t
     notifyObservers(&e);
 
     LOG_DEBUG("[CannedMessage] LaunchFreetextWithDestination dest=0x%08x ch=%d", dest, channel);
+}
+
+void CannedMessageModule::setLaunchedFromMessageRenderer(bool value)
+{
+    launchedFromMessageRenderer = value;
 }
 
 static bool returnToCannedList = false;
@@ -772,9 +775,14 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
         payload = 0;
         currentMessageIndex = -1;
 
-        // Notify UI that we want to redraw/close this screen
+        // If launched from MessageRenderer, return to it instead of just going inactive
         UIFrameEvent e;
-        e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+        if (launchedFromMessageRenderer) {
+            launchedFromMessageRenderer = false;
+            e.action = UIFrameEvent::Action::SWITCH_TO_TEXTMESSAGE;
+        } else {
+            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+        }
         notifyObservers(&e);
         IF_SCREEN(screen->forceDisplay());
         return true;
@@ -823,9 +831,14 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
             runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
             currentMessageIndex = -1;
 
-            // Notify UI to regenerate frame set and redraw
+            // If launched from MessageRenderer, return to it
             UIFrameEvent e;
-            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+            if (launchedFromMessageRenderer) {
+                launchedFromMessageRenderer = false;
+                e.action = UIFrameEvent::Action::SWITCH_TO_TEXTMESSAGE;
+            } else {
+                e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+            }
             notifyObservers(&e);
             IF_SCREEN(screen->forceDisplay());
             return true;
@@ -866,10 +879,8 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
                         setIntervalFromNow(500);
                         return;
                     } else {
-                        // Don't delete virtual keyboard immediately - it might still be executing
-                        // Instead, just clear the callback and reset banner to stop input processing
-                        graphics::NotificationRenderer::textInputCallback = nullptr;
-                        graphics::NotificationRenderer::resetBanner();
+                        // NotificationRenderer already cleaned up virtualKeyboard and textInputCallback
+                        // Just handle our state and navigation
 
                         // Return to inactive state
                         this->runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
@@ -877,14 +888,17 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
                         this->freetext = "";
                         this->cursor = 0;
 
-                        // Force display update to show normal screen
+                        // If launched from MessageRenderer, return to it
                         UIFrameEvent e;
-                        e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+                        if (launchedFromMessageRenderer) {
+                            launchedFromMessageRenderer = false;
+                            e.action = UIFrameEvent::Action::SWITCH_TO_TEXTMESSAGE;
+                        } else {
+                            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+                        }
                         this->notifyObservers(&e);
                         IF_SCREEN(screen->forceDisplay());
 
-                        // Schedule cleanup for next loop iteration to ensure safe deletion
-                        setIntervalFromNow(50);
                         return;
                     }
                 });
@@ -951,9 +965,14 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
         payload = 0;
         currentMessageIndex = -1;
 
-        // Notify UI that we want to redraw/close this screen
+        // If launched from MessageRenderer, return to it
         UIFrameEvent e;
-        e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+        if (launchedFromMessageRenderer) {
+            launchedFromMessageRenderer = false;
+            e.action = UIFrameEvent::Action::SWITCH_TO_TEXTMESSAGE;
+        } else {
+            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+        }
         notifyObservers(&e);
         IF_SCREEN(screen->forceDisplay());
         return true;
@@ -967,9 +986,14 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
         payload = 0;
         currentMessageIndex = -1;
 
-        // Notify UI that we want to redraw/close this screen
+        // If launched from MessageRenderer, return to it
         UIFrameEvent e;
-        e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+        if (launchedFromMessageRenderer) {
+            launchedFromMessageRenderer = false;
+            e.action = UIFrameEvent::Action::SWITCH_TO_TEXTMESSAGE;
+        } else {
+            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+        }
         notifyObservers(&e);
         IF_SCREEN(screen->forceDisplay());
         return true;
@@ -1012,8 +1036,14 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
             cursor = 0;
             payload = 0;
             currentMessageIndex = -1;
+            // If launched from MessageRenderer, return to it
             UIFrameEvent e;
-            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+            if (launchedFromMessageRenderer) {
+                launchedFromMessageRenderer = false;
+                e.action = UIFrameEvent::Action::SWITCH_TO_TEXTMESSAGE;
+            } else {
+                e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+            }
             notifyObservers(&e);
             IF_SCREEN(screen->forceDisplay());
             return true;
@@ -2848,7 +2878,13 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
                                                                        }
                                                                        // Regenerate frames when done
                                                                        UIFrameEvent e;
-                                                                       e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+                                                                       // If launched from MessageRenderer, return to it
+                                                                       if (launchedFromMessageRenderer && text.empty()) {
+                                                                           launchedFromMessageRenderer = false;
+                                                                           e.action = UIFrameEvent::Action::SWITCH_TO_TEXTMESSAGE;
+                                                                       } else {
+                                                                           e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+                                                                       }
                                                                        notifyObservers(&e);
                                                                        // Trigger runOnce to process SENDING_ACTIVE state
                                                                        // immediately

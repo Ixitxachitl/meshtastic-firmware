@@ -842,15 +842,11 @@ void NotificationRenderer::drawTextInput(OLEDDisplay *display, OLEDDisplayUiStat
             textInputCallback = nullptr;
             resetBanner();
 
-            // Call callback after cleanup
+            // Call callback after cleanup - callback handles its own navigation
             if (callback) {
                 callback("");
             }
-
-            // Restore normal overlays
-            if (screen) {
-                screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
-            }
+            // Don't call setFrames here - the callback is responsible for setting up navigation
             return;
         }
 
@@ -863,11 +859,10 @@ void NotificationRenderer::drawTextInput(OLEDDisplay *display, OLEDDisplayUiStat
                 textInputCallback = nullptr;
                 resetBanner();
                 if (callback) {
-                    callback("");
+                    callback(""); // Callback handles its own navigation (e.g., SWITCH_TO_TEXTMESSAGE)
                 }
-                if (screen) {
-                    screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
-                }
+                // Don't call setFrames here - the callback is responsible for setting up navigation
+                // This allows callbacks to return to specific screens (e.g., MessageRenderer)
                 return;
             }
 
