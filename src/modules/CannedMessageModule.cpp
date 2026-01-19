@@ -229,6 +229,10 @@ void CannedMessageModule::LaunchFreetextWithDestination(NodeNum newDest, uint8_t
     lastChannel = channel;
     lastDestSet = true;
 
+    // Save the current frame index so we can restore it on cancel
+    if (screen)
+        savedFrameIndex = screen->getCurrentFrameIndex();
+
     runState = CANNED_MESSAGE_RUN_STATE_FREETEXT;
     requestFocus();
     UIFrameEvent e;
@@ -556,9 +560,9 @@ int CannedMessageModule::handleInputEvent(const InputEvent *event)
                 savedFrameIndex = screen->getCurrentFrameIndex();
             runState = CANNED_MESSAGE_RUN_STATE_FREETEXT;
             requestFocus();
-            // Regenerate frameset to add CannedMessage frame, but preserve current position
+            // Switch to the CannedMessage frame (requestFocus + REGENERATE_FRAMESET)
             UIFrameEvent e;
-            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET_BACKGROUND;
+            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
             notifyObservers(&e);
             // Immediately process the input in the new state (freetext)
             return handleFreeTextInput(event);

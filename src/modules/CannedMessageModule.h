@@ -144,9 +144,7 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
 
     // === Input Handling ===
     int handleInputEvent(const InputEvent *event);
-    // Always want a UI frame so frame positions don't shift when activating/deactivating
-    // drawFrame() handles not drawing anything when inactive
-    virtual bool wantUIFrame() override { return true; }
+    virtual bool wantUIFrame() override { return shouldDraw(); }
     virtual Observable<const UIFrameEvent *> *getUIFrameObservable() override { return this; }
     virtual bool interceptingKeyboardInput() override;
     virtual void drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y) override;
