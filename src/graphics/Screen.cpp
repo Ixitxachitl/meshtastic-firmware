@@ -1551,8 +1551,14 @@ int Screen::handleUIFrameEvent(const UIFrameEvent *event)
             forceDisplay(true);            // commit the frame
             powerFSM.trigger(EVENT_PRESS); // reset auto-off timer
         }
-    }
 
+        // Switch to a specific frame index
+        else if (event->action == UIFrameEvent::Action::SWITCH_TO_FRAME_INDEX) {
+            setFrames(FOCUS_PRESERVE);            // preserve frame ordering
+            ui->switchToFrame(event->frameIndex); // switch to saved frame
+            setFastFramerate();                   // draw ASAP
+        }
+    }
     return 0;
 }
 
@@ -1817,6 +1823,11 @@ int Screen::handleAdminMessage(AdminModule_ObserverData *arg)
         break;
     }
     return 0;
+}
+
+uint8_t Screen::getCurrentFrameIndex()
+{
+    return ui->getUiState()->currentFrame;
 }
 
 bool Screen::isOverlayBannerShowing()

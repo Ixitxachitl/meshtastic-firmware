@@ -254,6 +254,9 @@ class Screen : public concurrency::OSThread
 
     bool isScreenOn() { return screenOn; }
 
+    /// Returns the index of the currently displayed frame
+    uint8_t getCurrentFrameIndex();
+
     // Stores the last 4 of our hardware ID, to make finding the device for pairing easier
     // FIXME: Needs refactoring and getMacAddr needs to be moved to a utility class
     char ourId[5];

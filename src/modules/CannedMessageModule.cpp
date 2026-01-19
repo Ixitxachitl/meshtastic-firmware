@@ -160,6 +160,7 @@ static NodeNum lastDest = NODENUM_BROADCAST;
 static uint8_t lastChannel = 0;
 static bool lastDestSet = false;
 static bool launchedFromMessageRenderer = false; // Track if we should return to MessageRenderer on cancel
+static int8_t savedFrameIndex = -1;              // Frame index to return to on cancel (-1 = not saved)
 
 meshtastic_CannedMessageModuleConfig cannedMessageModuleConfig;
 
@@ -548,10 +549,16 @@ int CannedMessageModule::handleInputEvent(const InputEvent *event)
     case CANNED_MESSAGE_RUN_STATE_INACTIVE:
         // Printable char (ASCII) opens free text compose
         if (event->kbchar >= 32 && event->kbchar <= 126) {
+            // Remember if we were on the message screen so we can return there on cancel
+            launchedFromMessageRenderer = graphics::isMessagesScreenActive();
+            // Save the current frame index so we can restore it on cancel
+            if (screen)
+                savedFrameIndex = screen->getCurrentFrameIndex();
             runState = CANNED_MESSAGE_RUN_STATE_FREETEXT;
             requestFocus();
+            // Regenerate frameset to add CannedMessage frame, but preserve current position
             UIFrameEvent e;
-            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET_BACKGROUND;
             notifyObservers(&e);
             // Immediately process the input in the new state (freetext)
             return handleFreeTextInput(event);
@@ -775,13 +782,17 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
         payload = 0;
         currentMessageIndex = -1;
 
-        // If launched from MessageRenderer, return to it instead of just going inactive
+        // Return to the appropriate screen
         UIFrameEvent e;
         if (launchedFromMessageRenderer) {
             launchedFromMessageRenderer = false;
             e.action = UIFrameEvent::Action::SWITCH_TO_TEXTMESSAGE;
+        } else if (savedFrameIndex >= 0) {
+            e.action = UIFrameEvent::Action::SWITCH_TO_FRAME_INDEX;
+            e.frameIndex = savedFrameIndex;
+            savedFrameIndex = -1;
         } else {
-            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET_BACKGROUND;
         }
         notifyObservers(&e);
         IF_SCREEN(screen->forceDisplay());
@@ -965,13 +976,17 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
         payload = 0;
         currentMessageIndex = -1;
 
-        // If launched from MessageRenderer, return to it
+        // Return to the appropriate screen
         UIFrameEvent e;
         if (launchedFromMessageRenderer) {
             launchedFromMessageRenderer = false;
             e.action = UIFrameEvent::Action::SWITCH_TO_TEXTMESSAGE;
+        } else if (savedFrameIndex >= 0) {
+            e.action = UIFrameEvent::Action::SWITCH_TO_FRAME_INDEX;
+            e.frameIndex = savedFrameIndex;
+            savedFrameIndex = -1;
         } else {
-            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET_BACKGROUND;
         }
         notifyObservers(&e);
         IF_SCREEN(screen->forceDisplay());
@@ -986,13 +1001,17 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
         payload = 0;
         currentMessageIndex = -1;
 
-        // If launched from MessageRenderer, return to it
+        // Return to the appropriate screen
         UIFrameEvent e;
         if (launchedFromMessageRenderer) {
             launchedFromMessageRenderer = false;
             e.action = UIFrameEvent::Action::SWITCH_TO_TEXTMESSAGE;
+        } else if (savedFrameIndex >= 0) {
+            e.action = UIFrameEvent::Action::SWITCH_TO_FRAME_INDEX;
+            e.frameIndex = savedFrameIndex;
+            savedFrameIndex = -1;
         } else {
-            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET_BACKGROUND;
         }
         notifyObservers(&e);
         IF_SCREEN(screen->forceDisplay());
@@ -1036,13 +1055,17 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
             cursor = 0;
             payload = 0;
             currentMessageIndex = -1;
-            // If launched from MessageRenderer, return to it
+            // Return to the appropriate screen
             UIFrameEvent e;
             if (launchedFromMessageRenderer) {
                 launchedFromMessageRenderer = false;
                 e.action = UIFrameEvent::Action::SWITCH_TO_TEXTMESSAGE;
+            } else if (savedFrameIndex >= 0) {
+                e.action = UIFrameEvent::Action::SWITCH_TO_FRAME_INDEX;
+                e.frameIndex = savedFrameIndex;
+                savedFrameIndex = -1;
             } else {
-                e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+                e.action = UIFrameEvent::Action::REGENERATE_FRAMESET_BACKGROUND;
             }
             notifyObservers(&e);
             IF_SCREEN(screen->forceDisplay());
@@ -1277,9 +1300,18 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
         payload = 0;
         currentMessageIndex = -1;
 
-        // Notify UI that we want to redraw/close this screen
+        // Return to the appropriate screen
         UIFrameEvent e;
-        e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+        if (launchedFromMessageRenderer) {
+            launchedFromMessageRenderer = false;
+            e.action = UIFrameEvent::Action::SWITCH_TO_TEXTMESSAGE;
+        } else if (savedFrameIndex >= 0) {
+            e.action = UIFrameEvent::Action::SWITCH_TO_FRAME_INDEX;
+            e.frameIndex = savedFrameIndex;
+            savedFrameIndex = -1;
+        } else {
+            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET_BACKGROUND;
+        }
         notifyObservers(&e);
         IF_SCREEN(screen->forceDisplay());
         return true;
