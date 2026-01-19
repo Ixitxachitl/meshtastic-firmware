@@ -184,7 +184,8 @@ void Screen::showNodePicker(const char *message, uint32_t durationMs, std::funct
     nodeDB->pause_sort(true);
     // Store the message and set the expiration timestamp
     strncpy(NotificationRenderer::alertBannerMessage, message, 255);
-    NotificationRenderer::alertBannerMessage[255] = '\0'; // Ensure null termination
+    NotificationRenderer::alertBannerMessage[255] = '\0';   // Ensure null termination
+    NotificationRenderer::alertBannerDuration = durationMs; // Store duration for inactivity reset
     NotificationRenderer::alertBannerUntil = (durationMs == 0) ? 0 : millis() + durationMs;
     NotificationRenderer::alertBannerCallback = bannerCallback;
     NotificationRenderer::pauseBanner = false;
@@ -206,7 +207,8 @@ void Screen::showNumberPicker(const char *message, uint32_t durationMs, uint8_t 
 #endif
     // Store the message and set the expiration timestamp
     strncpy(NotificationRenderer::alertBannerMessage, message, 255);
-    NotificationRenderer::alertBannerMessage[255] = '\0'; // Ensure null termination
+    NotificationRenderer::alertBannerMessage[255] = '\0';   // Ensure null termination
+    NotificationRenderer::alertBannerDuration = durationMs; // Store duration for inactivity reset
     NotificationRenderer::alertBannerUntil = (durationMs == 0) ? 0 : millis() + durationMs;
     NotificationRenderer::alertBannerCallback = bannerCallback;
     NotificationRenderer::pauseBanner = false;
@@ -233,6 +235,7 @@ void Screen::showTextInput(const char *header, const char *initialText, uint32_t
     // Store the message and set the expiration timestamp (use same pattern as other notifications)
     strncpy(NotificationRenderer::alertBannerMessage, header ? header : "Text Input", 255);
     NotificationRenderer::alertBannerMessage[255] = '\0';
+    NotificationRenderer::alertBannerDuration = durationMs; // Store duration for inactivity reset
     NotificationRenderer::alertBannerUntil = (durationMs == 0) ? 0 : millis() + durationMs;
     NotificationRenderer::pauseBanner = false;
     NotificationRenderer::current_notification_type = notificationTypeEnum::text_input;
