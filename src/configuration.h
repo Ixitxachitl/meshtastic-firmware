@@ -445,17 +445,6 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #endif
 #endif
 
-// BME680 BSEC2 support detection
-#if !defined(MESHTASTIC_BME680_BSEC2_SUPPORTED)
-#if __has_include(<bsec2.h>)
-#define MESHTASTIC_BME680_BSEC2_SUPPORTED 1
-#define MESHTASTIC_BME680_HEADER <bsec2.h>
-#elif __has_include(<Adafruit_BME680.h>)
-#define MESHTASTIC_BME680_BSEC2_SUPPORTED 0
-#define MESHTASTIC_BME680_HEADER <Adafruit_BME680.h>
-#endif
-#endif // !defined(MESHTASTIC_BME680_BSEC2_SUPPORTED)
-
 // -----------------------------------------------------------------------------
 // Global switches to turn off features for a minimized build
 // -----------------------------------------------------------------------------
