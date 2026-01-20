@@ -12,32 +12,11 @@
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/TimeFormatters.h"
-#include "graphics/draw/NotificationRenderer.h"
 #include "graphics/emotes.h"
 #include "main.h"
 #include "meshUtils.h"
 #include <string>
 #include <vector>
-
-// Exception support varies by platform; avoid try/catch when disabled
-#if defined(__EXCEPTIONS)
-#define MR_HAS_EXCEPTIONS 1
-#else
-#define MR_HAS_EXCEPTIONS 0
-#endif
-
-template <typename T> static inline void reserve_best_effort(std::vector<T> &v, size_t n)
-{
-#if MR_HAS_EXCEPTIONS
-    try {
-        v.reserve(n);
-    } catch (...) {
-        // ignore failures
-    }
-#else
-    (void)n; // skip reserving to avoid abort on OOM with -fno-exceptions
-#endif
-}
 
 // External declarations
 extern bool hasUnreadMessage;
@@ -52,176 +31,9 @@ namespace graphics
 namespace MessageRenderer
 {
 
-// Forward declarations
-static std::string normalizeEmoji(const std::string &s);
-
-// Cache normalized emoji labels to avoid repeated allocations
-static std::vector<std::string> cachedNormalizedEmoteLabels;
-static bool emoteLabelsCached = false;
-
-static void ensureEmoteLabelsNormalized()
-{
-    if (!emoteLabelsCached) {
-        cachedNormalizedEmoteLabels.clear();
-        cachedNormalizedEmoteLabels.reserve(numEmotes);
-        for (int i = 0; i < numEmotes; ++i) {
-            cachedNormalizedEmoteLabels.push_back(normalizeEmoji(std::string(emotes[i].label)));
-        }
-        emoteLabelsCached = true;
-    }
-}
-
 static std::vector<std::string> cachedLines;
 static std::vector<int> cachedHeights;
-
-// Scroll state (file scope so we can reset on new message)
-float scrollY = 0.0f;
-uint32_t lastTime = 0;
-uint32_t scrollStartDelay = 0;
-uint32_t pauseStart = 0;
-bool waitingToReset = false;
-bool scrollStarted = false;
 static bool manualScrolling = false;
-static bool didReset = false;
-static bool didLoadPreference = false;
-
-// Rebuild control
-static bool s_dirty = true; // true = caches must be rebuilt
-static inline void markDirty()
-{
-    s_dirty = true;
-}
-
-// Forward declarations for scroll functions (defined after helper functions)
-void scrollUp();
-void scrollDown();
-
-static std::vector<bool> cachedIsHeader;
-static std::vector<bool> cachedIsMine;
-static std::vector<AckStatus> cachedAckForLine;
-
-// Time metadata for live label (index-aligned with cachedLines)
-static std::vector<uint32_t> cachedMsgTimestamp; // original message timestamp
-static std::vector<bool> cachedIsBootRelative;   // true if timestamp is boot-relative
-
-// Cached filtered messages to avoid recreating the deque on every frame
-static std::deque<StoredMessage> cachedFiltered;
-static ThreadMode lastFilterMode = ThreadMode::ALL;
-static int lastFilterChannel = -1;
-static uint32_t lastFilterPeer = 0;
-
-// C++11-friendly helpers (no generic-lambda params)
-template <typename T> static inline void trim_vec_front(std::vector<T> &v, size_t n)
-{
-    if (v.empty())
-        return;
-    size_t k = std::min(n, v.size());
-    v.erase(v.begin(), v.begin() + k);
-}
-
-static bool shedOldest(size_t n)
-{
-    const size_t before = cachedLines.size();
-    if (!before)
-        return false;
-
-    trim_vec_front(cachedLines, n);
-    trim_vec_front(cachedHeights, n);
-    trim_vec_front(cachedIsHeader, n);
-    trim_vec_front(cachedIsMine, n);
-    trim_vec_front(cachedAckForLine, n);
-    trim_vec_front(cachedMsgTimestamp, n);
-    trim_vec_front(cachedIsBootRelative, n);
-
-    // If we've shed a significant amount, shrink capacity to reduce memory footprint
-    if (n >= before / 2) {
-        cachedLines.shrink_to_fit();
-        cachedHeights.shrink_to_fit();
-        cachedIsHeader.shrink_to_fit();
-        cachedIsMine.shrink_to_fit();
-        cachedAckForLine.shrink_to_fit();
-        cachedMsgTimestamp.shrink_to_fit();
-        cachedIsBootRelative.shrink_to_fit();
-    }
-
-    // request a clean rebuild/relayout; draw code clamps scroll position
-    markDirty();
-    return cachedLines.size() < before;
-}
-
-template <typename F> static bool retry_on_oom(F &&fn, size_t shedCount = 16, int maxRetries = 3)
-{
-#if MR_HAS_EXCEPTIONS
-    for (int attempt = 0; attempt < maxRetries; ++attempt) {
-        try {
-            fn();
-            return true;
-        } catch (const std::bad_alloc &) {
-            if (!shedOldest(shedCount))
-                return false;
-        }
-    }
-    return false;
-#else
-    // Without exceptions: shed once and attempt the operation
-    shedOldest(shedCount);
-    fn();
-    return true;
-#endif
-}
-
-// ---- Low-RAM guards for line buffers ----
-// Absolute caps; tune per device via build flags
-#ifndef MR_MAX_TOTAL_LINES
-#define MR_MAX_TOTAL_LINES 512
-#endif
-#ifndef MR_MAX_LINES_PER_MESSAGE
-#define MR_MAX_LINES_PER_MESSAGE 32
-#endif
-#ifndef MR_SHED_BATCH
-#define MR_SHED_BATCH 64
-#endif
-#ifndef MR_HIGH_WATER_MARK
-#define MR_HIGH_WATER_MARK 384
-#endif
-
-static constexpr size_t kMaxTotalLines = MR_MAX_TOTAL_LINES;
-static constexpr size_t kMaxLinesPerMessage = MR_MAX_LINES_PER_MESSAGE;
-static constexpr size_t kShedBatch = MR_SHED_BATCH;
-static constexpr size_t kHighWaterMark = MR_HIGH_WATER_MARK; // Start shedding when we hit this many lines
-
-// Check if we should proactively shed cache to prevent memory issues
-static inline void checkMemoryPressure()
-{
-    if (cachedLines.size() >= kHighWaterMark) {
-        LOG_DEBUG("MessageRenderer: Cache high water mark reached (%zu lines), proactive shedding", cachedLines.size());
-        shedOldest(kShedBatch);
-    }
-}
-
-// Reserve for the lines vector with clamping and exception safety.
-static bool try_reserve_lines(std::vector<std::string> &v, size_t want)
-{
-    if (want > kMaxTotalLines)
-        want = kMaxTotalLines;
-#if MR_HAS_EXCEPTIONS
-    try {
-        // Never request less than current size() to avoid shrink reallocation.
-        if (want < v.size())
-            want = v.size();
-        v.reserve(want);
-        return true;
-    } catch (const std::bad_alloc &) {
-        // Caller decides whether to shed caches or continue without reserve.
-        return false;
-    }
-#else
-    // Best-effort: skip pre-reserve; proceed without clamping memory
-    (void)v;
-    (void)want;
-    return true;
-#endif
-}
 
 // UTF-8 skip helper
 static inline size_t utf8CharLen(uint8_t c)
@@ -235,46 +47,8 @@ static inline size_t utf8CharLen(uint8_t c)
     return 1;
 }
 
-// Count UTF-8 characters (treating multi-byte sequences including emoji as 1 character)
-size_t utf8CharCount(const char *str)
-{
-    size_t count = 0;
-    for (size_t i = 0; str[i];) {
-        size_t len = utf8CharLen((uint8_t)str[i]);
-        i += len;
-        count++;
-    }
-    return count;
-}
-
-// Return substring with at most maxChars UTF-8 characters (emojis count as 1 char)
-std::string utf8Substr(const std::string &str, size_t maxChars)
-{
-    size_t count = 0;
-    size_t i = 0;
-    while (i < str.size() && count < maxChars) {
-        size_t len = utf8CharLen((uint8_t)str[i]);
-        i += len;
-        count++;
-    }
-    return str.substr(0, i);
-}
-
-// Truncate string to specified number of UTF-8 characters (in-place)
-static void utf8Truncate(char *str, size_t maxChars)
-{
-    size_t count = 0;
-    size_t i = 0;
-    while (str[i] && count < maxChars) {
-        size_t len = utf8CharLen((uint8_t)str[i]);
-        i += len;
-        count++;
-    }
-    str[i] = '\0';
-}
-
 // Remove variation selectors (FE0F), skin tone modifiers, and keycap modifiers from emoji so they match your labels
-std::string normalizeEmoji(const std::string &s)
+static std::string normalizeEmoji(const std::string &s)
 {
     std::string out;
     out.reserve(s.size()); // Pre-allocate to avoid reallocations
@@ -326,10 +100,24 @@ std::string normalizeEmoji(const std::string &s)
     return out;
 }
 
-static constexpr int MESSAGE_BLOCK_GAP = 6;
+// Cache normalized emoji labels to avoid repeated allocations
+static std::vector<std::string> cachedNormalizedEmoteLabels;
+static bool emoteLabelsCached = false;
+
+static void ensureEmoteLabelsNormalized()
+{
+    if (!emoteLabelsCached) {
+        cachedNormalizedEmoteLabels.clear();
+        cachedNormalizedEmoteLabels.reserve(numEmotes);
+        for (int i = 0; i < numEmotes; ++i) {
+            cachedNormalizedEmoteLabels.push_back(normalizeEmoji(std::string(emotes[i].label)));
+        }
+        emoteLabelsCached = true;
+    }
+}
 
 // Replace unknown 4-byte emoji with upside-down question mark
-std::string replaceUnknownEmoji(const std::string &s, const Emote *emotes, int emoteCount)
+static std::string replaceUnknownEmoji(const std::string &s, const Emote *emoteList, int emoteCount)
 {
     ensureEmoteLabelsNormalized(); // Ensure cache is ready
 
@@ -377,7 +165,6 @@ std::string replaceUnknownEmoji(const std::string &s, const Emote *emotes, int e
                 }
                 // Other E2 80 XX are punctuation (', ", –, —) - keep as-is
             }
-            // E2 81 XX = Subscripts/Superscripts (U+2070-U+209F) - NOT emoji
             // E2 86-97 XX = Arrows, Math, Technical (U+2190-U+27BF) - treat as emoji
             // E2 98-9B XX = Miscellaneous Symbols (U+2600-U+26FF) - includes ⚡☀️❤️ - emoji!
             // E2 9C-9F XX = Dingbats (U+2700-U+27BF) - emoji!
@@ -391,7 +178,7 @@ std::string replaceUnknownEmoji(const std::string &s, const Emote *emotes, int e
         } else if (charLen == 3 && c == 0xEF && i + 1 < normInput.size()) {
             // 3-byte sequences starting with 0xEF - check for variation selectors
             uint8_t b2 = static_cast<uint8_t>(normInput[i + 1]);
-            uint8_t b3 = static_cast<uint8_t>(normInput[i + 2]);
+            uint8_t b3 = (i + 2 < normInput.size()) ? static_cast<uint8_t>(normInput[i + 2]) : 0;
             // EF B8 8F = Variation Selector-16 (U+FE0F) - emoji presentation
             if (b2 == 0xB8 && b3 == 0x8F) {
                 isUnknownEmoji = true;
@@ -399,11 +186,11 @@ std::string replaceUnknownEmoji(const std::string &s, const Emote *emotes, int e
         }
 
         if (isUnknownEmoji) {
-            // Unknown emoji - replace with upside-down question mark
-            out.append("\xC2\xBF"); // ¿ in UTF-8
+            // Replace unknown emoji with upside-down question mark (¿)
+            out.append("¿");
             i += charLen;
         } else {
-            // Regular character - keep it
+            // Keep normal characters as-is
             out.append(normInput, i, charLen);
             i += charLen;
         }
@@ -412,63 +199,160 @@ std::string replaceUnknownEmoji(const std::string &s, const Emote *emotes, int e
     return out;
 }
 
-int getStringWidthWithEmotes(OLEDDisplay *display, const std::string &line, const Emote *emotes, int emoteCount)
+// UTF-8 character count (exported)
+size_t utf8CharCount(const char *str)
 {
-    ensureEmoteLabelsNormalized(); // Ensure cache is ready
+    size_t count = 0;
+    for (size_t i = 0; str[i];) {
+        size_t len = utf8CharLen((uint8_t)str[i]);
+        i += len;
+        count++;
+    }
+    return count;
+}
 
-    // Use same replacement logic as drawStringWithEmotes for consistent width calculation
-    const std::string normLine = replaceUnknownEmoji(line, emotes, emoteCount);
-    int totalWidth = 0;
+// UTF-8 substring (exported)
+std::string utf8Substr(const std::string &str, size_t maxChars)
+{
+    std::string result;
+    size_t count = 0;
+    for (size_t i = 0; i < str.size() && count < maxChars;) {
+        size_t len = utf8CharLen((uint8_t)str[i]);
+        result.append(str, i, len);
+        i += len;
+        count++;
+    }
+    return result;
+}
 
-    for (size_t i = 0; i < normLine.length();) {
-        bool matched = false;
-        for (int e = 0; e < emoteCount; ++e) {
-            const std::string &labelNorm = cachedNormalizedEmoteLabels[e];
-            const size_t emojiLen = labelNorm.length();
-            if (emojiLen && normLine.compare(i, emojiLen, labelNorm) == 0) {
-                totalWidth += emotes[e].width + 1; // emote width + spacing
-                i += emojiLen;
-                matched = true;
-                break;
-            }
-        }
-        if (!matched) {
-            size_t charLen = utf8CharLen(static_cast<uint8_t>(normLine[i]));
-            std::string singleChar = normLine.substr(i, charLen);
-#if defined(OLED_UA) || defined(OLED_RU)
-            totalWidth += display->getStringWidth(singleChar.c_str(), singleChar.length(), true);
-#else
-            totalWidth += display->getStringWidth(singleChar.c_str());
+// Scroll state (file scope so we can reset on new message)
+float scrollY = 0.0f;
+static int scrollMin = 0; // Minimum scroll to prevent bubble overlap with header
+uint32_t lastTime = 0;
+uint32_t scrollStartDelay = 0;
+uint32_t pauseStart = 0;
+bool waitingToReset = false;
+bool scrollStarted = false;
+static bool didReset = false;
+static bool didLoadPreference = false;
+static bool needsInitialScrollPosition = false; // Set after cache rebuild to position scroll for reversed order
+static constexpr int MESSAGE_BLOCK_GAP = 6;
+
+// Message order preference (default: newest first/on top)
+static bool messageOrderNewestFirst = true;
+
+#ifdef FSCom
+static const char *messageOrderFileName = "/prefs/message_order.dat";
 #endif
-            i += charLen;
-        }
-    }
-    return totalWidth;
-}
 
-static void drawMessageScrollbar(OLEDDisplay *display, int visibleHeight, int totalHeight, int scrollOffset, int startY)
+// Load message order preference from filesystem
+static void loadMessageOrderPreference()
 {
-    if (totalHeight <= visibleHeight)
-        return; // no scrollbar needed
+#ifdef FSCom
+    auto file = FSCom.open(messageOrderFileName, FILE_O_READ);
+    if (file) {
+        uint8_t value = 0;
+        if (file.read(&value, 1) == 1) {
+            messageOrderNewestFirst = (value != 0);
+            LOG_DEBUG("Loaded message order preference: %s", messageOrderNewestFirst ? "new on top" : "old on top");
+        }
+        file.close();
+    }
+#endif
+}
 
-    int scrollbarX = display->getWidth() - 2;
-    int scrollbarHeight = visibleHeight;
-    int thumbHeight = std::max(6, (scrollbarHeight * visibleHeight) / totalHeight);
-    int maxScroll = std::max(1, totalHeight - visibleHeight);
-    int thumbY = startY + (scrollbarHeight - thumbHeight) * scrollOffset / maxScroll;
+// Save message order preference to filesystem
+static void saveMessageOrderPreference()
+{
+#ifdef FSCom
+    FSCom.mkdir("/prefs"); // Ensure directory exists
+    // Remove old file to ensure clean write
+    if (FSCom.exists(messageOrderFileName)) {
+        FSCom.remove(messageOrderFileName);
+    }
+    auto file = FSCom.open(messageOrderFileName, FILE_O_WRITE);
+    if (file) {
+        uint8_t value = messageOrderNewestFirst ? 1 : 0;
+        file.write(&value, 1);
+        file.flush();
+        file.close();
+        LOG_INFO("Saved message order preference: %s", messageOrderNewestFirst ? "new on top" : "old on top");
+    }
+#endif
+}
 
-    for (int i = 0; i < thumbHeight; i++) {
-        display->setPixel(scrollbarX, thumbY + i);
+bool getMessageOrderNewestFirst()
+{
+    return messageOrderNewestFirst;
+}
+
+void setMessageOrderNewestFirst(bool newestFirst)
+{
+    if (messageOrderNewestFirst != newestFirst) {
+        messageOrderNewestFirst = newestFirst;
+        saveMessageOrderPreference();
+        // Clear cache and reset scroll when ordering changes
+        resetScrollState();
+        cachedLines.clear();
+        cachedHeights.clear();
+        // Flag to set initial scroll position after cache is rebuilt
+        needsInitialScrollPosition = true;
     }
 }
 
-void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string &line, const Emote *emotes, int emoteCount,
+// Adjust scroll for touch/drag gestures
+void adjustScroll(int16_t deltaY)
+{
+    manualScrolling = true;
+    scrollY -= deltaY;
+    if (scrollY < scrollMin)
+        scrollY = scrollMin;
+
+    int totalHeight = 0;
+    for (int h : cachedHeights)
+        totalHeight += h;
+    int visibleHeight = screen ? (screen->getHeight() - (FONT_HEIGHT_SMALL * 2)) : 64;
+    int maxScroll = totalHeight - visibleHeight;
+    if (maxScroll < 0)
+        maxScroll = 0;
+    if (scrollY > maxScroll)
+        scrollY = maxScroll;
+}
+
+void scrollUp()
+{
+    manualScrolling = true;
+    scrollY -= 12;
+    if (scrollY < scrollMin)
+        scrollY = scrollMin;
+}
+
+void scrollDown()
+{
+    manualScrolling = true;
+
+    int totalHeight = 0;
+    for (int h : cachedHeights)
+        totalHeight += h;
+
+    int visibleHeight = screen->getHeight() - (FONT_HEIGHT_SMALL * 2);
+    int maxScroll = totalHeight - visibleHeight;
+    if (maxScroll < 0)
+        maxScroll = 0;
+
+    scrollY += 12;
+    if (scrollY > maxScroll)
+        scrollY = maxScroll;
+}
+
+void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string &line, const Emote *emoteList, int emoteCount,
                           bool isMessageHeader)
 {
+    (void)isMessageHeader;         // Not used in this implementation
     ensureEmoteLabelsNormalized(); // Ensure cache is ready
 
     // Normalize and replace unknown emoji with placeholder so they don't render as blank
-    const std::string normLine = replaceUnknownEmoji(line, emotes, emoteCount);
+    const std::string normLine = replaceUnknownEmoji(line, emoteList, emoteCount);
     int cursorX = x;
     const int fontHeight = FONT_HEIGHT_SMALL;
 
@@ -481,8 +365,8 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
             const std::string &labelNorm = cachedNormalizedEmoteLabels[e];
             const size_t emojiLen = labelNorm.length();
             if (emojiLen && normLine.compare(i, emojiLen, labelNorm) == 0) {
-                if (emotes[e].height > maxIconHeight)
-                    maxIconHeight = emotes[e].height;
+                if (emoteList[e].height > maxIconHeight)
+                    maxIconHeight = emoteList[e].height;
                 i += emojiLen;
                 matched = true;
                 break;
@@ -510,19 +394,17 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
             continue;
         }
 
-        // Look ahead for the next emote match
+        // Look ahead for the next emote match using normalized labels
         size_t nextEmotePos = std::string::npos;
         const Emote *matchedEmote = nullptr;
         size_t emojiLen = 0;
 
         for (int e = 0; e < emoteCount; ++e) {
             const std::string &labelNorm = cachedNormalizedEmoteLabels[e];
-            if (labelNorm.empty())
-                continue;
             size_t pos = normLine.find(labelNorm, i);
             if (pos != std::string::npos && (nextEmotePos == std::string::npos || pos < nextEmotePos)) {
                 nextEmotePos = pos;
-                matchedEmote = &emotes[e];
+                matchedEmote = &emoteList[e];
                 emojiLen = labelNorm.length();
             }
         }
@@ -534,63 +416,23 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
 
         if (nextControl > i) {
             std::string textChunk = normLine.substr(i, nextControl - i);
-
-            // Handle special characters - render char by char to override width
-            size_t j = 0;
-            while (j < textChunk.length()) {
-                size_t charLen = utf8CharLen(static_cast<uint8_t>(textChunk[j]));
-
-                // Check if this is the ° character followed by C or F
-                if (charLen == 2 && (uint8_t)textChunk[j] == 0xC2 && j + 1 < textChunk.length() &&
-                    (uint8_t)textChunk[j + 1] == 0xB0 && j + 2 < textChunk.length() &&
-                    (textChunk[j + 2] == 'C' || textChunk[j + 2] == 'F')) {
-                    // Render °C or °F as a single unit to avoid spacing issues
-                    std::string tempUnit = textChunk.substr(j, 3); // °C or °F
-                    if (inBold) {
-                        display->drawString(cursorX + 1, fontY, tempUnit.c_str());
-                    }
-                    display->drawString(cursorX, fontY, tempUnit.c_str());
-#if defined(OLED_UA) || defined(OLED_RU)
-                    cursorX += display->getStringWidth(tempUnit.c_str(), tempUnit.length(), true);
-#else
-                    cursorX += display->getStringWidth(tempUnit.c_str());
-#endif
-                    j += 3;
-                } else {
-                    // Regular character - render it
-                    std::string singleChar = textChunk.substr(j, charLen);
-                    if (inBold) {
-                        display->drawString(cursorX + 1, fontY, singleChar.c_str());
-                    }
-                    display->drawString(cursorX, fontY, singleChar.c_str());
-#if defined(OLED_UA) || defined(OLED_RU)
-                    cursorX += display->getStringWidth(singleChar.c_str(), singleChar.length(), true);
-#else
-                    cursorX += display->getStringWidth(singleChar.c_str());
-#endif
-                    j += charLen;
-                }
+            if (inBold) {
+                // Faux bold: draw twice, offset by 1px
+                display->drawString(cursorX + 1, fontY, textChunk.c_str());
             }
-
+            display->drawString(cursorX, fontY, textChunk.c_str());
+#if defined(OLED_UA) || defined(OLED_RU)
+            cursorX += display->getStringWidth(textChunk.c_str(), textChunk.length(), true);
+#else
+            cursorX += display->getStringWidth(textChunk.c_str());
+#endif
             i = nextControl;
             continue;
         }
 
         // Render the emote (if found)
         if (matchedEmote && i == nextEmotePos) {
-            // For message headers with tiny fonts, bottom-align emoji with text
-            int iconY;
-#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
-            if (isMessageHeader) {
-                // Bottom-align with 2px offset from pure bottom
-                iconY = y + fontHeight - matchedEmote->height + 2;
-            } else {
-                // Center vertically relative to font
-                iconY = fontY + (fontHeight - matchedEmote->height) / 2;
-            }
-#else
-            iconY = fontY + (fontHeight - matchedEmote->height) / 2;
-#endif
+            int iconY = y + (lineHeight - matchedEmote->height) / 2;
             display->drawXbm(cursorX, iconY, matchedEmote->width, matchedEmote->height, matchedEmote->bitmap);
             cursorX += matchedEmote->width + 1;
             i += emojiLen;
@@ -598,43 +440,15 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
         } else {
             // No more emotes — render the rest of the line
             std::string remaining = normLine.substr(i);
-
-            // Handle special characters - render char by char to override width
-            size_t j = 0;
-            while (j < remaining.length()) {
-                size_t charLen = utf8CharLen(static_cast<uint8_t>(remaining[j]));
-
-                // Check if this is the ° character followed by C or F
-                if (charLen == 2 && (uint8_t)remaining[j] == 0xC2 && j + 1 < remaining.length() &&
-                    (uint8_t)remaining[j + 1] == 0xB0 && j + 2 < remaining.length() &&
-                    (remaining[j + 2] == 'C' || remaining[j + 2] == 'F')) {
-                    // Render °C or °F as a single unit to avoid spacing issues
-                    std::string tempUnit = remaining.substr(j, 3); // °C or °F
-                    if (inBold) {
-                        display->drawString(cursorX + 1, fontY, tempUnit.c_str());
-                    }
-                    display->drawString(cursorX, fontY, tempUnit.c_str());
-#if defined(OLED_UA) || defined(OLED_RU)
-                    cursorX += display->getStringWidth(tempUnit.c_str(), tempUnit.length(), true);
-#else
-                    cursorX += display->getStringWidth(tempUnit.c_str());
-#endif
-                    j += 3;
-                } else {
-                    // Regular character - render it
-                    std::string singleChar = remaining.substr(j, charLen);
-                    if (inBold) {
-                        display->drawString(cursorX + 1, fontY, singleChar.c_str());
-                    }
-                    display->drawString(cursorX, fontY, singleChar.c_str());
-#if defined(OLED_UA) || defined(OLED_RU)
-                    cursorX += display->getStringWidth(singleChar.c_str(), singleChar.length(), true);
-#else
-                    cursorX += display->getStringWidth(singleChar.c_str());
-#endif
-                    j += charLen;
-                }
+            if (inBold) {
+                display->drawString(cursorX + 1, fontY, remaining.c_str());
             }
+            display->drawString(cursorX, fontY, remaining.c_str());
+#if defined(OLED_UA) || defined(OLED_RU)
+            cursorX += display->getStringWidth(remaining.c_str(), remaining.length(), true);
+#else
+            cursorX += display->getStringWidth(remaining.c_str());
+#endif
             break;
         }
     }
@@ -650,71 +464,8 @@ void resetScrollState()
     lastTime = millis();
     manualScrolling = false;
     didReset = false;
-}
-
-// Fully free cached message data from heap (no eager re-reserve)
-void clearMessageCache()
-{
-    // Drop contents and capacity for all aligned caches
-    cachedLines.clear();
-    cachedLines.shrink_to_fit();
-
-    cachedHeights.clear();
-    cachedHeights.shrink_to_fit();
-
-    cachedIsHeader.clear();
-    cachedIsHeader.shrink_to_fit();
-
-    cachedIsMine.clear();
-    cachedIsMine.shrink_to_fit();
-
-    cachedAckForLine.clear();
-    cachedAckForLine.shrink_to_fit();
-
-    cachedMsgTimestamp.clear();
-    cachedMsgTimestamp.shrink_to_fit();
-
-    cachedIsBootRelative.clear();
-    cachedIsBootRelative.shrink_to_fit();
-
-    cachedFiltered.clear();
-    cachedFiltered.shrink_to_fit();
-
-    // No need to clear emoji label cache - it's constant and reusable
-
-    // Rebuild from scratch on next draw
-    resetScrollState();
-    markDirty();
-}
-
-// Manual scroll controls (UP/DOWN)
-void scrollUp()
-{
-    manualScrolling = true;
-    scrollY -= 12;
-    if (scrollY < 0)
-        scrollY = 0;
-}
-
-void scrollDown()
-{
-    manualScrolling = true;
-
-    int totalHeight = 0;
-    for (int h : cachedHeights)
-        totalHeight += h;
-
-    int visibleHeight = screen->getHeight() - (FONT_HEIGHT_SMALL * 2);
-    int maxScroll = totalHeight - visibleHeight;
-    if (maxScroll < 0)
-        maxScroll = 0;
-
-    // Allow overscrolling by navigation bar height
-    int maxScrollWithOverscroll = maxScroll + FONT_HEIGHT_SMALL;
-
-    scrollY += 12;
-    if (scrollY > maxScrollWithOverscroll)
-        scrollY = maxScrollWithOverscroll;
+    // Flag to reposition scroll for both modes (uses scrollMin for new-on-top, scrollStop for old-on-top)
+    needsInitialScrollPosition = true;
 }
 
 void nudgeScroll(int8_t direction)
@@ -759,99 +510,20 @@ void nudgeScroll(int8_t direction)
     }
 }
 
-void adjustScroll(int16_t deltaY)
+// Fully free cached message data from heap
+void clearMessageCache()
 {
-    if (cachedHeights.empty()) {
-        scrollY = 0.0f;
-        return;
-    }
+    std::vector<std::string>().swap(cachedLines);
+    std::vector<int>().swap(cachedHeights);
 
-    // Enable manual scrolling mode to prevent auto-scroll
-    manualScrolling = true;
-
-    // Natural scrolling: drag down = scroll up (negative delta)
-    scrollY -= static_cast<float>(deltaY);
-
-    // Calculate bounds
-    OLEDDisplay *display = (screen != nullptr) ? screen->getDisplayDevice() : nullptr;
-    const int displayHeight = display ? display->getHeight() : 64;
-    const int navHeight = FONT_HEIGHT_SMALL;
-    const int usableHeight = std::max(0, displayHeight - navHeight);
-
-    int totalHeight = 0;
-    for (int h : cachedHeights)
-        totalHeight += h;
-
-    int maxScroll = totalHeight - usableHeight;
-    if (maxScroll < 0)
-        maxScroll = 0;
-
-    // Allow overscrolling at the bottom by navigation bar height so text isn't blocked
-    int maxScrollWithOverscroll = maxScroll + navHeight;
-
-    // Clamp scroll position
-    if (scrollY < 0.0f)
-        scrollY = 0.0f;
-    if (scrollY > maxScrollWithOverscroll)
-        scrollY = static_cast<float>(maxScrollWithOverscroll);
-
-    // Reset auto-scroll timers
-    waitingToReset = false;
-    scrollStarted = false;
-    scrollStartDelay = millis();
-    lastTime = millis();
+    // Reset scroll so we rebuild cleanly next time we enter the screen
+    resetScrollState();
 }
 
 // Current thread state
 static ThreadMode currentMode = ThreadMode::ALL;
 static int currentChannel = -1;
 static uint32_t currentPeer = 0;
-
-// Message ordering preference (false = old on top/new on bottom, true = new on top/old on bottom)
-static bool messageOrderNewestFirst = true; // Default to develop branch behavior (new on top)
-
-#ifdef FSCom
-static const char *messageOrderFileName = "/prefs/message_order.dat";
-#endif
-
-// Load message order preference from filesystem
-static void loadMessageOrderPreference()
-{
-#ifdef FSCom
-    auto file = FSCom.open(messageOrderFileName, FILE_O_READ);
-    if (file) {
-        uint8_t value = 0;
-        if (file.read(&value, 1) == 1) {
-            messageOrderNewestFirst = (value != 0);
-            LOG_DEBUG("Loaded message order preference: %s", messageOrderNewestFirst ? "new on top" : "old on top");
-        }
-        file.close();
-    } else {
-        LOG_DEBUG("No message order preference file found, using default (new on top)");
-    }
-#endif
-}
-
-// Save message order preference to filesystem
-static void saveMessageOrderPreference()
-{
-#ifdef FSCom
-    FSCom.mkdir("/prefs"); // Ensure directory exists
-    auto file = FSCom.open(messageOrderFileName, FILE_O_WRITE);
-    if (file) {
-        uint8_t value = messageOrderNewestFirst ? 1 : 0;
-        size_t written = file.write(&value, 1);
-        file.close();
-        if (written == 1) {
-            LOG_INFO("Saved message order preference: %s", messageOrderNewestFirst ? "new on top" : "old on top");
-        } else {
-            LOG_WARN("Failed to write message order preference (wrote %d bytes)", written);
-        }
-    } else {
-        LOG_WARN("Failed to open %s for writing", messageOrderFileName);
-    }
-#endif
-}
 
 // Registry of seen threads for manual toggle
 static std::vector<int> seenChannels;
@@ -870,10 +542,7 @@ void setThreadMode(ThreadMode mode, int channel /* = -1 */, uint32_t peer /* = 0
     currentMode = mode;
     currentChannel = channel;
     currentPeer = peer;
-    // Immediately refresh the view after a mode change
-    resetScrollState(); // clears scroll & prepares for a fresh layout
-    markDirty();        // forces cache rebuild on next draw
-    didReset = false;   // keep existing contract (we reset above)
+    didReset = false; // force reset when mode changes
 
     // Track channels we’ve seen
     if (mode == ThreadMode::CHANNEL && channel >= 0) {
@@ -903,22 +572,6 @@ int getThreadChannel()
 uint32_t getThreadPeer()
 {
     return currentPeer;
-}
-
-bool getMessageOrderNewestFirst()
-{
-    return messageOrderNewestFirst;
-}
-
-void setMessageOrderNewestFirst(bool newestFirst)
-{
-    if (messageOrderNewestFirst != newestFirst) {
-        messageOrderNewestFirst = newestFirst;
-        saveMessageOrderPreference();
-        // Clear cache and reset scroll when ordering changes
-        resetScrollState();
-        markDirty();
-    }
 }
 
 // Accessors for menuHandler
@@ -970,13 +623,13 @@ static void drawRelayMark(OLEDDisplay *display, int x, int y, int size = 8)
     display->drawLine(centerX - 1, centerY - 4, centerX + 1, centerY - 4);
 }
 
-static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &line, const Emote *emotes, int emoteCount)
+static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &line, const Emote *emoteList, int emoteCount)
 {
     ensureEmoteLabelsNormalized(); // Ensure cache is ready
 
     // Use replaceUnknownEmoji to match how text is actually rendered
     // This ensures width calculation is consistent with drawStringWithEmotes
-    std::string normalized = replaceUnknownEmoji(line, emotes, emoteCount);
+    std::string normalized = replaceUnknownEmoji(line, emoteList, emoteCount);
     int totalWidth = 0;
 
     size_t i = 0;
@@ -986,7 +639,7 @@ static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &
             const std::string &labelNorm = cachedNormalizedEmoteLabels[e];
             size_t emojiLen = labelNorm.length();
             if (emojiLen > 0 && normalized.compare(i, emojiLen, labelNorm) == 0) {
-                totalWidth += emotes[e].width + 1; // +1 spacing
+                totalWidth += emoteList[e].width + 1; // +1 spacing
                 i += emojiLen;
                 matched = true;
                 break;
@@ -994,7 +647,6 @@ static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &
         }
         if (!matched) {
             size_t charLen = utf8CharLen(static_cast<uint8_t>(normalized[i]));
-            // Regular character (including ¿ replacement for unknown emoji) - use actual font width
 #if defined(OLED_UA) || defined(OLED_RU)
             totalWidth += display->getStringWidth(normalized.substr(i, charLen).c_str(), charLen, true);
 #else
@@ -1006,7 +658,18 @@ static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &
     return totalWidth;
 }
 
-// Get the actual visual bottom pixel of a drawn line (for bubble sizing)
+// Public wrapper for getRenderedLineWidth (used by other modules)
+int getStringWidthWithEmotes(OLEDDisplay *display, const std::string &line, const Emote *emotes, int emoteCount)
+{
+    return getRenderedLineWidth(display, line, emotes, emoteCount);
+}
+
+struct MessageBlock {
+    size_t start;
+    size_t end;
+    bool mine;
+};
+
 static int getDrawnLinePixelBottom(int lineTopY, const std::string &line, bool isHeaderLine)
 {
     if (isHeaderLine) {
@@ -1025,44 +688,6 @@ static int getDrawnLinePixelBottom(int lineTopY, const std::string &line, bool i
     const int iconTop = lineTopY + (lineHeight - tallest) / 2;
 
     return iconTop + tallest - 1;
-}
-
-// Message block structure for bubble drawing (matches upstream)
-struct MessageBlock {
-    size_t start;
-    size_t end;
-    bool mine;
-};
-
-static std::vector<MessageBlock> buildMessageBlocks(const std::vector<bool> &isHeaderVec, const std::vector<bool> &isMineVec)
-{
-    std::vector<MessageBlock> blocks;
-    if (isHeaderVec.empty())
-        return blocks;
-
-    size_t start = 0;
-    bool mine = isMineVec[0];
-
-    for (size_t i = 1; i < isHeaderVec.size(); ++i) {
-        if (isHeaderVec[i]) {
-            MessageBlock b;
-            b.start = start;
-            b.end = i - 1;
-            b.mine = mine;
-            blocks.push_back(b);
-
-            start = i;
-            mine = isMineVec[i];
-        }
-    }
-
-    MessageBlock last;
-    last.start = start;
-    last.end = isHeaderVec.size() - 1;
-    last.mine = mine;
-    blocks.push_back(last);
-
-    return blocks;
 }
 
 static void drawRoundedRectOutline(OLEDDisplay *display, int x, int y, int w, int h, int r)
@@ -1104,71 +729,96 @@ static void drawRoundedRectOutline(OLEDDisplay *display, int x, int y, int w, in
     display->drawCircleQuads(x0 + r, y1 - r, r, 4); // bottom left
 }
 
+static std::vector<MessageBlock> buildMessageBlocks(const std::vector<bool> &isHeaderVec, const std::vector<bool> &isMineVec)
+{
+    std::vector<MessageBlock> blocks;
+    if (isHeaderVec.empty())
+        return blocks;
+
+    size_t start = 0;
+    bool mine = isMineVec[0];
+
+    for (size_t i = 1; i < isHeaderVec.size(); ++i) {
+        if (isHeaderVec[i]) {
+            MessageBlock b;
+            b.start = start;
+            b.end = i - 1;
+            b.mine = mine;
+            blocks.push_back(b);
+
+            start = i;
+            mine = isMineVec[i];
+        }
+    }
+
+    MessageBlock last;
+    last.start = start;
+    last.end = isHeaderVec.size() - 1;
+    last.mine = mine;
+    blocks.push_back(last);
+
+    return blocks;
+}
+
+static void drawMessageScrollbar(OLEDDisplay *display, int visibleHeight, int totalHeight, int scrollOffset, int startY)
+{
+    if (totalHeight <= visibleHeight)
+        return; // no scrollbar needed
+
+    int scrollbarX = display->getWidth() - 2;
+    int scrollbarHeight = visibleHeight;
+    int thumbHeight = std::max(6, (scrollbarHeight * visibleHeight) / totalHeight);
+    int maxScroll = std::max(1, totalHeight - visibleHeight);
+    int thumbY = startY + (scrollbarHeight - thumbHeight) * scrollOffset / maxScroll;
+
+    for (int i = 0; i < thumbHeight; i++) {
+        display->setPixel(scrollbarX, thumbY + i);
+    }
+}
+
 void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     // Ensure any boot-relative timestamps are upgraded if RTC is valid
     messageStore.upgradeBootRelativeTimestamps();
 
+    // Load message order preference from filesystem (once)
     if (!didLoadPreference) {
         loadMessageOrderPreference();
         didLoadPreference = true;
+        // If loaded as reversed (old on top), flag to set initial scroll position
+        if (!messageOrderNewestFirst) {
+            needsInitialScrollPosition = true;
+        }
     }
 
     if (!didReset) {
         resetScrollState();
         didReset = true;
-
-        // If old messages are on top, we need to calculate initial scroll position to show newest at bottom
-        // This is done after the cache is built, so we defer actual positioning to first render
-        if (!messageOrderNewestFirst) {
-            // Set a flag to initialize scroll position after cache is built
-            waitingToReset = true; // Temporarily use this flag to indicate we need initial positioning
-        }
     }
 
     // Clear the unread message indicator when viewing the message
     hasUnreadMessage = false;
 
-    // Check if we need to rebuild the filtered message list
-    bool filterChanged = (currentMode != lastFilterMode || currentChannel != lastFilterChannel || currentPeer != lastFilterPeer);
-
-    // In ALL mode, we should match the full message store size
-    // In filtered modes, check if our cache might be stale
-    size_t liveCount = messageStore.getLiveMessages().size();
-    bool messageSizeMismatch = (currentMode == ThreadMode::ALL && cachedFiltered.size() != liveCount) ||
-                               (currentMode != ThreadMode::ALL && cachedFiltered.size() > liveCount);
-
-    if (filterChanged || s_dirty || cachedFiltered.empty() || messageSizeMismatch) {
-        // Filter messages based on thread mode
-        cachedFiltered.clear();
-        cachedFiltered.shrink_to_fit(); // Release memory when rebuilding
-        for (const auto &m : messageStore.getLiveMessages()) {
-            bool include = false;
-            switch (currentMode) {
-            case ThreadMode::ALL:
+    // Filter messages based on thread mode
+    std::deque<StoredMessage> filtered;
+    for (const auto &m : messageStore.getLiveMessages()) {
+        bool include = false;
+        switch (currentMode) {
+        case ThreadMode::ALL:
+            include = true;
+            break;
+        case ThreadMode::CHANNEL:
+            if (m.type == MessageType::BROADCAST && (int)m.channelIndex == currentChannel)
                 include = true;
-                break;
-            case ThreadMode::CHANNEL:
-                if (m.type == MessageType::BROADCAST && (int)m.channelIndex == currentChannel)
-                    include = true;
-                break;
-            case ThreadMode::DIRECT:
-                if (m.dest != NODENUM_BROADCAST && (m.sender == currentPeer || m.dest == currentPeer))
-                    include = true;
-                break;
-            }
-            if (include)
-                cachedFiltered.push_back(m);
+            break;
+        case ThreadMode::DIRECT:
+            if (m.dest != NODENUM_BROADCAST && (m.sender == currentPeer || m.dest == currentPeer))
+                include = true;
+            break;
         }
-
-        // Remember filter state
-        lastFilterMode = currentMode;
-        lastFilterChannel = currentChannel;
-        lastFilterPeer = currentPeer;
+        if (include)
+            filtered.push_back(m);
     }
-
-    // Use cached filtered list
-    const std::deque<StoredMessage> &filtered = cachedFiltered;
 
     display->clear();
     display->setTextAlignment(TEXT_ALIGN_LEFT);
@@ -1204,9 +854,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     case ThreadMode::DIRECT: {
         meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(currentPeer);
         if (node && node->has_user) {
-            // Apply emoji replacement to direct message title
-            std::string processedName = replaceUnknownEmoji(std::string(node->user.short_name), emotes, numEmotes);
-            snprintf(titleBuf, sizeof(titleBuf), "@%s", processedName.c_str());
+            snprintf(titleBuf, sizeof(titleBuf), "@%s", node->user.short_name);
         } else {
             snprintf(titleBuf, sizeof(titleBuf), "@%08x", currentPeer);
         }
@@ -1220,7 +868,6 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         if (currentMode != ThreadMode::ALL) {
             setThreadMode(ThreadMode::ALL);
             resetScrollState();
-            markDirty();
             return; // Next draw will rerun in ALL mode
         }
 
@@ -1233,357 +880,188 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         graphics::drawCommonFooter(display, x, y);
         return;
     }
-    if (s_dirty) {
-        // Check if we need to shed cache proactively before building new content
-        checkMemoryPressure();
 
-        // Build lines for filtered messages
-        // Order depends on messageOrderNewestFirst setting:
-        // - true (default): newest first (iterate forward, messages render top-to-bottom, autoscroll down)
-        // - false: oldest first (iterate reverse, messages render bottom-to-top, autoscroll up)
-        std::vector<std::string> allLines;
-        std::vector<bool> isMine;          // track alignment
-        std::vector<bool> isHeader;        // track header lines
-        std::vector<AckStatus> ackForLine; // per-header ACK badge
+    // Build lines for filtered messages
+    // Order depends on messageOrderNewestFirst setting:
+    // - true (default): newest first (iterate reverse, newest message at top)
+    // - false: oldest first (iterate forward, oldest message at top)
+    std::vector<std::string> allLines;
+    std::vector<bool> isMine;   // track alignment
+    std::vector<bool> isHeader; // track header lines
+    std::vector<AckStatus> ackForLine;
 
-        // Reuse capacity but avoid giant reserves on tiny heaps.
-        // Start with a modest estimate; clamp and tolerate failure.
-        {
-            size_t baseCap = cachedLines.capacity() ? cachedLines.capacity() : 256;
-            size_t estimate = std::min(baseCap, kMaxTotalLines);
-            (void)try_reserve_lines(allLines, estimate);
-
-            // Match side vectors to whatever capacity we actually ended up with.
-            size_t cap = allLines.capacity();
-            reserve_best_effort(isMine, cap);
-            reserve_best_effort(isHeader, cap);
-            reserve_best_effort(ackForLine, cap);
+    // Lambda to process a single message (avoids duplicating the code)
+    auto processMessage = [&](const StoredMessage &m) {
+        // Channel / destination labeling
+        char chanType[32] = "";
+        if (currentMode == ThreadMode::ALL) {
+            if (m.dest == NODENUM_BROADCAST) {
+                snprintf(chanType, sizeof(chanType), "#%s", channels.getName(m.channelIndex));
+            } else {
+                snprintf(chanType, sizeof(chanType), "(DM)");
+            }
         }
 
-        std::vector<uint32_t> msgTs;
-        std::vector<bool> isBootRel;
-        // Side buffers reserve best-effort (don’t throw if they can’t).
-        {
-            size_t cap = allLines.capacity();
-            reserve_best_effort(msgTs, cap);
-            reserve_best_effort(isBootRel, cap);
-        }
+        // Calculate how long ago
+        uint32_t nowSecs = getValidTime(RTCQuality::RTCQualityDevice, true);
+        uint32_t seconds = 0;
+        bool invalidTime = true;
 
-        // Iterate based on ordering preference
-        if (messageOrderNewestFirst) {
-            // New on top: iterate REVERSE (messages stored oldest-first, so reverse = newest first)
-            for (auto it = filtered.rbegin(); it != filtered.rend(); ++it) {
-                const auto &m = *it;
-
-                // Channel / destination labeling (single declaration)
-                char chanType[32] = "";
-                if (currentMode == ThreadMode::ALL) {
-                    if (m.type == MessageType::BROADCAST) {
-                        snprintf(chanType, sizeof(chanType), "(Ch%d)", m.channelIndex);
-                    } else {
-                        snprintf(chanType, sizeof(chanType), "(DM)");
-                    }
-                }
-
-                // We render time live; just reserve a conservative slot width (e.g., "999d")
-                const int timeSlotPx = display->getStringWidth("999d");
-
-                // Sender lookups (single set of declarations)
-                meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(m.sender);
-                meshtastic_NodeInfoLite *node_recipient = nodeDB->getMeshNode(m.dest);
-
-                char senderBuf[48] = "";
-#if defined(M5STACK_UNITC6L)
-                if (node && node->has_user && node->user.short_name && node->user.short_name[0] != '\0') {
-                    // Use short_name directly without emoji replacement to avoid allocations
-                    std::snprintf(senderBuf, sizeof(senderBuf), "%s", node->user.short_name);
-                } else {
-                    // No long/short name → show NodeID in parentheses
-                    snprintf(senderBuf, sizeof(senderBuf), "(%08x)", m.sender);
-                }
-
-                // If this is *our own* message, override senderBuf to who the recipient was
-                bool mine = (m.sender == nodeDB->getNodeNum());
-                if (mine && node_recipient && node_recipient->has_user && node_recipient->user.short_name &&
-                    node_recipient->user.short_name[0] != '\0') {
-                    // Use short_name directly without emoji replacement to avoid allocations
-                    std::snprintf(senderBuf, sizeof(senderBuf), "%s", node_recipient->user.short_name);
-                }
-#else
-                if (node && node->has_user && node->user.long_name && node->user.long_name[0] != '\0') {
-                    // Use long_name directly without emoji replacement to avoid allocations
-                    std::snprintf(senderBuf, sizeof(senderBuf), "%s", node->user.long_name);
-                } else {
-                    // No long/short name → show NodeID in parentheses
-                    snprintf(senderBuf, sizeof(senderBuf), "(%08x)", m.sender);
-                }
-
-                // If this is *our own* message, override senderBuf to who the recipient was
-                bool mine = (m.sender == nodeDB->getNodeNum());
-                if (mine && node_recipient && node_recipient->has_user && node_recipient->user.long_name &&
-                    node_recipient->user.long_name[0] != '\0') {
-                    // Use long_name directly without emoji replacement to avoid allocations
-                    std::snprintf(senderBuf, sizeof(senderBuf), "%s", node_recipient->user.long_name);
-                }
-#endif
-
-                // Compute how much room the sender label has (use timeSlotPx, NOT timeBuf)
-                int availWidth =
-                    SCREEN_WIDTH - timeSlotPx - display->getStringWidth(chanType) - display->getStringWidth(" @...") - 10;
-                if (availWidth < 0)
-                    availWidth = 0;
-
-                // Fit sender to available width - truncate by UTF-8 characters (emoji count as 1 char)
-                size_t origCharCount = utf8CharCount(senderBuf);
-                size_t charCount = origCharCount;
-                while (senderBuf[0] && display->getStringWidth(senderBuf) > availWidth && charCount > 0) {
-                    charCount--;
-                    utf8Truncate(senderBuf, charCount);
-                }
-
-                // If we actually truncated, append "..."
-                if (charCount < origCharCount && strlen(senderBuf) + 3 < sizeof(senderBuf)) {
-                    strcat(senderBuf, "...");
-                }
-
-                // Final header line (no time here; time is drawn live during render)
-                char headerStr[96] = "";
-                if (mine)
-                    std::snprintf(headerStr, sizeof(headerStr), "%s", chanType);
-                else
-                    std::snprintf(headerStr, sizeof(headerStr), "@%s %s", senderBuf, chanType);
-
-                // Header line (guard memory)
-                if (!retry_on_oom([&] {
-                        allLines.emplace_back(headerStr); // Avoid temporary string construction
-                        isMine.push_back(mine);
-                        isHeader.push_back(true);
-                        ackForLine.push_back(m.ackStatus);
-                        // time metadata aligned with this header line
-                        msgTs.push_back(m.timestamp);
-                        isBootRel.push_back(m.isBootRelative);
-                    })) {
-                    break; // couldn't grow even after shedding
-                }
-
-                // Body lines - use message text directly to avoid allocations
-                const char *msgText = MessageStore::getText(m);
-
-                std::vector<std::string> wrapped = generateLines(display, "", msgText, (mine ? rightTextWidth : leftTextWidth));
-
-                // Cap per-message wrapped lines so one long message can't explode memory.
-                if (wrapped.size() > kMaxLinesPerMessage) {
-                    // keep as many as possible, add ellipsis to last
-                    wrapped.resize(kMaxLinesPerMessage);
-                    if (!wrapped.empty()) {
-                        // Avoid huge reallocation by appending a tiny suffix
-                        wrapped.back() += " \xE2\x80\xA6"; // UTF-8 ellipsis
-                    }
-                }
-                for (auto &ln : wrapped) {
-                    if (!retry_on_oom([&] {
-                            allLines.push_back(std::move(ln));
-                            isMine.push_back(mine);
-                            isHeader.push_back(false);
-                            ackForLine.push_back(AckStatus::NONE);
-                            // keep vectors aligned (no per-body time in this section)
-                            msgTs.push_back(0);
-                            isBootRel.push_back(false);
-                        })) {
-                        break; // stop adding more for this message
-                    }
-                    // If we are nearing the hard cap, try to expand a little, else keep going.
-                    if (allLines.size() + 8 >= allLines.capacity()) {
-                        (void)try_reserve_lines(allLines, allLines.size() + 32);
-                    }
-                    // If reserve still can’t grow and we’re truly huge, stop early.
-                    if (allLines.size() >= kMaxTotalLines) {
-                        break;
-                    }
-                }
-            } // end for loop iteration over filtered messages
-        }     // end if (messageOrderNewestFirst)
-        else {
-            // Old on top: iterate FORWARD (messages stored oldest-first, so forward = oldest first)
-            for (auto it = filtered.begin(); it != filtered.end(); ++it) {
-                const auto &m = *it;
-
-                // Channel / destination labeling (single declaration)
-                char chanType[32] = "";
-                if (currentMode == ThreadMode::ALL) {
-                    if (m.type == MessageType::BROADCAST) {
-                        snprintf(chanType, sizeof(chanType), "(Ch%d)", m.channelIndex);
-                    } else {
-                        snprintf(chanType, sizeof(chanType), "(DM)");
-                    }
-                }
-
-                // We render time live; just reserve a conservative slot width (e.g., "999d")
-                const int timeSlotPx = display->getStringWidth("999d");
-
-                // Sender lookups (single set of declarations)
-                meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(m.sender);
-                meshtastic_NodeInfoLite *node_recipient = nodeDB->getMeshNode(m.dest);
-
-                char senderBuf[48] = "";
-#if defined(M5STACK_UNITC6L)
-                if (node && node->has_user && node->user.short_name && node->user.short_name[0] != '\0') {
-                    // Use short_name directly without emoji replacement to avoid allocations
-                    std::snprintf(senderBuf, sizeof(senderBuf), "%s", node->user.short_name);
-                } else {
-                    // No long/short name → show NodeID in parentheses
-                    snprintf(senderBuf, sizeof(senderBuf), "(%08x)", m.sender);
-                }
-
-                // If this is *our own* message, override senderBuf to who the recipient was
-                bool mine = (m.sender == nodeDB->getNodeNum());
-                if (mine && node_recipient && node_recipient->has_user && node_recipient->user.short_name &&
-                    node_recipient->user.short_name[0] != '\0') {
-                    // Use short_name directly without emoji replacement to avoid allocations
-                    std::snprintf(senderBuf, sizeof(senderBuf), "%s", node_recipient->user.short_name);
-                }
-#else
-                if (node && node->has_user && node->user.long_name && node->user.long_name[0] != '\0') {
-                    // Use long_name directly without emoji replacement to avoid allocations
-                    std::snprintf(senderBuf, sizeof(senderBuf), "%s", node->user.long_name);
-                } else {
-                    // No long/short name → show NodeID in parentheses
-                    snprintf(senderBuf, sizeof(senderBuf), "(%08x)", m.sender);
-                }
-
-                // If this is *our own* message, override senderBuf to who the recipient was
-                bool mine = (m.sender == nodeDB->getNodeNum());
-                if (mine && node_recipient && node_recipient->has_user && node_recipient->user.long_name &&
-                    node_recipient->user.long_name[0] != '\0') {
-                    // Use long_name directly without emoji replacement to avoid allocations
-                    std::snprintf(senderBuf, sizeof(senderBuf), "%s", node_recipient->user.long_name);
-                }
-#endif
-
-                // Compute how much room the sender label has (use timeSlotPx, NOT timeBuf)
-                int availWidth =
-                    SCREEN_WIDTH - timeSlotPx - display->getStringWidth(chanType) - display->getStringWidth(" @...") - 10;
-                if (availWidth < 0)
-                    availWidth = 0;
-
-                // Fit sender to available width - truncate by UTF-8 characters (emoji count as 1 char)
-                size_t origCharCount = utf8CharCount(senderBuf);
-                size_t charCount = origCharCount;
-                while (senderBuf[0] && display->getStringWidth(senderBuf) > availWidth && charCount > 0) {
-                    charCount--;
-                    utf8Truncate(senderBuf, charCount);
-                }
-
-                // If we actually truncated, append "..."
-                if (charCount < origCharCount && strlen(senderBuf) + 3 < sizeof(senderBuf)) {
-                    strcat(senderBuf, "...");
-                }
-
-                // Final header line (no time here; time is drawn live during render)
-                char headerStr[96] = "";
-                if (mine)
-                    std::snprintf(headerStr, sizeof(headerStr), "%s", chanType);
-                else
-                    std::snprintf(headerStr, sizeof(headerStr), "@%s %s", senderBuf, chanType);
-
-                // Header line (guard memory)
-                if (!retry_on_oom([&] {
-                        allLines.emplace_back(headerStr); // Avoid temporary string construction
-                        isMine.push_back(mine);
-                        isHeader.push_back(true);
-                        ackForLine.push_back(m.ackStatus);
-                        // time metadata aligned with this header line
-                        msgTs.push_back(m.timestamp);
-                        isBootRel.push_back(m.isBootRelative);
-                    })) {
-                    break; // couldn't grow even after shedding
-                }
-
-                // Body lines - use message text directly to avoid allocations
-                const char *msgText = MessageStore::getText(m);
-
-                std::vector<std::string> wrapped = generateLines(display, "", msgText, (mine ? rightTextWidth : leftTextWidth));
-
-                // Cap per-message wrapped lines so one long message can't explode memory.
-                if (wrapped.size() > kMaxLinesPerMessage) {
-                    // keep as many as possible, add ellipsis to last
-                    wrapped.resize(kMaxLinesPerMessage);
-                    if (!wrapped.empty()) {
-                        // Avoid huge reallocation by appending a tiny suffix
-                        wrapped.back() += " \xE2\x80\xA6"; // UTF-8 ellipsis
-                    }
-                }
-                for (auto &ln : wrapped) {
-                    if (!retry_on_oom([&] {
-                            allLines.push_back(std::move(ln));
-                            isMine.push_back(mine);
-                            isHeader.push_back(false);
-                            ackForLine.push_back(AckStatus::NONE);
-                            // keep vectors aligned (no per-body time in this section)
-                            msgTs.push_back(0);
-                            isBootRel.push_back(false);
-                        })) {
-                        break; // stop adding more for this message
-                    }
-                    // If we are nearing the hard cap, try to expand a little, else keep going.
-                    if (allLines.size() + 8 >= allLines.capacity()) {
-                        (void)try_reserve_lines(allLines, allLines.size() + 32);
-                    }
-                    // If reserve still can't grow and we're truly huge, stop early.
-                    if (allLines.size() >= kMaxTotalLines) {
-                        break;
-                    }
+        if (m.timestamp > 0 && nowSecs > 0) {
+            if (nowSecs >= m.timestamp) {
+                seconds = nowSecs - m.timestamp;
+                invalidTime = (seconds > 315360000); // >10 years
+            } else {
+                uint32_t ahead = m.timestamp - nowSecs;
+                if (ahead <= 600) { // allow small skew
+                    seconds = 0;
+                    invalidTime = false;
                 }
             }
-        } // end else (old on top)
-
-        // Heights can also OOM — compute with retry and then swap all caches
-        std::vector<int> newHeights;
-        if (!retry_on_oom([&] { newHeights = calculateLineHeights(allLines, emotes, isHeader); })) {
-            // keep existing caches; try again next time we become dirty
-            s_dirty = false;
-            return;
+        } else if (m.timestamp > 0 && nowSecs == 0) {
+            // RTC not valid: only trust boot-relative if same boot
+            uint32_t bootNow = millis() / 1000;
+            if (m.isBootRelative && m.timestamp <= bootNow) {
+                seconds = bootNow - m.timestamp;
+                invalidTime = false;
+            } else {
+                invalidTime = true; // old persisted boot-relative, ignore until healed
+            }
         }
 
-        // swap into persistent caches (fast, avoids realloc)
-        cachedLines.clear();
-        cachedLines.swap(allLines);
-        cachedHeights.clear();
-        cachedHeights.swap(newHeights);
-        cachedIsHeader.clear();
-        cachedIsHeader.swap(isHeader);
-        cachedIsMine.clear();
-        cachedIsMine.swap(isMine);
-        cachedAckForLine.clear();
-        cachedAckForLine.swap(ackForLine);
-        cachedMsgTimestamp.clear();
-        cachedMsgTimestamp.swap(msgTs);
-        cachedIsBootRelative.clear();
-        cachedIsBootRelative.swap(isBootRel);
-        s_dirty = false;
+        char timeBuf[16];
+        if (invalidTime) {
+            snprintf(timeBuf, sizeof(timeBuf), "???");
+        } else if (seconds < 60) {
+            snprintf(timeBuf, sizeof(timeBuf), "%us", seconds);
+        } else if (seconds < 3600) {
+            snprintf(timeBuf, sizeof(timeBuf), "%um", seconds / 60);
+        } else if (seconds < 86400) {
+            snprintf(timeBuf, sizeof(timeBuf), "%uh", seconds / 3600);
+        } else {
+            snprintf(timeBuf, sizeof(timeBuf), "%ud", seconds / 86400);
+        }
 
-        // Initialize scroll position if this is the first time we're building the cache
-        // and we're in "old on top" mode (newest messages at bottom)
-        if (!manualScrolling && !messageOrderNewestFirst && scrollY == 0 && !scrollStarted) {
-            // Calculate the position to show newest messages (at bottom)
-            int totalH = 0;
-            for (int h : cachedHeights)
-                totalH += h;
-            int bottomOffset = totalH - usableHeight + FONT_HEIGHT_SMALL;
-            if (bottomOffset > 0) {
-                scrollY = bottomOffset;
+        // Build header line for this message
+        meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(m.sender);
+        meshtastic_NodeInfoLite *node_recipient = nodeDB->getMeshNode(m.dest);
+
+        char senderBuf[48] = "";
+        if (node && node->has_user) {
+            // Use long name if present
+            strncpy(senderBuf, node->user.long_name, sizeof(senderBuf) - 1);
+            senderBuf[sizeof(senderBuf) - 1] = '\0';
+        } else {
+            // No long/short name → show NodeID in parentheses
+            snprintf(senderBuf, sizeof(senderBuf), "(%08x)", m.sender);
+        }
+
+        // If this is *our own* message, override senderBuf to who the recipient was
+        bool mine = (m.sender == nodeDB->getNodeNum());
+        if (mine && node_recipient && node_recipient->has_user) {
+            strcpy(senderBuf, node_recipient->user.long_name);
+        }
+
+        // Shrink Sender name if needed
+        int availWidth = SCREEN_WIDTH - display->getStringWidth(timeBuf) - display->getStringWidth(chanType) -
+                         display->getStringWidth(" @...") - 10;
+        if (availWidth < 0)
+            availWidth = 0;
+
+        size_t origLen = strlen(senderBuf);
+        while (senderBuf[0] && display->getStringWidth(senderBuf) > availWidth) {
+            senderBuf[strlen(senderBuf) - 1] = '\0';
+        }
+
+        // If we actually truncated, append "..."
+        if (strlen(senderBuf) < origLen) {
+            strcat(senderBuf, "...");
+        }
+
+        // Final header line
+        char headerStr[96];
+        if (mine) {
+            if (currentMode == ThreadMode::ALL) {
+                if (strcmp(chanType, "(DM)") == 0) {
+                    snprintf(headerStr, sizeof(headerStr), "%s to %s", timeBuf, senderBuf);
+                } else {
+                    snprintf(headerStr, sizeof(headerStr), "%s to %s", timeBuf, chanType);
+                }
+            } else {
+                snprintf(headerStr, sizeof(headerStr), "%s", timeBuf);
             }
+        } else {
+            snprintf(headerStr, sizeof(headerStr), "%s @%s %s", timeBuf, senderBuf, chanType);
+        }
+
+        // Push header line
+        allLines.push_back(std::string(headerStr));
+        isMine.push_back(mine);
+        isHeader.push_back(true);
+        ackForLine.push_back(m.ackStatus);
+
+        const char *msgText = MessageStore::getText(m);
+
+        int wrapWidth = mine ? rightTextWidth : leftTextWidth;
+        std::vector<std::string> wrapped = generateLines(display, "", msgText, wrapWidth);
+        for (auto &ln : wrapped) {
+            allLines.push_back(ln);
+            isMine.push_back(mine);
+            isHeader.push_back(false);
+            ackForLine.push_back(AckStatus::NONE);
+        }
+    };
+
+    // Iterate based on ordering preference
+    if (messageOrderNewestFirst) {
+        // New on top: iterate REVERSE (messages stored oldest-first, so reverse = newest first)
+        for (auto it = filtered.rbegin(); it != filtered.rend(); ++it) {
+            processMessage(*it);
+        }
+    } else {
+        // Old on top: iterate FORWARD (messages stored oldest-first, so forward = oldest first)
+        for (auto it = filtered.begin(); it != filtered.end(); ++it) {
+            processMessage(*it);
         }
     }
 
-    // Scrolling logic based on message ordering preference
-    // - messageOrderNewestFirst = true: new messages at top, autoscroll down
-    // - messageOrderNewestFirst = false: old messages at top, new at bottom, autoscroll up
+    // Cache lines and heights
+    cachedLines = allLines;
+    cachedHeights = calculateLineHeights(cachedLines, emotes, isHeader);
+
+    std::vector<MessageBlock> blocks = buildMessageBlocks(isHeader, isMine);
+
+    // Scrolling logic - direction depends on message ordering
     int totalHeight = 0;
-    for (size_t i = 0; i < cachedHeights.size(); ++i) {
+    for (size_t i = 0; i < cachedHeights.size(); ++i)
         totalHeight += cachedHeights[i];
-    }
     int usableScrollHeight = usableHeight;
+    int scrollStop = std::max(0, totalHeight - usableScrollHeight + (cachedHeights.empty() ? 0 : cachedHeights.back()));
+
+    // Calculate minimum scroll to prevent bubble from overlapping header
+    // When scrollY = scrollMin, first bubble top should be at contentTop + 1
+    // yOffset = -scrollY + contentTop, first line at yOffset
+    // First bubble top = yOffset - BUBBLE_PAD (either 1 or 2)
+    // We want: yOffset - BUBBLE_PAD >= contentTop + 1
+    // So: -scrollY + contentTop - BUBBLE_PAD >= contentTop + 1
+    // Therefore: -scrollY >= BUBBLE_PAD + 1, scrollY <= -(BUBBLE_PAD + 1)
+    // But scrollY increases downward, so we want scrollY >= -(BUBBLE_PAD + 1) to prevent going too high
+    // Actually simpler: scrollMin = -(maxBubblePadTop + 1)
+    constexpr int maxBubblePadTop = 2; // Max of BUBBLE_PAD_TOP_HEADER and BUBBLE_PAD_Y
+    scrollMin = -(maxBubblePadTop + 1);
+
+    // Set initial scroll position for reversed order (old on top = start at bottom)
+    if (needsInitialScrollPosition) {
+        if (!messageOrderNewestFirst && totalHeight > usableScrollHeight) {
+            scrollY = scrollStop; // Start at bottom for "old on top"
+        } else {
+            scrollY = scrollMin; // Start at top with proper padding
+        }
+        needsInitialScrollPosition = false;
+        scrollStartDelay = millis();
+        scrollStarted = false;
+        waitingToReset = false;
+    }
 
 #ifndef USE_EINK
     uint32_t now = millis();
@@ -1596,88 +1074,51 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     if (!scrollStarted && now - scrollStartDelay > 2000)
         scrollStarted = true;
 
-    // bottom alignment (one text row above bottom)
-    int kBottomPadPx = FONT_HEIGHT_SMALL; // One line of spacing from bottom
-    int bottomOffsetOneRow = totalHeight - usableScrollHeight + kBottomPadPx;
-    if (bottomOffsetOneRow < 0)
-        bottomOffsetOneRow = 0; // guard small lists
-
-    // Auto-scroll logic when not manually scrolling
     if (!manualScrolling && totalHeight > usableScrollHeight) {
-        if (messageOrderNewestFirst) {
-            // New on top mode: newest at top of list, start at top (scroll=0), autoscroll down
-            if (scrollStarted) {
+        if (scrollStarted) {
+            if (messageOrderNewestFirst) {
+                // New on top: start at top, scroll DOWN
                 if (!waitingToReset) {
-                    scrollY += delta * scrollSpeed; // Scroll DOWN (increase scrollY to see older messages)
-                    if (scrollY >= bottomOffsetOneRow) {
-                        scrollY = bottomOffsetOneRow;
+                    scrollY += delta * scrollSpeed;
+                    if (scrollY >= scrollStop) {
+                        scrollY = scrollStop;
                         waitingToReset = true;
                         pauseStart = lastTime;
                     }
                 } else if (lastTime - pauseStart > 3000) {
-                    scrollY = 0; // Reset to top to show newest
+                    scrollY = scrollMin;
                     waitingToReset = false;
                     scrollStarted = false;
                     scrollStartDelay = lastTime;
                 }
             } else {
-                // Initial position: at top to show newest messages
-                scrollY = 0;
-            }
-        } else {
-            // Old on top mode: oldest at top, newest at bottom, start at bottom (scrolled down), autoscroll up
-            if (scrollStarted) {
+                // Old on top: start at bottom, scroll UP
                 if (!waitingToReset) {
-                    scrollY -= delta * scrollSpeed; // Scroll UP (decrease scrollY to see older messages)
-                    if (scrollY <= 0) {
-                        scrollY = 0;
+                    scrollY -= delta * scrollSpeed;
+                    if (scrollY <= scrollMin) {
+                        scrollY = scrollMin;
                         waitingToReset = true;
                         pauseStart = lastTime;
                     }
                 } else if (lastTime - pauseStart > 3000) {
-                    scrollY = bottomOffsetOneRow; // Reset to bottom to show newest
+                    scrollY = scrollStop;
                     waitingToReset = false;
                     scrollStarted = false;
                     scrollStartDelay = lastTime;
                 }
-            } else {
-                // Initial position: at bottom to show newest messages
-                scrollY = bottomOffsetOneRow;
             }
         }
     } else if (!manualScrolling) {
-        // If content fits on screen, position based on ordering mode
+        // Content fits on screen - no scrolling needed
         if (messageOrderNewestFirst) {
-            scrollY = 0; // Start at top when newest messages are at top
+            scrollY = scrollMin;
         } else {
-            scrollY = bottomOffsetOneRow; // Start at bottom when newest messages are at bottom
+            scrollY = scrollMin; // Even with old-on-top, no scroll needed if content fits
         }
     }
 #else
-    // E-Ink: disable autoscroll but allow manual scrolling
-    int kBottomPadPx = FONT_HEIGHT_SMALL; // One line of spacing from bottom
-    int bottomOffsetOneRow = totalHeight - usableScrollHeight + kBottomPadPx;
-    if (bottomOffsetOneRow < 0)
-        bottomOffsetOneRow = 0; // guard small lists
-
-    // Only reset to appropriate position based on ordering mode if not manually scrolling
-    if (!manualScrolling) {
-        if (messageOrderNewestFirst) {
-            scrollY = 0; // New on top: show newest at top
-        } else {
-            scrollY = bottomOffsetOneRow; // Old on top: show newest at bottom
-        }
-    }
-
-    // Clamp scroll position
-    int maxScroll = totalHeight - usableScrollHeight;
-    if (maxScroll < 0)
-        maxScroll = 0;
-    if (scrollY < 0)
-        scrollY = 0;
-    if (scrollY > maxScroll)
-        scrollY = maxScroll;
-
+    // E-Ink: disable autoscroll
+    scrollY = 0.0f;
     waitingToReset = false;
     scrollStarted = false;
     lastTime = millis();
@@ -1686,7 +1127,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     int finalScroll = (int)scrollY;
     int yOffset = -finalScroll + getTextPositions(display)[1];
     constexpr int BUBBLE_PAD_X = 3;
-    constexpr int BUBBLE_PAD_Y = 4;
+    constexpr int BUBBLE_PAD_Y = 2;
     constexpr int BUBBLE_RADIUS = 4;
     constexpr int BUBBLE_MIN_W = 24;
     constexpr int BUBBLE_TEXT_INDENT = 2;
@@ -1705,9 +1146,6 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         }
     }
 
-    // Build message blocks for bubble drawing (matches upstream approach)
-    std::vector<MessageBlock> blocks = buildMessageBlocks(cachedIsHeader, cachedIsMine);
-
     // Draw bubbles
     for (size_t bi = 0; bi < blocks.size(); ++bi) {
         const auto &b = blocks[bi];
@@ -1717,9 +1155,9 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         int visualTop = lineTop[b.start];
 
         int topY;
-        if (cachedIsHeader[b.start]) {
+        if (isHeader[b.start]) {
             // Header start
-            constexpr int BUBBLE_PAD_TOP_HEADER = 1;
+            constexpr int BUBBLE_PAD_TOP_HEADER = 1; // try 1 or 2
             topY = visualTop - BUBBLE_PAD_TOP_HEADER;
         } else {
             // Body start
@@ -1736,7 +1174,8 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             }
             topY = visualTop - BUBBLE_PAD_Y;
         }
-        int visualBottom = getDrawnLinePixelBottom(lineTop[b.end], cachedLines[b.end], cachedIsHeader[b.end]);
+
+        int visualBottom = getDrawnLinePixelBottom(lineTop[b.end], cachedLines[b.end], isHeader[b.end]);
         int bottomY = visualBottom + BUBBLE_PAD_Y;
 
         if (bi + 1 < blocks.size()) {
@@ -1750,14 +1189,16 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         if (bottomY <= topY + 2)
             continue;
 
-        if (bottomY < contentTop || topY > contentBottom - 1)
+        // Skip bubbles entirely outside visible area
+        // Use SCREEN_HEIGHT for bottom so bubbles render until completely off screen
+        if (bottomY < contentTop || topY > SCREEN_HEIGHT)
             continue;
 
         int maxLineW = 0;
 
         for (size_t i = b.start; i <= b.end; ++i) {
             int w = 0;
-            if (cachedIsHeader[i]) {
+            if (isHeader[i]) {
                 w = display->getStringWidth(cachedLines[i].c_str());
                 if (b.mine)
                     w += 12; // room for ACK/NACK/relay mark
@@ -1807,113 +1248,33 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         }
     }
 
-    // Render visible lines (clamp counts defensively)
-    const size_t N =
-        std::min({cachedLines.size(), cachedHeights.size(), cachedIsHeader.size(), cachedIsMine.size(), cachedAckForLine.size()});
-    for (size_t i = 0; i < N; ++i) {
-        int lineY = yOffset;
-        for (size_t j = 0; j < i; ++j)
-            lineY += cachedHeights[j];
+    // Render visible lines
+    int lineY = yOffset;
+    for (size_t i = 0; i < cachedLines.size(); ++i) {
+        // Only skip lines that are completely outside the visible area
+        // Use SCREEN_HEIGHT for bottom so lines render until completely off screen
+        int lineBottom = lineY + cachedHeights[i];
+        bool lineVisible = (lineBottom > contentTop) && (lineY < SCREEN_HEIGHT);
 
-        if (lineY > -cachedHeights[i] && lineY < (scrollBottom + cachedHeights[i])) {
-            if (cachedIsHeader[i]) {
-                // ---- LIVE time computation (same logic as before) ----
-                uint32_t ts = (i < cachedMsgTimestamp.size()) ? cachedMsgTimestamp[i] : 0;
-                bool isBootRel = (i < cachedIsBootRelative.size()) ? cachedIsBootRelative[i] : false;
+        if (lineVisible) {
+            if (isHeader[i]) {
 
-                uint32_t nowSecs = getValidTime(RTCQuality::RTCQualityDevice, true);
-                uint32_t seconds = 0;
-                bool invalidTime = true;
-
-                if (ts > 0 && nowSecs > 0) {
-                    if (nowSecs >= ts) {
-                        seconds = nowSecs - ts;
-                        invalidTime = (seconds > 315360000); // >10 years
-                    } else {
-                        uint32_t ahead = ts - nowSecs;
-                        if (ahead <= 600) { // allow small skew
-                            seconds = 0;
-                            invalidTime = false;
-                        }
-                    }
-                } else if (ts > 0 && nowSecs == 0) {
-                    // RTC not valid: only trust boot-relative if same boot
-                    uint32_t bootNow = millis() / 1000;
-                    if (isBootRel && ts <= bootNow) {
-                        seconds = bootNow - ts;
-                        invalidTime = false;
-                    } else {
-                        invalidTime = true;
-                    }
-                }
-
-                char tbuf[16];
-                if (invalidTime) {
-                    snprintf(tbuf, sizeof(tbuf), "???");
-                } else if (seconds < 60) {
-                    snprintf(tbuf, sizeof(tbuf), "%us", seconds);
-                } else if (seconds < 3600) {
-                    snprintf(tbuf, sizeof(tbuf), "%um", seconds / 60);
-                } else if (seconds < 86400) {
-                    snprintf(tbuf, sizeof(tbuf), "%uh", seconds / 3600);
-                } else {
-                    snprintf(tbuf, sizeof(tbuf), "%ud", seconds / 86400);
-                }
-
-                // Compose full header using static buffer to avoid heap allocation per frame
-                static char fullHeaderBuf[128];
-                snprintf(fullHeaderBuf, sizeof(fullHeaderBuf), "%s %s", tbuf, cachedLines[i].c_str());
-
-#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
-                // Find tallest emoji in header for underline positioning
-                int tallestInHeader = FONT_HEIGHT_SMALL;
-                // Check if header contains any emoji (avoid normalizing fullHeader string)
-                for (int e = 0; e < numEmotes; ++e) {
-                    const std::string &labelNorm = cachedNormalizedEmoteLabels[e];
-                    if (!labelNorm.empty() && cachedLines[i].find(labelNorm) != std::string::npos) {
-                        tallestInHeader = std::max(tallestInHeader, emotes[e].height);
-                    }
-                }
-#endif
-
-                // Render header (measure/draw/underline using the full string)
-                int w = getRenderedLineWidth(display, std::string(fullHeaderBuf), emotes, numEmotes);
+                int w = getRenderedLineWidth(display, cachedLines[i], emotes, numEmotes);
                 int headerX;
-                if (cachedIsMine[i]) {
-                    // Right-align header with indent from bubble edge
+                if (isMine[i]) {
+                    // push header left to avoid overlap with scrollbar
                     headerX = (SCREEN_WIDTH - SCROLLBAR_WIDTH - RIGHT_MARGIN) - w - BUBBLE_TEXT_INDENT;
                     if (headerX < LEFT_MARGIN)
                         headerX = LEFT_MARGIN;
                 } else {
-                    // Left-align header with indent from bubble edge
                     headerX = x + BUBBLE_TEXT_INDENT;
                 }
-                drawStringWithEmotes(display, headerX, lineY, std::string(fullHeaderBuf), emotes, numEmotes, true);
+                // Use drawStringWithEmotes to render emotes in sender names
+                drawStringWithEmotes(display, headerX, lineY, cachedLines[i], emotes, numEmotes, true);
 
-                // Draw ACK/NACK mark for our own messages
-                if (cachedIsMine[i]) {
-                    int markX = headerX - 10;
-                    int markY = lineY;
-                    if (cachedAckForLine[i] == AckStatus::ACKED) {
-                        drawCheckMark(display, markX, markY, 8);
-                    } else if (cachedAckForLine[i] == AckStatus::NACKED || cachedAckForLine[i] == AckStatus::TIMEOUT) {
-                        drawXMark(display, markX, markY, 8);
-                    } else if (cachedAckForLine[i] == AckStatus::RELAYED) {
-                        drawRelayMark(display, markX, markY, 8);
-                    }
-                    // AckStatus::NONE → show nothing
-                }
-
-                // Draw underline just under header text (not under emojis)
-#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
-                // Position underline based on whether header has tall emoji
-                int underlineY = (tallestInHeader > FONT_HEIGHT_SMALL)
-                                     ? lineY + FONT_HEIGHT_SMALL + 3 // 3px gap when emoji present
-                                     : lineY + FONT_HEIGHT_SMALL;    // No gap for text-only headers
-#else
+                // Draw underline just under header text
                 int underlineY = lineY + FONT_HEIGHT_SMALL;
-#endif
-                // Clamp underline width to not exceed the bubble/screen edge
+
                 int underlineW = w;
                 int maxW = rightEdge - headerX;
                 if (maxW < 0)
@@ -1925,9 +1286,26 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                     display->setPixel(headerX + px, underlineY);
                 }
 
+                // Draw ACK/NACK mark for our own messages
+                if (isMine[i]) {
+                    int markX = headerX - 10;
+                    int markY = lineY;
+                    if (ackForLine[i] == AckStatus::ACKED) {
+                        // Destination ACK
+                        drawCheckMark(display, markX, markY, 8);
+                    } else if (ackForLine[i] == AckStatus::NACKED || ackForLine[i] == AckStatus::TIMEOUT) {
+                        // Failure or timeout
+                        drawXMark(display, markX, markY, 8);
+                    } else if (ackForLine[i] == AckStatus::RELAYED) {
+                        // Relay ACK
+                        drawRelayMark(display, markX, markY, 8);
+                    }
+                    // AckStatus::NONE → show nothing
+                }
+
             } else {
                 // Render message line
-                if (cachedIsMine[i]) {
+                if (isMine[i]) {
                     // Calculate actual rendered width including emotes
                     int renderedWidth = getRenderedLineWidth(display, cachedLines[i], emotes, numEmotes);
                     int rightX = (SCREEN_WIDTH - SCROLLBAR_WIDTH - RIGHT_MARGIN) - renderedWidth - BUBBLE_TEXT_INDENT;
@@ -1954,112 +1332,50 @@ std::vector<std::string> generateLines(OLEDDisplay *display, const char *headerS
 {
     std::vector<std::string> lines;
 
-    // Pre-allocate reasonable capacity to avoid reallocations
-    lines.reserve(8); // Most messages won't exceed 8 lines
-
     // Only push headerStr if it's not empty (prevents extra blank line after headers)
     if (headerStr && headerStr[0] != '\0') {
-        lines.emplace_back(headerStr); // Use emplace_back to avoid temporary string
+        lines.push_back(std::string(headerStr));
     }
 
     std::string line, word;
-    // Pre-allocate string capacity for typical message lengths
-    line.reserve(64);
-    word.reserve(32);
-
-    for (int i = 0; messageBuf[i];) {
-        // Handle UTF-8 characters properly
-        uint8_t firstByte = static_cast<uint8_t>(messageBuf[i]);
-        size_t charLen = utf8CharLen(firstByte);
-
-        // Handle smart quotes replacement
-        if (firstByte == 0xE2 && i + 2 < (int)strlen(messageBuf) && (unsigned char)messageBuf[i + 1] == 0x80 &&
+    for (int i = 0; messageBuf[i]; ++i) {
+        char ch = messageBuf[i];
+        if ((unsigned char)messageBuf[i] == 0xE2 && (unsigned char)messageBuf[i + 1] == 0x80 &&
             (unsigned char)messageBuf[i + 2] == 0x99) {
-            // Replace smart quote with plain apostrophe
-            if (messageBuf[i] == '\n') {
-                if (!word.empty())
-                    line += word;
-                if (!line.empty())
-                    lines.emplace_back(std::move(line));
-                line.clear();
-                word.clear();
-            } else if (messageBuf[i] == ' ') {
-                line += word;
-                line += ' ';
-                word.clear();
-            } else {
-                word += '\'';
-            }
-            i += 3; // skip the 3-byte UTF-8 sequence
-            continue;
+            ch = '\''; // plain apostrophe
+            i += 2;    // skip over the extra UTF-8 bytes
         }
-
-        // Extract the complete UTF-8 character
-        std::string utfChar;
-        utfChar.reserve(charLen);
-        for (size_t j = 0; j < charLen && messageBuf[i + j]; ++j) {
-            utfChar += messageBuf[i + j];
-        }
-
-        // Check if it's a newline or space (should be single byte)
-        if (charLen == 1 && messageBuf[i] == '\n') {
+        if (ch == '\n') {
             if (!word.empty())
                 line += word;
             if (!line.empty())
-                lines.emplace_back(std::move(line));
+                lines.push_back(line);
             line.clear();
             word.clear();
-        } else if (charLen == 1 && messageBuf[i] == ' ') {
-            line += word;
-            line += ' ';
+        } else if (ch == ' ') {
+            line += word + ' ';
             word.clear();
         } else {
-            // Check if this is an emoji (before adding to word)
-            // Note: Don't treat ¿ as an emoji - it's a regular character replacement for unknown emoji
-            bool isEmoji = (charLen >= 4 && firstByte == 0xF0) || (charLen == 3 && (firstByte == 0xE2 || firstByte == 0xEF));
-
-            // If current word is not empty and we're about to add an emoji, flush word first
-            if (isEmoji && !word.empty()) {
-                // Flush current word to line
-                line += word;
-                word.clear();
-            }
-
-            // Add the complete UTF-8 character to word
-            word += utfChar;
-
-            // Check if adding this word would exceed the line width
-            std::string test_buffer = line + word;
-            uint16_t strWidth = getRenderedLineWidth(display, test_buffer, emotes, numEmotes);
-
+            word += ch;
+            std::string test = line + word;
+#if defined(OLED_UA) || defined(OLED_RU)
+            uint16_t strWidth = display->getStringWidth(test.c_str(), test.length(), true);
+#else
+            uint16_t strWidth = display->getStringWidth(test.c_str());
+#endif
             if (strWidth > textWidth) {
-                if (!line.empty()) {
-                    // Line is full, wrap
-                    lines.emplace_back(std::move(line));
-                    line = std::move(word);
-                    word.clear();
-                } else {
-                    // Even a single word is too wide, force it to its own line
-                    lines.emplace_back(std::move(word));
-                    word.clear();
-                    line.clear();
-                }
-            }
-
-            // If we just added an emoji, flush it to line so next emoji can wrap independently
-            if (isEmoji) {
-                line += word;
+                if (!line.empty())
+                    lines.push_back(line);
+                line = word;
                 word.clear();
             }
         }
-
-        i += charLen; // Move by the complete character length
     }
 
     if (!word.empty())
         line += word;
     if (!line.empty())
-        lines.emplace_back(std::move(line)); // Use move semantics
+        lines.push_back(line);
 
     return lines;
 }
@@ -2067,77 +1383,43 @@ std::vector<int> calculateLineHeights(const std::vector<std::string> &lines, con
                                       const std::vector<bool> &isHeaderVec)
 {
     // Tunables for layout control
-#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
-    constexpr int HEADER_UNDERLINE_GAP = 1; // space between underline and first body line
-    constexpr int HEADER_UNDERLINE_PIX = 1; // underline thickness (1px row drawn)
-    constexpr int BODY_LINE_LEADING = -1;   // default vertical leading for normal body lines (was -3, +2 for more spacing)
-    constexpr int MESSAGE_BLOCK_GAP = 2;    // gap after a message block before a new header
-    constexpr int EMOTE_PADDING_ABOVE = 2;  // space above emote line (added to line above)
-    constexpr int EMOTE_PADDING_BELOW = 2;  // space below emote line (added to emote line)
-#else
     constexpr int HEADER_UNDERLINE_GAP = 0; // space between underline and first body line
     constexpr int HEADER_UNDERLINE_PIX = 1; // underline thickness (1px row drawn)
     constexpr int BODY_LINE_LEADING = -4;   // default vertical leading for normal body lines
-    constexpr int MESSAGE_BLOCK_GAP = 4;    // gap after a message block before a new header
     constexpr int EMOTE_PADDING_ABOVE = 4;  // space above emote line (added to line above)
     constexpr int EMOTE_PADDING_BELOW = 3;  // space below emote line (added to emote line)
-#endif
 
     std::vector<int> rowHeights;
     rowHeights.reserve(lines.size());
-
-    ensureEmoteLabelsNormalized(); // Ensure cache is ready
-
-    // Helper lambda to detect if a line contains any emoji by normalizing both line and label
-    auto lineContainsEmoji = [&](const std::string &str) -> bool {
-        const std::string normLine = normalizeEmoji(str);
-        for (int i = 0; i < numEmotes; ++i) {
-            const std::string &normLabel = cachedNormalizedEmoteLabels[i];
-            if (normLine.find(normLabel) != std::string::npos) {
-                return true;
-            }
-        }
-        return false;
-    };
 
     for (size_t idx = 0; idx < lines.size(); ++idx) {
         const auto &line = lines[idx];
         const int baseHeight = FONT_HEIGHT_SMALL;
         int lineHeight = baseHeight;
 
-        // Detect if THIS line contains an emote (normalize for comparison)
-        bool hasEmote = lineContainsEmoji(line);
+        // Detect if THIS line or NEXT line contains an emote
+        bool hasEmote = false;
         int tallestEmote = baseHeight;
-        // Check known emotes for their actual height
-        if (hasEmote) {
-            const std::string normLine = normalizeEmoji(line);
-            for (int i = 0; i < numEmotes; ++i) {
-                const std::string &normLabel = cachedNormalizedEmoteLabels[i];
-                if (normLine.find(normLabel) != std::string::npos) {
-                    tallestEmote = std::max(tallestEmote, emotes[i].height);
-                }
+        for (int i = 0; i < numEmotes; ++i) {
+            if (line.find(emotes[i].label) != std::string::npos) {
+                hasEmote = true;
+                tallestEmote = std::max(tallestEmote, emotes[i].height);
             }
         }
 
         bool nextHasEmote = false;
         if (idx + 1 < lines.size()) {
-            nextHasEmote = lineContainsEmoji(lines[idx + 1]);
+            for (int i = 0; i < numEmotes; ++i) {
+                if (lines[idx + 1].find(emotes[i].label) != std::string::npos) {
+                    nextHasEmote = true;
+                    break;
+                }
+            }
         }
 
         if (isHeaderVec[idx]) {
             // Header line spacing
-#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
-            // For tiny fonts, adjust spacing based on content
-            if (hasEmote) {
-                // With emoji: minimal spacing after underline
-                lineHeight = FONT_HEIGHT_SMALL + 4 + HEADER_UNDERLINE_GAP;
-            } else {
-                // Text only: standard spacing with underline
-                lineHeight = baseHeight + HEADER_UNDERLINE_PIX + HEADER_UNDERLINE_GAP;
-            }
-#else
             lineHeight = baseHeight + HEADER_UNDERLINE_PIX + HEADER_UNDERLINE_GAP;
-#endif
         } else {
             // Base spacing for normal lines
             int desiredBody = baseHeight + BODY_LINE_LEADING;
@@ -2168,25 +1450,6 @@ std::vector<int> calculateLineHeights(const std::vector<std::string> &lines, con
     return rowHeights;
 }
 
-void renderMessageContent(OLEDDisplay *display, const std::vector<std::string> &lines, const std::vector<int> &rowHeights, int x,
-                          int yOffset, int scrollBottom, const Emote *emotes, int numEmotes, bool isInverted, bool isBold)
-{
-    for (size_t i = 0; i < lines.size(); ++i) {
-        int lineY = yOffset;
-        for (size_t j = 0; j < i; ++j)
-            lineY += rowHeights[j];
-        if (lineY > -rowHeights[i] && lineY < (scrollBottom + rowHeights[i])) {
-            if (i == 0 && isInverted) {
-                display->drawString(x, lineY, lines[i].c_str());
-                if (isBold)
-                    display->drawString(x, lineY, lines[i].c_str());
-            } else {
-                drawStringWithEmotes(display, x, lineY, lines[i], emotes, numEmotes);
-            }
-        }
-    }
-}
-
 void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const meshtastic_MeshPacket &packet)
 {
     if (packet.from != 0) {
@@ -2202,43 +1465,20 @@ void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const mesht
 
         // Banner logic
         const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(packet.from);
-        char longName[48] = "";
-#if defined(M5STACK_UNITC6L)
-        // Use short_name for C6L due to limited screen space
-        if (node && node->has_user && node->user.short_name && node->user.short_name[0] != '\0') {
-            // Apply emoji replacement to banner name
-            std::string processedName = replaceUnknownEmoji(std::string(node->user.short_name), emotes, numEmotes);
-            strncpy(longName, processedName.c_str(), sizeof(longName) - 1);
+        char longName[48] = "?";
+        if (node && node->user.long_name) {
+            strncpy(longName, node->user.long_name, sizeof(longName) - 1);
             longName[sizeof(longName) - 1] = '\0';
-        } else {
-            // No long/short name → show NodeID in parentheses
-            snprintf(longName, sizeof(longName), "(%08x)", packet.from);
         }
-#else
-        if (node && node->has_user && node->user.long_name && node->user.long_name[0] != '\0') {
-            // Apply emoji replacement to banner name
-            std::string processedName = replaceUnknownEmoji(std::string(node->user.long_name), emotes, numEmotes);
-            strncpy(longName, processedName.c_str(), sizeof(longName) - 1);
-            longName[sizeof(longName) - 1] = '\0';
-        } else {
-            // No long/short name → show NodeID in parentheses
-            snprintf(longName, sizeof(longName), "(%08x)", packet.from);
-        }
-#endif
         int availWidth = display->getWidth() - ((currentResolution == ScreenResolution::High) ? 40 : 20);
         if (availWidth < 0)
             availWidth = 0;
 
-        // Fit node name to available width - truncate by UTF-8 characters (emoji count as 1 char)
-        size_t origCharCount = utf8CharCount(longName);
-        size_t charCount = origCharCount;
-        while (longName[0] && display->getStringWidth(longName) > availWidth && charCount > 0) {
-            charCount--;
-            utf8Truncate(longName, charCount);
+        size_t origLen = strlen(longName);
+        while (longName[0] && display->getStringWidth(longName) > availWidth) {
+            longName[strlen(longName) - 1] = '\0';
         }
-
-        // If we actually truncated, append "..."
-        if (charCount < origCharCount && strlen(longName) + 3 < 256) {
+        if (strlen(longName) < origLen) {
             strcat(longName, "...");
         }
         const char *msgRaw = reinterpret_cast<const char *>(packet.decoded.payload.bytes);
@@ -2301,56 +1541,14 @@ void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const mesht
             }
         }
 
-        // Show banner for shorter time if currently viewing the messages screen,
-        // longer time if on any other screen (regardless of which thread we were last viewing)
-        bool onMessageScreen = graphics::isMessagesScreenActive();
+        // Shorter banner if already in a conversation (Channel or Direct)
+        bool inThread = (getThreadMode() != ThreadMode::ALL);
 
-        // If virtual keyboard is active, show non-intrusive popup instead of full banner
-        if (NotificationRenderer::current_notification_type == notificationTypeEnum::text_input) {
-            if (shouldWakeOnReceivedMessage()) {
-                screen->setOn(true);
-                screen->forceDisplay();
-            }
-
-            // Build popup: title from banner first line, content = message text (sanitized)
-            char titleBuf[64] = {0};
-            // Extract first line from banner as title
-            const char *newline = strchr(banner, '\n');
-            if (newline) {
-                size_t titleLen = std::min((size_t)(newline - banner), sizeof(titleBuf) - 1);
-                strncpy(titleBuf, banner, titleLen);
-                titleBuf[titleLen] = '\0';
-            } else {
-                strncpy(titleBuf, banner, sizeof(titleBuf) - 1);
-            }
-
-            // Content: payload bytes (sanitize and strip bell character)
-            char content[256] = {0};
-            std::string raw;
-            raw.reserve(packet.decoded.payload.size);
-            for (size_t i = 0; i < packet.decoded.payload.size; ++i) {
-                char c = msgRaw[i];
-                if (c == '\x07') // ASCII_BELL
-                    continue;
-                raw.push_back(c);
-            }
-            // Basic sanitization: remove control characters except newline/tab
-            std::string sanitized;
-            for (char c : raw) {
-                if ((c >= 32 && c <= 126) || c == '\n' || c == '\t')
-                    sanitized.push_back(c);
-            }
-            strncpy(content, sanitized.c_str(), sizeof(content) - 1);
-
-            NotificationRenderer::showKeyboardMessagePopupWithTitle(titleBuf, content, 3000);
-        } else {
-            // Normal banner display when keyboard not active
-            if (shouldWakeOnReceivedMessage()) {
-                screen->setOn(true);
-            }
-
-            screen->showSimpleBanner(banner, onMessageScreen ? 1000 : 3000);
+        if (shouldWakeOnReceivedMessage()) {
+            screen->setOn(true);
         }
+
+        screen->showSimpleBanner(banner, inThread ? 1000 : 3000);
     }
 
     // Always focus into the correct conversation thread when a message with real text arrives
@@ -2361,28 +1559,19 @@ void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const mesht
 
     // Reset scroll for a clean start
     resetScrollState();
-    // Always mark dirty when a new message arrives so it appears immediately
-    markDirty();
 }
 
 void setThreadFor(const StoredMessage &sm, const meshtastic_MeshPacket &packet)
 {
     if (packet.to == 0 || packet.to == NODENUM_BROADCAST) {
-        // Only mark dirty if we're actually changing threads
-        if (currentMode != ThreadMode::CHANNEL || currentChannel != (int)sm.channelIndex) {
-            setThreadMode(ThreadMode::CHANNEL, sm.channelIndex);
-        }
+        setThreadMode(ThreadMode::CHANNEL, sm.channelIndex);
     } else {
         uint32_t localNode = nodeDB->getNodeNum();
         uint32_t peer = (sm.sender == localNode) ? packet.to : sm.sender;
-        // Only mark dirty if we're actually changing threads
-        if (currentMode != ThreadMode::DIRECT || currentPeer != peer) {
-            setThreadMode(ThreadMode::DIRECT, -1, peer);
-        }
+        setThreadMode(ThreadMode::DIRECT, -1, peer);
     }
 }
 
 } // namespace MessageRenderer
 } // namespace graphics
-
 #endif

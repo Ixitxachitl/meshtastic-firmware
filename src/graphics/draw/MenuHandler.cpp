@@ -563,7 +563,7 @@ void menuHandler::clockMenu()
 }
 void menuHandler::messageResponseMenu()
 {
-    enum optionsNumbers { Back = 0, ViewMode, DeleteMenu, ReplyMenu, MuteChannel, Aloud, enumEnd };
+    enum optionsNumbers { Back = 0, ViewMode, DeleteMenu, ReplyMenu, MuteChannel, MessageOrder, Aloud, enumEnd };
 
     static const char *optionsArray[enumEnd];
     static int optionsEnumArray[enumEnd];
@@ -582,7 +582,9 @@ void menuHandler::messageResponseMenu()
     optionsArray[options] = "View Chats";
     optionsEnumArray[options++] = ViewMode;
 
-    // If viewing ALL chats, hide “Mute Chat”
+    optionsArray[options] = "Message Order";
+    optionsEnumArray[options++] = MessageOrder;
+
     if (mode != graphics::MessageRenderer::ThreadMode::ALL && mode != graphics::MessageRenderer::ThreadMode::DIRECT) {
         const uint8_t chIndex = (threadChannel != 0) ? (uint8_t)threadChannel : channels.getPrimaryIndex();
         auto &chan = channels.getByIndex(chIndex);
@@ -636,6 +638,10 @@ void menuHandler::messageResponseMenu()
 
         } else if (selected == DeleteMenu) {
             menuHandler::menuQueue = menuHandler::delete_messages_menu;
+            screen->runNow();
+
+        } else if (selected == MessageOrder) {
+            menuHandler::menuQueue = menuHandler::message_order_menu;
             screen->runNow();
 
 #ifdef HAS_I2S
@@ -744,6 +750,40 @@ void menuHandler::replyMenu()
     };
     screen->showOverlayBanner(bannerOptions);
 }
+
+void menuHandler::messageOrderMenu()
+{
+    enum optionsNumbers { Back = 0, NewOnTop, OldOnTop };
+    static const char *optionsArray[] = {"Back", "New on Top", "Old on Top"};
+
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = "Message Order";
+    bannerOptions.optionsArrayPtr = optionsArray;
+    bannerOptions.optionsCount = 3;
+    bannerOptions.InitialSelected = graphics::MessageRenderer::getMessageOrderNewestFirst() ? 1 : 2;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        switch (selected) {
+        case Back:
+            menuHandler::menuQueue = menuHandler::message_response_menu;
+            screen->runNow();
+            return;
+        case NewOnTop:
+            if (!graphics::MessageRenderer::getMessageOrderNewestFirst()) {
+                graphics::MessageRenderer::setMessageOrderNewestFirst(true);
+                screen->setFrames(Screen::FOCUS_PRESERVE); // Stay on current screen
+            }
+            break;
+        case OldOnTop:
+            if (graphics::MessageRenderer::getMessageOrderNewestFirst()) {
+                graphics::MessageRenderer::setMessageOrderNewestFirst(false);
+                screen->setFrames(Screen::FOCUS_PRESERVE); // Stay on current screen
+            }
+            break;
+        }
+    };
+    screen->showOverlayBanner(bannerOptions);
+}
+
 void menuHandler::deleteMessagesMenu()
 {
     enum optionsNumbers { Back = 0, DeleteOldest, DeleteThis, DeleteAll, enumEnd };
@@ -3016,6 +3056,9 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
         break;
     case reply_menu:
         replyMenu();
+        break;
+    case message_order_menu:
+        messageOrderMenu();
         break;
     case delete_messages_menu:
         deleteMessagesMenu();
