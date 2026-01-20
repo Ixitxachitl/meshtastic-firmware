@@ -7,7 +7,6 @@
 #include "MessageStore.h"
 #include "NodeDB.h"
 #include "UIRenderer.h"
-#include "configuration.h"
 #include "gps/RTC.h"
 #include "graphics/Screen.h"
 #include "graphics/ScreenFonts.h"
@@ -42,7 +41,6 @@ template <typename T> static inline void reserve_best_effort(std::vector<T> &v, 
 
 // External declarations
 extern bool hasUnreadMessage;
-extern meshtastic_DeviceState devicestate;
 extern graphics::Screen *screen;
 
 using graphics::Emote;
@@ -327,6 +325,8 @@ std::string normalizeEmoji(const std::string &s)
     }
     return out;
 }
+
+static constexpr int MESSAGE_BLOCK_GAP = 6;
 
 // Replace unknown 4-byte emoji with upside-down question mark
 std::string replaceUnknownEmoji(const std::string &s, const Emote *emotes, int emoteCount)
@@ -1006,6 +1006,104 @@ static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &
     return totalWidth;
 }
 
+// Get the actual visual bottom pixel of a drawn line (for bubble sizing)
+static int getDrawnLinePixelBottom(int lineTopY, const std::string &line, bool isHeaderLine)
+{
+    if (isHeaderLine) {
+        return lineTopY + (FONT_HEIGHT_SMALL - 1);
+    }
+
+    int tallest = FONT_HEIGHT_SMALL;
+    for (int e = 0; e < numEmotes; ++e) {
+        if (line.find(emotes[e].label) != std::string::npos) {
+            if (emotes[e].height > tallest)
+                tallest = emotes[e].height;
+        }
+    }
+
+    const int lineHeight = std::max(FONT_HEIGHT_SMALL, tallest);
+    const int iconTop = lineTopY + (lineHeight - tallest) / 2;
+
+    return iconTop + tallest - 1;
+}
+
+// Message block structure for bubble drawing (matches upstream)
+struct MessageBlock {
+    size_t start;
+    size_t end;
+    bool mine;
+};
+
+static std::vector<MessageBlock> buildMessageBlocks(const std::vector<bool> &isHeaderVec, const std::vector<bool> &isMineVec)
+{
+    std::vector<MessageBlock> blocks;
+    if (isHeaderVec.empty())
+        return blocks;
+
+    size_t start = 0;
+    bool mine = isMineVec[0];
+
+    for (size_t i = 1; i < isHeaderVec.size(); ++i) {
+        if (isHeaderVec[i]) {
+            MessageBlock b;
+            b.start = start;
+            b.end = i - 1;
+            b.mine = mine;
+            blocks.push_back(b);
+
+            start = i;
+            mine = isMineVec[i];
+        }
+    }
+
+    MessageBlock last;
+    last.start = start;
+    last.end = isHeaderVec.size() - 1;
+    last.mine = mine;
+    blocks.push_back(last);
+
+    return blocks;
+}
+
+static void drawRoundedRectOutline(OLEDDisplay *display, int x, int y, int w, int h, int r)
+{
+    if (w <= 1 || h <= 1)
+        return;
+
+    if (r < 0)
+        r = 0;
+
+    int maxR = (std::min(w, h) / 2) - 1;
+    if (r > maxR)
+        r = maxR;
+
+    if (r == 0) {
+        display->drawRect(x, y, w, h);
+        return;
+    }
+
+    const int x0 = x;
+    const int y0 = y;
+    const int x1 = x + w - 1;
+    const int y1 = y + h - 1;
+
+    // sides
+    if (x0 + r <= x1 - r) {
+        display->drawLine(x0 + r, y0, x1 - r, y0); // top
+        display->drawLine(x0 + r, y1, x1 - r, y1); // bottom
+    }
+    if (y0 + r <= y1 - r) {
+        display->drawLine(x0, y0 + r, x0, y1 - r); // left
+        display->drawLine(x1, y0 + r, x1, y1 - r); // right
+    }
+
+    // corner arcs
+    display->drawCircleQuads(x0 + r, y0 + r, r, 2); // top left
+    display->drawCircleQuads(x1 - r, y0 + r, r, 1); // top right
+    display->drawCircleQuads(x1 - r, y1 - r, r, 8); // bottom right
+    display->drawCircleQuads(x0 + r, y1 - r, r, 4); // bottom left
+}
+
 void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     // Ensure any boot-relative timestamps are upgraded if RTC is valid
@@ -1587,6 +1685,127 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 
     int finalScroll = (int)scrollY;
     int yOffset = -finalScroll + getTextPositions(display)[1];
+    constexpr int BUBBLE_PAD_X = 3;
+    constexpr int BUBBLE_PAD_Y = 4;
+    constexpr int BUBBLE_RADIUS = 4;
+    constexpr int BUBBLE_MIN_W = 24;
+    constexpr int BUBBLE_TEXT_INDENT = 2;
+    const int contentTop = getTextPositions(display)[1];
+    const int contentBottom = scrollBottom; // already excludes nav line
+    const int rightEdge = SCREEN_WIDTH - SCROLLBAR_WIDTH - RIGHT_MARGIN;
+    const int bubbleGapY = std::max(1, MESSAGE_BLOCK_GAP / 2);
+
+    std::vector<int> lineTop;
+    lineTop.resize(cachedLines.size());
+    {
+        int acc = 0;
+        for (size_t i = 0; i < cachedLines.size(); ++i) {
+            lineTop[i] = yOffset + acc;
+            acc += cachedHeights[i];
+        }
+    }
+
+    // Build message blocks for bubble drawing (matches upstream approach)
+    std::vector<MessageBlock> blocks = buildMessageBlocks(cachedIsHeader, cachedIsMine);
+
+    // Draw bubbles
+    for (size_t bi = 0; bi < blocks.size(); ++bi) {
+        const auto &b = blocks[bi];
+        if (b.start >= cachedLines.size() || b.end >= cachedLines.size() || b.start > b.end)
+            continue;
+
+        int visualTop = lineTop[b.start];
+
+        int topY;
+        if (cachedIsHeader[b.start]) {
+            // Header start
+            constexpr int BUBBLE_PAD_TOP_HEADER = 1;
+            topY = visualTop - BUBBLE_PAD_TOP_HEADER;
+        } else {
+            // Body start
+            bool thisLineHasEmote = false;
+            for (int e = 0; e < numEmotes; ++e) {
+                if (cachedLines[b.start].find(emotes[e].label) != std::string::npos) {
+                    thisLineHasEmote = true;
+                    break;
+                }
+            }
+            if (thisLineHasEmote) {
+                constexpr int EMOTE_PADDING_ABOVE = 4;
+                visualTop -= EMOTE_PADDING_ABOVE;
+            }
+            topY = visualTop - BUBBLE_PAD_Y;
+        }
+        int visualBottom = getDrawnLinePixelBottom(lineTop[b.end], cachedLines[b.end], cachedIsHeader[b.end]);
+        int bottomY = visualBottom + BUBBLE_PAD_Y;
+
+        if (bi + 1 < blocks.size()) {
+            int nextHeaderIndex = (int)blocks[bi + 1].start;
+            int nextTop = lineTop[nextHeaderIndex];
+            int maxBottom = nextTop - 1 - bubbleGapY;
+            if (bottomY > maxBottom)
+                bottomY = maxBottom;
+        }
+
+        if (bottomY <= topY + 2)
+            continue;
+
+        if (bottomY < contentTop || topY > contentBottom - 1)
+            continue;
+
+        int maxLineW = 0;
+
+        for (size_t i = b.start; i <= b.end; ++i) {
+            int w = 0;
+            if (cachedIsHeader[i]) {
+                w = display->getStringWidth(cachedLines[i].c_str());
+                if (b.mine)
+                    w += 12; // room for ACK/NACK/relay mark
+            } else {
+                w = getRenderedLineWidth(display, cachedLines[i], emotes, numEmotes);
+            }
+            if (w > maxLineW)
+                maxLineW = w;
+        }
+
+        int bubbleW = std::max(BUBBLE_MIN_W, maxLineW + (BUBBLE_PAD_X * 2));
+        int bubbleH = (bottomY - topY) + 1;
+        int bubbleX = 0;
+        if (b.mine) {
+            bubbleX = rightEdge - bubbleW;
+        } else {
+            bubbleX = x;
+        }
+        if (bubbleX < x)
+            bubbleX = x;
+        if (bubbleX + bubbleW > rightEdge)
+            bubbleW = std::max(1, rightEdge - bubbleX);
+
+        if (bubbleW > 1 && bubbleH > 1) {
+            int r = BUBBLE_RADIUS;
+            int maxR = (std::min(bubbleW, bubbleH) / 2) - 1;
+            if (maxR < 0)
+                maxR = 0;
+            if (r > maxR)
+                r = maxR;
+
+            drawRoundedRectOutline(display, bubbleX, topY, bubbleW, bubbleH, r);
+            const int extra = 3;
+            const int rr = r + extra;
+            int x1 = bubbleX + bubbleW - 1;
+            int y1 = topY + bubbleH - 1;
+
+            if (!b.mine) {
+                // top-left corner square
+                display->drawLine(bubbleX, topY, bubbleX + rr, topY);
+                display->drawLine(bubbleX, topY, bubbleX, topY + rr);
+            } else {
+                // bottom-right corner square
+                display->drawLine(x1 - rr, y1, x1, y1);
+                display->drawLine(x1, y1 - rr, x1, y1);
+            }
+        }
+    }
 
     // Render visible lines (clamp counts defensively)
     const size_t N =
@@ -1659,7 +1878,16 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 
                 // Render header (measure/draw/underline using the full string)
                 int w = getRenderedLineWidth(display, std::string(fullHeaderBuf), emotes, numEmotes);
-                int headerX = cachedIsMine[i] ? (SCREEN_WIDTH - w - 2) : x;
+                int headerX;
+                if (cachedIsMine[i]) {
+                    // Right-align header with indent from bubble edge
+                    headerX = (SCREEN_WIDTH - SCROLLBAR_WIDTH - RIGHT_MARGIN) - w - BUBBLE_TEXT_INDENT;
+                    if (headerX < LEFT_MARGIN)
+                        headerX = LEFT_MARGIN;
+                } else {
+                    // Left-align header with indent from bubble edge
+                    headerX = x + BUBBLE_TEXT_INDENT;
+                }
                 drawStringWithEmotes(display, headerX, lineY, std::string(fullHeaderBuf), emotes, numEmotes, true);
 
                 // Draw ACK/NACK mark for our own messages
@@ -1685,7 +1913,15 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 #else
                 int underlineY = lineY + FONT_HEIGHT_SMALL;
 #endif
-                for (int px = 0; px < w; ++px) {
+                // Clamp underline width to not exceed the bubble/screen edge
+                int underlineW = w;
+                int maxW = rightEdge - headerX;
+                if (maxW < 0)
+                    maxW = 0;
+                if (underlineW > maxW)
+                    underlineW = maxW;
+
+                for (int px = 0; px < underlineW; ++px) {
                     display->setPixel(headerX + px, underlineY);
                 }
 
@@ -1694,22 +1930,22 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 if (cachedIsMine[i]) {
                     // Calculate actual rendered width including emotes
                     int renderedWidth = getRenderedLineWidth(display, cachedLines[i], emotes, numEmotes);
-                    int rightX = SCREEN_WIDTH - renderedWidth - SCROLLBAR_WIDTH - RIGHT_MARGIN;
+                    int rightX = (SCREEN_WIDTH - SCROLLBAR_WIDTH - RIGHT_MARGIN) - renderedWidth - BUBBLE_TEXT_INDENT;
                     if (rightX < LEFT_MARGIN)
                         rightX = LEFT_MARGIN;
 
                     drawStringWithEmotes(display, rightX, lineY, cachedLines[i], emotes, numEmotes);
                 } else {
-                    drawStringWithEmotes(display, x, lineY, cachedLines[i], emotes, numEmotes);
+                    drawStringWithEmotes(display, x + BUBBLE_TEXT_INDENT, lineY, cachedLines[i], emotes, numEmotes);
                 }
             }
         }
+
+        lineY += cachedHeights[i];
     }
-    int totalContentHeight = totalHeight;
-    int visibleHeight = usableHeight;
 
     // Draw scrollbar
-    drawMessageScrollbar(display, visibleHeight, totalContentHeight, finalScroll, getTextPositions(display)[1]);
+    drawMessageScrollbar(display, usableHeight, totalHeight, finalScroll, getTextPositions(display)[1]);
     graphics::drawCommonHeader(display, x, y, titleStr);
     graphics::drawCommonFooter(display, x, y);
 }
@@ -1867,6 +2103,7 @@ std::vector<int> calculateLineHeights(const std::vector<std::string> &lines, con
     for (size_t idx = 0; idx < lines.size(); ++idx) {
         const auto &line = lines[idx];
         const int baseHeight = FONT_HEIGHT_SMALL;
+        int lineHeight = baseHeight;
 
         // Detect if THIS line contains an emote (normalize for comparison)
         bool hasEmote = lineContainsEmoji(line);
@@ -1886,8 +2123,6 @@ std::vector<int> calculateLineHeights(const std::vector<std::string> &lines, con
         if (idx + 1 < lines.size()) {
             nextHasEmote = lineContainsEmoji(lines[idx + 1]);
         }
-
-        int lineHeight = baseHeight;
 
         if (isHeaderVec[idx]) {
             // Header line spacing
