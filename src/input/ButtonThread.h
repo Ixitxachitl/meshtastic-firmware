@@ -131,6 +131,10 @@ class ButtonThread : public Observable<const InputEvent *>, public concurrency::
     uint32_t lastLeadUpNoteTime = 0;
     bool leadUpSequenceActive = false;
 
+    // Deferred long press tracking (when longLongPress is configured)
+    bool longPressDeferred = false;
+    bool longLongPressFired = false;
+
     static void wakeOnIrq(int irq, int mode);
 };
 

@@ -7,6 +7,10 @@
 extern graphics::Screen *screen;
 #endif
 
+// Tilt-compensated heading from BMI270 (if available)
+extern volatile bool g_hasMagHeading;
+extern volatile float g_magHeadingRad;
+
 // Flag when an interrupt has been detected
 volatile static bool BMM150_IRQ = false;
 
@@ -22,27 +26,33 @@ bool BMM150Sensor::init()
 int32_t BMM150Sensor::runOnce()
 {
 #if !defined(MESHTASTIC_EXCLUDE_SCREEN) && HAS_SCREEN
-    float heading = sensor->getCompassDegree();
+    // Only update screen if we have valid calibrated magnetometer data from BMI270
+    // Otherwise let the fake gyro compass handle it
+    if (g_hasMagHeading) {
+        float heading = g_magHeadingRad * 180.0f / M_PI; // Convert radians to degrees
 
-    switch (config.display.compass_orientation) {
-    case meshtastic_Config_DisplayConfig_CompassOrientation_DEGREES_0_INVERTED:
-    case meshtastic_Config_DisplayConfig_CompassOrientation_DEGREES_0:
-        break;
-    case meshtastic_Config_DisplayConfig_CompassOrientation_DEGREES_90:
-    case meshtastic_Config_DisplayConfig_CompassOrientation_DEGREES_90_INVERTED:
-        heading += 90;
-        break;
-    case meshtastic_Config_DisplayConfig_CompassOrientation_DEGREES_180:
-    case meshtastic_Config_DisplayConfig_CompassOrientation_DEGREES_180_INVERTED:
-        heading += 180;
-        break;
-    case meshtastic_Config_DisplayConfig_CompassOrientation_DEGREES_270:
-    case meshtastic_Config_DisplayConfig_CompassOrientation_DEGREES_270_INVERTED:
-        heading += 270;
-        break;
+        switch (config.display.compass_orientation) {
+        case meshtastic_Config_DisplayConfig_CompassOrientation_DEGREES_0_INVERTED:
+        case meshtastic_Config_DisplayConfig_CompassOrientation_DEGREES_0:
+            break;
+        case meshtastic_Config_DisplayConfig_CompassOrientation_DEGREES_90:
+        case meshtastic_Config_DisplayConfig_CompassOrientation_DEGREES_90_INVERTED:
+            heading += 90;
+            break;
+        case meshtastic_Config_DisplayConfig_CompassOrientation_DEGREES_180:
+        case meshtastic_Config_DisplayConfig_CompassOrientation_DEGREES_180_INVERTED:
+            heading += 180;
+            break;
+        case meshtastic_Config_DisplayConfig_CompassOrientation_DEGREES_270:
+        case meshtastic_Config_DisplayConfig_CompassOrientation_DEGREES_270_INVERTED:
+            heading += 270;
+            break;
+        }
+        if (screen) {
+            screen->setHeading(heading);
+            screen->forceDisplay(true);
+        }
     }
-    if (screen)
-        screen->setHeading(heading);
 #endif
     return MOTION_SENSOR_CHECK_INTERVAL_MS;
 }
@@ -84,8 +94,8 @@ bool BMM150Singleton::init(ScanI2C::FoundDevice device)
 
     // SW reset to make sure the device starts in a known state
     setOperationMode(BMM150_POWERMODE_NORMAL);
-    setPresetMode(BMM150_PRESETMODE_LOWPOWER);
-    setRate(BMM150_DATA_RATE_02HZ);
+    setPresetMode(BMM150_PRESETMODE_REGULAR);
+    setRate(BMM150_DATA_RATE_10HZ);
     setMeasurementXYZ();
     return true;
 }

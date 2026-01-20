@@ -22,6 +22,7 @@
 #include "modules/CannedMessageModule.h"
 #include "modules/ExternalNotificationModule.h"
 #include "modules/KeyVerificationModule.h"
+#include "modules/Telemetry/EnvironmentTelemetry.h"
 #include "modules/TraceRouteModule.h"
 #include <algorithm>
 #include <array>
@@ -62,6 +63,7 @@ menuHandler::screenMenus menuHandler::menuQueue = menu_none;
 uint32_t menuHandler::pickedNodeNum = 0;
 bool test_enabled = false;
 uint8_t test_count = 0;
+static menuHandler::screenMenus displayUnitsParentMenu = menuHandler::screen_options_menu;
 
 void menuHandler::loraMenu()
 {
@@ -663,8 +665,12 @@ void menuHandler::replyMenu()
     optionsArray[options] = "With Preset";
     optionsEnumArray[options++] = ReplyPreset;
 
-    // Freetext reply (only when keyboard exists)
+    // Freetext reply (only when keyboard or button input exists)
+#if HAS_TRACKBALL || HAS_TOUCHSCREEN || defined(HAS_PHYSICAL_KEYBOARD)
+    if (kb_found || osk_found) {
+#else
     if (kb_found) {
+#endif
         optionsArray[options] = "With Freetext";
         optionsEnumArray[options++] = ReplyFreetext;
     }
@@ -700,6 +706,8 @@ void menuHandler::replyMenu()
 
         // Preset reply
         if (selected == ReplyPreset) {
+            // Mark that we're launching from MessageRenderer for proper return navigation
+            cannedMessageModule->setLaunchedFromMessageRenderer(true);
 
             if (mode == graphics::MessageRenderer::ThreadMode::CHANNEL) {
                 cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST, ch);
@@ -708,12 +716,8 @@ void menuHandler::replyMenu()
                 cannedMessageModule->LaunchWithDestination(peer);
 
             } else {
-                // Fallback for last received message
-                if (devicestate.rx_text_message.to == NODENUM_BROADCAST) {
-                    cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST, devicestate.rx_text_message.channel);
-                } else {
-                    cannedMessageModule->LaunchWithDestination(devicestate.rx_text_message.from);
-                }
+                // View All mode - use channel 0 (primary channel)
+                cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST, 0);
             }
 
             return;
@@ -721,6 +725,8 @@ void menuHandler::replyMenu()
 
         // Freetext reply
         if (selected == ReplyFreetext) {
+            // Mark that we're launching from MessageRenderer for proper return navigation
+            cannedMessageModule->setLaunchedFromMessageRenderer(true);
 
             if (mode == graphics::MessageRenderer::ThreadMode::CHANNEL) {
                 cannedMessageModule->LaunchFreetextWithDestination(NODENUM_BROADCAST, ch);
@@ -729,12 +735,8 @@ void menuHandler::replyMenu()
                 cannedMessageModule->LaunchFreetextWithDestination(peer);
 
             } else {
-                // Fallback for last received message
-                if (devicestate.rx_text_message.to == NODENUM_BROADCAST) {
-                    cannedMessageModule->LaunchFreetextWithDestination(NODENUM_BROADCAST, devicestate.rx_text_message.channel);
-                } else {
-                    cannedMessageModule->LaunchFreetextWithDestination(devicestate.rx_text_message.from);
-                }
+                // View All mode - use channel 0 (primary channel)
+                cannedMessageModule->LaunchFreetextWithDestination(NODENUM_BROADCAST, 0);
             }
 
             return;
@@ -1061,7 +1063,11 @@ void menuHandler::textMessageBaseMenu()
     int options = 1;
     optionsArray[options] = "New Preset Msg";
     optionsEnumArray[options++] = Preset;
+#if HAS_TRACKBALL || HAS_TOUCHSCREEN || defined(HAS_PHYSICAL_KEYBOARD)
+    if (kb_found || osk_found) {
+#else
     if (kb_found) {
+#endif
         optionsArray[options] = "New Freetext Msg";
         optionsEnumArray[options++] = Freetext;
     }
@@ -1184,7 +1190,11 @@ void menuHandler::favoriteBaseMenu()
     }
     optionsEnumArray[options++] = Preset;
 
+#if HAS_TRACKBALL || HAS_TOUCHSCREEN || defined(HAS_PHYSICAL_KEYBOARD)
+    if (kb_found || osk_found) {
+#else
     if (kb_found) {
+#endif
         optionsArray[options] = "New Freetext Msg";
         optionsEnumArray[options++] = Freetext;
     }
@@ -1959,6 +1969,53 @@ void menuHandler::GPSPositionBroadcastMenu()
 
 #endif
 
+void menuHandler::ScreenTimeoutPickerMenu()
+{
+    static const char *optionsArray[] = {"Back", "5 Seconds", "10 Seconds", "30 Seconds", "1 Minute", "Always On"};
+
+    // Get current timeout to set initial selection
+    int currentSelection = 0; // Default to Back
+    if (config.display.screen_on_secs == 0) {
+        currentSelection = 5; // Always On
+    } else if (config.display.screen_on_secs <= 5) {
+        currentSelection = 1; // 5 Seconds
+    } else if (config.display.screen_on_secs <= 10) {
+        currentSelection = 2; // 10 Seconds
+    } else if (config.display.screen_on_secs <= 30) {
+        currentSelection = 3; // 30 Seconds
+    } else if (config.display.screen_on_secs <= 60) {
+        currentSelection = 4; // 1 Minute
+    }
+
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = "Screen Timeout";
+    bannerOptions.optionsArrayPtr = optionsArray;
+    bannerOptions.optionsCount = 6;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        if (selected == 1) { // 5 Seconds
+            config.display.screen_on_secs = 5;
+        } else if (selected == 2) { // 10 Seconds
+            config.display.screen_on_secs = 10;
+        } else if (selected == 3) { // 30 Seconds
+            config.display.screen_on_secs = 30;
+        } else if (selected == 4) { // 1 Minute
+            config.display.screen_on_secs = 60;
+        } else if (selected == 5) { // Always On
+            config.display.screen_on_secs = 0;
+        }
+
+        if (selected != 0) { // Not "Back"
+            // Save to device and reload config
+            service->reloadConfig(SEGMENT_CONFIG);
+            // Screen timeout changes require a reboot to take effect
+            rebootAtMsec = (millis() + DEFAULT_REBOOT_SECONDS * 1000);
+            LOG_INFO("Screen timeout set to %d seconds - rebooting", config.display.screen_on_secs);
+        }
+    };
+    bannerOptions.InitialSelected = currentSelection;
+    screen->showOverlayBanner(bannerOptions);
+}
+
 void menuHandler::BluetoothToggleMenu()
 {
     static const char *optionsArray[] = {"Back", "Enabled", "Disabled"};
@@ -2345,9 +2402,9 @@ void menuHandler::screenOptionsMenu()
     hasSupportBrightness = false;
 #endif
 
-    enum optionsNumbers { Back, Brightness, ScreenColor, FrameToggles, DisplayUnits };
-    static const char *optionsArray[5] = {"Back"};
-    static int optionsEnumArray[5] = {Back};
+    enum optionsNumbers { Back, Brightness, ScreenColor, ScreenTimeout, FrameToggles, DisplayUnits };
+    static const char *optionsArray[6] = {"Back"};
+    static int optionsEnumArray[6] = {Back};
     int options = 1;
 
     // Only show brightness for B&W displays
@@ -2362,6 +2419,9 @@ void menuHandler::screenOptionsMenu()
     optionsArray[options] = "Screen Color";
     optionsEnumArray[options++] = ScreenColor;
 #endif
+
+    optionsArray[options] = "Screen Timeout";
+    optionsEnumArray[options++] = ScreenTimeout;
 
     optionsArray[options] = "Frame Visibility";
     optionsEnumArray[options++] = FrameToggles;
@@ -2380,6 +2440,9 @@ void menuHandler::screenOptionsMenu()
             screen->runNow();
         } else if (selected == ScreenColor) {
             menuHandler::menuQueue = menuHandler::tftcolormenupicker;
+            screen->runNow();
+        } else if (selected == ScreenTimeout) {
+            menuHandler::menuQueue = menuHandler::screen_timeout_picker;
             screen->runNow();
         } else if (selected == FrameToggles) {
             menuHandler::menuQueue = menuHandler::FrameToggles;
@@ -2632,15 +2695,173 @@ void menuHandler::DisplayUnits_menu()
         if (selected == MetricUnits) {
             config.display.units = meshtastic_Config_DisplayConfig_DisplayUnits_METRIC;
             service->reloadConfig(SEGMENT_CONFIG);
+#if HAS_TELEMETRY && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
+            if (environmentTelemetryModule)
+                environmentTelemetryModule->invalidateDisplayCache();
+#endif
         } else if (selected == ImperialUnits) {
             config.display.units = meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL;
             service->reloadConfig(SEGMENT_CONFIG);
+#if HAS_TELEMETRY && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
+            if (environmentTelemetryModule)
+                environmentTelemetryModule->invalidateDisplayCache();
+#endif
         } else {
-            menuHandler::menuQueue = menuHandler::screen_options_menu;
+            menuHandler::menuQueue = displayUnitsParentMenu;
             screen->runNow();
         }
     };
     screen->showOverlayBanner(bannerOptions);
+}
+
+void menuHandler::envTelemetryMenu()
+{
+    enum optionsNumbers { ExitOpt, SendTelemetry, PickSource, AutoMostRecent, DisplayUnits };
+    static const char *optionsArray[] = {"Back", "Send Telemetry", "Pick Source", "Auto (Most Recent)", "Display Units"};
+    static int optionsEnumArray[] = {ExitOpt, SendTelemetry, PickSource, AutoMostRecent, DisplayUnits};
+
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = "Environment";
+    bannerOptions.optionsArrayPtr = optionsArray;
+    bannerOptions.optionsCount = 5;
+    bannerOptions.optionsEnumPtr = optionsEnumArray;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        if (selected == SendTelemetry) {
+            if (environmentTelemetryModule) {
+                // sendTelemetry already sets s_lastSource to self, so auto mode will show our telemetry
+                bool sent = environmentTelemetryModule->sendTelemetry(NODENUM_BROADCAST, false);
+                // Queue banner to show after menu closes and screen updates
+                menuHandler::menuQueue = sent ? menuHandler::telemetry_sent_banner : menuHandler::telemetry_no_sensors_banner;
+                screen->runNow();
+            } else {
+                menuHandler::menuQueue = menuHandler::telemetry_unavailable_banner;
+                screen->runNow();
+            }
+        } else if (selected == PickSource) {
+            menuHandler::menuQueue = menuHandler::env_source_picker; // route to picker
+            screen->runNow();
+        } else if (selected == AutoMostRecent) {
+            if (environmentTelemetryModule) {
+                environmentTelemetryModule->setEnvDisplaySource(0); // 0 = Auto (most recent)
+            }
+            screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
+        } else if (selected == DisplayUnits) {
+            displayUnitsParentMenu = menuHandler::env_menu;
+            menuHandler::menuQueue = menuHandler::DisplayUnits;
+            screen->runNow();
+        } else {
+            graphics::setOverlayActive(false);
+            screen->runNow();
+        }
+    };
+
+    screen->showOverlayBanner(bannerOptions);
+}
+
+void menuHandler::envTelemetrySourceMenu()
+{
+    // Collect sources that actually have env telemetry
+    std::vector<uint32_t> sources;
+    if (environmentTelemetryModule)
+        sources = environmentTelemetryModule->getSourcesWithTelemetry();
+    std::sort(sources.begin(), sources.end());
+
+    // If none, go back to the top Environment menu (old behavior)
+    if (sources.empty()) {
+        graphics::BannerOverlayOptions o;
+        o.message = "No Sources";
+        o.durationMs = 1200;
+        o.notificationType = graphics::notificationTypeEnum::text_banner;
+        screen->showOverlayBanner(o); // now uses text_banner correctly
+// Brief sleep to let the SELECT key-up settle so we don't re-enter immediately
+#if defined(FREERTOS)
+        vTaskDelay(pdMS_TO_TICKS(o.durationMs));
+#elif defined(ARDUINO)
+        delay(o.durationMs);
+#else
+        usleep(o.durationMs * 1000);
+#endif
+        graphics::setOverlayActive(true); // keep overlay alive
+        menuHandler::envTelemetryMenu();  // reopen the top menu immediately
+        return;
+    }
+
+    // Build picker: Back, [nodes...], Exit (Exit goes last)
+    static const int kMax = 64;
+    static const char *optionsArray[kMax];
+    static int optionsEnumArray[kMax];
+
+    // Keep strings alive for c_str() - must be static to persist
+    static std::vector<std::string> nameStorage;
+
+    // Clear and rebuild everything fresh
+    nameStorage.clear();
+    nameStorage.reserve(sources.size() + 2); // Reserve space for all entries
+
+    int count = 0;
+
+    // Back sentinel = -1
+    optionsArray[count] = "Back";
+    optionsEnumArray[count++] = -1;
+
+    // Node names (only sources with env telemetry) - respect use_long_node_name setting
+    for (uint32_t num : sources) {
+        if (count >= kMax - 1)
+            break; // leave room for Exit
+
+        const meshtastic_NodeInfoLite *n = nodeDB->getMeshNode(num);
+        char buf[40]; // Match long_name buffer size from protobuf
+        buf[0] = '\0';
+
+        if (n && n->has_user) {
+            const char *name = config.display.use_long_node_name ? n->user.long_name : n->user.short_name;
+            if (name && name[0]) {
+                snprintf(buf, sizeof(buf), "%s", name);
+            } else {
+                // Fallback: try the other name if preferred is empty
+                const char *altName = config.display.use_long_node_name ? n->user.short_name : n->user.long_name;
+                if (altName && altName[0]) {
+                    snprintf(buf, sizeof(buf), "%s", altName);
+                }
+            }
+        }
+
+        // If still empty, use hex fallback
+        if (buf[0] == '\0') {
+            snprintf(buf, sizeof(buf), "%08x", (unsigned int)num);
+        }
+
+        nameStorage.push_back(std::string(buf));
+        optionsArray[count] = nameStorage.back().c_str();
+        optionsEnumArray[count++] = static_cast<int>(num); // real nodenum
+    }
+
+    // Exit sentinel = -2 (always LAST)
+    optionsArray[count] = "Exit";
+    optionsEnumArray[count++] = -2;
+
+    BannerOverlayOptions o;
+    o.message = "Telemetry Source";
+    o.optionsArrayPtr = optionsArray;
+    o.optionsEnumPtr = optionsEnumArray;
+    o.optionsCount = count;
+
+    o.bannerCallback = [](int selected) -> void {
+        if (selected == -1) { // Back → return to Env menu
+            menuHandler::menuQueue = menuHandler::env_menu;
+            screen->runNow();
+        } else if (selected == -2) { // Exit → close overlay
+            graphics::setOverlayActive(false);
+            screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
+        } else { // Nodenum chosen
+            if (environmentTelemetryModule)
+                environmentTelemetryModule->setEnvDisplaySource(static_cast<uint32_t>(selected));
+            graphics::setOverlayActive(false);
+            screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
+        }
+    };
+
+    screen->showOverlayBanner(o);
 }
 
 void menuHandler::handleMenuSwitch(OLEDDisplay *display)
@@ -2724,6 +2945,9 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
     case brightness_picker:
         BrightnessPickerMenu();
         break;
+    case screen_timeout_picker:
+        ScreenTimeoutPickerMenu();
+        break;
     case node_name_length_menu:
         nodeNameLengthMenu();
         break;
@@ -2778,6 +3002,15 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
     case throttle_message:
         screen->showSimpleBanner("Too Many Attempts\nTry again in 60 seconds.", 5000);
         break;
+    case telemetry_sent_banner:
+        screen->showSimpleBanner("Telemetry Sent", 2000);
+        break;
+    case telemetry_no_sensors_banner:
+        screen->showSimpleBanner("No Sensors", 2000);
+        break;
+    case telemetry_unavailable_banner:
+        screen->showSimpleBanner("Module Not Available", 2000);
+        break;
     case message_response_menu:
         messageResponseMenu();
         break;
@@ -2789,6 +3022,12 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
         break;
     case message_viewmode_menu:
         messageViewModeMenu();
+        break;
+    case env_menu:
+        envTelemetryMenu();
+        break;
+    case env_source_picker:
+        envTelemetrySourceMenu();
         break;
     }
     menuQueue = menu_none;

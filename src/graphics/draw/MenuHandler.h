@@ -48,13 +48,21 @@ class menuHandler
         key_verification_final_prompt,
         trace_route_menu,
         throttle_message,
+        telemetry_sent_banner,
+        telemetry_no_sensors_banner,
+        telemetry_unavailable_banner,
         message_response_menu,
         message_viewmode_menu,
         reply_menu,
+        message_order_menu,
         delete_messages_menu,
         node_name_length_menu,
         FrameToggles,
-        DisplayUnits
+        DisplayUnits,
+        env_menu,
+        env_source_picker,
+        screen_timeout_picker,
+        screen_timeout_picker_menu
     };
     static screenMenus menuQueue;
     static uint32_t pickedNodeNum; // node selected by NodePicker for ManageNodeMenu
@@ -73,6 +81,7 @@ class menuHandler
     static void ClockFacePicker();
     static void messageResponseMenu();
     static void messageViewModeMenu();
+    static void messageOrderMenu();
     static void replyMenu();
     static void deleteMessagesMenu();
     static void homeBaseMenu();
@@ -92,6 +101,7 @@ class menuHandler
     static void nodeListMenu();
     static void resetNodeDBMenu();
     static void BrightnessPickerMenu();
+    static void ScreenTimeoutPickerMenu();
     static void rebootMenu();
     static void shutdownMenu();
     static void NodePicker();
@@ -109,9 +119,11 @@ class menuHandler
     static void FrameToggles_menu();
     static void DisplayUnits_menu();
     static void textMessageMenu();
+    static void envTelemetryMenu();
+    static void envTelemetrySourceMenu();
+    static void saveUIConfig();
 
   private:
-    static void saveUIConfig();
     static void keyVerificationInitMenu();
     static void keyVerificationFinalPrompt();
     static void BluetoothToggleMenu();

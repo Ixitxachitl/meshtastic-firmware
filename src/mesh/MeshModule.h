@@ -44,10 +44,12 @@ struct UIFrameEvent {
         REDRAW_ONLY,                    // Don't change which frames are show, just redraw, asap
         REGENERATE_FRAMESET,            // Regenerate (change? add? remove?) screen frames, honoring requestFocus()
         REGENERATE_FRAMESET_BACKGROUND, // Regenerate screen frames, Attempt to remain on the same frame throughout
-        SWITCH_TO_TEXTMESSAGE           // Jump directly to the Text Message screen
+        SWITCH_TO_TEXTMESSAGE,          // Jump directly to the Text Message screen
+        SWITCH_TO_FRAME_INDEX           // Switch to a specific frame index (uses frameIndex field)
     } action = REDRAW_ONLY;
 
-    // We might want to pass additional data inside this struct at some point
+    // Frame index for SWITCH_TO_FRAME_INDEX action
+    uint8_t frameIndex = 0;
 };
 
 /** A baseclass for any mesh "module".

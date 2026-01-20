@@ -40,6 +40,12 @@ ProcessMessage TextMessageModule::handleReceived(const meshtastic_MeshPacket &mp
         powerFSM.trigger(EVENT_RECEIVED_MSG);
     }
 
+#if HAS_SCREEN
+    if (screen) {
+        screen->handleTextMessage(&mp);
+    }
+#endif
+
     // Notify any observers (e.g. external modules that care about packets)
     notifyObservers(&mp);
 

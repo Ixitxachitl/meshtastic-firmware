@@ -799,10 +799,18 @@ void TraceRouteModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state
                 rebuildResultLines(display);
             }
 
+#if defined(USE_TINY_FONT)
+            int lineHeight = FONT_HEIGHT_TINY + 1; // Use proper font height with 1px spacing
+#else
             int lineHeight = FONT_HEIGHT_SMALL + 1; // Use proper font height with 1px spacing
+#endif
             for (size_t i = 0; i < resultLines.size(); i++) {
                 int lineY = contentStartY + (i * lineHeight);
+#if defined(USE_TINY_FONT)
+                if (lineY + FONT_HEIGHT_TINY <= display->getHeight()) {
+#else
                 if (lineY + FONT_HEIGHT_SMALL <= display->getHeight()) {
+#endif
                     display->drawString(x + 2, lineY, resultLines[i]);
                 }
             }

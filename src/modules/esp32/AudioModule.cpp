@@ -29,7 +29,6 @@
 
 ButterworthFilter hp_filter(240, 8000, ButterworthFilter::ButterworthFilter::Highpass, 1);
 
-TaskHandle_t codec2HandlerTask;
 AudioModule *audioModule;
 
 #ifdef ARCH_ESP32
@@ -41,7 +40,88 @@ AudioModule *audioModule;
 
 #include "graphics/ScreenFonts.h"
 
-void run_codec2(void *parameter)
+/**
+ * Codec2 processing thread - handles encoding/decoding in a dedicated FreeRTOS task
+ */
+class Codec2Thread : public concurrency::OSThread
+{
+  private:
+    AudioModule *parentModule;
+    volatile bool hasWork = false;
+
+  public:
+    Codec2Thread(AudioModule *parent) : OSThread("Codec2"), parentModule(parent)
+    {
+#ifdef HAS_FREE_RTOS
+        // Configure as high-priority FreeRTOS task for real-time audio processing
+        const uint32_t codec2StackWords = 30000 / sizeof(StackType_t); // 30KB stack (original size)
+        const UBaseType_t codec2Priority = 5;                          // High priority (original priority)
+        const BaseType_t codec2Core = tskNO_AFFINITY;                  // No specific core affinity
+
+        setFreeRTOSTask(true, codec2StackWords, codec2Priority, codec2Core);
+#endif
+    }
+
+    // Signal that there's work to be done (called from ISR)
+    void notifyWork() { hasWork = true; }
+
+  protected:
+    int32_t runOnce() override
+    {
+        if (!parentModule) {
+            return disable();
+        }
+
+        // Check if there's work to do
+        if (!hasWork) {
+            return 10; // Wait 10ms and check again
+        }
+
+        hasWork = false; // Clear the work flag
+
+        if (parentModule->radio_state == RadioState::tx) {
+            // Process TX audio data
+            for (int i = 0; i < parentModule->adc_buffer_size; i++)
+                parentModule->speech[i] = (int16_t)hp_filter.Update((float)parentModule->speech[i]);
+
+            codec2_encode(parentModule->codec2, parentModule->tx_encode_frame + parentModule->tx_encode_frame_index,
+                          parentModule->speech);
+            parentModule->tx_encode_frame_index += parentModule->encode_codec_size;
+
+            if (parentModule->tx_encode_frame_index == (parentModule->encode_frame_size + sizeof(parentModule->tx_header))) {
+                LOG_INFO("Send %d codec2 bytes", parentModule->encode_frame_size);
+                parentModule->sendPayload();
+                parentModule->tx_encode_frame_index = sizeof(parentModule->tx_header);
+            }
+        } else if (parentModule->radio_state == RadioState::rx) {
+            // Process RX audio data
+            size_t bytesOut = 0;
+            if (memcmp(parentModule->rx_encode_frame, &parentModule->tx_header, sizeof(parentModule->tx_header)) == 0) {
+                for (int i = 4; i < parentModule->rx_encode_frame_index; i += parentModule->encode_codec_size) {
+                    codec2_decode(parentModule->codec2, parentModule->output_buffer, parentModule->rx_encode_frame + i);
+                    i2s_write(I2S_PORT, &parentModule->output_buffer, parentModule->adc_buffer_size, &bytesOut,
+                              pdMS_TO_TICKS(500));
+                }
+            } else {
+                // if the buffer header does not match our own codec, make a temp decoding setup.
+                CODEC2 *tmp_codec2 = codec2_create(parentModule->rx_encode_frame[3]);
+                codec2_set_lpc_post_filter(tmp_codec2, 1, 0, 0.8, 0.2);
+                int tmp_encode_codec_size = (codec2_bits_per_frame(tmp_codec2) + 7) / 8;
+                int tmp_adc_buffer_size = codec2_samples_per_frame(tmp_codec2);
+                for (int i = 4; i < parentModule->rx_encode_frame_index; i += tmp_encode_codec_size) {
+                    codec2_decode(tmp_codec2, parentModule->output_buffer, parentModule->rx_encode_frame + i);
+                    i2s_write(I2S_PORT, &parentModule->output_buffer, tmp_adc_buffer_size, &bytesOut, pdMS_TO_TICKS(500));
+                }
+                codec2_destroy(tmp_codec2);
+            }
+        }
+
+        // Small delay for polling - could be improved with proper synchronization
+        return 10; // 10ms
+    }
+};
+
+static Codec2Thread *codec2Thread = nullptr;
 {
     // 4 bytes of header in each frame hex c0 de c2 plus the bitrate
     memcpy(audioModule->tx_encode_frame, &audioModule->tx_header, sizeof(audioModule->tx_header));
@@ -112,9 +192,35 @@ AudioModule::AudioModule() : SinglePortModule("Audio", meshtastic_PortNum_AUDIO_
         adc_buffer_size = codec2_samples_per_frame(codec2);
         LOG_INFO("Use %d frames of %d bytes for a total payload length of %d bytes", encode_frame_num, encode_codec_size,
                  encode_frame_size);
-        xTaskCreate(&run_codec2, "codec2_task", 30000, NULL, 5, &codec2HandlerTask);
+
+        // Create and start the codec2 processing thread
+        codec2Thread = new Codec2Thread(this);
+#ifdef HAS_FREE_RTOS
+        if (codec2Thread->isFreeRTOSTask()) {
+            if (!codec2Thread->startFreeRTOSTask()) {
+                LOG_ERROR("Failed to start Codec2Thread FreeRTOS task");
+                delete codec2Thread;
+                codec2Thread = nullptr;
+            }
+        }
+#endif
     } else {
         disable();
+    }
+}
+
+AudioModule::~AudioModule()
+{
+    // Clean up codec2 thread
+    if (codec2Thread) {
+        delete codec2Thread;
+        codec2Thread = nullptr;
+    }
+
+    // Clean up codec2 encoder
+    if (codec2) {
+        codec2_destroy(codec2);
+        codec2 = nullptr;
     }
 }
 
@@ -124,7 +230,11 @@ void AudioModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int
 
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
+#if defined(USE_TINY_FONT)
+    display->fillRect(0 + x, 0 + y, x + display->getWidth(), y + FONT_HEIGHT_TINY);
+#else
     display->fillRect(0 + x, 0 + y, x + display->getWidth(), y + FONT_HEIGHT_SMALL);
+#endif
     display->setColor(BLACK);
     display->drawStringf(0 + x, 0 + y, buffer, "Codec2 Mode %d Audio",
                          (moduleConfig.audio.bitrate ? moduleConfig.audio.bitrate : AUDIO_MODULE_MODE) - 1);
@@ -133,10 +243,18 @@ void AudioModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     switch (radio_state) {
     case RadioState::tx:
+#if defined(USE_TINY_FONT)
+        display->drawString(display->getWidth() / 2 + x, (display->getHeight() - FONT_HEIGHT_TINY) / 2 + y, "PTT");
+#else
         display->drawString(display->getWidth() / 2 + x, (display->getHeight() - FONT_HEIGHT_SMALL) / 2 + y, "PTT");
+#endif
         break;
     default:
+#if defined(USE_TINY_FONT)
+        display->drawString(display->getWidth() / 2 + x, (display->getHeight() - FONT_HEIGHT_TINY) / 2 + y, "Receive");
+#else
         display->drawString(display->getWidth() / 2 + x, (display->getHeight() - FONT_HEIGHT_SMALL) / 2 + y, "Receive");
+#endif
         break;
     }
 }
@@ -223,12 +341,11 @@ int32_t AudioModule::runOnce()
                     if (adc_buffer_index == adc_buffer_size) {
                         adc_buffer_index = 0;
                         memcpy((void *)speech, (void *)adc_buffer, 2 * adc_buffer_size);
-                        // Notify run_codec2 task that the buffer is ready.
+                        // Notify codec2 thread that the buffer is ready.
                         radio_state = RadioState::tx;
-                        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-                        vTaskNotifyGiveFromISR(codec2HandlerTask, &xHigherPriorityTaskWoken);
-                        if (xHigherPriorityTaskWoken == pdTRUE)
-                            YIELD_FROM_ISR(xHigherPriorityTaskWoken);
+                        if (codec2Thread) {
+                            codec2Thread->notifyWork();
+                        }
                     }
                 }
             }
@@ -276,11 +393,10 @@ ProcessMessage AudioModule::handleReceived(const meshtastic_MeshPacket &mp)
             memcpy(rx_encode_frame, p.payload.bytes, p.payload.size);
             radio_state = RadioState::rx;
             rx_encode_frame_index = p.payload.size;
-            // Notify run_codec2 task that the buffer is ready.
-            BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-            vTaskNotifyGiveFromISR(codec2HandlerTask, &xHigherPriorityTaskWoken);
-            if (xHigherPriorityTaskWoken == pdTRUE)
-                YIELD_FROM_ISR(xHigherPriorityTaskWoken);
+            // Notify codec2 thread that the buffer is ready.
+            if (codec2Thread) {
+                codec2Thread->notifyWork();
+            }
         }
     }
 

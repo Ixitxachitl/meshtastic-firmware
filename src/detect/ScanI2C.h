@@ -88,7 +88,8 @@ class ScanI2C
         BH1750,
         DA217,
         CHSC6X,
-        CST226SE
+        CST226SE,
+        BMI270
     } DeviceType;
 
     // typedef uint8_t DeviceAddress;
@@ -121,6 +122,8 @@ class ScanI2C
     } FoundDevice;
 
     static const FoundDevice DEVICE_NONE;
+    
+    static bool hasMagnetometer();
 
   public:
     ScanI2C();
@@ -153,7 +156,9 @@ class ScanI2C
 
   protected:
     virtual FoundDevice firstOfOrNONE(size_t, DeviceType[]) const;
+    static void setMagOnPort(I2CPort port, bool value);
 
   private:
     bool shouldSuppressScreen = false;
+    static bool s_hasMagOnPort[3];
 };
