@@ -20,7 +20,7 @@ bsecSensor BME680Sensor::sensorList[9] = {BSEC_OUTPUT_IAQ,
                                           BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_TEMPERATURE,
                                           BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_HUMIDITY};
 
-BME680Sensor::BME680Sensor() : TelemetrySensor(BME68X_TELEM_TYPE, sensorName) {}
+BME680Sensor::BME680Sensor() : TelemetrySensor(meshtastic_TelemetrySensorType_BME680, "BME680") {}
 
 #if __has_include(<bsec2.h>)
 int32_t BME680Sensor::runOnce()

@@ -655,6 +655,7 @@ void setup()
 #elif HAS_WIRE
     Wire.begin();
 #endif
+#endif
 
 #if defined(M5STACK_UNITC6L)
     pinMode(LORA_CS, OUTPUT);

@@ -42,7 +42,6 @@ class BME680Sensor : public TelemetrySensor
     uint8_t accuracy = 0;
     uint16_t stateUpdateCounter = 0;
     static bsecSensor sensorList[9]; // Shared, initialized in .cpp
-    static constexpr const char *sensorName = SENSOR_NAME;
     void loadState();
     void updateState();
     void checkStatus(const char *functionName);
