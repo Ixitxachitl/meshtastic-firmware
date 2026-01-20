@@ -1,6 +1,6 @@
 #include "configuration.h"
 
-#if !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR && __has_include(MESHTASTIC_BME680_HEADER)
+#if !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR && (__has_include(<bsec2.h>) || __has_include(<Adafruit_BME680.h>))
 
 #include "../mesh/generated/meshtastic/telemetry.pb.h"
 #include "BME680Sensor.h"
@@ -22,7 +22,7 @@ bsecSensor BME680Sensor::sensorList[9] = {BSEC_OUTPUT_IAQ,
 
 BME680Sensor::BME680Sensor() : TelemetrySensor(BME68X_TELEM_TYPE, sensorName) {}
 
-#if MESHTASTIC_BME680_BSEC2_SUPPORTED == 1
+#if __has_include(<bsec2.h>)
 int32_t BME680Sensor::runOnce()
 {
     static uint32_t next_due = 0;
@@ -76,7 +76,7 @@ int32_t BME680Sensor::runOnce()
     next_due = now + 3000;
     return 3000;
 }
-#endif // defined(MESHTASTIC_BME680_BSEC2_SUPPORTED)
+#endif
 
 bool BME680Sensor::initDevice(TwoWire *bus, ScanI2C::FoundDevice *dev)
 {
@@ -95,7 +95,7 @@ bool BME680Sensor::initDevice(TwoWire *bus, ScanI2C::FoundDevice *dev)
     }
 #endif
 
-#if MESHTASTIC_BME680_BSEC2_SUPPORTED == 1
+#if __has_include(<bsec2.h>)
     if (!bme680.begin(dev->address.address, *bus))
         checkStatus("begin");
 
@@ -136,7 +136,7 @@ bool BME680Sensor::initDevice(TwoWire *bus, ScanI2C::FoundDevice *dev)
 
     status = 1;
 
-#endif // MESHTASTIC_BME680_BSEC2_SUPPORTED
+#endif
 
     initI2CSensor();
     return status;
@@ -144,8 +144,7 @@ bool BME680Sensor::initDevice(TwoWire *bus, ScanI2C::FoundDevice *dev)
 
 bool BME680Sensor::getMetrics(meshtastic_Telemetry *measurement)
 {
-#if MESHTASTIC_BME680_BSEC2_SUPPORTED == 1
-    // Quick guard: if no fresh data yet, bail
+#if __has_include(<bsec2.h>)
     if (bme680.getData(BSEC_OUTPUT_RAW_PRESSURE).signal == 0)
         return false;
 
@@ -189,11 +188,11 @@ bool BME680Sensor::getMetrics(meshtastic_Telemetry *measurement)
     measurement->variant.environment_metrics.barometric_pressure = bme680->readPressure() / 100.0F;
     measurement->variant.environment_metrics.gas_resistance = bme680->readGas() / 1000.0;
 
-#endif // MESHTASTIC_BME680_BSEC2_SUPPORTED
+#endif
     return true;
 }
 
-#if MESHTASTIC_BME680_BSEC2_SUPPORTED == 1
+#if __has_include(<bsec2.h>)
 void BME680Sensor::loadState()
 {
 #ifdef FSCom
@@ -279,6 +278,6 @@ void BME680Sensor::checkStatus(const char *functionName)
         LOG_WARN("%s BME68X code: %d", functionName, bme680.sensor.status);
     }
 }
-#endif // MESHTASTIC_BME680_BSEC2_SUPPORTED
+#endif
 
 #endif
