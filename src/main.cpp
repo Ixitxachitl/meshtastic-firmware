@@ -610,8 +610,20 @@ void setup()
     bool wire1Active = false;
 
 #if !MESHTASTIC_EXCLUDE_I2C
-    // --- Secondary I2C (Wire1) on CAP/Grove pins (G2=SDA, G1=SCL) ---
-#if WIRE_INTERFACES_COUNT == 2 && defined(G1) && defined(G2)
+    // --- Secondary I2C (Wire1) initialization ---
+#if WIRE_INTERFACES_COUNT == 2
+#if defined(I2C_SDA1) && defined(ARCH_RP2040)
+    // RP2040 with explicit I2C1 pins
+    Wire1.setSDA(I2C_SDA1);
+    Wire1.setSCL(I2C_SCL1);
+    Wire1.begin();
+    wire1Active = true;
+#elif defined(I2C_SDA1) && !defined(ARCH_RP2040)
+    // ESP32 or other with explicit I2C1 pins
+    Wire1.begin(I2C_SDA1, I2C_SCL1);
+    wire1Active = true;
+#elif defined(G1) && defined(G2)
+    // CAP/Grove pins (G2=SDA, G1=SCL)
     const bool wantExternalI2COnCap = true;
     if (wantExternalI2COnCap) {
 #if defined(ARCH_RP2040)
@@ -635,7 +647,14 @@ void setup()
     } else {
         LOG_INFO("CAP bus (Wire1) disabled by config.");
     }
-#endif // WIRE_INTERFACES_COUNT == 2 && defined(G1) && defined(G2)
+#elif defined(NRF52840_XXAA)
+    // nRF52840 with PIN_WIRE1_SDA/PIN_WIRE1_SCL defined in variant.h
+    // Arduino nRF52 core uses these automatically with Wire1.begin()
+    Wire1.begin();
+    wire1Active = true;
+    LOG_INFO("Wire1 initialized using variant-defined pins");
+#endif
+#endif // WIRE_INTERFACES_COUNT == 2
 
     // --- Primary I2C (Wire) ---
 #if defined(I2C_SDA) && defined(ARCH_RP2040)
