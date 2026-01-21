@@ -552,10 +552,7 @@ void playGPSDisableBeep()
 
 void playStartMelody()
 {
-    // Original: F#3 (185Hz), A#3 (233Hz), C#4 (277Hz) - low, mid, high progression
-    // The tonesToRtttl() function normalizes octaves so minimum becomes 4 (RTTL parser requirement)
-    // This melody will be converted to: 4f#, 4a#, 2c#5 (octaves 4, 4, 5)
-    ToneDuration melody[] = {{NOTE_FS3, 250}, {NOTE_AS3, 250}, {NOTE_CS4, 500}};
+    ToneDuration melody[] = {{NOTE_FS3, DURATION_1_8}, {NOTE_AS3, DURATION_1_8}, {NOTE_CS4, DURATION_1_4}};
     playMelody(melody, sizeof(melody) / sizeof(ToneDuration), "start");
 }
 
