@@ -1152,13 +1152,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 
     int finalScroll = (int)scrollY;
     int yOffset = -finalScroll + getTextPositions(display)[1];
-    constexpr int BUBBLE_PAD_X = 3;
-    constexpr int BUBBLE_PAD_Y = 2;
-    constexpr int BUBBLE_RADIUS = 4;
-    constexpr int BUBBLE_MIN_W = 24;
-    constexpr int BUBBLE_TEXT_INDENT = 2;
     const int contentTop = getTextPositions(display)[1];
-    const int contentBottom = scrollBottom; // already excludes nav line
     const int rightEdge = SCREEN_WIDTH - SCROLLBAR_WIDTH - RIGHT_MARGIN;
     const int bubbleGapY = std::max(1, MESSAGE_BLOCK_GAP / 2);
 
