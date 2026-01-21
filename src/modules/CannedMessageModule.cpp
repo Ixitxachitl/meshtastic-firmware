@@ -3441,6 +3441,22 @@ ProcessMessage CannedMessageModule::handleReceived(const meshtastic_MeshPacket &
 
             waitingForAck = false;
 
+            // Update last sent StoredMessage with ACK/NACK/RELAYED result
+            if (!messageStore.getLiveMessages().empty()) {
+                StoredMessage &last = const_cast<StoredMessage &>(messageStore.getLiveMessages().back());
+                if (last.sender == nodeDB->getNodeNum()) { // only update our own messages
+                    if (wasBroadcast && isAck) {
+                        last.ackStatus = AckStatus::ACKED;
+                    } else if (isFromDest && isAck) {
+                        last.ackStatus = AckStatus::ACKED;
+                    } else if (!isFromDest && isAck) {
+                        last.ackStatus = AckStatus::RELAYED;
+                    } else {
+                        last.ackStatus = AckStatus::NACKED;
+                    }
+                }
+            }
+
             // Show overlay banner
             if (screen) {
                 auto *display = screen->getDisplayDevice();
