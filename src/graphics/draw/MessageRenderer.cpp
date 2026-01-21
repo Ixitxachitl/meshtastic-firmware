@@ -829,9 +829,14 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     constexpr int LEFT_MARGIN = 2;
     constexpr int RIGHT_MARGIN = 2;
     constexpr int SCROLLBAR_WIDTH = 3;
+    constexpr int BUBBLE_PAD_X = 3;
+    constexpr int BUBBLE_PAD_Y = 4;
+    constexpr int BUBBLE_RADIUS = 4;
+    constexpr int BUBBLE_MIN_W = 24;
+    constexpr int BUBBLE_TEXT_INDENT = 2;
 
-    const int leftTextWidth = SCREEN_WIDTH - LEFT_MARGIN - RIGHT_MARGIN;
-
+    // Derived widths
+    const int leftTextWidth = SCREEN_WIDTH - LEFT_MARGIN - RIGHT_MARGIN - (BUBBLE_PAD_X * 2);
     const int rightTextWidth = SCREEN_WIDTH - LEFT_MARGIN - RIGHT_MARGIN - SCROLLBAR_WIDTH;
 
     // Title string depending on mode
@@ -896,7 +901,28 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         char chanType[32] = "";
         if (currentMode == ThreadMode::ALL) {
             if (m.dest == NODENUM_BROADCAST) {
-                snprintf(chanType, sizeof(chanType), "#%s", channels.getName(m.channelIndex));
+                const char *name = channels.getName(m.channelIndex);
+                if (currentResolution == ScreenResolution::Low || currentResolution == ScreenResolution::UltraLow) {
+                    if (strcmp(name, "ShortTurbo") == 0)
+                        name = "ShortT";
+                    else if (strcmp(name, "ShortSlow") == 0)
+                        name = "ShortS";
+                    else if (strcmp(name, "ShortFast") == 0)
+                        name = "ShortF";
+                    else if (strcmp(name, "MediumSlow") == 0)
+                        name = "MedS";
+                    else if (strcmp(name, "MediumFast") == 0)
+                        name = "MedF";
+                    else if (strcmp(name, "LongSlow") == 0)
+                        name = "LongS";
+                    else if (strcmp(name, "LongFast") == 0)
+                        name = "LongF";
+                    else if (strcmp(name, "LongTurbo") == 0)
+                        name = "LongT";
+                    else if (strcmp(name, "LongMod") == 0)
+                        name = "LongM";
+                }
+                snprintf(chanType, sizeof(chanType), "#%s", name);
             } else {
                 snprintf(chanType, sizeof(chanType), "(DM)");
             }
@@ -963,8 +989,8 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         }
 
         // Shrink Sender name if needed
-        int availWidth = SCREEN_WIDTH - display->getStringWidth(timeBuf) - display->getStringWidth(chanType) -
-                         display->getStringWidth(" @...") - 10;
+        int availWidth = (mine ? rightTextWidth : leftTextWidth) - display->getStringWidth(timeBuf) -
+                         display->getStringWidth(chanType) - display->getStringWidth("   @...");
         if (availWidth < 0)
             availWidth = 0;
 
@@ -1267,7 +1293,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                     if (headerX < LEFT_MARGIN)
                         headerX = LEFT_MARGIN;
                 } else {
-                    headerX = x + BUBBLE_TEXT_INDENT;
+                    headerX = x + BUBBLE_PAD_X + BUBBLE_TEXT_INDENT;
                 }
                 // Use drawStringWithEmotes to render emotes in sender names
                 drawStringWithEmotes(display, headerX, lineY, cachedLines[i], emotes, numEmotes, true);
@@ -1314,7 +1340,8 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 
                     drawStringWithEmotes(display, rightX, lineY, cachedLines[i], emotes, numEmotes);
                 } else {
-                    drawStringWithEmotes(display, x + BUBBLE_TEXT_INDENT, lineY, cachedLines[i], emotes, numEmotes);
+                    drawStringWithEmotes(display, x + BUBBLE_PAD_X + BUBBLE_TEXT_INDENT, lineY, cachedLines[i], emotes,
+                                         numEmotes);
                 }
             }
         }
