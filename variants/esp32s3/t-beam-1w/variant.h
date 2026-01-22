@@ -70,11 +70,19 @@
 #define LED_PIN 18
 #define LED_STATE_ON 1 // HIGH = ON
 
-// Battery ADC
+// Battery ADC - F550 style 2S Li-ion battery (7.4V nominal)
 #define BATTERY_PIN 4
 #define ADC_CHANNEL ADC1_GPIO4_CHANNEL
 #define BATTERY_SENSE_SAMPLES 30
 #define ADC_MULTIPLIER 2.9333
+
+// 2S Li-ion battery voltage thresholds (millivolts)
+#define NUM_CELLS 2
+#define CELL_TYPE_LION
+#define BAT_FULLVOLT 8400  // 4.2V * 2 = 8.4V fully charged
+#define BAT_EMPTYVOLT 6000 // 3.0V * 2 = 6.0V empty (safe cutoff)
+#define BAT_CHARGINGVOLT 8400
+#define BAT_NOBATVOLT 4500 // Below this = no battery connected
 
 // NTC temperature sensor
 #define NTC_PIN 14
