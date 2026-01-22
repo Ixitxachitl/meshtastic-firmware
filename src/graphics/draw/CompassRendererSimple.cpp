@@ -182,6 +182,12 @@ void drawCenterNeedle3D(OLEDDisplay *display, int16_t cx, int16_t cy, uint16_t r
     drawArrowToNode(display, cx, cy, radius, bearingRad * 180.0f / M_PI);
 }
 
+void drawMagnetIndicator(OLEDDisplay *display, int16_t x, int16_t y)
+{
+    // Stub implementation for simple renderer - no magnetometer indicator
+    // The full CompassRenderer has this functionality with magnet icons
+}
+
 } // namespace CompassRenderer
 } // namespace graphics
 
