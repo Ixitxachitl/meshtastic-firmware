@@ -1219,7 +1219,8 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         for (size_t i = b.start; i <= b.end; ++i) {
             int w = 0;
             if (isHeader[i]) {
-                w = display->getStringWidth(cachedLines[i].c_str());
+                // Use getRenderedLineWidth to account for emoji widths in sender names
+                w = getRenderedLineWidth(display, cachedLines[i], emotes, numEmotes);
                 if (b.mine)
                     w += 12; // room for ACK/NACK/relay mark
             } else {
