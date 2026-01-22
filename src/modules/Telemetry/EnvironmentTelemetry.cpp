@@ -978,6 +978,13 @@ static struct TelemetryDisplayCache {
 static float s_scrollY = 0.0f;
 static bool s_manualScrolling = false;
 
+// Auto-scroll state (similar to MessageRenderer)
+static uint32_t s_scrollLastTime = 0;
+static uint32_t s_scrollStartDelay = 0;
+static uint32_t s_scrollPauseStart = 0;
+static bool s_scrollStarted = false;
+static bool s_scrollWaitingToReset = false;
+
 std::vector<uint32_t> EnvironmentTelemetryModule::getSourcesWithTelemetry() const
 {
     std::vector<uint32_t> out;
@@ -1028,6 +1035,10 @@ void EnvironmentTelemetryModule::resetScroll()
 {
     s_scrollY = 0.0f;
     s_manualScrolling = false;
+    // Reset auto-scroll state
+    s_scrollStartDelay = 0;
+    s_scrollStarted = false;
+    s_scrollWaitingToReset = false;
 }
 
 void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
@@ -1254,7 +1265,36 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
         } else {
             snprintf(agoBuf, sizeof(agoBuf), "%lus", (unsigned long)agoSecs);
         }
-        snprintf(cachedDisplayStr, sizeof(cachedDisplayStr), "%s (%s)", s_displayCache.leftStr, agoBuf);
+
+        // Truncate sender name if needed to keep timestamp visible
+        // Reserve space for " (XXXs)" suffix plus scrollbar
+        char timeSuffix[24];
+        snprintf(timeSuffix, sizeof(timeSuffix), " (%s)", agoBuf);
+        int suffixWidth = display->getStringWidth(timeSuffix);
+        int maxNameWidth = SCREEN_WIDTH - suffixWidth - 6; // 6px margin for scrollbar
+
+        char truncatedName[sizeof(s_displayCache.leftStr)];
+        strncpy(truncatedName, s_displayCache.leftStr, sizeof(truncatedName) - 1);
+        truncatedName[sizeof(truncatedName) - 1] = '\0';
+
+        // Shrink name if it's too wide
+        size_t origLen = strlen(truncatedName);
+        while (truncatedName[0] && display->getStringWidth(truncatedName) > maxNameWidth) {
+            truncatedName[strlen(truncatedName) - 1] = '\0';
+        }
+        // Add ellipsis if we truncated
+        if (strlen(truncatedName) < origLen && strlen(truncatedName) > 0) {
+            // Make room for "..."
+            size_t len = strlen(truncatedName);
+            if (len >= 3) {
+                truncatedName[len - 1] = '\0';
+                truncatedName[len - 2] = '\0';
+                truncatedName[len - 3] = '\0';
+            }
+            strcat(truncatedName, "...");
+        }
+
+        snprintf(cachedDisplayStr, sizeof(cachedDisplayStr), "%s%s", truncatedName, timeSuffix);
     }
     const char *displayStr = cachedDisplayStr;
 
@@ -1453,10 +1493,47 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
             totalContentHeight += metricRows[i].height;
         }
 
-        // Clamp scroll position
+        // Calculate max scroll
         float maxScroll = (float)(totalContentHeight - visibleHeight);
         if (maxScroll < 0.0f)
             maxScroll = 0.0f;
+
+#ifndef USE_EINK
+        // Auto-scroll logic (similar to MessageRenderer)
+        uint32_t now = millis();
+        float delta = (now - s_scrollLastTime) / 400.0f;
+        s_scrollLastTime = now;
+        const float scrollSpeed = 2.0f;
+
+        if (s_scrollStartDelay == 0)
+            s_scrollStartDelay = now;
+        if (!s_scrollStarted && now - s_scrollStartDelay > 2000)
+            s_scrollStarted = true;
+
+        if (!s_manualScrolling && maxScroll > 0.0f) {
+            if (s_scrollStarted) {
+                // Scroll down, then pause at bottom, then reset to top
+                if (!s_scrollWaitingToReset) {
+                    s_scrollY += delta * scrollSpeed;
+                    if (s_scrollY >= maxScroll) {
+                        s_scrollY = maxScroll;
+                        s_scrollWaitingToReset = true;
+                        s_scrollPauseStart = now;
+                    }
+                } else if (now - s_scrollPauseStart > 3000) {
+                    s_scrollY = 0.0f;
+                    s_scrollWaitingToReset = false;
+                    s_scrollStarted = false;
+                    s_scrollStartDelay = now;
+                }
+            }
+        } else if (!s_manualScrolling) {
+            // Content fits on screen - no scrolling needed
+            s_scrollY = 0.0f;
+        }
+#endif
+
+        // Clamp scroll position
         if (s_scrollY < 0.0f)
             s_scrollY = 0.0f;
         if (s_scrollY > maxScroll)
@@ -1634,10 +1711,47 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
             totalContentHeight += rowHeightForCalc;
         }
 
-        // Clamp scroll position
+        // Calculate max scroll
         float maxScroll = (float)(totalContentHeight - visibleHeight);
         if (maxScroll < 0.0f)
             maxScroll = 0.0f;
+
+#ifndef USE_EINK
+        // Auto-scroll logic (similar to MessageRenderer)
+        uint32_t now = millis();
+        float delta = (now - s_scrollLastTime) / 400.0f;
+        s_scrollLastTime = now;
+        const float scrollSpeed = 2.0f;
+
+        if (s_scrollStartDelay == 0)
+            s_scrollStartDelay = now;
+        if (!s_scrollStarted && now - s_scrollStartDelay > 2000)
+            s_scrollStarted = true;
+
+        if (!s_manualScrolling && maxScroll > 0.0f) {
+            if (s_scrollStarted) {
+                // Scroll down, then pause at bottom, then reset to top
+                if (!s_scrollWaitingToReset) {
+                    s_scrollY += delta * scrollSpeed;
+                    if (s_scrollY >= maxScroll) {
+                        s_scrollY = maxScroll;
+                        s_scrollWaitingToReset = true;
+                        s_scrollPauseStart = now;
+                    }
+                } else if (now - s_scrollPauseStart > 3000) {
+                    s_scrollY = 0.0f;
+                    s_scrollWaitingToReset = false;
+                    s_scrollStarted = false;
+                    s_scrollStartDelay = now;
+                }
+            }
+        } else if (!s_manualScrolling) {
+            // Content fits on screen - no scrolling needed
+            s_scrollY = 0.0f;
+        }
+#endif
+
+        // Clamp scroll position
         if (s_scrollY < 0.0f)
             s_scrollY = 0.0f;
         if (s_scrollY > maxScroll)
