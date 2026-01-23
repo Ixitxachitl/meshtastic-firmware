@@ -1037,6 +1037,7 @@ void EnvironmentTelemetryModule::resetScroll()
     s_manualScrolling = false;
     // Reset auto-scroll state
     s_scrollStartDelay = 0;
+    s_scrollLastTime = 0; // Reset to avoid huge delta on first frame
     s_scrollStarted = false;
     s_scrollWaitingToReset = false;
 }
@@ -1307,11 +1308,9 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     }
 
     // === Now render ===
-    // Detect large display devices (SenseCAP Indicator 480x480, T-Deck 320x240)
-    bool isLargeDisplay = false;
-#if defined(SENSECAP_INDICATOR) || defined(T_DECK)
-    isLargeDisplay = true;
-#endif
+    // Detect large display devices based on screen width
+    // Large displays: 240+ width (T-Deck 320x240, nRF TFT 240x320, SenseCAP Indicator 480x480, etc.)
+    bool isLargeDisplay = (SCREEN_WIDTH >= 240);
 
     // Use advanced display with sparklines on high-resolution and low-resolution screens (except UltraLow)
     if (graphics::isHighResolution() && isLargeDisplay) {
@@ -1324,12 +1323,8 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
 
         // Full-width graphs spanning to screen edge
         const int graphW = SCREEN_WIDTH - x - 2;
-        // T-Deck has smaller screen in landscape, use smaller graphs
-#if defined(T_DECK)
-        const int graphH = kLargeSparkH / 3; // 1/3 height for T-Deck
-#else
-        const int graphH = kLargeSparkH; // Full height for SenseCAP Indicator
-#endif
+        // Smaller screens (width ≤ 320) use smaller graphs, larger screens (480+) get full height
+        const int graphH = (SCREEN_WIDTH <= 320) ? (kLargeSparkH / 3) : kLargeSparkH;
 
         // Use FONT_SMALL which is medium-sized (19px) on large TFT displays
         display->setFont(FONT_SMALL);
@@ -1501,6 +1496,9 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
 #ifndef USE_EINK
         // Auto-scroll logic (similar to MessageRenderer)
         uint32_t now = millis();
+        // Initialize s_scrollLastTime on first frame to avoid huge delta
+        if (s_scrollLastTime == 0)
+            s_scrollLastTime = now;
         float delta = (now - s_scrollLastTime) / 400.0f;
         s_scrollLastTime = now;
         const float scrollSpeed = 2.0f;
@@ -1719,6 +1717,9 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
 #ifndef USE_EINK
         // Auto-scroll logic (similar to MessageRenderer)
         uint32_t now = millis();
+        // Initialize s_scrollLastTime on first frame to avoid huge delta
+        if (s_scrollLastTime == 0)
+            s_scrollLastTime = now;
         float delta = (now - s_scrollLastTime) / 400.0f;
         s_scrollLastTime = now;
         const float scrollSpeed = 2.0f;
