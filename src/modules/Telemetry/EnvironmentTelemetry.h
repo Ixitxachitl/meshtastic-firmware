@@ -45,6 +45,10 @@ class EnvironmentTelemetryModule : private concurrency::OSThread,
 
     void invalidateDisplayCache(); // Force redraw with new units
 
+    // Layout preference (Compact vs Full with large graphs)
+    static bool getUseFullLayout();
+    static void setUseFullLayout(bool fullLayout);
+
     // Scrolling support
     static void scrollUp();
     static void scrollDown();

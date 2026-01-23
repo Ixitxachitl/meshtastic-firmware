@@ -5,6 +5,7 @@
 #include "../mesh/generated/meshtastic/telemetry.pb.h"
 #include "Default.h"
 #include "EnvironmentTelemetry.h"
+#include "FSCommon.h"
 #include "MeshService.h"
 #include "NodeDB.h"
 #include "PowerFSM.h"
@@ -974,6 +975,63 @@ static struct TelemetryDisplayCache {
     }
 } s_displayCache;
 
+// Layout preference (default: compact layout)
+static bool s_useFullLayout = false;
+
+#ifdef FSCom
+static const char *envLayoutFileName = "/prefs/env_layout.dat";
+#endif
+
+// Load layout preference from filesystem
+static void loadLayoutPreference()
+{
+#ifdef FSCom
+    auto file = FSCom.open(envLayoutFileName, FILE_O_READ);
+    if (file) {
+        uint8_t value = 0;
+        if (file.read(&value, 1) == 1) {
+            s_useFullLayout = (value != 0);
+            LOG_DEBUG("Loaded env layout preference: %s", s_useFullLayout ? "Full" : "Compact");
+        }
+        file.close();
+    }
+#endif
+}
+
+// Save layout preference to filesystem
+static void saveLayoutPreference()
+{
+#ifdef FSCom
+    FSCom.mkdir("/prefs"); // Ensure directory exists
+    if (FSCom.exists(envLayoutFileName)) {
+        FSCom.remove(envLayoutFileName);
+    }
+    auto file = FSCom.open(envLayoutFileName, FILE_O_WRITE);
+    if (file) {
+        uint8_t value = s_useFullLayout ? 1 : 0;
+        file.write(&value, 1);
+        file.flush();
+        file.close();
+        LOG_INFO("Saved env layout preference: %s", s_useFullLayout ? "Full" : "Compact");
+    }
+#endif
+}
+
+bool EnvironmentTelemetryModule::getUseFullLayout()
+{
+    return s_useFullLayout;
+}
+
+void EnvironmentTelemetryModule::setUseFullLayout(bool fullLayout)
+{
+    if (s_useFullLayout != fullLayout) {
+        s_useFullLayout = fullLayout;
+        saveLayoutPreference();
+        resetScroll();
+        s_displayCache.markDirty();
+    }
+}
+
 // Scroll state tracking (float for smooth pixel-level scrolling)
 static float s_scrollY = 0.0f;
 static bool s_manualScrolling = false;
@@ -1045,6 +1103,14 @@ void EnvironmentTelemetryModule::resetScroll()
 void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     ::display = display;
+
+    // Load layout preference from filesystem (once)
+    static bool layoutPrefLoaded = false;
+    if (!layoutPrefLoaded) {
+        loadLayoutPreference();
+        layoutPrefLoaded = true;
+    }
+
     // === Setup display ===
     display->clear();
     display->setFont(FONT_SMALL);
@@ -1308,13 +1374,12 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     }
 
     // === Now render ===
-    // Detect large display devices based on screen width
-    // Large displays: 240+ width (T-Deck 320x240, nRF TFT 240x320, SenseCAP Indicator 480x480, etc.)
-    bool isLargeDisplay = (SCREEN_WIDTH >= 240);
+    // Check if device supports Full layout (large displays with width >= 240)
+    bool supportsFullLayout = (SCREEN_WIDTH >= 240) && graphics::isHighResolution();
 
-    // Use advanced display with sparklines on high-resolution and low-resolution screens (except UltraLow)
-    if (graphics::isHighResolution() && isLargeDisplay) {
-        // === LARGE DISPLAY SCROLLABLE LAYOUT with graphs for all metrics ===
+    // Use Full layout if user selected it AND device supports it
+    if (supportsFullLayout && s_useFullLayout) {
+        // === FULL LAYOUT with large graphs for all metrics ===
 
         // Calculate available scroll area (starts right after header)
         int scrollTop = currentY;

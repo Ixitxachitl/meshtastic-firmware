@@ -2756,15 +2756,29 @@ void menuHandler::DisplayUnits_menu()
 
 void menuHandler::envTelemetryMenu()
 {
-    enum optionsNumbers { ExitOpt, SendTelemetry, PickSource, AutoMostRecent, DisplayUnits };
-    static const char *optionsArray[] = {"Back", "Send Telemetry", "Pick Source", "Auto (Most Recent)", "Display Units"};
-    static int optionsEnumArray[] = {ExitOpt, SendTelemetry, PickSource, AutoMostRecent, DisplayUnits};
+    enum optionsNumbers { ExitOpt, SendTelemetry, PickSource, AutoMostRecent, Layout, DisplayUnits };
+
+    // Check if device supports Full layout (large screens with width >= 240)
+    bool supportsFullLayout = (SCREEN_WIDTH >= 240) && isHighResolution();
+
+    // Build menu dynamically based on device capabilities
+    static const char *optionsArrayFull[] = {"Back",   "Send Telemetry", "Pick Source", "Auto (Most Recent)",
+                                             "Layout", "Display Units"};
+    static const char *optionsArrayCompact[] = {"Back", "Send Telemetry", "Pick Source", "Auto (Most Recent)", "Display Units"};
+    static int optionsEnumArrayFull[] = {ExitOpt, SendTelemetry, PickSource, AutoMostRecent, Layout, DisplayUnits};
+    static int optionsEnumArrayCompact[] = {ExitOpt, SendTelemetry, PickSource, AutoMostRecent, DisplayUnits};
 
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = "Environment";
-    bannerOptions.optionsArrayPtr = optionsArray;
-    bannerOptions.optionsCount = 5;
-    bannerOptions.optionsEnumPtr = optionsEnumArray;
+    if (supportsFullLayout) {
+        bannerOptions.optionsArrayPtr = optionsArrayFull;
+        bannerOptions.optionsCount = 6;
+        bannerOptions.optionsEnumPtr = optionsEnumArrayFull;
+    } else {
+        bannerOptions.optionsArrayPtr = optionsArrayCompact;
+        bannerOptions.optionsCount = 5;
+        bannerOptions.optionsEnumPtr = optionsEnumArrayCompact;
+    }
     bannerOptions.bannerCallback = [](int selected) -> void {
         if (selected == SendTelemetry) {
             if (environmentTelemetryModule) {
@@ -2785,6 +2799,9 @@ void menuHandler::envTelemetryMenu()
                 environmentTelemetryModule->setEnvDisplaySource(0); // 0 = Auto (most recent)
             }
             screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
+        } else if (selected == Layout) {
+            menuHandler::menuQueue = menuHandler::env_layout_menu;
+            screen->runNow();
         } else if (selected == DisplayUnits) {
             displayUnitsParentMenu = menuHandler::env_menu;
             menuHandler::menuQueue = menuHandler::DisplayUnits;
@@ -2902,6 +2919,39 @@ void menuHandler::envTelemetrySourceMenu()
     };
 
     screen->showOverlayBanner(o);
+}
+
+void menuHandler::envTelemetryLayoutMenu()
+{
+    enum optionsNumbers { Back = 0, Compact, Full };
+    static const char *optionsArray[] = {"Back", "Compact", "Full"};
+
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = "Layout";
+    bannerOptions.optionsArrayPtr = optionsArray;
+    bannerOptions.optionsCount = 3;
+    bannerOptions.InitialSelected = EnvironmentTelemetryModule::getUseFullLayout() ? 2 : 1;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        switch (selected) {
+        case Back:
+            menuHandler::menuQueue = menuHandler::env_menu;
+            screen->runNow();
+            return;
+        case Compact:
+            if (EnvironmentTelemetryModule::getUseFullLayout()) {
+                EnvironmentTelemetryModule::setUseFullLayout(false);
+                screen->setFrames(Screen::FOCUS_PRESERVE);
+            }
+            break;
+        case Full:
+            if (!EnvironmentTelemetryModule::getUseFullLayout()) {
+                EnvironmentTelemetryModule::setUseFullLayout(true);
+                screen->setFrames(Screen::FOCUS_PRESERVE);
+            }
+            break;
+        }
+    };
+    screen->showOverlayBanner(bannerOptions);
 }
 
 void menuHandler::handleMenuSwitch(OLEDDisplay *display)
@@ -3071,6 +3121,9 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
         break;
     case env_source_picker:
         envTelemetrySourceMenu();
+        break;
+    case env_layout_menu:
+        envTelemetryLayoutMenu();
         break;
     }
     menuQueue = menu_none;

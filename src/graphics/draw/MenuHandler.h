@@ -61,8 +61,8 @@ class menuHandler
         DisplayUnits,
         env_menu,
         env_source_picker,
-        screen_timeout_picker,
-        screen_timeout_picker_menu
+        env_layout_menu,
+        screen_timeout_picker
     };
     static screenMenus menuQueue;
     static uint32_t pickedNodeNum; // node selected by NodePicker for ManageNodeMenu
@@ -121,6 +121,7 @@ class menuHandler
     static void textMessageMenu();
     static void envTelemetryMenu();
     static void envTelemetrySourceMenu();
+    static void envTelemetryLayoutMenu();
     static void saveUIConfig();
 
   private:
