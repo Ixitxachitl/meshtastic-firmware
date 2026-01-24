@@ -26,6 +26,7 @@
 // SD Card
 #define HAS_SDCARD
 #define SDCARD_USE_SPI1
+#undef SDCARD_CS // Undefine from pins_arduino.h to avoid redefinition warning
 #define SDCARD_CS SPI_CS
 
 // LoRa Radio - SX1262 with 1W PA
@@ -74,7 +75,7 @@
 #define BATTERY_PIN 4
 #define ADC_CHANNEL ADC1_GPIO4_CHANNEL
 #define BATTERY_SENSE_SAMPLES 30
-#define ADC_MULTIPLIER 2.9333
+#define ADC_MULTIPLIER 3.06
 
 // 2S Li-ion battery voltage thresholds (millivolts)
 #define NUM_CELLS 2
