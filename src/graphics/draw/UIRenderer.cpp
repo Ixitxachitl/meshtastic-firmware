@@ -1722,8 +1722,8 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
         const bool isEnvScreen = (state->currentFrame == envIdx);
         graphics::setEnvTelemetryScreenActive(isEnvScreen);
 #if !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
-        // Reset scroll to top when switching to environment telemetry screen
-        if (isEnvScreen) {
+        // Reset scroll when leaving env screen so it starts at top when returning
+        if (!isEnvScreen) {
             EnvironmentTelemetryModule::resetScroll();
         }
 #endif
