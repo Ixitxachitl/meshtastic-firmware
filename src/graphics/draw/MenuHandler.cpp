@@ -2041,7 +2041,7 @@ void menuHandler::ScreenTimeoutPickerMenu()
         } else if (selected == 4) { // 1 Minute
             config.display.screen_on_secs = 60;
         } else if (selected == 5) { // Always On
-            config.display.screen_on_secs = 0;
+            config.display.screen_on_secs = UINT32_MAX;
         }
 
         if (selected != 0) { // Not "Back"
