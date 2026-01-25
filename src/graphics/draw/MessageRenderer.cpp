@@ -1376,11 +1376,10 @@ std::vector<std::string> generateLines(OLEDDisplay *display, const char *headerS
 
     std::string line, word;
     for (size_t i = 0; messageBuf[i];) {
-        char ch = messageBuf[i];
+        unsigned char ch = (unsigned char)messageBuf[i];
 
         // Handle curly apostrophe → plain apostrophe
-        if ((unsigned char)messageBuf[i] == 0xE2 && (unsigned char)messageBuf[i + 1] == 0x80 &&
-            (unsigned char)messageBuf[i + 2] == 0x99) {
+        if (ch == 0xE2 && (unsigned char)messageBuf[i + 1] == 0x80 && (unsigned char)messageBuf[i + 2] == 0x99) {
             word += '\'';
             i += 3;
             continue;
@@ -1430,7 +1429,7 @@ std::vector<std::string> generateLines(OLEDDisplay *display, const char *headerS
             ++i;
         } else {
             // Regular character - accumulate into word
-            size_t charLen = utf8CharLen(static_cast<uint8_t>(ch));
+            size_t charLen = utf8CharLen(ch);
             word.append(messageBuf + i, charLen);
 
             std::string test = line + word;
