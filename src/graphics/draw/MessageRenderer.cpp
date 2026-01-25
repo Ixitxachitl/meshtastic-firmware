@@ -1153,6 +1153,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     int finalScroll = (int)scrollY;
     int yOffset = -finalScroll + getTextPositions(display)[1];
     const int contentTop = getTextPositions(display)[1];
+    const int contentBottom = scrollBottom; // already excludes nav line
     const int rightEdge = SCREEN_WIDTH - SCROLLBAR_WIDTH - RIGHT_MARGIN;
     const int bubbleGapY = std::max(1, MESSAGE_BLOCK_GAP / 2);
 
@@ -1210,8 +1211,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             continue;
 
         // Skip bubbles entirely outside visible area
-        // Use SCREEN_HEIGHT for bottom so bubbles render until completely off screen
-        if (bottomY < contentTop || topY > SCREEN_HEIGHT)
+        if (bottomY < contentTop || topY > contentBottom - 1)
             continue;
 
         int maxLineW = 0;
@@ -1273,9 +1273,8 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     int lineY = yOffset;
     for (size_t i = 0; i < cachedLines.size(); ++i) {
         // Only skip lines that are completely outside the visible area
-        // Use SCREEN_HEIGHT for bottom so lines render until completely off screen
         int lineBottom = lineY + cachedHeights[i];
-        bool lineVisible = (lineBottom > contentTop) && (lineY < SCREEN_HEIGHT);
+        bool lineVisible = (lineBottom > contentTop) && (lineY < contentBottom);
 
         if (lineVisible) {
             if (isHeader[i]) {
