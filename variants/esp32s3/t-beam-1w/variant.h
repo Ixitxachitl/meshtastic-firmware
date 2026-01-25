@@ -75,7 +75,7 @@
 #define BATTERY_PIN 4
 #define ADC_CHANNEL ADC1_GPIO4_CHANNEL
 #define BATTERY_SENSE_SAMPLES 30
-#define ADC_MULTIPLIER 3.06
+#define ADC_MULTIPLIER 3.01
 
 // 2S Li-ion battery voltage thresholds (millivolts)
 #define NUM_CELLS 2
