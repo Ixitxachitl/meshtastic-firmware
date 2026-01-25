@@ -1487,28 +1487,47 @@ void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const mesht
                 isChannelMuted = true;
         }
 
-        // Banner logic
+        // Banner logic - respect use_long_node_name setting like NodeListRenderer
         const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(packet.from);
-        char longName[48] = "";
-        if (node && node->has_user && node->user.long_name && node->user.long_name[0] != '\0') {
-            // Apply emoji replacement to banner name
-            std::string processedName = replaceUnknownEmoji(std::string(node->user.long_name), emotes, numEmotes);
-            strncpy(longName, processedName.c_str(), sizeof(longName) - 1);
-            longName[sizeof(longName) - 1] = '\0';
-        } else {
-            // No long/short name → show NodeID in parentheses
-            snprintf(longName, sizeof(longName), "(%08x)", packet.from);
+        char senderName[48] = "";
+        if (node && node->has_user) {
+            // Respect the same long/short name setting as NodeListRenderer
+            const char *preferred = config.display.use_long_node_name ? node->user.long_name : node->user.short_name;
+            const char *fallback = config.display.use_long_node_name ? node->user.short_name : node->user.long_name;
+            const char *nameToUse = (preferred && preferred[0]) ? preferred : ((fallback && fallback[0]) ? fallback : nullptr);
+
+            if (nameToUse) {
+                // Apply emoji replacement to banner name
+                std::string processedName = replaceUnknownEmoji(std::string(nameToUse), emotes, numEmotes);
+                strncpy(senderName, processedName.c_str(), sizeof(senderName) - 1);
+                senderName[sizeof(senderName) - 1] = '\0';
+            }
         }
+        if (senderName[0] == '\0') {
+            // No name available → show NodeID in parentheses
+            snprintf(senderName, sizeof(senderName), "(%08x)", packet.from);
+        }
+
+        // Truncate to fit banner width, respecting UTF-8 boundaries
         int availWidth = display->getWidth() - ((currentResolution == ScreenResolution::High) ? 40 : 20);
         if (availWidth < 0)
             availWidth = 0;
 
-        size_t origLen = strlen(longName);
-        while (longName[0] && display->getStringWidth(longName) > availWidth) {
-            longName[strlen(longName) - 1] = '\0';
+        size_t origLen = strlen(senderName);
+        size_t bytePos = origLen;
+        while (bytePos > 0 && display->getStringWidth(senderName) > availWidth) {
+            // Back up to the start of the previous UTF-8 character
+            do {
+                --bytePos;
+            } while (bytePos > 0 && (senderName[bytePos] & 0xC0) == 0x80); // Skip continuation bytes
+            senderName[bytePos] = '\0';
         }
-        if (strlen(longName) < origLen) {
-            strcat(longName, "...");
+        // Add ellipsis if truncated (ensure room for "...")
+        if (bytePos < origLen && bytePos > 0) {
+            size_t capForText = sizeof(senderName) - 1;
+            if (bytePos <= capForText - 3) {
+                strcat(senderName, "...");
+            }
         }
         const char *msgRaw = reinterpret_cast<const char *>(packet.decoded.payload.bytes);
 
@@ -1527,8 +1546,8 @@ void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const mesht
         }
 
         if (isAlert) {
-            if (longName && longName[0])
-                snprintf(banner, sizeof(banner), "Alert Received from\n%s", longName);
+            if (senderName[0])
+                snprintf(banner, sizeof(banner), "Alert Received from\n%s", senderName);
             else
                 strcpy(banner, "Alert Received");
         } else {
@@ -1536,11 +1555,11 @@ void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const mesht
             if (isChannelMuted)
                 return;
 
-            if (longName && longName[0]) {
+            if (senderName[0]) {
                 if (currentResolution == ScreenResolution::UltraLow) {
                     strcpy(banner, "New Message");
                 } else {
-                    snprintf(banner, sizeof(banner), "New Message from\n%s", longName);
+                    snprintf(banner, sizeof(banner), "New Message from\n%s", senderName);
                 }
             } else
                 strcpy(banner, "New Message");
