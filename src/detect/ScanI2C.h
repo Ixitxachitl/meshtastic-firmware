@@ -99,6 +99,7 @@ class ScanI2C
         CW2015,
         SCD30,
         ADS1115,
+        I2C_BUZZER,
     } DeviceType;
 
     // typedef uint8_t DeviceAddress;
@@ -156,6 +157,8 @@ class ScanI2C
     FoundDevice firstAQI() const;
 
     FoundDevice firstRGBLED() const;
+
+    FoundDevice firstBuzzer() const;
 
     virtual FoundDevice find(DeviceType) const;
 
