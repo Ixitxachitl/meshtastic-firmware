@@ -974,18 +974,34 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 
         char senderBuf[48] = "";
         if (node && node->has_user) {
-            // Use long name if present
-            strncpy(senderBuf, node->user.long_name, sizeof(senderBuf) - 1);
-            senderBuf[sizeof(senderBuf) - 1] = '\0';
-        } else {
-            // No long/short name → show NodeID in parentheses
+            // Respect the same long/short name setting as NodeListRenderer
+            const char *preferred = config.display.use_long_node_name ? node->user.long_name : node->user.short_name;
+            const char *fallback = config.display.use_long_node_name ? node->user.short_name : node->user.long_name;
+            const char *nameToUse = (preferred && preferred[0]) ? preferred : ((fallback && fallback[0]) ? fallback : nullptr);
+            if (nameToUse) {
+                strncpy(senderBuf, nameToUse, sizeof(senderBuf) - 1);
+                senderBuf[sizeof(senderBuf) - 1] = '\0';
+            }
+        }
+        if (senderBuf[0] == '\0') {
+            // No name available → show NodeID in parentheses
             snprintf(senderBuf, sizeof(senderBuf), "(%08x)", m.sender);
         }
 
         // If this is *our own* message, override senderBuf to who the recipient was
         bool mine = (m.sender == nodeDB->getNodeNum());
         if (mine && node_recipient && node_recipient->has_user) {
-            strcpy(senderBuf, node_recipient->user.long_name);
+            const char *preferred =
+                config.display.use_long_node_name ? node_recipient->user.long_name : node_recipient->user.short_name;
+            const char *fallback =
+                config.display.use_long_node_name ? node_recipient->user.short_name : node_recipient->user.long_name;
+            const char *nameToUse = (preferred && preferred[0]) ? preferred : ((fallback && fallback[0]) ? fallback : nullptr);
+            if (nameToUse) {
+                strncpy(senderBuf, nameToUse, sizeof(senderBuf) - 1);
+                senderBuf[sizeof(senderBuf) - 1] = '\0';
+            } else {
+                snprintf(senderBuf, sizeof(senderBuf), "(%08x)", m.dest);
+            }
         }
 
         // Shrink Sender name if needed
@@ -1361,8 +1377,12 @@ std::vector<std::string> generateLines(OLEDDisplay *display, const char *headerS
         lines.push_back(std::string(headerStr));
     }
 
-    // Helper to check if position i starts an emoji from our emote list
+    // Helper to check if position starts an emoji - only check at potential emoji start bytes
     auto startsWithEmoji = [](const char *buf, size_t pos, size_t &emojiLen) -> bool {
+        unsigned char c = (unsigned char)buf[pos];
+        // Emoji are multi-byte UTF-8: skip check for ASCII
+        if (c < 0x80)
+            return false;
         for (int e = 0; e < numEmotes; ++e) {
             const char *label = emotes[e].label;
             size_t labelLen = strlen(label);
@@ -1372,6 +1392,27 @@ std::vector<std::string> generateLines(OLEDDisplay *display, const char *headerS
             }
         }
         return false;
+    };
+
+    // Simple width helper - use basic string width for most checks, only use
+    // emoji-aware width when line contains potential emoji bytes
+    auto getLineWidth = [display](const std::string &s) -> int {
+        // Quick check: if no high bytes, use fast path
+        bool hasHighByte = false;
+        for (char c : s) {
+            if ((unsigned char)c >= 0x80) {
+                hasHighByte = true;
+                break;
+            }
+        }
+        if (!hasHighByte) {
+#if defined(OLED_UA) || defined(OLED_RU)
+            return display->getStringWidth(s.c_str(), s.length(), true);
+#else
+            return display->getStringWidth(s.c_str());
+#endif
+        }
+        return getRenderedLineWidth(display, s, emotes, numEmotes);
     };
 
     std::string line, word;
@@ -1391,8 +1432,7 @@ std::vector<std::string> generateLines(OLEDDisplay *display, const char *headerS
             // Flush current word to line first
             if (!word.empty()) {
                 std::string test = line + word;
-                int strWidth = getRenderedLineWidth(display, test, emotes, numEmotes);
-                if (strWidth > textWidth && !line.empty()) {
+                if (getLineWidth(test) > textWidth && !line.empty()) {
                     lines.push_back(line);
                     line = word;
                 } else {
@@ -1404,8 +1444,7 @@ std::vector<std::string> generateLines(OLEDDisplay *display, const char *headerS
             // Now handle the emoji as its own unit
             std::string emojiStr(messageBuf + i, emojiLen);
             std::string test = line + emojiStr;
-            int strWidth = getRenderedLineWidth(display, test, emotes, numEmotes);
-            if (strWidth > textWidth && !line.empty()) {
+            if (getLineWidth(test) > textWidth && !line.empty()) {
                 lines.push_back(line);
                 line = emojiStr;
             } else {
@@ -1433,8 +1472,7 @@ std::vector<std::string> generateLines(OLEDDisplay *display, const char *headerS
             word.append(messageBuf + i, charLen);
 
             std::string test = line + word;
-            int strWidth = getRenderedLineWidth(display, test, emotes, numEmotes);
-            if (strWidth > textWidth) {
+            if (getLineWidth(test) > textWidth) {
                 if (!line.empty())
                     lines.push_back(line);
                 line = word;
