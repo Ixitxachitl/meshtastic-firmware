@@ -549,8 +549,8 @@ template <size_t N> static void drawMiniSparkBoxed(OLEDDisplay *dpy, int x, int 
     }
 }
 
-// Prefer long_name when available (and width allows), else short_name, else hex id.
-// Mirrors the selection logic used by MessageRenderer.
+// Respects config.display.use_long_node_name setting, same as NodeListRenderer.
+// Falls back to the other name if preferred is empty, then to hex id.
 static inline const char *getSenderName(uint32_t nodeNum)
 {
     static char buf[64];
@@ -560,19 +560,14 @@ static inline const char *getSenderName(uint32_t nodeNum)
         const char *ln = node->user.long_name;
         const char *sn = node->user.short_name;
 
-        // On UltraLow resolution displays, prefer short_name for space
-        if (graphics::currentResolution == graphics::ScreenResolution::UltraLow) {
-            if (sn && sn[0])
-                return sn;
-            if (ln && ln[0])
-                return ln;
-        } else {
-            // On Low and High resolution screens, prefer long_name for readability
-            if (ln && ln[0])
-                return ln;
-            if (sn && sn[0])
-                return sn;
-        }
+        // Respect the same long/short name setting as NodeListRenderer
+        const char *preferred = config.display.use_long_node_name ? ln : sn;
+        const char *fallback = config.display.use_long_node_name ? sn : ln;
+
+        if (preferred && preferred[0])
+            return preferred;
+        if (fallback && fallback[0])
+            return fallback;
     }
 
     // Fallback: hex node id like "ABCDEF12"
