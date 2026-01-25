@@ -89,7 +89,8 @@ class ScanI2C
         DA217,
         CHSC6X,
         CST226SE,
-        BMI270
+        BMI270,
+        I2C_BUZZER
     } DeviceType;
 
     // typedef uint8_t DeviceAddress;
@@ -122,7 +123,7 @@ class ScanI2C
     } FoundDevice;
 
     static const FoundDevice DEVICE_NONE;
-    
+
     static bool hasMagnetometer();
 
   public:
@@ -147,6 +148,8 @@ class ScanI2C
     FoundDevice firstAQI() const;
 
     FoundDevice firstRGBLED() const;
+
+    FoundDevice firstBuzzer() const;
 
     virtual FoundDevice find(DeviceType) const;
 

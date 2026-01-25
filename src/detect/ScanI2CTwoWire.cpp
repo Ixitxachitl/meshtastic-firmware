@@ -206,6 +206,16 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
         type = NONE;
         if (err == 0) {
             switch (addr.address) {
+#ifdef HAS_I2C_BUZZER
+            // I2C Buzzer detection - only when explicitly enabled via HAS_I2C_BUZZER
+            // Default address 0x3E avoids conflict with OLEDs
+            case I2C_BUZZER_ADDR:
+                // For Modulino-compatible buzzers, we can't really probe without making noise
+                // Just assume if something responds at this address and HAS_I2C_BUZZER is set, it's a buzzer
+                logFoundDevice("I2C Buzzer", (uint8_t)addr.address);
+                type = I2C_BUZZER;
+                break;
+#endif
             case SSD1306_ADDRESS_H:
             case SSD1306_ADDRESS_L:
                 type = probeOLED(addr);

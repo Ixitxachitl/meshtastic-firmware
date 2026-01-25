@@ -6,6 +6,10 @@
 #include "mesh/IndicatorSerial.h"
 #endif
 
+#if !MESHTASTIC_EXCLUDE_I2C
+#include "I2CBuzzer.h"
+#endif
+
 #if !defined(ARCH_ESP32) && !defined(ARCH_RP2040) && !defined(ARCH_PORTDUINO)
 #include "Tone.h"
 #endif
@@ -452,7 +456,7 @@ size_t tonesToRtttl(char *out, size_t outCap, const ToneDuration *td, int n, con
 // ==============================================================================
 
 /**
- * Helper function to play a melody via I2S or GPIO buzzer
+ * Helper function to play a melody via I2S, I2C buzzer, or GPIO buzzer
  * Automatically handles I2S conversion and fallback to GPIO
  */
 static void playMelody(const ToneDuration *melody, int count, const char *name = "sys")
@@ -477,6 +481,22 @@ static void playMelody(const ToneDuration *melody, int count, const char *name =
 
             // Wait for note to complete plus spacing (30% longer)
             delay(duration * 1.3);
+        }
+        return;
+    }
+#endif
+
+#if !MESHTASTIC_EXCLUDE_I2C
+    // I2C Buzzer (Modulino-compatible protocol)
+    extern I2CBuzzer *i2cBuzzer;
+    if (i2cBuzzer && i2cBuzzer->isAvailable()) {
+        for (int i = 0; i < count; i++) {
+            const auto &td = melody[i];
+            if (td.frequency_khz > 0) {
+                i2cBuzzer->tone(td.frequency_khz, td.duration_ms);
+            }
+            // Wait for note to complete plus spacing (30% longer)
+            delay(td.duration_ms * 1.3);
         }
         return;
     }
