@@ -1361,14 +1361,61 @@ std::vector<std::string> generateLines(OLEDDisplay *display, const char *headerS
         lines.push_back(std::string(headerStr));
     }
 
+    // Helper to check if position i starts an emoji from our emote list
+    auto startsWithEmoji = [](const char *buf, size_t pos, size_t &emojiLen) -> bool {
+        for (int e = 0; e < numEmotes; ++e) {
+            const char *label = emotes[e].label;
+            size_t labelLen = strlen(label);
+            if (labelLen > 0 && strncmp(buf + pos, label, labelLen) == 0) {
+                emojiLen = labelLen;
+                return true;
+            }
+        }
+        return false;
+    };
+
     std::string line, word;
-    for (int i = 0; messageBuf[i]; ++i) {
+    for (size_t i = 0; messageBuf[i];) {
         char ch = messageBuf[i];
+
+        // Handle curly apostrophe → plain apostrophe
         if ((unsigned char)messageBuf[i] == 0xE2 && (unsigned char)messageBuf[i + 1] == 0x80 &&
             (unsigned char)messageBuf[i + 2] == 0x99) {
-            ch = '\''; // plain apostrophe
-            i += 2;    // skip over the extra UTF-8 bytes
+            word += '\'';
+            i += 3;
+            continue;
         }
+
+        // Check if we're at an emoji - treat emojis as breakable units
+        size_t emojiLen = 0;
+        if (startsWithEmoji(messageBuf, i, emojiLen)) {
+            // Flush current word to line first
+            if (!word.empty()) {
+                std::string test = line + word;
+                int strWidth = getRenderedLineWidth(display, test, emotes, numEmotes);
+                if (strWidth > textWidth && !line.empty()) {
+                    lines.push_back(line);
+                    line = word;
+                } else {
+                    line += word;
+                }
+                word.clear();
+            }
+
+            // Now handle the emoji as its own unit
+            std::string emojiStr(messageBuf + i, emojiLen);
+            std::string test = line + emojiStr;
+            int strWidth = getRenderedLineWidth(display, test, emotes, numEmotes);
+            if (strWidth > textWidth && !line.empty()) {
+                lines.push_back(line);
+                line = emojiStr;
+            } else {
+                line += emojiStr;
+            }
+            i += emojiLen;
+            continue;
+        }
+
         if (ch == '\n') {
             if (!word.empty())
                 line += word;
@@ -1376,23 +1423,25 @@ std::vector<std::string> generateLines(OLEDDisplay *display, const char *headerS
                 lines.push_back(line);
             line.clear();
             word.clear();
+            ++i;
         } else if (ch == ' ') {
             line += word + ' ';
             word.clear();
+            ++i;
         } else {
-            word += ch;
+            // Regular character - accumulate into word
+            size_t charLen = utf8CharLen(static_cast<uint8_t>(ch));
+            word.append(messageBuf + i, charLen);
+
             std::string test = line + word;
-#if defined(OLED_UA) || defined(OLED_RU)
-            uint16_t strWidth = display->getStringWidth(test.c_str(), test.length(), true);
-#else
-            uint16_t strWidth = display->getStringWidth(test.c_str());
-#endif
+            int strWidth = getRenderedLineWidth(display, test, emotes, numEmotes);
             if (strWidth > textWidth) {
                 if (!line.empty())
                     lines.push_back(line);
                 line = word;
                 word.clear();
             }
+            i += charLen;
         }
     }
 
