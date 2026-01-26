@@ -368,21 +368,41 @@ void PetModule::updateMood()
         currentMood = PetMood::NEUTRAL;
         currentAnimation = PetAnimation::IDLE;
     } else if (wantsToPlay && currentAnimation != PetAnimation::PLAYING) {
-        // Random play!
+        // Random play - pick a happy animation
         currentMood = PetMood::HAPPY;
-        currentAnimation = PetAnimation::PLAYING;
+        uint8_t playChoice = rand() % 3;
+        if (playChoice == 0) {
+            currentAnimation = PetAnimation::PLAYING;
+        } else if (playChoice == 1) {
+            currentAnimation = PetAnimation::DANCING;
+        } else {
+            currentAnimation = PetAnimation::HOPPING;
+        }
     } else if (messagesReceived > 0 && (now - lastActivityTime) < 10000) {
         // Recently received a message - eating animation
         currentMood = PetMood::HAPPY;
         currentAnimation = PetAnimation::EATING;
     } else if (messagesReceived > 0 && (messagesReceived % 10) < 3) {
-        // Normal activity - walking around
+        // Normal activity - walking or hopping around
         currentMood = PetMood::NEUTRAL;
-        currentAnimation = PetAnimation::WALKING;
-    } else {
-        // Good activity
+        currentAnimation = (rand() % 3 == 0) ? PetAnimation::HOPPING : PetAnimation::WALKING;
+    } else if (timeSinceActivity > 30000 && (rand() % 10 == 0)) {
+        // Getting a bit bored - might yawn or scratch
+        currentMood = PetMood::NEUTRAL;
+        currentAnimation = (rand() % 2 == 0) ? PetAnimation::YAWNING : PetAnimation::SCRATCHING;
+    } else if (happiness > 70 && (rand() % 8 == 0)) {
+        // Happy and curious - sniff around
         currentMood = PetMood::HAPPY;
-        currentAnimation = PetAnimation::IDLE;
+        currentAnimation = PetAnimation::SNIFFING;
+    } else {
+        // Good activity - variety of idle animations
+        currentMood = PetMood::HAPPY;
+        uint8_t idleChoice = rand() % 4;
+        if (idleChoice == 0) {
+            currentAnimation = PetAnimation::HAPPY_BOUNCE;
+        } else {
+            currentAnimation = PetAnimation::IDLE;
+        }
     }
 }
 
@@ -392,7 +412,7 @@ void PetModule::updateAnimation()
     // petX ranges from 0 to 20, which gets scaled to actual walk range in drawFrame
     const int16_t maxWalkX = 20;
 
-    if (currentAnimation == PetAnimation::WALKING) {
+    if (currentAnimation == PetAnimation::WALKING || currentAnimation == PetAnimation::HOPPING) {
         petX += petDirection * 2; // Move 2 units per frame for visible movement
         // Bounce within the range
         if (petX >= maxWalkX) {
@@ -449,6 +469,16 @@ uint8_t PetModule::getFrameCount() const
         return PET_THINKING_FRAMES;
     case PetAnimation::SCARED:
         return PET_SCARED_FRAMES;
+    case PetAnimation::HOPPING:
+        return PET_HOPPING_FRAMES;
+    case PetAnimation::SCRATCHING:
+        return PET_SCRATCHING_FRAMES;
+    case PetAnimation::DANCING:
+        return PET_DANCING_FRAMES;
+    case PetAnimation::YAWNING:
+        return PET_YAWNING_FRAMES;
+    case PetAnimation::SNIFFING:
+        return PET_SNIFFING_FRAMES;
     default:
         return 1;
     }
@@ -600,8 +630,6 @@ void PetModule::drawPet(OLEDDisplay *display, int16_t x, int16_t y)
         break;
     case PetAnimation::LOOKING:
         frameData = petLookingFrames[animationFrame % PET_LOOKING_FRAMES];
-        // Flip direction based on frame for looking left/right
-        flipHorizontal = (animationFrame % 2 == 1);
         break;
     case PetAnimation::WAVING:
         frameData = petWavingFrames[animationFrame % PET_WAVING_FRAMES];
@@ -611,6 +639,25 @@ void PetModule::drawPet(OLEDDisplay *display, int16_t x, int16_t y)
         break;
     case PetAnimation::SCARED:
         frameData = petScaredFrames[animationFrame % PET_SCARED_FRAMES];
+        break;
+    case PetAnimation::HOPPING:
+        frameData = petHoppingFrames[animationFrame % PET_HOPPING_FRAMES];
+        // Flip when moving left
+        flipHorizontal = (petDirection < 0);
+        break;
+    case PetAnimation::SCRATCHING:
+        frameData = petScratchingFrames[animationFrame % PET_SCRATCHING_FRAMES];
+        break;
+    case PetAnimation::DANCING:
+        frameData = petDancingFrames[animationFrame % PET_DANCING_FRAMES];
+        break;
+    case PetAnimation::YAWNING:
+        frameData = petYawningFrames[animationFrame % PET_YAWNING_FRAMES];
+        break;
+    case PetAnimation::SNIFFING:
+        frameData = petSniffingFrames[animationFrame % PET_SNIFFING_FRAMES];
+        // Alternate direction while sniffing
+        flipHorizontal = (animationFrame % 2 == 1);
         break;
     }
 

@@ -52,7 +52,13 @@ enum class PetAnimation {
     LOOKING,  // For position/navigation
     WAVING,   // For meeting nodes
     THINKING, // For telemetry data
-    SCARED    // For alerts/admin messages
+    SCARED,   // For alerts/admin messages
+    // Additional variety animations
+    HOPPING,    // Happy hopping/skipping
+    SCRATCHING, // Idle scratching
+    DANCING,    // Happy dancing
+    YAWNING,    // Bored/neutral yawning
+    SNIFFING    // Curious sniffing around
 };
 
 // Last received message types
