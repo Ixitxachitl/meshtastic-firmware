@@ -140,16 +140,16 @@ const char *getSafeNodeName(OLEDDisplay *display, meshtastic_NodeInfoLite *node,
         const size_t beforeLen = std::strlen(nodeName);
 
         // Trim from the end one UTF-8 character at a time until it fits
-        // Use getStringWidthWithEmotes to properly account for emoji rendering
+        // Use simple getStringWidth for performance - emoji width differences are minor
         size_t bytePos = beforeLen;
-        int currentWidth = graphics::MessageRenderer::getStringWidthWithEmotes(display, std::string(nodeName), emotes, numEmotes);
+        int currentWidth = display->getStringWidth(nodeName);
         while (bytePos > 0 && currentWidth > availWidth) {
             // Back up to the start of the previous UTF-8 character
             do {
                 --bytePos;
             } while (bytePos > 0 && (nodeName[bytePos] & 0xC0) == 0x80); // Skip continuation bytes
             nodeName[bytePos] = '\0';
-            currentWidth = graphics::MessageRenderer::getStringWidthWithEmotes(display, std::string(nodeName), emotes, numEmotes);
+            currentWidth = display->getStringWidth(nodeName);
         }
 
         // If truncated, append "..." (respect buffer size)
