@@ -495,6 +495,9 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
 
+    // Determine scale factor based on screen resolution
+    const uint8_t scale = graphics::isHighResolution() ? 2 : 1;
+
     // Draw header
     const char *titleStr = "Chirpy";
     graphics::drawCommonHeader(display, x, y, titleStr);
@@ -504,40 +507,53 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     const int16_t screenH = display->getHeight();
     const int16_t contentY = y + FONT_HEIGHT_SMALL; // Tighter - right below header
 
+    // Scaled dimensions
+    const int16_t moodSize = 16 * scale;
+    const int16_t petW = PET_FRAME_WIDTH * scale;
+    const int16_t petH = PET_FRAME_HEIGHT * scale;
+    const int16_t lvlIconW = lvl_icon_width * scale;
+    const int16_t lvlIconH = lvl_icon_height * scale;
+
     // Mood indicator in top-left corner (below header)
-    drawMoodIndicator(display, x + 1, contentY + 3); // Move down 3 pixels
+    drawMoodIndicator(display, x + 1, contentY + 3 * scale, scale);
 
     // Show level under mood indicator - icon with number below
     int16_t lvlIconX = x + 3;
-    display->drawXbm(lvlIconX, contentY + 3 + 16, lvl_icon_width, lvl_icon_height, lvl_icon);
+    int16_t lvlIconY = contentY + 3 * scale + moodSize;
+    if (scale > 1) {
+        drawXbmScaled(display, lvlIconX, lvlIconY, lvl_icon_width, lvl_icon_height, lvl_icon, scale);
+    } else {
+        display->drawXbm(lvlIconX, contentY + 3 + 16, lvl_icon_width, lvl_icon_height, lvl_icon);
+    }
     char lvlBuf[8];
     snprintf(lvlBuf, sizeof(lvlBuf), "%u", level);
     display->setFont(FONT_SMALL);
     display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->drawString(lvlIconX + (lvl_icon_width / 2), contentY + 16 + lvl_icon_height, lvlBuf);
+    int16_t lvlNumY = (scale > 1) ? (lvlIconY + lvlIconH + 1) : (contentY + 3 + 16 + lvl_icon_height - 3);
+    display->drawString(lvlIconX + (lvlIconW / 2), lvlNumY, lvlBuf);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
 
     // Pet area - wider box for pet
-    const int16_t petBoxW = PET_FRAME_WIDTH + 32; // Wider box (another 10% wider)
-    const int16_t petBoxH = PET_FRAME_HEIGHT + 4;
-    const int16_t petBoxX = x + 18;       // After mood indicator
-    const int16_t petBoxY = contentY + 3; // Move down 2 more pixels
+    const int16_t petBoxW = petW + 32 * scale;
+    const int16_t petBoxH = petH + 4 * scale;
+    const int16_t petBoxX = x + 18 * scale; // After mood indicator
+    const int16_t petBoxY = contentY + 3 * scale;
 
     // Draw pet area with border
-    drawPetArea(display, petBoxX, petBoxY, petBoxW, petBoxH);
+    drawPetArea(display, petBoxX, petBoxY, petBoxW, petBoxH, scale);
 
     // Draw the pet at petX position within box
-    int16_t walkRange = petBoxW - PET_FRAME_WIDTH - 4;          // Available walk space
-    int16_t petDrawX = petBoxX + 2 + ((petX * walkRange) / 20); // Scale petX (0-20) to walkRange
-    int16_t petDrawY = petBoxY + (petBoxH - PET_FRAME_HEIGHT) / 2;
-    drawPet(display, petDrawX, petDrawY);
+    int16_t walkRange = petBoxW - petW - 4 * scale; // Available walk space
+    int16_t petDrawX = petBoxX + 2 * scale + ((petX * walkRange) / 20);
+    int16_t petDrawY = petBoxY + (petBoxH - petH) / 2;
+    drawPet(display, petDrawX, petDrawY, scale);
 
     // Stats on the right side - align with top of pet box
-    const int16_t statsX = petBoxX + petBoxW + 3;
-    drawStats(display, statsX, petBoxY - 3, screenW - statsX); // Move up 2px more
+    const int16_t statsX = petBoxX + petBoxW + 3 * scale;
+    drawStats(display, statsX, petBoxY - 3, screenW - statsX);
 
     // Row below pet and stats: Last packet type with hops and time ago
-    int16_t lastY = petBoxY + petBoxH - 2; // Move up 2px
+    int16_t lastY = petBoxY + petBoxH + (scale > 1 ? 2 : -2);
     char buf[48];
 
     // Format time ago
@@ -562,13 +578,39 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     int16_t barW = (screenW / 2) - 3;
 
     // Heart for happiness, EXP for experience
-    drawStatusBarWithIcon(display, x, barY, barW, happiness, true); // heart
+    drawStatusBarWithIcon(display, x, barY, barW, happiness, true, scale);
     uint8_t xpPercent = (xpForNextLevel > 0) ? (uint8_t)((experience * 100) / xpForNextLevel) : 0;
-    drawStatusBarWithIcon(display, x + barW + 4, barY, barW, xpPercent, false); // exp
+    drawStatusBarWithIcon(display, x + barW + 4, barY, barW, xpPercent, false, scale);
 }
 
-// Helper function to draw XBM bitmap flipped horizontally
-void PetModule::drawXbmFlipped(OLEDDisplay *display, int16_t x, int16_t y, int16_t width, int16_t height, const uint8_t *xbm)
+// Helper function to draw XBM bitmap scaled 2x (for high-resolution screens)
+void PetModule::drawXbmScaled(OLEDDisplay *display, int16_t x, int16_t y, int16_t width, int16_t height, const uint8_t *xbm,
+                              uint8_t scale)
+{
+    int16_t bytesPerRow = (width + 7) / 8;
+
+    for (int16_t row = 0; row < height; row++) {
+        for (int16_t col = 0; col < width; col++) {
+            int16_t byteIndex = row * bytesPerRow + (col / 8);
+            int16_t bitIndex = col % 8;
+            uint8_t byte = pgm_read_byte(&xbm[byteIndex]);
+            bool pixel = (byte >> bitIndex) & 1;
+
+            if (pixel) {
+                // Draw scaled pixel (scale x scale block)
+                for (uint8_t sy = 0; sy < scale; sy++) {
+                    for (uint8_t sx = 0; sx < scale; sx++) {
+                        display->setPixel(x + col * scale + sx, y + row * scale + sy);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Helper function to draw XBM bitmap flipped horizontally (with optional scale)
+void PetModule::drawXbmFlipped(OLEDDisplay *display, int16_t x, int16_t y, int16_t width, int16_t height, const uint8_t *xbm,
+                               uint8_t scale)
 {
     // XBM format: each row is stored as bytes, LSB first within each byte
     // We need to draw pixels from right to left for horizontal flip
@@ -585,15 +627,19 @@ void PetModule::drawXbmFlipped(OLEDDisplay *display, int16_t x, int16_t y, int16
             bool pixel = (byte >> bitIndex) & 1;
 
             if (pixel) {
-                // Draw at flipped X position
-                int16_t flippedX = x + (width - 1 - col);
-                display->setPixel(flippedX, y + row);
+                // Draw at flipped X position with scale
+                int16_t flippedCol = width - 1 - col;
+                for (uint8_t sy = 0; sy < scale; sy++) {
+                    for (uint8_t sx = 0; sx < scale; sx++) {
+                        display->setPixel(x + flippedCol * scale + sx, y + row * scale + sy);
+                    }
+                }
             }
         }
     }
 }
 
-void PetModule::drawPet(OLEDDisplay *display, int16_t x, int16_t y)
+void PetModule::drawPet(OLEDDisplay *display, int16_t x, int16_t y, uint8_t scale)
 {
     const uint8_t *frameData = nullptr;
     bool flipHorizontal = false;
@@ -667,7 +713,9 @@ void PetModule::drawPet(OLEDDisplay *display, int16_t x, int16_t y)
 
     if (frameData) {
         if (flipHorizontal) {
-            drawXbmFlipped(display, x, y, PET_FRAME_WIDTH, PET_FRAME_HEIGHT, frameData);
+            drawXbmFlipped(display, x, y, PET_FRAME_WIDTH, PET_FRAME_HEIGHT, frameData, scale);
+        } else if (scale > 1) {
+            drawXbmScaled(display, x, y, PET_FRAME_WIDTH, PET_FRAME_HEIGHT, frameData, scale);
         } else {
             display->drawXbm(x, y, PET_FRAME_WIDTH, PET_FRAME_HEIGHT, frameData);
         }
@@ -707,26 +755,40 @@ void PetModule::drawStats(OLEDDisplay *display, int16_t x, int16_t y, int16_t wi
     display->drawString(x, y + lineH * 2, buf);
 }
 
-void PetModule::drawStatusBarWithIcon(OLEDDisplay *display, int16_t x, int16_t y, int16_t width, uint8_t percent, bool isHeart)
+void PetModule::drawStatusBarWithIcon(OLEDDisplay *display, int16_t x, int16_t y, int16_t width, uint8_t percent, bool isHeart,
+                                      uint8_t scale)
 {
     // Draw tiny icon (heart or exp)
     int16_t iconW = 8;
-    const int16_t iconH = 6;
+    int16_t iconH = 6;
 
     if (isHeart) {
         // Draw tiny heart icon (hand-crafted 8x6)
         static const uint8_t tiny_heart[] PROGMEM = {0b01101100, 0b11111110, 0b11111110, 0b01111100, 0b00111000, 0b00010000};
-        display->drawXbm(x, y, iconW, iconH, tiny_heart);
+        if (scale > 1) {
+            drawXbmScaled(display, x, y, iconW, iconH, tiny_heart, scale);
+        } else {
+            display->drawXbm(x, y, iconW, iconH, tiny_heart);
+        }
     } else {
         // Draw EXP icon (10x6)
         iconW = exp_icon_width;
-        display->drawXbm(x, y, exp_icon_width, exp_icon_height, exp_icon);
+        iconH = exp_icon_height;
+        if (scale > 1) {
+            drawXbmScaled(display, x, y, iconW, iconH, exp_icon, scale);
+        } else {
+            display->drawXbm(x, y, iconW, iconH, exp_icon);
+        }
     }
 
-    // Draw thin bar (5 pixels tall)
-    int16_t barX = x + iconW + 2;
-    int16_t barW = width - iconW - 2;
-    int16_t barH = 5;
+    // Scale icon dimensions for bar positioning
+    int16_t scaledIconW = iconW * scale;
+    int16_t scaledIconH = iconH * scale;
+
+    // Draw thin bar (scaled height)
+    int16_t barX = x + scaledIconW + 2 * scale;
+    int16_t barW = width - scaledIconW - 2 * scale;
+    int16_t barH = 5 * scale;
 
     display->drawRect(barX, y, barW, barH);
 
@@ -745,10 +807,13 @@ void PetModule::drawStatusBarWithIcon(OLEDDisplay *display, int16_t x, int16_t y
     }
 }
 
-void PetModule::drawPetArea(OLEDDisplay *display, int16_t x, int16_t y, int16_t width, int16_t height)
+void PetModule::drawPetArea(OLEDDisplay *display, int16_t x, int16_t y, int16_t width, int16_t height, uint8_t scale)
 {
-    // Draw a box for the pet area
+    // Draw a box for the pet area (double thick for high resolution)
     display->drawRect(x, y, width, height);
+    if (scale > 1) {
+        display->drawRect(x + 1, y + 1, width - 2, height - 2);
+    }
 
     // Remove corner pixels for rounded effect
     display->setColor(BLACK);
@@ -756,10 +821,21 @@ void PetModule::drawPetArea(OLEDDisplay *display, int16_t x, int16_t y, int16_t 
     display->setPixel(x + width - 1, y);
     display->setPixel(x, y + height - 1);
     display->setPixel(x + width - 1, y + height - 1);
+    if (scale > 1) {
+        // Additional corner cleanup for double-thick border
+        display->setPixel(x + 1, y);
+        display->setPixel(x, y + 1);
+        display->setPixel(x + width - 2, y);
+        display->setPixel(x + width - 1, y + 1);
+        display->setPixel(x, y + height - 2);
+        display->setPixel(x + 1, y + height - 1);
+        display->setPixel(x + width - 1, y + height - 2);
+        display->setPixel(x + width - 2, y + height - 1);
+    }
     display->setColor(WHITE);
 }
 
-void PetModule::drawMoodIndicator(OLEDDisplay *display, int16_t x, int16_t y)
+void PetModule::drawMoodIndicator(OLEDDisplay *display, int16_t x, int16_t y, uint8_t scale)
 {
 #ifndef EXCLUDE_EMOJI
     // Draw mood indicator using emote bitmaps
@@ -806,7 +882,11 @@ void PetModule::drawMoodIndicator(OLEDDisplay *display, int16_t x, int16_t y)
     }
 
     if (moodBitmap) {
-        display->drawXbm(x, y, moodWidth, moodHeight, moodBitmap);
+        if (scale > 1) {
+            drawXbmScaled(display, x, y, moodWidth, moodHeight, moodBitmap, scale);
+        } else {
+            display->drawXbm(x, y, moodWidth, moodHeight, moodBitmap);
+        }
     }
 #else
     // Fallback to ASCII if emojis are excluded

@@ -169,12 +169,16 @@ class PetModule : public MeshModule, public Observable<const UIFrameEvent *>, pr
     void updateHappiness();
 
 #if HAS_SCREEN
-    void drawPet(OLEDDisplay *display, int16_t x, int16_t y);
-    void drawXbmFlipped(OLEDDisplay *display, int16_t x, int16_t y, int16_t width, int16_t height, const uint8_t *xbm);
+    void drawPet(OLEDDisplay *display, int16_t x, int16_t y, uint8_t scale = 1);
+    void drawXbmScaled(OLEDDisplay *display, int16_t x, int16_t y, int16_t width, int16_t height, const uint8_t *xbm,
+                       uint8_t scale);
+    void drawXbmFlipped(OLEDDisplay *display, int16_t x, int16_t y, int16_t width, int16_t height, const uint8_t *xbm,
+                        uint8_t scale = 1);
     void drawStats(OLEDDisplay *display, int16_t x, int16_t y, int16_t width);
-    void drawMoodIndicator(OLEDDisplay *display, int16_t x, int16_t y);
-    void drawStatusBarWithIcon(OLEDDisplay *display, int16_t x, int16_t y, int16_t width, uint8_t percent, bool isHeart);
-    void drawPetArea(OLEDDisplay *display, int16_t x, int16_t y, int16_t width, int16_t height);
+    void drawMoodIndicator(OLEDDisplay *display, int16_t x, int16_t y, uint8_t scale = 1);
+    void drawStatusBarWithIcon(OLEDDisplay *display, int16_t x, int16_t y, int16_t width, uint8_t percent, bool isHeart,
+                               uint8_t scale = 1);
+    void drawPetArea(OLEDDisplay *display, int16_t x, int16_t y, int16_t width, int16_t height, uint8_t scale = 1);
     const char *getMessageTypeName(LastMessageType type);
 #endif
 };
