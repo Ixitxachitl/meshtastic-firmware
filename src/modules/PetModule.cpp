@@ -505,13 +505,17 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     const int16_t contentY = y + FONT_HEIGHT_SMALL; // Tighter - right below header
 
     // Mood indicator in top-left corner (below header)
-    drawMoodIndicator(display, x, contentY + 5); // Move down 3 pixels
+    drawMoodIndicator(display, x + 1, contentY + 3); // Move down 3 pixels
 
-    // Show level under mood indicator
+    // Show level under mood indicator - icon with number below
+    int16_t lvlIconX = x + 3;
+    display->drawXbm(lvlIconX, contentY + 3 + 16, lvl_icon_width, lvl_icon_height, lvl_icon);
     char lvlBuf[8];
-    snprintf(lvlBuf, sizeof(lvlBuf), "Lv%u", level);
+    snprintf(lvlBuf, sizeof(lvlBuf), "%u", level);
     display->setFont(FONT_SMALL);
-    display->drawString(x, contentY + 3 + 17, lvlBuf);
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    display->drawString(lvlIconX + (lvl_icon_width / 2), contentY + 16 + lvl_icon_height, lvlBuf);
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
 
     // Pet area - wider box for pet
     const int16_t petBoxW = PET_FRAME_WIDTH + 32; // Wider box (another 10% wider)

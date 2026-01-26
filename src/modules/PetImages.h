@@ -17,6 +17,11 @@ const uint8_t exp_icon_width = 10;
 const uint8_t exp_icon_height = 6;
 const uint8_t exp_icon[] PROGMEM = {0x03, 0x00, 0x01, 0x00, 0xAB, 0x03, 0x91, 0x02, 0xAB, 0x03, 0x80, 0x00};
 
+// Level icon (12x5 pixels)
+const uint8_t lvl_icon_width = 12;
+const uint8_t lvl_icon_height = 5;
+const uint8_t lvl_icon[] PROGMEM = {0x00, 0x00, 0x02, 0x01, 0x52, 0x01, 0x26, 0x05, 0x00, 0x00};
+
 // Frame dimensions (adjust to match your artwork)
 #define PET_FRAME_WIDTH 24
 #define PET_FRAME_HEIGHT 24
