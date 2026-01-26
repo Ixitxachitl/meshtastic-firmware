@@ -61,6 +61,9 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "mesh/Channels.h"
 #include "mesh/generated/meshtastic/deviceonly.pb.h"
 #include "modules/ExternalNotificationModule.h"
+#if !MESHTASTIC_EXCLUDE_PET
+#include "modules/PetModule.h"
+#endif
 #include "modules/Telemetry/EnvironmentTelemetry.h"
 #include "modules/TextMessageModule.h"
 #include "modules/WaypointModule.h"
@@ -1176,7 +1179,12 @@ void Screen::setFrames(FrameFocus focus)
                 fsi.positions.environment = numframes;
             }
 
-            indicatorIcons.push_back(icon_module);
+#if !MESHTASTIC_EXCLUDE_PET
+            if (m && m == petModule)
+                indicatorIcons.push_back(icon_pet);
+            else
+#endif
+                indicatorIcons.push_back(icon_module);
             numframes++;
         }
     }

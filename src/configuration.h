@@ -500,6 +500,15 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define MESHTASTIC_EXCLUDE_SERIAL 1
 #define MESHTASTIC_EXCLUDE_POWERSTRESS 1
 #define MESHTASTIC_EXCLUDE_ADMIN 1
+#define MESHTASTIC_EXCLUDE_PET 1
+#endif
+
+// By default, exclude the pet module unless explicitly enabled
+// To enable, add -DMESHTASTIC_INCLUDE_PET=1 to build flags or define in variant.h
+#ifndef MESHTASTIC_INCLUDE_PET
+#ifndef MESHTASTIC_EXCLUDE_PET
+#define MESHTASTIC_EXCLUDE_PET 1
+#endif
 #endif
 
 // // Turn off wifi even if HW supports wifi (webserver relies on wifi and is also disabled)

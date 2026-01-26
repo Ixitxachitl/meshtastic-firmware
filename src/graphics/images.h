@@ -256,6 +256,18 @@ const uint8_t icon_module[] PROGMEM = {
     0b00011000  // ░░░██░░░
 };
 
+// 🐾 Pet module icon (simple face)
+const uint8_t icon_pet[] PROGMEM = {
+    0b00111100, // ░░████░░
+    0b01000010, // ░█░░░░█░
+    0b10000001, // █░░░░░░█
+    0b10100101, // █░█░░█░█
+    0b10100101, // █░█░░█░█
+    0b10000001, // █░░░░░░█
+    0b10000001, // █░░░░░░█
+    0b01111110  // ░██████░
+};
+
 #define mute_symbol_width 8
 #define mute_symbol_height 8
 const uint8_t mute_symbol[] PROGMEM = {
