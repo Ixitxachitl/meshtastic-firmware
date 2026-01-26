@@ -616,7 +616,9 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
         else // if the newline wasn't found, then pull string length from strlen
             lineLengths[lineCount] = strlen(lines[lineCount]);
 
-        lineWidths[lineCount] = display->getStringWidth(lines[lineCount], lineLengths[lineCount], true);
+        // Use emoji-aware width calculation for proper centering
+        std::string lineStr(lines[lineCount], lineLengths[lineCount]);
+        lineWidths[lineCount] = MessageRenderer::getStringWidthWithEmotes(display, lineStr, emotes, numEmotes);
 
         // Consider extra width for signal bars on lines that contain "Signal:"
         uint16_t potentialWidth = lineWidths[lineCount];
@@ -750,7 +752,7 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
                 const int barHeightStep = 2;
                 const int gap = 6;
 
-                int textWidth = display->getStringWidth(lineBuffer, strlen(lineBuffer), true);
+                int textWidth = MessageRenderer::getStringWidthWithEmotes(display, std::string(lineBuffer), emotes, numEmotes);
                 int barsWidth = totalBars * barWidth + (totalBars - 1) * barSpacing + gap;
                 int totalWidth = textWidth + barsWidth;
                 int groupStartX = boxLeft + (boxWidth - totalWidth) / 2;

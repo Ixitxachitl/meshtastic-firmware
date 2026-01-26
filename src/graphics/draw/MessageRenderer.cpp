@@ -1594,14 +1594,15 @@ void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const mesht
             snprintf(senderName, sizeof(senderName), "(%08x)", packet.from);
         }
 
-        // Truncate to fit banner width, respecting UTF-8 boundaries
+        // Truncate to fit banner width, respecting UTF-8 and emoji boundaries
         int availWidth = display->getWidth() - ((currentResolution == ScreenResolution::High) ? 40 : 20);
         if (availWidth < 0)
             availWidth = 0;
 
         size_t origLen = strlen(senderName);
         size_t bytePos = origLen;
-        while (bytePos > 0 && display->getStringWidth(senderName) > availWidth) {
+        // Use emoji-aware width calculation
+        while (bytePos > 0 && getRenderedLineWidth(display, std::string(senderName), emotes, numEmotes) > availWidth) {
             // Back up to the start of the previous UTF-8 character
             do {
                 --bytePos;
