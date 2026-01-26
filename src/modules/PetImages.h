@@ -8,40 +8,9 @@
  * PetImages.h - Animation frames for the PetModule
  *
  * This file contains XBM bitmap data for the animated pet.
- * You can replace these placeholder images with your own custom artwork.
+ * You can replace these images with your own custom artwork.
  *
- * XBM FORMAT:
- * - Each frame should be PET_FRAME_WIDTH x PET_FRAME_HEIGHT pixels
- * - Data is stored in XBM format (1 bit per pixel, LSB first)
- * - Use tools like GIMP or online converters to create XBM data
- *
- * TO ADD CUSTOM IMAGES:
- * 1. Create your pixel art at 24x24 pixels (or adjust PET_FRAME_WIDTH/HEIGHT)
- * 2. Export as XBM or use an image-to-XBM converter
- * 3. Copy the hex array data here, replacing the placeholder frames
- * 4. Ensure the frame count constants match your number of frames
- *
- * ANIMATION TIPS:
- * - IDLE: 2-4 frames of subtle breathing/blinking
- * - WALK: 4-6 frames of walking cycle
- * - HAPPY: 2-4 frames of bouncing/wagging
- * - SLEEP: 2-3 frames with "Zzz" effect
- * - EXCITED: 3-4 frames of jumping/spinning
  */
-
-// Tiny battery icons (8x6 pixels) for status bar
-const uint8_t tiny_battery_100_width = 8;
-const uint8_t tiny_battery_100_height = 6;
-
-const uint8_t tiny_battery_100[] PROGMEM = {0b01111110, 0b11111111, 0b10111111, 0b10111111, 0b11111111, 0b01111110};
-
-const uint8_t tiny_battery_75[] PROGMEM = {0b01111110, 0b11111111, 0b10011111, 0b10011111, 0b11111111, 0b01111110};
-
-const uint8_t tiny_battery_50[] PROGMEM = {0b01111110, 0b11111111, 0b10001111, 0b10001111, 0b11111111, 0b01111110};
-
-const uint8_t tiny_battery_25[] PROGMEM = {0b01111110, 0b11111111, 0b10000111, 0b10000111, 0b11111111, 0b01111110};
-
-const uint8_t tiny_battery_0[] PROGMEM = {0b01111110, 0b11111111, 0b10000011, 0b10000011, 0b11111111, 0b01111110};
 
 // EXP icon (10x6 pixels) for XP bar
 const uint8_t exp_icon_width = 10;
