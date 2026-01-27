@@ -15,9 +15,9 @@
  * - Bytes 0-3: Frequency in Hz (little-endian uint32_t)
  * - Bytes 4-7: Duration in ms (little-endian uint32_t)
  *
- * Default I2C address is 0x3C (same as Modulino Buzzer).
- * Note: This conflicts with SSD1306 displays, so only enable when
- * HAS_I2C_BUZZER is defined in variant.h and no OLED is on that address.
+ * Supported addresses (auto-detected when HAS_I2C_BUZZER is defined):
+ * - 0x1E: Modulino Buzzer default address (distinguished from HMC5883L via probe)
+ * - 0x3C: Modulino Buzzer pinstrap address (distinguished from OLED via probe)
  */
 class I2CBuzzer
 {
@@ -49,6 +49,28 @@ class I2CBuzzer
     void noTone();
 
     /**
+     * @brief Start playing an RTTTL melody (non-blocking)
+     * @param rtttlSong RTTTL format string
+     */
+    void beginRtttl(const char *rtttlSong);
+
+    /**
+     * @brief Continue playing the current RTTTL melody
+     * Call this frequently from the main loop
+     */
+    void playRtttl();
+
+    /**
+     * @brief Stop RTTTL playback
+     */
+    void stopRtttl();
+
+    /**
+     * @brief Check if RTTTL is currently playing
+     */
+    bool isRtttlPlaying() const { return rtttlPlaying; }
+
+    /**
      * @brief Get the I2C address being used
      */
     uint8_t getAddress() const { return address; }
@@ -58,10 +80,25 @@ class I2CBuzzer
     uint8_t address;
     bool available;
 
+    // RTTTL playback state
+    const char *rtttlBuffer;
+    const char *rtttlFirstNote;
+    bool rtttlPlaying;
+    uint8_t rtttlDefaultDur;
+    uint8_t rtttlDefaultOct;
+    int rtttlBpm;
+    long rtttlWholenote;
+    unsigned long rtttlNoteEndTime;
+
     /**
      * @brief Write the 8-byte tone command to the buzzer
      */
     bool writeCommand(uint32_t frequency, uint32_t duration);
+
+    /**
+     * @brief Parse and play the next RTTTL note
+     */
+    void rtttlNextNote();
 };
 
 // Global instance (initialized in main.cpp after I2C scan)

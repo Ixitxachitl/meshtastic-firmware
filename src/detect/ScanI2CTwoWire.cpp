@@ -95,6 +95,29 @@ ScanI2C::DeviceType ScanI2CTwoWire::probeOLED(ScanI2C::DeviceAddress addr) const
 
     return o_probe;
 }
+
+bool ScanI2CTwoWire::probeHMC5883L(ScanI2C::DeviceAddress addr) const
+{
+    // HMC5883L has identification registers at 0x0A, 0x0B, 0x0C
+    // They should return 'H' (0x48), '4' (0x34), '3' (0x33)
+    TwoWire *i2cBus = fetchI2CBus(addr);
+
+    i2cBus->beginTransmission(addr.address);
+    i2cBus->write((uint8_t)0x0A); // ID Register A
+    if (i2cBus->endTransmission(false) != 0)
+        return false;
+
+    if (i2cBus->requestFrom((int)addr.address, 3) != 3)
+        return false;
+
+    uint8_t idA = i2cBus->read();
+    uint8_t idB = i2cBus->read();
+    uint8_t idC = i2cBus->read();
+
+    // HMC5883L returns 'H', '4', '3' (0x48, 0x34, 0x33)
+    return (idA == 0x48 && idB == 0x34 && idC == 0x33);
+}
+
 uint16_t ScanI2CTwoWire::getRegisterValue(const ScanI2CTwoWire::RegisterLocation &registerLocation,
                                           ScanI2CTwoWire::ResponseWidth responseWidth, bool zeropad = false) const
 {
@@ -206,19 +229,19 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
         type = NONE;
         if (err == 0) {
             switch (addr.address) {
-#ifdef HAS_I2C_BUZZER
-            // I2C Buzzer detection - only when explicitly enabled via HAS_I2C_BUZZER
-            // Default address 0x3E avoids conflict with OLEDs
-            case I2C_BUZZER_ADDR:
-                // For Modulino-compatible buzzers, we can't really probe without making noise
-                // Just assume if something responds at this address and HAS_I2C_BUZZER is set, it's a buzzer
-                logFoundDevice("I2C Buzzer", (uint8_t)addr.address);
-                type = I2C_BUZZER;
-                break;
-#endif
             case SSD1306_ADDRESS_H:
             case SSD1306_ADDRESS_L:
+#ifdef HAS_I2C_BUZZER
+                // 0x3C can be either an OLED or a Modulino Buzzer (pinstrap address)
+                // Probe for OLED first - if nothing detected, assume buzzer
                 type = probeOLED(addr);
+                if (type == SCREEN_UNKNOWN) {
+                    logFoundDevice("I2C Buzzer", (uint8_t)addr.address);
+                    type = I2C_BUZZER;
+                }
+#else
+                type = probeOLED(addr);
+#endif
                 break;
 
 #ifdef RV3028_RTC
@@ -486,9 +509,19 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
                 break;
             }
             case HMC5883L_ADDR: {
-                logFoundDevice("HMC5883L", (uint8_t)addr.address);
-                type = HMC5883L;
-                ScanI2C::setMagOnPort(port, true);
+                // 0x1E can be HMC5883L magnetometer or Modulino Buzzer (default address)
+                // Probe for HMC5883L ID registers to distinguish
+                if (probeHMC5883L(addr)) {
+                    logFoundDevice("HMC5883L", (uint8_t)addr.address);
+                    type = HMC5883L;
+                    ScanI2C::setMagOnPort(port, true);
+                }
+#ifdef HAS_I2C_BUZZER
+                else {
+                    logFoundDevice("I2C Buzzer", (uint8_t)addr.address);
+                    type = I2C_BUZZER;
+                }
+#endif
                 break;
             }
 #ifdef HAS_QMA6100P
