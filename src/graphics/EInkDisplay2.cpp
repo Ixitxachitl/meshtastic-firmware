@@ -144,11 +144,12 @@ bool EInkDisplay::connect()
     // ThinkNode M1 has a hardware dimmable backlight. Start enabled
     digitalWrite(PIN_EINK_EN, HIGH);
 #else
-    digitalWrite(PIN_EINK_EN, LOW);
+    // Respect user's saved brightness preference
+    digitalWrite(PIN_EINK_EN, uiconfig.screen_brightness > 0 ? HIGH : LOW);
 #endif
 #endif
 
-#if defined(TTGO_T_ECHO) || defined(ELECROW_ThinkNode_M1) || defined(T_ECHO_LITE) || defined(TTGO_T_ECHO_PLUS)
+#if defined(TTGO_T_ECHO) || defined(TTGO_T_ECHO_PLUS) || defined(ELECROW_ThinkNode_M1) || defined(T_ECHO_LITE)
     {
         auto lowLevel = new EINK_DISPLAY_MODEL(PIN_EINK_CS, PIN_EINK_DC, PIN_EINK_RES, PIN_EINK_BUSY, SPI1);
 

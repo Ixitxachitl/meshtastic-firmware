@@ -77,6 +77,18 @@ class MessageStore
 {
   public:
     explicit MessageStore(const std::string &label);
+    
+    // Returns true if there are changes in RAM that should be saved to flash.
+    static bool isPersistDirty();
+    // Mark RAM state as needing persistence (call on any mutation).
+    static void markPersistDirty();
+    // Mark RAM state as clean after a successful save.
+    static void markPersistClean();
+    
+    // NEW: Lossless compaction of the text pool.
+    // Re-packs message texts into a fresh pool, updates offsets, and swaps pools.
+    // Use only after you've persisted (or when you’re sure you won't power-cycle mid-op).
+    void compactPoolLossless();
 
     // Live RAM methods (always current, used by UI and runtime)
     void addLiveMessage(StoredMessage &&msg);
@@ -117,8 +129,11 @@ class MessageStore
     // Allocate text into pool (used by sender-side code)
     static uint16_t storeText(const char *src, size_t len);
 
-    // Used when loading from flash to rebuild the text pool
-    static uint16_t rebuildTextFromFlash(const char *src, size_t len);
+    // Iterate newest -> oldest without allocating
+    template <typename F>
+    void forEachNewestFirst(F&& fn) const {
+        for (auto it = liveMessages.rbegin(); it != liveMessages.rend(); ++it) fn(*it);
+    }
 
   private:
     std::deque<StoredMessage> liveMessages; // Single in-RAM message buffer (also used for persistence)

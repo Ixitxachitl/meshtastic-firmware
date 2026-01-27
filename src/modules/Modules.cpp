@@ -109,6 +109,10 @@
 #include "modules/DropzoneModule.h"
 #endif
 
+#if !MESHTASTIC_EXCLUDE_PET
+#include "modules/PetModule.h"
+#endif
+
 /**
  * Create module instances here.  If you are adding a new module, you must 'new' it here (or somewhere else)
  */
@@ -250,7 +254,7 @@ void setupModules()
 #if HAS_TELEMETRY && HAS_SENSOR && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
     if (moduleConfig.has_telemetry &&
         (moduleConfig.telemetry.environment_measurement_enabled || moduleConfig.telemetry.environment_screen_enabled)) {
-        new EnvironmentTelemetryModule();
+        environmentTelemetryModule = new EnvironmentTelemetryModule();
     }
 #if HAS_TELEMETRY && HAS_SENSOR && !MESHTASTIC_EXCLUDE_AIR_QUALITY_SENSOR
     if (moduleConfig.has_telemetry &&
@@ -300,6 +304,9 @@ void setupModules()
 #endif
 #if !MESHTASTIC_EXCLUDE_EXTERNALNOTIFICATION
     externalNotificationModule = new ExternalNotificationModule();
+#endif
+#if !MESHTASTIC_EXCLUDE_PET
+    petModule = new PetModule();
 #endif
 #if !MESHTASTIC_EXCLUDE_RANGETEST && !MESHTASTIC_EXCLUDE_GPS
     if (moduleConfig.has_range_test && moduleConfig.range_test.enabled)

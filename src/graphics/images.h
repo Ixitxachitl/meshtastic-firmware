@@ -18,6 +18,40 @@ const uint8_t imgUSB_HighResolution[] PROGMEM = {0x00, 0x3e, 0xf8, 0x80, 0x43, 0
                                                  0x61, 0x42, 0xfc, 0xc0, 0xc2, 0xff, 0x80, 0x43, 0xf8, 0x00, 0x3e, 0xf8};
 const uint8_t imgPower[] PROGMEM = {0x40, 0x40, 0x40, 0x58, 0x48, 0x08, 0x08, 0x08,
                                     0x1C, 0x22, 0x22, 0x41, 0x7F, 0x22, 0x22, 0x22};
+
+// Tiny icons for USE_TINY_FONT
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+const unsigned char usb_tiny[] PROGMEM = {0x18, 0x0E, 0x19, 0x01};
+const int usb_tiny_width = 5;
+const int usb_tiny_height = 4;
+
+// Battery levels for tiny font (8 pixels wide, 6 pixels tall)
+const unsigned char tiny_battery_100[] PROGMEM = {0x00, 0x3E, 0x7E, 0x7E, 0x3E, 0x00};
+const int tiny_battery_100_width = 8;
+const int tiny_battery_100_height = 6;
+
+const unsigned char tiny_battery_75[] PROGMEM = {0x00, 0x3E, 0x5E, 0x5E, 0x3E, 0x00};
+const int tiny_battery_75_width = 8;
+const int tiny_battery_75_height = 6;
+
+const unsigned char tiny_battery_50[] PROGMEM = {0x00, 0x3E, 0x4E, 0x4E, 0x3E, 0x00};
+const int tiny_battery_50_width = 8;
+const int tiny_battery_50_height = 6;
+
+const unsigned char tiny_battery_25[] PROGMEM = {0x00, 0x3E, 0x46, 0x46, 0x3E, 0x00};
+const int tiny_battery_25_width = 8;
+const int tiny_battery_25_height = 6;
+
+const unsigned char tiny_battery_0[] PROGMEM = {0x00, 0x3E, 0x42, 0x42, 0x3E, 0x00};
+const int tiny_battery_0_width = 8;
+const int tiny_battery_0_height = 6;
+
+// Legacy single battery icon (kept for compatibility)
+const unsigned char battery_tiny[] PROGMEM = {0x0F, 0x1F, 0x1F, 0x0F};
+const int battery_tiny_width = 5;
+const int battery_tiny_height = 4;
+#endif
+
 const uint8_t imgUser[] PROGMEM = {0x3C, 0x42, 0x99, 0xA5, 0xA5, 0x99, 0x42, 0x3C};
 const uint8_t imgPositionEmpty[] PROGMEM = {0x20, 0x30, 0x28, 0x24, 0x42, 0xFF};
 const uint8_t imgPositionSolid[] PROGMEM = {0x20, 0x30, 0x38, 0x3C, 0x7E, 0xFF};
@@ -82,6 +116,11 @@ static const unsigned char mail[] PROGMEM = {
     0b10000001, 0b00, // Edges
     0b11111111, 0b00  // Bottom line
 };
+
+// Compact envelope icon for M5STACK_UNITC6L (7x6)
+const int envelope_width = 7;
+const int envelope_height = 6;
+static const unsigned char envelope[] PROGMEM = {0x7F, 0x63, 0x55, 0x49, 0x41, 0x7F};
 
 // 📬 Mail / Message
 const uint8_t icon_mail[] PROGMEM = {
@@ -217,6 +256,18 @@ const uint8_t icon_module[] PROGMEM = {
     0b00011000  // ░░░██░░░
 };
 
+// 🐾 Pet module icon (simple face)
+const uint8_t icon_pet[] PROGMEM = {
+    0b00111100, // ░░████░░
+    0b01000010, // ░█░░░░█░
+    0b10000001, // █░░░░░░█
+    0b10100101, // █░█░░█░█
+    0b10100101, // █░█░░█░█
+    0b10000001, // █░░░░░░█
+    0b10000001, // █░░░░░░█
+    0b01111110  // ░██████░
+};
+
 #define mute_symbol_width 8
 #define mute_symbol_height 8
 const uint8_t mute_symbol[] PROGMEM = {
@@ -312,7 +363,12 @@ const uint8_t chirpy_small[] = {0x7f, 0x41, 0x55, 0x55, 0x55, 0x55, 0x41, 0x7f};
 #define connection_icon_height 5
 const uint8_t connection_icon[] = {0x36, 0x41, 0x5D, 0x41, 0x36};
 
-#ifdef M5STACK_UNITC6L
+// Compass ball icon (8x8)
+const unsigned char compass_ball[] PROGMEM = {0x3C, 0x42, 0xBD, 0x81, 0xC3, 0xBD, 0x42, 0x3C};
+const int compass_ball_width = 8;
+const int compass_ball_height = 8;
+
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
 #include "img/icon_small.xbm"
 #else
 #include "img/icon.xbm"

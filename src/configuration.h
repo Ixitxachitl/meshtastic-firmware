@@ -265,6 +265,15 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define LP5562_ADDR 0x30
 
 // -----------------------------------------------------------------------------
+// I2C Buzzer (Modulino-compatible)
+// Default address 0x3E avoids conflict with common OLEDs (0x3C/0x3D)
+// Can be overridden in variant.h if your buzzer uses a different address
+// -----------------------------------------------------------------------------
+#ifndef I2C_BUZZER_ADDR
+#define I2C_BUZZER_ADDR 0x3E
+#endif
+
+// -----------------------------------------------------------------------------
 // Security
 // -----------------------------------------------------------------------------
 
@@ -491,6 +500,15 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define MESHTASTIC_EXCLUDE_SERIAL 1
 #define MESHTASTIC_EXCLUDE_POWERSTRESS 1
 #define MESHTASTIC_EXCLUDE_ADMIN 1
+#define MESHTASTIC_EXCLUDE_PET 1
+#endif
+
+// By default, exclude the pet module unless explicitly enabled
+// To enable, add -DMESHTASTIC_INCLUDE_PET=1 to build flags or define in variant.h
+#ifndef MESHTASTIC_INCLUDE_PET
+#ifndef MESHTASTIC_EXCLUDE_PET
+#define MESHTASTIC_EXCLUDE_PET 1
+#endif
 #endif
 
 // // Turn off wifi even if HW supports wifi (webserver relies on wifi and is also disabled)

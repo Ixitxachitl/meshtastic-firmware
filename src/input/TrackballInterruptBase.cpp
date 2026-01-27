@@ -77,6 +77,13 @@ int32_t TrackballInterruptBase::runOnce()
         uint32_t pressDuration = millis() - pressStartTime;
         bool buttonStillPressed = false;
 
+#if defined(T_DECK)
+        buttonStillPressed = (this->action == TB_ACTION_PRESSED);
+        // Clear action after checking so next cycle will detect button release
+        if (buttonStillPressed) {
+            this->action = TB_ACTION_NONE;
+        }
+#else
         buttonStillPressed = !digitalRead(_pinPress);
 
         if (!buttonStillPressed) {
