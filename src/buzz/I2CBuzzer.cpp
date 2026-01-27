@@ -9,8 +9,6 @@
 // Global instance
 I2CBuzzer *i2cBuzzer = nullptr;
 
-I2CBuzzer::I2CBuzzer() : wire(nullptr), address(0), available(false) {}
-
 bool I2CBuzzer::begin(const ScanI2C::FoundDevice &device)
 {
     if (device.type != ScanI2C::DeviceType::I2C_BUZZER) {
@@ -80,6 +78,199 @@ bool I2CBuzzer::writeCommand(uint32_t frequency, uint32_t duration)
     }
 
     return true;
+}
+
+// ==============================================================================
+// RTTTL Playback Implementation
+// ==============================================================================
+
+I2CBuzzer::I2CBuzzer()
+    : wire(nullptr), address(0), available(false), rtttlBuffer(nullptr), rtttlFirstNote(nullptr), rtttlPlaying(false),
+      rtttlDefaultDur(4), rtttlDefaultOct(5), rtttlBpm(63), rtttlWholenote(0), rtttlNoteEndTime(0)
+{
+}
+
+void I2CBuzzer::beginRtttl(const char *rtttlSong)
+{
+    if (!available || !rtttlSong) {
+        return;
+    }
+
+    rtttlBuffer = rtttlSong;
+    rtttlPlaying = true;
+    rtttlNoteEndTime = 0;
+    rtttlDefaultDur = 4;
+    rtttlDefaultOct = 5;
+    rtttlBpm = 63;
+
+    // Parse RTTTL header: name:d=N,o=N,b=NNN:notes
+
+    // Skip name
+    while (*rtttlBuffer && *rtttlBuffer != ':')
+        rtttlBuffer++;
+    if (*rtttlBuffer)
+        rtttlBuffer++; // skip ':'
+
+    // Parse default duration
+    if (*rtttlBuffer == 'd') {
+        rtttlBuffer += 2; // skip "d="
+        int num = 0;
+        while (*rtttlBuffer && isdigit(*rtttlBuffer)) {
+            num = (num * 10) + (*rtttlBuffer++ - '0');
+        }
+        if (num > 0)
+            rtttlDefaultDur = num;
+        if (*rtttlBuffer == ',')
+            rtttlBuffer++;
+    }
+
+    // Parse default octave
+    if (*rtttlBuffer == 'o') {
+        rtttlBuffer += 2; // skip "o="
+        int num = *rtttlBuffer++ - '0';
+        if (num >= 3 && num <= 7)
+            rtttlDefaultOct = num;
+        if (*rtttlBuffer == ',')
+            rtttlBuffer++;
+    }
+
+    // Parse BPM
+    if (*rtttlBuffer == 'b') {
+        rtttlBuffer += 2; // skip "b="
+        int num = 0;
+        while (*rtttlBuffer && isdigit(*rtttlBuffer)) {
+            num = (num * 10) + (*rtttlBuffer++ - '0');
+        }
+        if (num > 0)
+            rtttlBpm = num;
+        if (*rtttlBuffer == ':')
+            rtttlBuffer++;
+    }
+
+    // Calculate whole note duration in ms
+    rtttlWholenote = (60 * 1000L / rtttlBpm) * 4;
+    rtttlFirstNote = rtttlBuffer;
+
+    LOG_DEBUG("I2CBuzzer: RTTTL started, bpm=%d, wholenote=%ld", rtttlBpm, rtttlWholenote);
+
+    // Play first note immediately
+    if (rtttlBuffer && *rtttlBuffer != '\0') {
+        rtttlNextNote();
+    }
+}
+
+void I2CBuzzer::playRtttl()
+{
+    if (!rtttlPlaying || !available) {
+        return;
+    }
+
+    unsigned long now = millis();
+
+    // Wait for current note to finish
+    if (now < rtttlNoteEndTime) {
+        return;
+    }
+
+    // Check if song is finished
+    if (!rtttlBuffer || *rtttlBuffer == '\0') {
+        rtttlPlaying = false;
+        return;
+    }
+
+    rtttlNextNote();
+}
+
+void I2CBuzzer::rtttlNextNote()
+{
+    // Parse duration
+    int num = 0;
+    while (*rtttlBuffer && isdigit(*rtttlBuffer)) {
+        num = (num * 10) + (*rtttlBuffer++ - '0');
+    }
+
+    long duration;
+    if (num > 0)
+        duration = rtttlWholenote / num;
+    else
+        duration = rtttlWholenote / rtttlDefaultDur;
+
+    // Parse note
+    uint8_t note = 0;
+    switch (*rtttlBuffer) {
+    case 'c':
+        note = 1;
+        break;
+    case 'd':
+        note = 3;
+        break;
+    case 'e':
+        note = 5;
+        break;
+    case 'f':
+        note = 6;
+        break;
+    case 'g':
+        note = 8;
+        break;
+    case 'a':
+        note = 10;
+        break;
+    case 'b':
+        note = 12;
+        break;
+    case 'p':
+    default:
+        note = 0;
+        break;
+    }
+    if (*rtttlBuffer)
+        rtttlBuffer++;
+
+    // Check for sharp
+    if (*rtttlBuffer == '#') {
+        note++;
+        rtttlBuffer++;
+    }
+
+    // Check for dotted note (before octave)
+    if (*rtttlBuffer == '.') {
+        duration += duration / 2;
+        rtttlBuffer++;
+    }
+
+    // Parse octave
+    uint8_t scale = rtttlDefaultOct;
+    if (*rtttlBuffer && isdigit(*rtttlBuffer)) {
+        scale = *rtttlBuffer++ - '0';
+    }
+
+    // Check for dotted note (after octave)
+    if (*rtttlBuffer == '.') {
+        duration += duration / 2;
+        rtttlBuffer++;
+    }
+
+    // Skip comma
+    if (*rtttlBuffer == ',')
+        rtttlBuffer++;
+
+    // Calculate frequency and play
+    if (note > 0) {
+        // RTTTL note formula
+        unsigned int frequency = (unsigned int)(261.63 * pow(2.0, (note - 1) / 12.0 + (scale - 4)));
+        tone(frequency, duration);
+    }
+    // For rests (note == 0), we just wait without playing
+
+    // Schedule next note after this one finishes
+    rtttlNoteEndTime = millis() + duration;
+}
+
+void I2CBuzzer::stopRtttl()
+{
+    rtttlPlaying = false;
+    noTone();
 }
 
 #endif // !MESHTASTIC_EXCLUDE_I2C
