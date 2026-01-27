@@ -759,19 +759,20 @@ void PetModule::drawStatusBarWithIcon(OLEDDisplay *display, int16_t x, int16_t y
                                       uint8_t scale)
 {
     // Draw tiny icon (heart or exp)
-    int16_t iconW = 8;
-    int16_t iconH = 6;
+    int16_t iconW;
+    int16_t iconH;
 
     if (isHeart) {
-        // Draw tiny heart icon (hand-crafted 8x6)
-        static const uint8_t tiny_heart[] PROGMEM = {0b01101100, 0b11111110, 0b11111110, 0b01111100, 0b00111000, 0b00010000};
+        // Draw tiny heart icon
+        iconW = heart_icon_width;
+        iconH = heart_icon_height;
         if (scale > 1) {
-            drawXbmScaled(display, x, y, iconW, iconH, tiny_heart, scale);
+            drawXbmScaled(display, x, y, iconW, iconH, heart_icon, scale);
         } else {
-            display->drawXbm(x, y, iconW, iconH, tiny_heart);
+            display->drawXbm(x, y, iconW, iconH, heart_icon);
         }
     } else {
-        // Draw EXP icon (10x6)
+        // Draw EXP icon
         iconW = exp_icon_width;
         iconH = exp_icon_height;
         if (scale > 1) {

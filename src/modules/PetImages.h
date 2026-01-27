@@ -12,6 +12,11 @@
  *
  */
 
+// Heart icon (8x6 pixels) for happiness bar
+const uint8_t heart_icon_width = 8;
+const uint8_t heart_icon_height = 6;
+const uint8_t heart_icon[] PROGMEM = {0b01101100, 0b11111110, 0b11111110, 0b01111100, 0b00111000, 0b00010000};
+
 // EXP icon (10x6 pixels) for XP bar
 const uint8_t exp_icon_width = 10;
 const uint8_t exp_icon_height = 6;
