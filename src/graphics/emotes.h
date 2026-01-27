@@ -397,6 +397,10 @@ extern const unsigned char cold_face[] PROGMEM;
 #define antenna_bars_width 16
 #define antenna_bars_height 16
 extern const unsigned char antenna_bars[] PROGMEM;
+
+#define tower_width 16
+#define tower_height 16
+extern const unsigned char tower[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
 } // namespace graphics

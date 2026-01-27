@@ -1575,7 +1575,7 @@ void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const mesht
 
         // Banner logic - respect use_long_node_name setting like NodeListRenderer
         const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(packet.from);
-        char senderName[48] = "?";
+        char senderName[48] = "";
         if (node && node->has_user) {
             // Respect the same long/short name setting as NodeListRenderer
             const char *preferred = config.display.use_long_node_name ? node->user.long_name : node->user.short_name;
