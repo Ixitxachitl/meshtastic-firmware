@@ -1325,6 +1325,20 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                     display->setPixel(headerX + px, underlineY);
                 }
 
+                // Draw underline just under header text
+                int underlineY = lineY + FONT_HEIGHT_SMALL;
+
+                int underlineW = w;
+                int maxW = rightEdge - headerX;
+                if (maxW < 0)
+                    maxW = 0;
+                if (underlineW > maxW)
+                    underlineW = maxW;
+
+                for (int px = 0; px < underlineW; ++px) {
+                    display->setPixel(headerX + px, underlineY);
+                }
+
                 // Draw ACK/NACK mark for our own messages
                 if (isMine[i]) {
                     int markX = headerX - 10;
@@ -1575,7 +1589,7 @@ void handleNewMessage(OLEDDisplay *display, const StoredMessage &sm, const mesht
 
         // Banner logic - respect use_long_node_name setting like NodeListRenderer
         const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(packet.from);
-        char senderName[48] = "";
+        char senderName[48] = "?";
         if (node && node->has_user) {
             // Respect the same long/short name setting as NodeListRenderer
             const char *preferred = config.display.use_long_node_name ? node->user.long_name : node->user.short_name;
