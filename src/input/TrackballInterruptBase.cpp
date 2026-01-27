@@ -107,6 +107,7 @@ int32_t TrackballInterruptBase::runOnce()
             }
             this->action = TB_ACTION_PRESSED_LONG;
         }
+#endif
     }
 
     if (directionDetected && directionStartTime > 0) {

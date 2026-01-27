@@ -1325,20 +1325,6 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                     display->setPixel(headerX + px, underlineY);
                 }
 
-                // Draw underline just under header text
-                int underlineY = lineY + FONT_HEIGHT_SMALL;
-
-                int underlineW = w;
-                int maxW = rightEdge - headerX;
-                if (maxW < 0)
-                    maxW = 0;
-                if (underlineW > maxW)
-                    underlineW = maxW;
-
-                for (int px = 0; px < underlineW; ++px) {
-                    display->setPixel(headerX + px, underlineY);
-                }
-
                 // Draw ACK/NACK mark for our own messages
                 if (isMine[i]) {
                     int markX = headerX - 10;
