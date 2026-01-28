@@ -556,6 +556,15 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     int16_t lastY = petBoxY + petBoxH + (scale > 1 ? 2 : -2);
     char buf[48];
 
+    // Calculate icon scale based on font size
+    uint8_t iconScale = (FONT_HEIGHT_SMALL >= 16) ? 2 : 1;
+    int16_t iconW = last_icon_width * iconScale;
+    int16_t iconH = last_icon_height * iconScale;
+    int16_t textOffset = iconW + 2;
+
+    // Draw last icon
+    drawXbmScaled(display, x, lastY + (FONT_HEIGHT_SMALL - iconH) / 2, last_icon_width, last_icon_height, last_icon, iconScale);
+
     // Format time ago
     char timeBuf[8];
     if (lastMessageTime > 0) {
@@ -567,11 +576,11 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         } else {
             snprintf(timeBuf, sizeof(timeBuf), "%luh", (unsigned long)(elapsed / 3600));
         }
-        snprintf(buf, sizeof(buf), "Last: %s [%u] (%s)", getMessageTypeName(lastMessageType), lastMessageHops, timeBuf);
+        snprintf(buf, sizeof(buf), "%s [%u] (%s)", getMessageTypeName(lastMessageType), lastMessageHops, timeBuf);
     } else {
-        snprintf(buf, sizeof(buf), "Last: %s", getMessageTypeName(lastMessageType));
+        snprintf(buf, sizeof(buf), "%s", getMessageTypeName(lastMessageType));
     }
-    display->drawString(x, lastY, buf);
+    display->drawString(x + textOffset, lastY, buf);
 
     // Status bars directly below Last
     int16_t barY = lastY + FONT_HEIGHT_SMALL - 1;
@@ -730,29 +739,39 @@ void PetModule::drawStats(OLEDDisplay *display, int16_t x, int16_t y, int16_t wi
     char buf[24];
     int16_t lineH = FONT_HEIGHT_SMALL - 4; // Very tight spacing
 
-    // Row 1: Messages received
-    snprintf(buf, sizeof(buf), "M:%lu", (unsigned long)messagesReceived);
-    display->drawString(x, y, buf);
+    // Calculate icon scale based on font size
+    uint8_t iconScale = (FONT_HEIGHT_SMALL >= 16) ? 2 : 1;
+    int16_t iconW = messages_icon_width * iconScale;
+    int16_t iconH = messages_icon_height * iconScale;
+    int16_t textOffset = iconW + 2; // Gap between icon and text
 
-    // Row 2: Nodes: active/total
+    // Row 1: Messages received (envelope icon) - icon shifted down 1 pixel
+    drawXbmScaled(display, x, y + 1 + (lineH - iconH) / 2, messages_icon_width, messages_icon_height, messages_icon, iconScale);
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)messagesReceived);
+    display->drawString(x + textOffset, y, buf);
+
+    // Row 2: Nodes: active/total (nodes icon) - icon shifted down 1 pixel
     uint16_t activeNodes = 0;
     uint16_t totalNodes = 0;
     if (nodeStatus) {
         activeNodes = nodeStatus->getNumOnline();
         totalNodes = nodeStatus->getNumTotal();
     }
-    snprintf(buf, sizeof(buf), "N:%u/%u", activeNodes, totalNodes);
-    display->drawString(x, y + lineH, buf);
+    drawXbmScaled(display, x, y + 1 + lineH + (lineH - iconH) / 2, nodes_icon_width, nodes_icon_height, nodes_icon, iconScale);
+    snprintf(buf, sizeof(buf), "%u/%u", activeNodes, totalNodes);
+    display->drawString(x + textOffset, y + lineH, buf);
 
-    // Row 3: Uptime
+    // Row 3: Uptime (clock icon) - icon shifted down 1 pixel
     uint32_t uptimeHours = getUptimeMinutes() / 60;
     uint32_t uptimeMins = getUptimeMinutes() % 60;
+    drawXbmScaled(display, x, y + 1 + lineH * 2 + (lineH - iconH) / 2, uptime_icon_width, uptime_icon_height, uptime_icon,
+                  iconScale);
     if (uptimeHours > 0) {
-        snprintf(buf, sizeof(buf), "Up:%luh%02lum", (unsigned long)uptimeHours, (unsigned long)uptimeMins);
+        snprintf(buf, sizeof(buf), "%luh%02lum", (unsigned long)uptimeHours, (unsigned long)uptimeMins);
     } else {
-        snprintf(buf, sizeof(buf), "Up:%lum", (unsigned long)uptimeMins);
+        snprintf(buf, sizeof(buf), "%lum", (unsigned long)uptimeMins);
     }
-    display->drawString(x, y + lineH * 2, buf);
+    display->drawString(x + textOffset, y + lineH * 2, buf);
 }
 
 void PetModule::drawStatusBarWithIcon(OLEDDisplay *display, int16_t x, int16_t y, int16_t width, uint8_t percent, bool isHeart,

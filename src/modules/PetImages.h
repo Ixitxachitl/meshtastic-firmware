@@ -50,6 +50,23 @@ const uint8_t lvl_icon_width = 12;
 const uint8_t lvl_icon_height = 5;
 const uint8_t lvl_icon[] PROGMEM = {0x00, 0x00, 0x02, 0x01, 0x52, 0x01, 0x26, 0x05, 0x00, 0x00};
 
+// Status bar icons (8x8, scalable)
+const uint8_t messages_icon_width = 8;
+const uint8_t messages_icon_height = 8;
+const uint8_t messages_icon[] PROGMEM = {0x00, 0xFF, 0xC3, 0xA5, 0x99, 0x81, 0x81, 0xFF};
+
+const uint8_t nodes_icon_width = 8;
+const uint8_t nodes_icon_height = 8;
+const uint8_t nodes_icon[] PROGMEM = {0x3C, 0x42, 0x99, 0xBD, 0xBD, 0x99, 0x42, 0x3C};
+
+const uint8_t last_icon_width = 8;
+const uint8_t last_icon_height = 8;
+const uint8_t last_icon[] PROGMEM = {0x18, 0x24, 0xB2, 0x35, 0x35, 0xB2, 0x24, 0x18};
+
+const uint8_t uptime_icon_width = 8;
+const uint8_t uptime_icon_height = 8;
+const uint8_t uptime_icon[] PROGMEM = {0x3C, 0x42, 0x91, 0x91, 0x8D, 0x81, 0x42, 0x3C};
+
 // ============================================================================
 // PETIDLE - Idle/breathing animation
 // ============================================================================
