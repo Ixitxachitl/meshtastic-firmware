@@ -296,6 +296,8 @@ static const uint8_t SS = 0xFF; // Not used, dummy value
 // Battery / ADC already defined above
 #define HAS_RTC 1
 
+#define SERIAL_PRINT_PORT 0
+
 #ifdef __cplusplus
 }
 #endif
