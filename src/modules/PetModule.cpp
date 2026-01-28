@@ -529,7 +529,7 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     snprintf(lvlBuf, sizeof(lvlBuf), "%u", level);
     display->setFont(FONT_SMALL);
     display->setTextAlignment(TEXT_ALIGN_CENTER);
-    int16_t lvlNumY = (scale > 1) ? (lvlIconY + lvlIconH + 1) : (contentY + 3 + 16 + lvl_icon_height - 3);
+    int16_t lvlNumY = (scale > 1) ? (lvlIconY + lvlIconH - 1) : (contentY + 3 + 16 + lvl_icon_height - 3);
     display->drawString(lvlIconX + (lvlIconW / 2), lvlNumY, lvlBuf);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
 
@@ -580,10 +580,10 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     } else {
         snprintf(buf, sizeof(buf), "%s", getMessageTypeName(lastMessageType));
     }
-    display->drawString(x + textOffset, lastY, buf);
+    display->drawString(x + textOffset, lastY + (iconScale > 1 ? 2 : 0), buf);
 
-    // Status bars directly below Last
-    int16_t barY = lastY + FONT_HEIGHT_SMALL - 1;
+    // Status bars directly below Last (with extra padding for high-res)
+    int16_t barY = lastY + FONT_HEIGHT_SMALL - 1 + (iconScale > 1 ? 4 : 0);
     int16_t barW = (screenW / 2) - 3;
 
     // Heart for happiness, EXP for experience
@@ -737,18 +737,19 @@ void PetModule::drawStats(OLEDDisplay *display, int16_t x, int16_t y, int16_t wi
     display->setTextAlignment(TEXT_ALIGN_LEFT);
 
     char buf[24];
-    int16_t lineH = FONT_HEIGHT_SMALL - 4; // Very tight spacing
-
     // Calculate icon scale based on font size
     uint8_t iconScale = (FONT_HEIGHT_SMALL >= 16) ? 2 : 1;
+    // Add extra padding between rows for high-res screens
+    int16_t lineH = FONT_HEIGHT_SMALL - 4 + (iconScale > 1 ? 4 : 0);
     int16_t iconW = messages_icon_width * iconScale;
     int16_t iconH = messages_icon_height * iconScale;
-    int16_t textOffset = iconW + 2; // Gap between icon and text
+    int16_t textOffset = iconW + 2;                // Gap between icon and text
+    int16_t textYOffset = (iconScale > 1) ? 2 : 0; // Move text down 2px for high-res
 
     // Row 1: Messages received (envelope icon) - icon shifted down 1 pixel
     drawXbmScaled(display, x, y + 1 + (lineH - iconH) / 2, messages_icon_width, messages_icon_height, messages_icon, iconScale);
     snprintf(buf, sizeof(buf), "%lu", (unsigned long)messagesReceived);
-    display->drawString(x + textOffset, y, buf);
+    display->drawString(x + textOffset, y + textYOffset, buf);
 
     // Row 2: Nodes: active/total (nodes icon) - icon shifted down 1 pixel
     uint16_t activeNodes = 0;
@@ -759,7 +760,7 @@ void PetModule::drawStats(OLEDDisplay *display, int16_t x, int16_t y, int16_t wi
     }
     drawXbmScaled(display, x, y + 1 + lineH + (lineH - iconH) / 2, nodes_icon_width, nodes_icon_height, nodes_icon, iconScale);
     snprintf(buf, sizeof(buf), "%u/%u", activeNodes, totalNodes);
-    display->drawString(x + textOffset, y + lineH, buf);
+    display->drawString(x + textOffset, y + lineH + textYOffset, buf);
 
     // Row 3: Uptime (clock icon) - icon shifted down 1 pixel
     uint32_t uptimeHours = getUptimeMinutes() / 60;
@@ -771,7 +772,7 @@ void PetModule::drawStats(OLEDDisplay *display, int16_t x, int16_t y, int16_t wi
     } else {
         snprintf(buf, sizeof(buf), "%lum", (unsigned long)uptimeMins);
     }
-    display->drawString(x + textOffset, y + lineH * 2, buf);
+    display->drawString(x + textOffset, y + lineH * 2 + textYOffset, buf);
 }
 
 void PetModule::drawStatusBarWithIcon(OLEDDisplay *display, int16_t x, int16_t y, int16_t width, uint8_t percent, bool isHeart,
