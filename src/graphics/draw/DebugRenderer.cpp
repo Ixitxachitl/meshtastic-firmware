@@ -457,7 +457,11 @@ void drawLoRaFocused(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x,
 
     int chUtil_x = (currentResolution == ScreenResolution::High) ? display->getStringWidth(chUtil) + 10
                                                                  : display->getStringWidth(chUtil) + 5;
+#if defined(USE_TINY_FONT)
+    int chUtil_y = getTextPositions(display)[line] - 1;
+#else
     int chUtil_y = getTextPositions(display)[line] + 3;
+#endif
 
     int chutil_bar_width = (currentResolution == ScreenResolution::High) ? 100 : 50;
     int chutil_bar_height = (currentResolution == ScreenResolution::High) ? 12 : 7;

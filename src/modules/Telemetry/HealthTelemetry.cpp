@@ -123,7 +123,7 @@ void HealthTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *
     display->drawString(x, y, headerStr);
 
     char last_temp[16];
-    if (moduleConfig.telemetry.environment_display_fahrenheit) {
+    if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
         snprintf(last_temp, sizeof(last_temp), "%.0f°F",
                  UnitConversions::CelsiusToFahrenheit(lastMeasurement.variant.health_metrics.temperature));
     } else {

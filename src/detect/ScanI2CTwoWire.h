@@ -57,6 +57,8 @@ class ScanI2CTwoWire : public ScanI2C
 
     DeviceType probeOLED(ScanI2C::DeviceAddress) const;
 
+    bool probeHMC5883L(ScanI2C::DeviceAddress) const;
+
     static void logFoundDevice(const char *device, uint8_t address);
 };
 #endif

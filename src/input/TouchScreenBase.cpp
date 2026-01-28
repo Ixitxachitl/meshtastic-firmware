@@ -1,8 +1,16 @@
 #include "TouchScreenBase.h"
+#include "graphics/SharedUIDisplay.h"           // for isMessagesScreenActive()
+#include "graphics/draw/NotificationRenderer.h" // for isOverlayBannerShowing()
 #include "main.h"
 
-#if defined(RAK14014) && !defined(MESHTASTIC_EXCLUDE_CANNEDMESSAGES)
+#if !defined(MESHTASTIC_EXCLUDE_CANNEDMESSAGES) && !defined(MESHTASTIC_EXCLUDE_SCREEN)
 #include "modules/CannedMessageModule.h"
+extern CannedMessageModule *cannedMessageModule;
+#endif
+
+#if HAS_TELEMETRY && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
+#include "modules/Telemetry/EnvironmentTelemetry.h"
+extern EnvironmentTelemetryModule *environmentTelemetryModule;
 #endif
 
 #ifndef TIME_LONG_PRESS
@@ -39,6 +47,7 @@ int32_t TouchScreenBase::runOnce()
 {
     TouchEvent e;
     e.touchEvent = static_cast<char>(TOUCH_ACTION_NONE);
+    e.deltaY = 0;
 
     // process touch events
     int16_t x, y;
@@ -47,6 +56,46 @@ int32_t TouchScreenBase::runOnce()
         touched = false;
     if (touched) {
         this->setInterval(20);
+
+        // Fire continuous scroll drag events while touching and moving
+        // ONLY on screens that support scrolling (messages screen, emote picker, env telemetry) AND when no overlay/menu is
+        // active
+#if HAS_SCREEN
+        bool overlayShowing = graphics::NotificationRenderer::isOverlayBannerShowing();
+
+        // Check if we're on a screen that supports scrolling
+        bool messagesActive = graphics::isMessagesScreenActive();
+        bool envTelemetryActive = graphics::isEnvTelemetryScreenActive();
+#if !defined(MESHTASTIC_EXCLUDE_CANNEDMESSAGES) && !defined(MESHTASTIC_EXCLUDE_SCREEN)
+        bool emotePickerActive = (cannedMessageModule && cannedMessageModule->isEmotePickerActive());
+        bool cannedMessageActive = (cannedMessageModule && cannedMessageModule->isCannedMessageActive());
+#else
+        bool emotePickerActive = false;
+        bool cannedMessageActive = false;
+#endif
+        // Enable scroll drag for: messages (when canned not active), emote picker, or env telemetry screen
+        bool canScrollDrag =
+            ((messagesActive && !cannedMessageActive) || emotePickerActive || envTelemetryActive) && !overlayShowing;
+
+        // If overlay opened during this touch gesture, immediately stop scrolling
+        if (_isScrolling && overlayShowing) {
+            _isScrolling = false;
+        }
+#else
+        bool canScrollDrag = false;
+#endif
+        if (_touchedOld && canScrollDrag) {
+            int16_t dy = y - _last_y;
+            // Minimum movement threshold to avoid jitter
+            if (abs(dy) >= 2) {
+                _isScrolling = true; // Mark that we're actively scrolling
+                e.touchEvent = static_cast<char>(TOUCH_ACTION_SCROLL_DRAG);
+                e.x = x;
+                e.y = y;
+                e.deltaY = dy;
+            }
+        }
+
         _last_x = x;
         _last_y = y;
     }
@@ -57,6 +106,10 @@ int32_t TouchScreenBase::runOnce()
             _start = millis();
             _first_x = x;
             _first_y = y;
+
+            // Always clear scrolling state when starting a new touch
+            // This ensures we start fresh and don't carry over state from previous gestures
+            _isScrolling = false;
         } else {
             _state = TOUCH_EVENT_CLEARED;
             time_t duration = millis() - _start;
@@ -70,9 +123,17 @@ int32_t TouchScreenBase::runOnce()
             uint16_t adx = abs(dx);
             uint16_t ady = abs(dy);
 
-            // swipe horizontal
+            // Check if overlay/menu is currently active
+#if HAS_SCREEN
+            bool overlayActive = graphics::NotificationRenderer::isOverlayBannerShowing();
+#else
+            bool overlayActive = false;
+#endif
+
+            // swipe horizontal - always allow LEFT/RIGHT regardless of _isScrolling
             if (adx > ady && adx > TOUCH_THRESHOLD_X) {
-                if (0 > dx) { // swipe right to left
+                _isScrolling = false; // Reset state
+                if (0 > dx) {         // swipe right to left
                     e.touchEvent = static_cast<char>(TOUCH_ACTION_LEFT);
                     LOG_DEBUG("action SWIPE: right to left");
                 } else { // swipe left to right
@@ -80,33 +141,52 @@ int32_t TouchScreenBase::runOnce()
                     LOG_DEBUG("action SWIPE: left to right");
                 }
             }
-            // swipe vertical
+            // swipe vertical - suppress if we were scrolling and no overlay active
             else if (ady > adx && ady > TOUCH_THRESHOLD_Y) {
-                if (0 > dy) { // swipe bottom to top
-                    e.touchEvent = static_cast<char>(TOUCH_ACTION_UP);
-                    LOG_DEBUG("action SWIPE: bottom to top");
-                } else { // swipe top to bottom
-                    e.touchEvent = static_cast<char>(TOUCH_ACTION_DOWN);
-                    LOG_DEBUG("action SWIPE: top to bottom");
+                LOG_DEBUG("Vertical swipe detected: dy=%d, ady=%d, _isScrolling=%d, overlayActive=%d", dy, ady, _isScrolling,
+                          overlayActive);
+                // If we were scrolling on messages screen AND no overlay is open,
+                // suppress UP/DOWN (scroll drag already handled the gesture)
+                if (_isScrolling && !overlayActive) {
+                    _isScrolling = false; // Reset state
+                    _tapped = false;      // Clear tap state
+                    // Don't generate UP/DOWN - already handled by scroll drag
+                } else {
+                    _isScrolling = false; // Reset state
+                    if (0 > dy) {         // swipe bottom to top
+                        e.touchEvent = static_cast<char>(TOUCH_ACTION_UP);
+                        LOG_DEBUG("action SWIPE: bottom to top");
+                    } else { // swipe top to bottom
+                        e.touchEvent = static_cast<char>(TOUCH_ACTION_DOWN);
+                        LOG_DEBUG("action SWIPE: top to bottom");
+                    }
                 }
             }
-            // tap
+            // tap - suppress if we were scrolling
             else {
-                if (duration > 0 && duration < TIME_LONG_PRESS) {
-                    if (_tapped) {
-                        _tapped = false;
-                    } else {
-                        _tapped = true;
-                    }
+                // If we were scrolling, suppress tap (it was just the scroll ending)
+                if (_isScrolling && !overlayActive) {
+                    _isScrolling = false; // Reset state
+                    _tapped = false;      // Clear tap state
+                    // Don't generate tap
                 } else {
-                    _tapped = false;
+                    _isScrolling = false; // Reset state
+                    if (duration > 0 && duration < TIME_LONG_PRESS) {
+                        if (_tapped) {
+                            _tapped = false;
+                        } else {
+                            _tapped = true;
+                        }
+                    } else {
+                        _tapped = false;
+                    }
                 }
             }
         }
     }
     _touchedOld = touched;
 
-#if defined RAK14014
+#if defined(RAK14014) && !defined(MESHTASTIC_EXCLUDE_CANNEDMESSAGES) && !defined(MESHTASTIC_EXCLUDE_SCREEN)
     // Speed up the processing speed of the keyboard in virtual keyboard mode
     auto state = cannedMessageModule->getRunState();
     if (state == CANNED_MESSAGE_RUN_STATE_FREETEXT) {
@@ -132,7 +212,8 @@ int32_t TouchScreenBase::runOnce()
 #endif
 
     // fire LONG_PRESS event without the need for release
-    if (touched && (time_t(millis()) - _start) > TIME_LONG_PRESS) {
+    // Suppress long press if user is actively scrolling to prevent menu from opening during drag
+    if (touched && !_isScrolling && (time_t(millis()) - _start) > TIME_LONG_PRESS) {
         // tricky: prevent reoccurring events and another touch event when releasing
         _start = millis() + 30000;
         e.touchEvent = static_cast<char>(TOUCH_ACTION_LONG_PRESS);

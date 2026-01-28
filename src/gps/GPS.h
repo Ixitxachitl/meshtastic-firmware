@@ -126,6 +126,9 @@ class GPS : private concurrency::OSThread
     // Let the GPS hardware save power between updates
     void down();
 
+    // Feed NMEA data from external source (e.g., companion processor)
+    bool feedNMEA(const char *nmea);
+
   private:
     GPS() : concurrency::OSThread("GPS") {}
 
@@ -196,6 +199,7 @@ class GPS : private concurrency::OSThread
 
     CallbackObserver<GPS, void *> notifyDeepSleepObserver = CallbackObserver<GPS, void *>(this, &GPS::prepareDeepSleep);
 
+  public:
     /** If !NULL we will use this serial port to construct our GPS */
 #if defined(ARCH_RP2040)
     static SerialUART *_serial_gps;
@@ -205,6 +209,7 @@ class GPS : private concurrency::OSThread
     static HardwareSerial *_serial_gps;
 #endif
 
+  private:
     // Create a ublox packet for editing in memory
     uint8_t makeUBXPacket(uint8_t class_id, uint8_t msg_id, uint8_t payload_size, const uint8_t *msg);
     uint8_t makeCASPacket(uint8_t class_id, uint8_t msg_id, uint8_t payload_size, const uint8_t *msg);

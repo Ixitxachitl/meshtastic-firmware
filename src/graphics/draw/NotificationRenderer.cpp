@@ -2,10 +2,12 @@
 
 #if HAS_SCREEN
 #include "DisplayFormatters.h"
+#include "MessageRenderer.h"
 #include "NodeDB.h"
 #include "NotificationRenderer.h"
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
+#include "graphics/emotes.h"
 #include "graphics/images.h"
 #include "input/RotaryEncoderInterruptImpl1.h"
 #include "input/UpDownInterruptImpl1.h"
@@ -25,6 +27,9 @@
 #endif
 
 using namespace meshtastic;
+using graphics::Emote;
+using graphics::emotes;
+using graphics::numEmotes;
 
 #if HAS_BUTTON
 // Global button thread pointer defined in main.cpp
@@ -42,8 +47,9 @@ int bannerSignalBars = -1;
 InputEvent NotificationRenderer::inEvent;
 int8_t NotificationRenderer::curSelected = 0;
 char NotificationRenderer::alertBannerMessage[256] = {0};
-uint32_t NotificationRenderer::alertBannerUntil = 0;  // 0 is a special case meaning forever
-uint8_t NotificationRenderer::alertBannerOptions = 0; // last x lines are seelctable options
+uint32_t NotificationRenderer::alertBannerUntil = 0;    // 0 is a special case meaning forever
+uint32_t NotificationRenderer::alertBannerDuration = 0; // Store the original duration for resetting on input
+uint8_t NotificationRenderer::alertBannerOptions = 0;   // last x lines are seelctable options
 const char **NotificationRenderer::optionsArrayPtr = nullptr;
 const int *NotificationRenderer::optionsEnumPtr = nullptr;
 std::function<void(int)> NotificationRenderer::alertBannerCallback = NULL;
@@ -53,6 +59,14 @@ uint32_t NotificationRenderer::numDigits = 0;
 uint32_t NotificationRenderer::currentNumber = 0;
 VirtualKeyboard *NotificationRenderer::virtualKeyboard = nullptr;
 std::function<void(const std::string &)> NotificationRenderer::textInputCallback = nullptr;
+
+// Helper to reset the inactivity timeout when user provides input
+static void resetInactivityTimeout()
+{
+    if (NotificationRenderer::alertBannerDuration > 0) {
+        NotificationRenderer::alertBannerUntil = millis() + NotificationRenderer::alertBannerDuration;
+    }
+}
 
 uint32_t pow_of_10(uint32_t n)
 {
@@ -102,6 +116,7 @@ void NotificationRenderer::resetBanner()
     pauseBanner = false;
     numDigits = 0;
     currentNumber = 0;
+    alertBannerDuration = 0; // Reset stored duration
 
     nodeDB->pause_sort(false);
 
@@ -176,6 +191,7 @@ void NotificationRenderer::drawNumberPicker(OLEDDisplay *display, OLEDDisplayUiS
     // Handle input
     if (inEvent.inputEvent == INPUT_BROKER_UP || inEvent.inputEvent == INPUT_BROKER_ALT_PRESS ||
         inEvent.inputEvent == INPUT_BROKER_UP_LONG) {
+        resetInactivityTimeout();
         if (this_digit == 9) {
             currentNumber -= 9 * (pow_of_10(numDigits - curSelected - 1));
         } else {
@@ -183,6 +199,7 @@ void NotificationRenderer::drawNumberPicker(OLEDDisplay *display, OLEDDisplayUiS
         }
     } else if (inEvent.inputEvent == INPUT_BROKER_DOWN || inEvent.inputEvent == INPUT_BROKER_USER_PRESS ||
                inEvent.inputEvent == INPUT_BROKER_DOWN_LONG) {
+        resetInactivityTimeout();
         if (this_digit == 0) {
             currentNumber += 9 * (pow_of_10(numDigits - curSelected - 1));
         } else {
@@ -190,13 +207,16 @@ void NotificationRenderer::drawNumberPicker(OLEDDisplay *display, OLEDDisplayUiS
         }
     } else if (inEvent.inputEvent == INPUT_BROKER_ANYKEY) {
         if (inEvent.kbchar > 47 && inEvent.kbchar < 58) { // have a digit
+            resetInactivityTimeout();
             currentNumber -= this_digit * (pow_of_10(numDigits - curSelected - 1));
             currentNumber += (inEvent.kbchar - 48) * (pow_of_10(numDigits - curSelected - 1));
             curSelected++;
         }
     } else if (inEvent.inputEvent == INPUT_BROKER_SELECT || inEvent.inputEvent == INPUT_BROKER_RIGHT) {
+        resetInactivityTimeout();
         curSelected++;
     } else if (inEvent.inputEvent == INPUT_BROKER_LEFT) {
+        resetInactivityTimeout();
         curSelected--;
     } else if ((inEvent.inputEvent == INPUT_BROKER_CANCEL || inEvent.inputEvent == INPUT_BROKER_ALT_LONG) &&
                alertBannerUntil != 0) {
@@ -241,12 +261,48 @@ void NotificationRenderer::drawNumberPicker(OLEDDisplay *display, OLEDDisplayUiS
 void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiState *state)
 {
     static uint32_t selectedNodenum = 0;
+    static uint16_t cachedMaxWidth = 0;
+    static int cachedNodeCount = 0;
 
     // === Layout Configuration ===
     constexpr uint16_t vPadding = 2;
-    alertBannerOptions = nodeDB->getNumMeshNodes() - 1;
+    // +1 for "Back" option at index 0
+    int numNodes = nodeDB->getNumMeshNodes() - 1; // exclude self
+    alertBannerOptions = numNodes + 1;            // nodes + "Back" option
 
-    // let the box drawing function calculate the widths?
+    // Only re-calculate maximum width if node count changed (cache for performance)
+    uint16_t maxWidth = cachedMaxWidth;
+    if (cachedNodeCount != alertBannerOptions || cachedMaxWidth == 0) {
+        uint16_t maxNodeNameWidth = 0;
+        uint16_t arrowsWidth = display->getStringWidth(">  <", 4, true);
+
+        for (int i = 0; i < alertBannerOptions; i++) {
+            char temp_name[40] = {0};
+            if (i == 0) {
+                strncpy(temp_name, "Back", sizeof(temp_name) - 1);
+            } else {
+                auto node = nodeDB->getMeshNodeByIndex(i);
+                if (node && node->has_user) {
+                    std::string sanitized = sanitizeString(node->user.long_name);
+                    // Use utf8Substr to properly truncate at character boundaries with ellipsis
+                    if (graphics::MessageRenderer::utf8CharCount(sanitized.c_str()) > 18) {
+                        sanitized = graphics::MessageRenderer::utf8Substr(sanitized, 18) + "...";
+                    }
+                    strncpy(temp_name, sanitized.c_str(), sizeof(temp_name) - 1);
+                } else if (node) {
+                    snprintf(temp_name, sizeof(temp_name), "(%04X)", (uint16_t)(node->num & 0xFFFF));
+                }
+            }
+            uint16_t nodeWidth = display->getStringWidth(temp_name, strlen(temp_name), true);
+            if (nodeWidth > maxNodeNameWidth)
+                maxNodeNameWidth = nodeWidth;
+        }
+
+        // Cache the calculated values
+        maxWidth = maxNodeNameWidth + arrowsWidth;
+        cachedMaxWidth = maxWidth;
+        cachedNodeCount = alertBannerOptions;
+    }
 
     const char *lineStarts[MAX_LINES + 1] = {0};
     uint16_t lineCount = 0;
@@ -265,62 +321,113 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
     // Handle input
     if (inEvent.inputEvent == INPUT_BROKER_UP || inEvent.inputEvent == INPUT_BROKER_LEFT ||
         inEvent.inputEvent == INPUT_BROKER_ALT_PRESS || inEvent.inputEvent == INPUT_BROKER_UP_LONG) {
+        resetInactivityTimeout();
         curSelected--;
     } else if (inEvent.inputEvent == INPUT_BROKER_DOWN || inEvent.inputEvent == INPUT_BROKER_RIGHT ||
                inEvent.inputEvent == INPUT_BROKER_USER_PRESS || inEvent.inputEvent == INPUT_BROKER_DOWN_LONG) {
+        resetInactivityTimeout();
         curSelected++;
     } else if (inEvent.inputEvent == INPUT_BROKER_SELECT) {
+        if (curSelected == 0) {
+            // "Back" selected - just close the picker
+            resetBanner();
+            return;
+        }
         alertBannerCallback(selectedNodenum);
         resetBanner();
         return;
-    } else if ((inEvent.inputEvent == INPUT_BROKER_CANCEL || inEvent.inputEvent == INPUT_BROKER_ALT_LONG) &&
-               alertBannerUntil != 0) {
+    } else if (inEvent.inputEvent == INPUT_BROKER_CANCEL || inEvent.inputEvent == INPUT_BROKER_ALT_LONG ||
+               inEvent.inputEvent == INPUT_BROKER_BACK || (inEvent.inputEvent == INPUT_BROKER_ANYKEY && inEvent.kbchar == 0x08)) {
+        // Backspace/Cancel/Back acts like selecting "Back"
         resetBanner();
         return;
     }
 
-    if (curSelected == -1)
+    // Wrap selection around
+    if (curSelected < 0)
         curSelected = alertBannerOptions - 1;
-    if (curSelected == alertBannerOptions)
+    if (curSelected >= alertBannerOptions)
         curSelected = 0;
 
     inEvent.inputEvent = INPUT_BROKER_NONE;
     if (alertBannerMessage[0] == '\0')
         return;
 
-    uint16_t totalLines = lineCount + alertBannerOptions;
     uint16_t screenHeight = display->height();
+#if defined(M5STACK_UNITC6L)
+    uint8_t effectiveLineHeight = FONT_HEIGHT_SMALL - 1; // Tighter spacing for Tom Thumb font
+#else
     uint8_t effectiveLineHeight = FONT_HEIGHT_SMALL - 3;
-    uint8_t visibleTotalLines = std::min<uint8_t>(totalLines, (screenHeight - vPadding * 2) / effectiveLineHeight);
-    uint8_t linesShown = lineCount;
-    const char *linePointers[visibleTotalLines + 1] = {0}; // this is sort of a dynamic allocation
+#endif
+
+    // Calculate max visible options using 75% of screen height
+    uint16_t usableHeight = (screenHeight * 3) / 4; // 75% of screen
+    uint8_t maxVisibleOptions = (usableHeight / effectiveLineHeight) - lineCount;
+    if (maxVisibleOptions < 3)
+        maxVisibleOptions = 3; // Minimum 3 visible options
+
+    uint8_t visibleOptions = std::min<uint8_t>(maxVisibleOptions, alertBannerOptions);
+    uint8_t visibleTotalLines = lineCount + visibleOptions;
+
+    const char *linePointers[visibleTotalLines + 1] = {0};
 
     // copy the linestarts to display to the linePointers holder
     for (int i = 0; i < lineCount; i++) {
         linePointers[i] = lineStarts[i];
     }
-    char scratchLineBuffer[visibleTotalLines - lineCount][40];
+    char scratchLineBuffer[visibleOptions][40];
 
+    // Center-focused scrolling:
+    // - Selection moves down to middle of visible area first
+    // - Then list scrolls while selection stays in middle
+    // - At end, selection moves from middle to bottom
+    uint8_t middleIndex = visibleOptions / 2; // Middle position in visible list
     uint8_t firstOptionToShow = 0;
-    if (curSelected > 1 && alertBannerOptions > visibleTotalLines - lineCount) {
-        if (curSelected > alertBannerOptions - visibleTotalLines + lineCount)
-            firstOptionToShow = alertBannerOptions - visibleTotalLines + lineCount;
-        else
-            firstOptionToShow = curSelected - 1;
-    } else {
-        firstOptionToShow = 0;
-    }
-    int scratchLineNum = 0;
-    for (int i = firstOptionToShow; i < alertBannerOptions && linesShown < visibleTotalLines; i++, linesShown++) {
-        char temp_name[16] = {0};
-        if (nodeDB->getMeshNodeByIndex(i + 1)->has_user) {
-            std::string sanitized = sanitizeString(nodeDB->getMeshNodeByIndex(i + 1)->user.long_name);
-            strncpy(temp_name, sanitized.c_str(), sizeof(temp_name) - 1);
+
+    if (alertBannerOptions > visibleOptions) {
+        // Calculate the scroll position to keep selection centered when possible
+        if (curSelected <= middleIndex) {
+            // Near start: don't scroll, let selection move from top toward middle
+            firstOptionToShow = 0;
+        } else if (curSelected >= alertBannerOptions - (visibleOptions - middleIndex)) {
+            // Near end: stop scrolling, let selection move from middle to bottom
+            firstOptionToShow = alertBannerOptions - visibleOptions;
         } else {
-            snprintf(temp_name, sizeof(temp_name), "(%04X)", (uint16_t)(nodeDB->getMeshNodeByIndex(i + 1)->num & 0xFFFF));
+            // Middle region: scroll to keep selection in the middle
+            firstOptionToShow = curSelected - middleIndex;
         }
+    }
+
+    int scratchLineNum = 0;
+    uint8_t linesShown = lineCount;
+    for (int i = firstOptionToShow; i < alertBannerOptions && scratchLineNum < visibleOptions; i++, linesShown++) {
+        char temp_name[40] = {0};
+
+        if (i == 0) {
+            // "Back" option at index 0
+            strncpy(temp_name, "Back", sizeof(temp_name) - 1);
+        } else {
+            // Node options start at index 1, map to nodeDB index (i) since index 0 is self
+            auto node = nodeDB->getMeshNodeByIndex(i);
+            if (node && node->has_user) {
+                std::string sanitized = sanitizeString(node->user.long_name);
+                // Use utf8Substr to properly truncate at character boundaries with ellipsis
+                if (graphics::MessageRenderer::utf8CharCount(sanitized.c_str()) > 18) {
+                    sanitized = graphics::MessageRenderer::utf8Substr(sanitized, 18) + "...";
+                }
+                strncpy(temp_name, sanitized.c_str(), sizeof(temp_name) - 1);
+            } else if (node) {
+                snprintf(temp_name, sizeof(temp_name), "(%04X)", (uint16_t)(node->num & 0xFFFF));
+            }
+        }
+
         if (i == curSelected) {
-            selectedNodenum = nodeDB->getMeshNodeByIndex(i + 1)->num;
+            if (i > 0) {
+                // Only set selectedNodenum for actual nodes, not "Back"
+                auto node = nodeDB->getMeshNodeByIndex(i);
+                if (node)
+                    selectedNodenum = node->num;
+            }
             if (currentResolution == ScreenResolution::High) {
                 strncpy(scratchLineBuffer[scratchLineNum], "> ", 3);
                 strncpy(scratchLineBuffer[scratchLineNum] + 2, temp_name, 36);
@@ -337,7 +444,9 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
         }
         linePointers[linesShown] = scratchLineBuffer[scratchLineNum++];
     }
-    drawNotificationBox(display, state, linePointers, totalLines, firstOptionToShow);
+
+    uint16_t totalLines = lineCount + alertBannerOptions;
+    drawNotificationBox(display, state, linePointers, totalLines, firstOptionToShow, maxWidth);
 }
 
 void NotificationRenderer::drawAlertBannerOverlay(OLEDDisplay *display, OLEDDisplayUiState *state)
@@ -382,9 +491,11 @@ void NotificationRenderer::drawAlertBannerOverlay(OLEDDisplay *display, OLEDDisp
     if (alertBannerOptions > 0) {
         if (inEvent.inputEvent == INPUT_BROKER_UP || inEvent.inputEvent == INPUT_BROKER_LEFT ||
             inEvent.inputEvent == INPUT_BROKER_ALT_PRESS || inEvent.inputEvent == INPUT_BROKER_UP_LONG) {
+            resetInactivityTimeout();
             curSelected--;
         } else if (inEvent.inputEvent == INPUT_BROKER_DOWN || inEvent.inputEvent == INPUT_BROKER_RIGHT ||
                    inEvent.inputEvent == INPUT_BROKER_USER_PRESS || inEvent.inputEvent == INPUT_BROKER_DOWN_LONG) {
+            resetInactivityTimeout();
             curSelected++;
         } else if (inEvent.inputEvent == INPUT_BROKER_SELECT) {
             if (optionsEnumPtr != nullptr) {
@@ -420,7 +531,11 @@ void NotificationRenderer::drawAlertBannerOverlay(OLEDDisplay *display, OLEDDisp
     uint16_t totalLines = lineCount + alertBannerOptions;
 
     uint16_t screenHeight = display->height();
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+    uint8_t effectiveLineHeight = FONT_HEIGHT_TINY - 1; // Tighter spacing for Tom Thumb font
+#else
     uint8_t effectiveLineHeight = FONT_HEIGHT_SMALL - 3;
+#endif
     uint8_t visibleTotalLines = std::min<uint8_t>(totalLines, (screenHeight - vPadding * 2) / effectiveLineHeight);
     uint8_t linesShown = lineCount;
     const char *linePointers[visibleTotalLines + 1] = {0}; // this is sort of a dynamic allocation
@@ -501,7 +616,9 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
         else // if the newline wasn't found, then pull string length from strlen
             lineLengths[lineCount] = strlen(lines[lineCount]);
 
-        lineWidths[lineCount] = display->getStringWidth(lines[lineCount], lineLengths[lineCount], true);
+        // Use emoji-aware width calculation for proper centering
+        std::string lineStr(lines[lineCount], lineLengths[lineCount]);
+        lineWidths[lineCount] = MessageRenderer::getStringWidthWithEmotes(display, lineStr, emotes, numEmotes);
 
         // Consider extra width for signal bars on lines that contain "Signal:"
         uint16_t potentialWidth = lineWidths[lineCount];
@@ -532,6 +649,14 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
 
     uint16_t boxWidth = hPadding * 2 + maxWidth;
 
+    // Constrain box width to screen width minus margins
+    uint16_t screenWidth = display->width();
+    uint16_t maxAllowedWidth = screenWidth - 8; // Leave 4px margin on each side
+    if (boxWidth > maxAllowedWidth) {
+        boxWidth = maxAllowedWidth;
+        maxWidth = boxWidth - hPadding * 2;
+    }
+
     if (needs_bell) {
         if ((currentResolution == ScreenResolution::High) && boxWidth <= 150)
             boxWidth += 26;
@@ -540,7 +665,11 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
     }
 
     uint16_t screenHeight = display->height();
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+    uint8_t effectiveLineHeight = FONT_HEIGHT_TINY - 1; // Tighter spacing for Tom Thumb font
+#else
     uint8_t effectiveLineHeight = FONT_HEIGHT_SMALL - 3;
+#endif
     uint8_t visibleTotalLines = std::min<uint8_t>(lineCount, (screenHeight - vPadding * 2) / effectiveLineHeight);
     uint16_t contentHeight = visibleTotalLines * effectiveLineHeight;
     uint16_t boxHeight = contentHeight + vPadding * 2;
@@ -554,18 +683,6 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
     }
     int16_t boxTop = (display->height() / 2) - (boxHeight / 2);
     boxHeight += (currentResolution == ScreenResolution::High) ? 2 : 1;
-#if defined(M5STACK_UNITC6L)
-    if (visibleTotalLines == 1) {
-        boxTop += 25;
-    }
-    if (alertBannerOptions < 3) {
-        int missingLines = 3 - alertBannerOptions;
-        int moveUp = missingLines * (effectiveLineHeight / 2);
-        boxTop -= moveUp;
-        if (boxTop < 0)
-            boxTop = 0;
-    }
-#endif
 
     // Draw Box
     display->setColor(BLACK);
@@ -604,12 +721,26 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
             if (strchr(lineBuffer, 'p') || strchr(lineBuffer, 'g') || strchr(lineBuffer, 'y') || strchr(lineBuffer, 'j')) {
                 background_yOffset = -1;
             }
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+            // Make header background taller for tiny fonts
+            display->fillRect(boxLeft, boxTop + 1, boxWidth, effectiveLineHeight + 1 - background_yOffset);
+#else
             display->fillRect(boxLeft, boxTop + 1, boxWidth, effectiveLineHeight - background_yOffset);
+#endif
             display->setColor(BLACK);
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+            int yOffset = 1; // Consistent spacing for tiny fonts (FONT_HEIGHT_TINY is 6, so 6-5=1 for proper alignment)
+#else
             int yOffset = 3;
-            display->drawString(textX, lineY - yOffset, lineBuffer);
+#endif
+            graphics::MessageRenderer::drawStringWithEmotes(display, textX, lineY - yOffset, std::string(lineBuffer), emotes,
+                                                            numEmotes);
             display->setColor(WHITE);
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+            lineY += effectiveLineHeight; // Consistent spacing for tiny fonts
+#else
             lineY += (effectiveLineHeight - 2 - background_yOffset);
+#endif
         } else {
             // Pop-up
             // If this is the Signal line, center text + bars as one group
@@ -621,12 +752,13 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
                 const int barHeightStep = 2;
                 const int gap = 6;
 
-                int textWidth = display->getStringWidth(lineBuffer, strlen(lineBuffer), true);
+                int textWidth = MessageRenderer::getStringWidthWithEmotes(display, std::string(lineBuffer), emotes, numEmotes);
                 int barsWidth = totalBars * barWidth + (totalBars - 1) * barSpacing + gap;
                 int totalWidth = textWidth + barsWidth;
                 int groupStartX = boxLeft + (boxWidth - totalWidth) / 2;
 
-                display->drawString(groupStartX, lineY, lineBuffer);
+                graphics::MessageRenderer::drawStringWithEmotes(display, groupStartX, lineY, std::string(lineBuffer), emotes,
+                                                                numEmotes);
 
                 int baseX = groupStartX + textWidth + gap;
                 int baseY = lineY + effectiveLineHeight - 1;
@@ -642,7 +774,13 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
                     }
                 }
             } else {
-                display->drawString(textX, lineY, lineBuffer);
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+                int textYOffset = FONT_HEIGHT_TINY - 5; // Move text down for Tom Thumb font (7-5=2)
+#else
+                int textYOffset = 0;
+#endif
+                graphics::MessageRenderer::drawStringWithEmotes(display, textX, lineY + textYOffset, std::string(lineBuffer),
+                                                                emotes, numEmotes);
             }
             lineY += (effectiveLineHeight);
         }
@@ -706,15 +844,11 @@ void NotificationRenderer::drawTextInput(OLEDDisplay *display, OLEDDisplayUiStat
             textInputCallback = nullptr;
             resetBanner();
 
-            // Call callback after cleanup
+            // Call callback after cleanup - callback handles its own navigation
             if (callback) {
                 callback("");
             }
-
-            // Restore normal overlays
-            if (screen) {
-                screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
-            }
+            // Don't call setFrames here - the callback is responsible for setting up navigation
             return;
         }
 
@@ -727,11 +861,10 @@ void NotificationRenderer::drawTextInput(OLEDDisplay *display, OLEDDisplayUiStat
                 textInputCallback = nullptr;
                 resetBanner();
                 if (callback) {
-                    callback("");
+                    callback(""); // Callback handles its own navigation (e.g., SWITCH_TO_TEXTMESSAGE)
                 }
-                if (screen) {
-                    screen->setFrames(graphics::Screen::FOCUS_PRESERVE);
-                }
+                // Don't call setFrames here - the callback is responsible for setting up navigation
+                // This allows callbacks to return to specific screens (e.g., MessageRenderer)
                 return;
             }
 

@@ -20,6 +20,14 @@
 #include "graphics/fonts/OLEDDisplayFontsGR.h"
 #endif
 
+// Ohm symbol overlay fonts - single-character fonts that can be swapped in
+#include "graphics/fonts/OLEDDisplayFontsOhm.h"
+
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+#include "graphics/fonts/OLEDDisplayFontsTomThumb.h"
+#define FONT_TINY TomThumb4x6 // Height: 6
+#endif
+
 #if defined(CROWPANEL_ESP32S3_5_EPAPER) && defined(USE_EINK)
 #include "graphics/fonts/EinkDisplayFonts.h"
 #endif
@@ -58,7 +66,7 @@
 #define FONT_MEDIUM_LOCAL ArialMT_Plain_16_UA // Height: 19
 #else
 #ifdef OLED_CS
-#define FONT_MEDIUM_LOCAL ArialMT_Plain_16_CS
+#define FONT_MEDIUM_LOCAL ArialMT_Plain_16_CS // Height: 19
 #else
 #define FONT_MEDIUM_LOCAL ArialMT_Plain_16 // Height: 19
 #endif
@@ -96,10 +104,10 @@
 #define FONT_SMALL FONT_MEDIUM_LOCAL // Height: 19
 #define FONT_MEDIUM FONT_LARGE_LOCAL // Height: 28
 #define FONT_LARGE FONT_LARGE_LOCAL  // Height: 28
-#elif defined(M5STACK_UNITC6L)
-#define FONT_SMALL FONT_SMALL_LOCAL  // Height: 13
-#define FONT_MEDIUM FONT_SMALL_LOCAL // Height: 13
-#define FONT_LARGE FONT_SMALL_LOCAL  // Height: 13
+#elif defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+#define FONT_SMALL FONT_TINY  // Height: 6
+#define FONT_MEDIUM FONT_TINY // Height: 6
+#define FONT_LARGE FONT_TINY  // Height: 6
 #else
 #define FONT_SMALL FONT_SMALL_LOCAL   // Height: 13
 #define FONT_MEDIUM FONT_MEDIUM_LOCAL // Height: 19
@@ -120,3 +128,7 @@
 #define FONT_HEIGHT_SMALL _fontHeight(FONT_SMALL)
 #define FONT_HEIGHT_MEDIUM _fontHeight(FONT_MEDIUM)
 #define FONT_HEIGHT_LARGE _fontHeight(FONT_LARGE)
+
+#if defined(M5STACK_UNITC6L) || defined(USE_TINY_FONT)
+#define FONT_HEIGHT_TINY _fontHeight(FONT_TINY)
+#endif

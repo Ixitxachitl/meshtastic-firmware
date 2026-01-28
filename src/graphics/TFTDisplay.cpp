@@ -2,6 +2,12 @@
 #include "main.h"
 #if USE_TFTDISPLAY
 
+#if defined(T_DECK)
+#include <bb_captouch.h>
+static BBCapTouch bbct;
+static bool bbctInitialized = false;
+#endif
+
 #if ARCH_PORTDUINO
 #include "platform/portduino/PortduinoGlue.h"
 #endif
@@ -1052,7 +1058,7 @@ class LGFX : public lgfx::LGFX_Device
             cfg.pin_cs = ST7701_CS;
             cfg.pin_sclk = ST7701_SCK;
             cfg.pin_mosi = ST7701_SDA;
-            // cfg.use_psram = 1;
+            cfg.use_psram = 1; // Enable PSRAM for frame buffer to ensure DMA cache coherency
             _panel_instance.config_detail(cfg);
         }
 
@@ -1083,7 +1089,7 @@ class LGFX : public lgfx::LGFX_Device
             cfg.pin_vsync = GPIO_NUM_17;
             cfg.pin_hsync = GPIO_NUM_16;
             cfg.pin_pclk = GPIO_NUM_21;
-            cfg.freq_write = 12000000;
+            cfg.freq_write = 12000000; // 12MHz - slower refresh reduces chance of visible tearing
 
             cfg.hsync_polarity = 0;
             cfg.hsync_front_porch = 10;
@@ -1091,9 +1097,9 @@ class LGFX : public lgfx::LGFX_Device
             cfg.hsync_back_porch = 50;
 
             cfg.vsync_polarity = 0;
-            cfg.vsync_front_porch = 10;
-            cfg.vsync_pulse_width = 8;
-            cfg.vsync_back_porch = 20;
+            cfg.vsync_front_porch = 20; // Increased blanking time for LVGL updates
+            cfg.vsync_pulse_width = 10; // Wider sync pulse
+            cfg.vsync_back_porch = 30;  // Larger back porch gives more time for buffer updates
 
             cfg.pclk_active_neg = 0;
             cfg.de_idle_high = 1;
@@ -1170,9 +1176,9 @@ TFTDisplay::TFTDisplay(uint8_t address, int sda, int scl, OLEDDISPLAY_GEOMETRY g
 
 #if ARCH_PORTDUINO
     if (portduino_config.displayRotate) {
-        setGeometry(GEOMETRY_RAWMODE, portduino_config.displayWidth, portduino_config.displayWidth);
+        setGeometry(GEOMETRY_RAWMODE, portduino_config.displayHeight, portduino_config.displayWidth);
     } else {
-        setGeometry(GEOMETRY_RAWMODE, portduino_config.displayHeight, portduino_config.displayHeight);
+        setGeometry(GEOMETRY_RAWMODE, portduino_config.displayWidth, portduino_config.displayHeight);
     }
 
 #elif defined(SCREEN_ROTATE)
@@ -1304,6 +1310,34 @@ void TFTDisplay::sdlLoop()
             InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_SHUTDOWN, .kbchar = 0, .touchX = 0, .touchY = 0};
             inputBroker->injectInputEvent(&event);
         }
+
+        // Check for text input (keyboard characters)
+        while (sdl_panel_->hasTextInput()) {
+            char c = sdl_panel_->getTextInput();
+            // Handle special keys
+            if (c == '\b' || c == 0x08) {
+                // Backspace -> INPUT_BROKER_BACK
+                InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_BACK, .kbchar = 0, .touchX = 0, .touchY = 0};
+                inputBroker->injectInputEvent(&event);
+            } else if (c == '\t' || c == 0x09) {
+                // Tab -> INPUT_BROKER_MSG_TAB for switching destinations (like Cardputer)
+                InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_ANYKEY,
+                                    .kbchar = INPUT_BROKER_MSG_TAB,
+                                    .touchX = 0,
+                                    .touchY = 0};
+                inputBroker->injectInputEvent(&event);
+            } else if (c == '\x1b' || c == 0x1B) {
+                // Escape -> INPUT_BROKER_CANCEL for exit/cancel (like Cardputer)
+                InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_CANCEL, .kbchar = 0, .touchX = 0, .touchY = 0};
+                inputBroker->injectInputEvent(&event);
+            } else {
+                // Regular character input
+                InputEvent event = {
+                    .inputEvent = (input_broker_event)INPUT_BROKER_ANYKEY, .kbchar = (unsigned char)c, .touchX = 0, .touchY = 0};
+                inputBroker->injectInputEvent(&event);
+            }
+        }
+
         // debounce
         if (lastPressed != 0 && !sdl_panel_->gpio_in(lastPressed))
             return;
@@ -1440,6 +1474,20 @@ bool TFTDisplay::getTouch(int16_t *x, int16_t *y)
     } else {
         return false;
     }
+#elif defined(T_DECK)
+    // Use bb_captouch like device-ui does for proper coordinate handling
+    if (!bbctInitialized) {
+        bbct.init(I2C_SDA, I2C_SCL, -1, SCREEN_TOUCH_INT);
+        bbct.setOrientation(90, 320, 240);
+        bbctInitialized = true;
+    }
+    TOUCHINFO ti;
+    if (bbct.getSamples(&ti)) {
+        *x = ti.x[0];
+        *y = ti.y[0] - 90; // Offset needed with setOrientation(90,...) - matches device-ui
+        return true;
+    }
+    return false;
 #elif !defined(M5STACK) && !defined(HACKADAY_COMMUNICATOR)
     return tft->getTouch(x, y);
 #else
@@ -1485,6 +1533,13 @@ bool TFTDisplay::connect()
     tft->init();
 #endif
 
+        // Set initial brightness immediately to prevent flash at full brightness
+        // For ST7789 (T-Deck), use default brightness during construction, will be updated in Screen::setup()
+#if defined(ST7789_CS)
+    tft->setBrightness(BRIGHTNESS_DEFAULT);
+    LOG_INFO("Set initial TFT brightness to default: %d", BRIGHTNESS_DEFAULT);
+#endif
+
 #if defined(M5STACK)
     tft->setRotation(0);
 #elif defined(RAK14014)
@@ -1506,7 +1561,12 @@ bool TFTDisplay::connect()
     tft->fillScreen(TFT_BLACK);
 
     if (this->linePixelBuffer == NULL) {
+#if defined(ARCH_ESP32) && defined(BOARD_HAS_PSRAM)
+        // Allocate TFT line buffer with DMA capability (can use PSRAM on ESP32-S3)
+        this->linePixelBuffer = (uint16_t *)heap_caps_malloc(sizeof(uint16_t) * displayWidth, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+#else
         this->linePixelBuffer = (uint16_t *)malloc(sizeof(uint16_t) * displayWidth);
+#endif
 
         if (!this->linePixelBuffer) {
             LOG_ERROR("Not enough memory to create TFT line buffer\n");

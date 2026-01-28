@@ -24,6 +24,10 @@
 #include "mesh/generated/meshtastic/rtttl.pb.h"
 #include <Arduino.h>
 
+#if !MESHTASTIC_EXCLUDE_I2C
+#include "buzz/I2CBuzzer.h"
+#endif
+
 #ifdef HAS_NCP5623
 #include <graphics/RAKled.h>
 #endif
@@ -93,6 +97,12 @@ int32_t ExternalNotificationModule::runOnce()
 #ifdef HAS_I2S
         // audioThread->isPlaying() also handles actually playing the RTTTL, needs to be called in loop
         isRtttlPlaying = isRtttlPlaying || audioThread->isPlaying();
+#endif
+#if !MESHTASTIC_EXCLUDE_I2C
+        // Include I2C buzzer RTTTL state
+        if (i2cBuzzer && i2cBuzzer->isAvailable()) {
+            isRtttlPlaying = isRtttlPlaying || i2cBuzzer->isRtttlPlaying();
+        }
 #endif
         if ((nagCycleCutoff < millis()) && !isRtttlPlaying) {
             // Turn off external notification immediately when timeout is reached, regardless of song state
@@ -185,13 +195,36 @@ int32_t ExternalNotificationModule::runOnce()
             delay = EXT_NOTIFICATION_FAST_THREAD_MS;
         }
 #endif
+
+#if !MESHTASTIC_EXCLUDE_I2C
+        // I2C Buzzer RTTTL playback (Modulino-compatible)
+        if (i2cBuzzer && i2cBuzzer->isAvailable() && canBuzz()) {
+            if (i2cBuzzer->isRtttlPlaying()) {
+                i2cBuzzer->playRtttl();
+                // Need very fast updates for I2C RTTTL - faster than PWM due to I2C overhead
+                delay = 5;
+            } else if (isNagging && (nagCycleCutoff >= millis())) {
+                LOG_DEBUG("Starting I2C RTTTL: ringtone=%.50s", rtttlConfig.ringtone);
+                i2cBuzzer->beginRtttl(rtttlConfig.ringtone);
+                delay = 5;
+            }
+        }
+#endif
+
         // now let the PWM buzzer play
+        // SenseCAP Indicator doesn't need use_pwm since tone() redirects to RP2040
+#ifdef SENSECAP_INDICATOR
+        if (config.device.buzzer_gpio && canBuzz()) {
+#else
         if (moduleConfig.external_notification.use_pwm && config.device.buzzer_gpio && canBuzz()) {
+#endif
             if (rtttl::isPlaying()) {
                 rtttl::play();
             } else if (isNagging && (nagCycleCutoff >= millis())) {
                 // start the song again if we have time left
+                LOG_DEBUG("Starting RTTL: buzzer_gpio=%d, ringtone=%.50s", config.device.buzzer_gpio, rtttlConfig.ringtone);
                 rtttl::begin(config.device.buzzer_gpio, rtttlConfig.ringtone);
+                LOG_DEBUG("RTTL started, isPlaying=%d", rtttl::isPlaying());
             }
             // we need fast updates to play the RTTTL
             delay = EXT_NOTIFICATION_FAST_THREAD_MS;
@@ -312,6 +345,12 @@ void ExternalNotificationModule::stopNow()
     LOG_INFO("Stop audioThread playback");
     audioThread->stop();
 #endif
+#if !MESHTASTIC_EXCLUDE_I2C
+    if (i2cBuzzer && i2cBuzzer->isAvailable()) {
+        LOG_INFO("Stop I2C buzzer playback");
+        i2cBuzzer->stopRtttl();
+    }
+#endif
     // Turn off all outputs
     LOG_INFO("Turning off setExternalStates");
     for (int i = 0; i < 3; i++) {
@@ -407,6 +446,13 @@ ExternalNotificationModule::ExternalNotificationModule()
                 LOG_INFO("Use Pin %i in PWM mode", config.device.buzzer_gpio);
             }
         }
+#ifdef SENSECAP_INDICATOR
+        // SenseCAP Indicator: Set buzzer_gpio for RTTL even without use_pwm
+        if (!config.device.buzzer_gpio) {
+            config.device.buzzer_gpio = PIN_BUZZER;
+            LOG_INFO("SenseCAP Indicator: Set buzzer_gpio=%i for RTTL", config.device.buzzer_gpio);
+        }
+#endif
 #ifdef HAS_NCP5623
         if (rgb_found.type == ScanI2C::NCP5623) {
             rgb.begin();
@@ -443,7 +489,7 @@ ExternalNotificationModule::ExternalNotificationModule()
 ProcessMessage ExternalNotificationModule::handleReceived(const meshtastic_MeshPacket &mp)
 {
     if (moduleConfig.external_notification.enabled && !isSilenced) {
-#ifdef T_WATCH_S3
+#if defined(T_WATCH_S3) || defined(T_LORA_PAGER) || defined(TTGO_T_ECHO_PLUS)
         drv.setWaveform(0, 75);
         drv.setWaveform(1, 56);
         drv.setWaveform(2, 0);
@@ -500,7 +546,15 @@ ProcessMessage ExternalNotificationModule::handleReceived(const meshtastic_MeshP
                     LOG_INFO("externalNotificationModule - Notification Bell (Buzzer)");
                     isNagging = true;
                     if (!moduleConfig.external_notification.use_pwm && !moduleConfig.external_notification.use_i2s_as_buzzer) {
-                        setExternalState(2, true);
+#if !MESHTASTIC_EXCLUDE_I2C
+                        // Start I2C buzzer if available
+                        if (i2cBuzzer && i2cBuzzer->isAvailable()) {
+                            i2cBuzzer->beginRtttl(rtttlConfig.ringtone);
+                        } else
+#endif
+                        {
+                            setExternalState(2, true);
+                        }
                     } else {
 #ifdef HAS_I2S
                         if (moduleConfig.external_notification.use_i2s_as_buzzer) {
@@ -561,7 +615,15 @@ ProcessMessage ExternalNotificationModule::handleReceived(const meshtastic_MeshP
                     }
 #endif
                     if (!moduleConfig.external_notification.use_pwm && !moduleConfig.external_notification.use_i2s_as_buzzer) {
-                        setExternalState(2, true);
+#if !MESHTASTIC_EXCLUDE_I2C
+                        // Start I2C buzzer if available
+                        if (i2cBuzzer && i2cBuzzer->isAvailable()) {
+                            i2cBuzzer->beginRtttl(rtttlConfig.ringtone);
+                        } else
+#endif
+                        {
+                            setExternalState(2, true);
+                        }
                     } else {
 #ifdef HAS_I2S
                         if (moduleConfig.external_notification.use_i2s_as_buzzer) {

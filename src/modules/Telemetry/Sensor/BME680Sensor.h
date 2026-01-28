@@ -25,6 +25,8 @@ class BME680Sensor : public TelemetrySensor
   private:
 #if __has_include(<bsec2.h>)
     Bsec2 bme680;
+    float lastGasOhms = NAN;
+    ScanI2C::DeviceAddress deviceAddress; // Track port for pin switching
 #else
     using BME680Ptr = std::unique_ptr<Adafruit_BME680>;
 
@@ -36,18 +38,10 @@ class BME680Sensor : public TelemetrySensor
   protected:
 #if __has_include(<bsec2.h>)
     const char *bsecConfigFileName = "/prefs/bsec.dat";
-    uint8_t bsecState[BSEC_MAX_STATE_BLOB_SIZE] = {0};
+    static uint8_t bsecState[BSEC_MAX_STATE_BLOB_SIZE]; // Shared state buffer (saves per-instance RAM)
     uint8_t accuracy = 0;
     uint16_t stateUpdateCounter = 0;
-    bsecSensor sensorList[9] = {BSEC_OUTPUT_IAQ,
-                                BSEC_OUTPUT_RAW_TEMPERATURE,
-                                BSEC_OUTPUT_RAW_PRESSURE,
-                                BSEC_OUTPUT_RAW_HUMIDITY,
-                                BSEC_OUTPUT_RAW_GAS,
-                                BSEC_OUTPUT_STABILIZATION_STATUS,
-                                BSEC_OUTPUT_RUN_IN_STATUS,
-                                BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_TEMPERATURE,
-                                BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_HUMIDITY};
+    static bsecSensor sensorList[9]; // Shared, initialized in .cpp
     void loadState();
     void updateState();
     void checkStatus(const char *functionName);
@@ -60,6 +54,7 @@ class BME680Sensor : public TelemetrySensor
 #endif
     virtual bool getMetrics(meshtastic_Telemetry *measurement) override;
     virtual bool initDevice(TwoWire *bus, ScanI2C::FoundDevice *dev) override;
+    float getGasResistanceOhms() const { return lastGasOhms; }
 };
 
 #endif

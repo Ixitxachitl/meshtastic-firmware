@@ -19,6 +19,19 @@ bool in_array(uint8_t *array, int size, uint8_t lookfor)
     return false;
 }
 
+static bool detectBMI270(TwoWire *w, uint8_t addr)
+{
+    // BMI270 chip ID register 0x00 should read 0x24
+    w->beginTransmission(addr);
+    w->write((uint8_t)0x00);
+    if (w->endTransmission(false) != 0)
+        return false;
+    if (w->requestFrom((int)addr, 1) != 1)
+        return false;
+    uint8_t id = w->read();
+    return id == 0x24;
+}
+
 ScanI2C::FoundDevice ScanI2CTwoWire::find(ScanI2C::DeviceType type) const
 {
     concurrency::LockGuard guard((concurrency::Lock *)&lock);
@@ -82,6 +95,29 @@ ScanI2C::DeviceType ScanI2CTwoWire::probeOLED(ScanI2C::DeviceAddress addr) const
 
     return o_probe;
 }
+
+bool ScanI2CTwoWire::probeHMC5883L(ScanI2C::DeviceAddress addr) const
+{
+    // HMC5883L has identification registers at 0x0A, 0x0B, 0x0C
+    // They should return 'H' (0x48), '4' (0x34), '3' (0x33)
+    TwoWire *i2cBus = fetchI2CBus(addr);
+
+    i2cBus->beginTransmission(addr.address);
+    i2cBus->write((uint8_t)0x0A); // ID Register A
+    if (i2cBus->endTransmission(false) != 0)
+        return false;
+
+    if (i2cBus->requestFrom((int)addr.address, 3) != 3)
+        return false;
+
+    uint8_t idA = i2cBus->read();
+    uint8_t idB = i2cBus->read();
+    uint8_t idC = i2cBus->read();
+
+    // HMC5883L returns 'H', '4', '3' (0x48, 0x34, 0x33)
+    return (idA == 0x48 && idB == 0x34 && idC == 0x33);
+}
+
 uint16_t ScanI2CTwoWire::getRegisterValue(const ScanI2CTwoWire::RegisterLocation &registerLocation,
                                           ScanI2CTwoWire::ResponseWidth responseWidth, bool zeropad = false) const
 {
@@ -92,8 +128,8 @@ uint16_t ScanI2CTwoWire::getRegisterValue(const ScanI2CTwoWire::RegisterLocation
     i2cBus->write(registerLocation.registerAddress);
     if (zeropad) {
         // Lark Commands need the argument list length in 2 bytes.
-        i2cBus->write((int)0);
-        i2cBus->write((int)0);
+        i2cBus->write((uint8_t)0);
+        i2cBus->write((uint8_t)0);
     }
     i2cBus->endTransmission();
     delay(20);
@@ -123,8 +159,22 @@ uint16_t ScanI2CTwoWire::getRegisterValue(const ScanI2CTwoWire::RegisterLocation
 void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
 {
     concurrency::LockGuard guard((concurrency::Lock *)&lock);
+    ScanI2C::setMagOnPort(port, false);
 
     LOG_DEBUG("Scan for I2C devices on port %d", port);
+
+    // ESP32-C6 only has 1 I2C peripheral - use pin switching for Grove port
+#if defined(M5STACK_UNITC6L) && defined(GROVE_SDA) && defined(GROVE_SCL)
+    bool switchedPins = false;
+    if (port == I2CPort::WIRE1) {
+        // Temporarily switch Wire to Grove pins (GPIO5/4)
+        Wire.end();
+        Wire.begin(GROVE_SDA, GROVE_SCL);
+        Wire.setClock(100000);
+        switchedPins = true;
+        LOG_DEBUG("Switched I2C to Grove port (GPIO%d/GPIO%d)", GROVE_SDA, GROVE_SCL);
+    }
+#endif
 
     uint8_t err;
 
@@ -181,7 +231,17 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
             switch (addr.address) {
             case SSD1306_ADDRESS_H:
             case SSD1306_ADDRESS_L:
+#ifdef HAS_I2C_BUZZER
+                // 0x3C can be either an OLED or a Modulino Buzzer (pinstrap address)
+                // Probe for OLED first - if nothing detected, assume buzzer
                 type = probeOLED(addr);
+                if (type == SCREEN_UNKNOWN) {
+                    logFoundDevice("I2C Buzzer", (uint8_t)addr.address);
+                    type = I2C_BUZZER;
+                }
+#else
+                type = probeOLED(addr);
+#endif
                 break;
 
 #ifdef RV3028_RTC
@@ -442,8 +502,28 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
                 }
                 break;
 
-                SCAN_SIMPLE_CASE(QMC5883L_ADDR, QMC5883L, "QMC5883L", (uint8_t)addr.address)
-                SCAN_SIMPLE_CASE(HMC5883L_ADDR, HMC5883L, "HMC5883L", (uint8_t)addr.address)
+            case QMC5883L_ADDR: {
+                logFoundDevice("QMC5883L", (uint8_t)addr.address);
+                type = QMC5883L;
+                ScanI2C::setMagOnPort(port, true);
+                break;
+            }
+            case HMC5883L_ADDR: {
+                // 0x1E can be HMC5883L magnetometer or Modulino Buzzer (default address)
+                // Probe for HMC5883L ID registers to distinguish
+                if (probeHMC5883L(addr)) {
+                    logFoundDevice("HMC5883L", (uint8_t)addr.address);
+                    type = HMC5883L;
+                    ScanI2C::setMagOnPort(port, true);
+                }
+#ifdef HAS_I2C_BUZZER
+                else {
+                    logFoundDevice("I2C Buzzer", (uint8_t)addr.address);
+                    type = I2C_BUZZER;
+                }
+#endif
+                break;
+            }
 #ifdef HAS_QMA6100P
                 SCAN_SIMPLE_CASE(QMA6100P_ADDR, QMA6100P, "QMA6100P", (uint8_t)addr.address)
 #else
@@ -529,7 +609,7 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
                 } else {
                     // Test BH1750 - send power on command
                     i2cBus->beginTransmission(addr.address);
-                    i2cBus->write(0x01); // Power On command
+                    i2cBus->write((uint8_t)0x01); // Power On command
                     uint8_t bh1750_error = i2cBus->endTransmission();
                     if (bh1750_error == 0) {
                         type = BH1750;
@@ -542,7 +622,12 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
 
                 SCAN_SIMPLE_CASE(BHI260AP_ADDR, BHI260AP, "BHI260AP", (uint8_t)addr.address);
                 SCAN_SIMPLE_CASE(SCD4X_ADDR, SCD4X, "SCD4X", (uint8_t)addr.address);
-                SCAN_SIMPLE_CASE(BMM150_ADDR, BMM150, "BMM150", (uint8_t)addr.address);
+            case BMM150_ADDR: {
+                logFoundDevice("BMM150", (uint8_t)addr.address);
+                type = BMM150;
+                ScanI2C::setMagOnPort(port, true); // <-- now runs
+                break;
+            }
 #ifdef HAS_TPS65233
                 SCAN_SIMPLE_CASE(TPS65233_ADDR, TPS65233, "TPS65233", (uint8_t)addr.address);
 #endif
@@ -570,26 +655,40 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
 
             case ICM20948_ADDR:     // same as BMX160_ADDR
             case ICM20948_ADDR_ALT: // same as MPU6050_ADDR
-                registerValue = getRegisterValue(ScanI2CTwoWire::RegisterLocation(addr, 0x00), 1);
 #ifdef HAS_ICM20948
                 type = ICM20948;
                 logFoundDevice("ICM20948", (uint8_t)addr.address);
                 break;
 #endif
-                if (registerValue == 0xEA) {
-                    type = ICM20948;
-                    logFoundDevice("ICM20948", (uint8_t)addr.address);
-                    break;
-                } else if (addr.address == BMX160_ADDR) {
-                    type = BMX160;
-                    logFoundDevice("BMX160", (uint8_t)addr.address);
-                    break;
-                } else {
-                    type = MPU6050;
-                    logFoundDevice("MPU6050", (uint8_t)addr.address);
+                {
+                    // First try explicit ID reads in a robust order:
+                    uint16_t id = getRegisterValue(ScanI2CTwoWire::RegisterLocation(addr, 0x00), 1);
+
+                    if (id == 0xEA) { // ICM-20948 ID
+                        type = ICM20948;
+                        logFoundDevice("ICM20948", (uint8_t)addr.address);
+                        ScanI2C::setMagOnPort(port, true);
+                        break;
+                    }
+
+                    // BMI270 ID is 0x24 on reg 0x00; some boards need a repeated read, so use helper
+                    if (id == 0x24 || detectBMI270(i2cBus, addr.address)) {
+                        type = BMI270;
+                        logFoundDevice("BMI270", (uint8_t)addr.address);
+                        break;
+                    }
+
+                    // Legacy fallbacks by address if nothing matched
+                    if (addr.address == BMX160_ADDR) {
+                        type = BMX160;
+                        logFoundDevice("BMX160", (uint8_t)addr.address);
+                        ScanI2C::setMagOnPort(port, true);
+                    } else {
+                        type = MPU6050;
+                        logFoundDevice("MPU6050", (uint8_t)addr.address);
+                    }
                     break;
                 }
-                break;
 
             case CGRADSENS_ADDR:
                 // Register 0x00 of the RadSens sensor contains is product identifier 0x7D
@@ -637,6 +736,16 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
             foundDevices[addr] = type;
         }
     }
+
+    // Restore original I2C pins if we switched to Grove
+#if defined(M5STACK_UNITC6L) && defined(GROVE_SDA) && defined(GROVE_SCL)
+    if (switchedPins) {
+        Wire.end();
+        Wire.begin(I2C_SDA, I2C_SCL);
+        Wire.setClock(100000);
+        LOG_DEBUG("Restored I2C to internal bus (GPIO%d/GPIO%d)", I2C_SDA, I2C_SCL);
+    }
+#endif
 }
 
 void ScanI2CTwoWire::scanPort(I2CPort port)

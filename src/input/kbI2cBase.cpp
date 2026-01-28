@@ -9,6 +9,8 @@
 #include "TLoraPagerKeyboard.h"
 #elif defined(HACKADAY_COMMUNICATOR)
 #include "HackadayCommunicatorKeyboard.h"
+#elif defined(M5STACK_CARDPUTER_ADV)
+#include "CardputerAdvKeyboard.h"
 #else
 #include "TCA8418Keyboard.h"
 #endif
@@ -24,6 +26,8 @@ KbI2cBase::KbI2cBase(const char *name)
       TCAKeyboard(*(new TLoraPagerKeyboard()))
 #elif defined(HACKADAY_COMMUNICATOR)
       TCAKeyboard(*(new HackadayCommunicatorKeyboard()))
+#elif defined(M5STACK_CARDPUTER_ADV)
+      TCAKeyboard(*(new CardputerAdvKeyboard()))
 #else
       TCAKeyboard(*(new TCA8418Keyboard()))
 #endif
@@ -50,6 +54,16 @@ uint8_t read_from_14004(TwoWire *i2cBus, uint8_t reg, uint8_t *data, uint8_t len
 
 int32_t KbI2cBase::runOnce()
 {
+#if defined(M5STACK_UNITC6L) && defined(GROVE_SDA) && defined(GROVE_SCL)
+    // ESP32-C6: Switch to Grove pins if keyboard is on WIRE1
+    bool needsPinSwitch = (cardkb_found.port == ScanI2C::WIRE1);
+    if (needsPinSwitch) {
+        Wire.end();
+        Wire.begin(GROVE_SDA, GROVE_SCL);
+        Wire.setClock(100000);
+    }
+#endif
+
     if (!i2cBus) {
         switch (cardkb_found.port) {
         case ScanI2C::WIRE1:
@@ -65,6 +79,25 @@ int32_t KbI2cBase::runOnce()
             }
             if (cardkb_found.address == TCA8418_KB_ADDR) {
                 TCAKeyboard.begin(TCA8418_KB_ADDR, &Wire1);
+            }
+            break;
+#endif
+#if defined(M5STACK_UNITC6L) && defined(GROVE_SDA) && defined(GROVE_SCL)
+            // ESP32-C6: Use reconfigured Wire for Grove port
+            LOG_DEBUG("Use I2C Bus 0 on Grove pins (GPIO5/GPIO4) for keyboard");
+            i2cBus = &Wire;
+            if (cardkb_found.address == CARDKB_ADDR) {
+                // CardKB doesn't need begin(), just I2C communication
+            }
+            if (cardkb_found.address == BBQ10_KB_ADDR) {
+                Q10keyboard.begin(BBQ10_KB_ADDR, &Wire);
+                Q10keyboard.setBacklight(0);
+            }
+            if (cardkb_found.address == MPR121_KB_ADDR) {
+                MPRkeyboard.begin(MPR121_KB_ADDR, &Wire);
+            }
+            if (cardkb_found.address == TCA8418_KB_ADDR) {
+                TCAKeyboard.begin(TCA8418_KB_ADDR, &Wire);
             }
             break;
 #endif
@@ -340,6 +373,9 @@ int32_t KbI2cBase::runOnce()
             case TCA8418KeyboardBase::FUNCTION_F5:
                 e.inputEvent = INPUT_BROKER_FN_F5;
                 e.kbchar = 0x00;
+            case 0x8F: // fn+e - emote picker
+                e.inputEvent = INPUT_BROKER_ANYKEY;
+                e.kbchar = INPUT_BROKER_MSG_EMOTE_LIST;
                 break;
             default:
                 if (nextEvent > 127) {
@@ -394,10 +430,11 @@ int32_t KbI2cBase::runOnce()
             e.inputEvent = INPUT_BROKER_NONE;
             e.source = this->_originName;
             switch (c) {
-            case 0x71: // This is the button q. If modifier and q pressed, it cancels the input
+            case 0x71: // This is the button q. If modifier and q pressed, it reboots the device
                 if (is_sym) {
                     is_sym = false;
-                    e.inputEvent = INPUT_BROKER_CANCEL;
+                    e.inputEvent = INPUT_BROKER_ANYKEY;
+                    e.kbchar = INPUT_BROKER_MSG_REBOOT;
                 } else {
                     e.inputEvent = INPUT_BROKER_ANYKEY;
                     e.kbchar = c;
@@ -408,6 +445,16 @@ int32_t KbI2cBase::runOnce()
                     is_sym = false;
                     e.inputEvent = INPUT_BROKER_ANYKEY;
                     e.kbchar = 0x09; // TAB Scancode
+                } else {
+                    e.inputEvent = INPUT_BROKER_ANYKEY;
+                    e.kbchar = c;
+                }
+                break;
+            case 0x65: // letter e. Modifier makes it open emote picker
+                if (is_sym) {
+                    is_sym = false;
+                    e.inputEvent = INPUT_BROKER_ANYKEY;
+                    e.kbchar = 0x8F; // INPUT_BROKER_MSG_EMOTE_LIST
                 } else {
                     e.inputEvent = INPUT_BROKER_ANYKEY;
                     e.kbchar = c;
@@ -541,6 +588,16 @@ int32_t KbI2cBase::runOnce()
     default:
         LOG_WARN("Unknown kb_model 0x%02x", kb_model);
     }
+
+#if defined(M5STACK_UNITC6L) && defined(GROVE_SDA) && defined(GROVE_SCL)
+    // Restore internal I2C pins after keyboard reading
+    if (needsPinSwitch) {
+        Wire.end();
+        Wire.begin(I2C_SDA, I2C_SCL);
+        Wire.setClock(100000);
+    }
+#endif
+
     return 300;
 }
 
