@@ -38,6 +38,7 @@ const Emote emotes[] = {
     {"\U0001F62D", loudly_crying_face, loudly_crying_face_width, loudly_crying_face_height}, // 😭 Loudly Crying Face
     {"\U0001F92E", vomiting, vomiting_width, vomiting_height},                               // 🤮 Face Vomiting
     {"\U0001F60E", cool, cool_width, cool_height},                                           // 😎 Smiling Face with Sunglasses
+    {"\U0001F634", sleeping_face, sleeping_face_width, sleeping_face_height},                // 😴 Sleeping Face
     {"\U0001F440", eyes, eyes_width, eyes_height},                                           // 👀 Eyes
     {"\U0001F441\uFE0F", eye, eye_width, eye_height},                                        // 👁️ Eye
 
@@ -568,6 +569,11 @@ const unsigned char antenna_bars[] PROGMEM = {0x00, 0x00, 0x00, 0x00, 0x00, 0x60
 const unsigned char tower[] PROGMEM = {0x80, 0x01, 0x80, 0x01, 0xC0, 0x03, 0x40, 0x02, 0x40, 0x02, 0xA0,
                                        0x05, 0x60, 0x06, 0xA0, 0x05, 0x10, 0x08, 0x70, 0x0E, 0x88, 0x11,
                                        0x08, 0x10, 0xDC, 0x3B, 0x24, 0x24, 0x22, 0x44, 0x1E, 0x78};
+
+const unsigned char sleeping_face[] PROGMEM = {0x00, 0x00, 0x00, 0x78, 0x00, 0x20, 0x00, 0x10, 0xE0, 0x78, 0x18,
+                                               0x03, 0x04, 0x04, 0x04, 0x04, 0xB2, 0x09, 0x02, 0x08, 0x02, 0x08,
+                                               0xE4, 0x04, 0x04, 0x04, 0x18, 0x03, 0xE0, 0x00, 0x00, 0x00};
+
 #endif
 
 } // namespace graphics

@@ -886,14 +886,14 @@ void PetModule::drawMoodIndicator(OLEDDisplay *display, int16_t x, int16_t y, ui
         moodHeight = grinning_height;
         break;
     case PetMood::SLEEPING:
-        moodBitmap = graphics::first_quarter_moon_face;
-        moodWidth = first_quarter_moon_face_width;
-        moodHeight = first_quarter_moon_face_height;
+        moodBitmap = graphics::sleeping_face;
+        moodWidth = sleeping_face_width;
+        moodHeight = sleeping_face_height;
         break;
     case PetMood::HUNGRY:
-        moodBitmap = graphics::question;
-        moodWidth = question_width;
-        moodHeight = question_height;
+        moodBitmap = graphics::cold_face;
+        moodWidth = cold_face_width;
+        moodHeight = cold_face_height;
         break;
     case PetMood::ALERT:
         moodBitmap = graphics::bang;

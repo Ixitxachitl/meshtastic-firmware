@@ -401,6 +401,10 @@ extern const unsigned char antenna_bars[] PROGMEM;
 #define tower_width 16
 #define tower_height 16
 extern const unsigned char tower[] PROGMEM;
+
+#define sleeping_face_width 16
+#define sleeping_face_height 16
+extern const unsigned char sleeping_face[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
 } // namespace graphics
