@@ -405,6 +405,10 @@ extern const unsigned char tower[] PROGMEM;
 #define sleeping_face_width 16
 #define sleeping_face_height 16
 extern const unsigned char sleeping_face[] PROGMEM;
+
+#define weary_face_width 16
+#define weary_face_height 16
+extern const unsigned char weary_face[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
 } // namespace graphics

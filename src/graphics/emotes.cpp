@@ -21,6 +21,7 @@ const Emote emotes[] = {
     {"\U0001F60D", heart_eyes, heart_eyes_width, heart_eyes_height},                                  // 😍 Heart Eyes
     {"\U0001F970", heart_smile, heart_smile_width, heart_smile_height}, // 🥰 Smiling Face with Hearts
     {"\U0001F976", cold_face, cold_face_width, cold_face_height},       // 🥶 Cold Face
+    {"\U0001F629", weary_face, weary_face_width, weary_face_height},    // 😩 Weary Face
 
     // --- Question/Alert ---
     {"\u2753", question, question_width, question_height},                 // ❓ Question Mark
@@ -574,6 +575,9 @@ const unsigned char sleeping_face[] PROGMEM = {0x00, 0x00, 0x00, 0x78, 0x00, 0x2
                                                0x03, 0x04, 0x04, 0x04, 0x04, 0xB2, 0x09, 0x02, 0x08, 0x02, 0x08,
                                                0xE4, 0x04, 0x04, 0x04, 0x18, 0x03, 0xE0, 0x00, 0x00, 0x00};
 
+const unsigned char weary_face[] PROGMEM = {0x00, 0x00, 0xE0, 0x07, 0x18, 0x18, 0x44, 0x22, 0x24, 0x24, 0x4A,
+                                            0x52, 0x32, 0x4C, 0x02, 0x40, 0xC2, 0x43, 0x22, 0x44, 0x12, 0x48,
+                                            0xF4, 0x2F, 0x04, 0x20, 0x18, 0x18, 0xE0, 0x07, 0x00, 0x00};
 #endif
 
 } // namespace graphics

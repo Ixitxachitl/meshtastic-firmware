@@ -564,7 +564,8 @@ ProcessMessage ExternalNotificationModule::handleReceived(const meshtastic_MeshP
                         drv.setWaveform(7, 0);
                         drv.go();
 #endif
-                        if (!moduleConfig.external_notification.use_pwm && !moduleConfig.external_notification.use_i2s_as_buzzer) {
+                        if (!moduleConfig.external_notification.use_pwm &&
+                            !moduleConfig.external_notification.use_i2s_as_buzzer) {
 #if !MESHTASTIC_EXCLUDE_I2C
                             // Start I2C buzzer if available
                             if (i2cBuzzer && i2cBuzzer->isAvailable()) {
