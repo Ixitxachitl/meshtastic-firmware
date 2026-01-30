@@ -374,9 +374,9 @@ uint8_t PetModule::calculateHealth() const
     return (health > 100) ? 100 : (uint8_t)health;
 }
 
-uint16_t PetModule::getMessagesPerHour() const
+uint16_t PetModule::getMessagesPerMinute() const
 {
-    // Sum all buckets to get messages in the last hour
+    // Sum all buckets to get messages in the last minute
     uint16_t total = 0;
     for (uint8_t i = 0; i < MESSAGE_HISTORY_BUCKETS; i++) {
         total += messageHistory[i];
@@ -384,17 +384,16 @@ uint16_t PetModule::getMessagesPerHour() const
     return total;
 }
 
-const uint8_t *PetModule::getSpeedIcon(uint16_t messagesPerHour) const
+const uint8_t *PetModule::getSpeedIcon(uint16_t messagesPerMinute) const
 {
-    // Scale: 0=idle, 10=low, 30=medium, 60=high, 100+=very high
-    // These thresholds can be adjusted based on typical mesh traffic
-    if (messagesPerHour == 0) {
+    // Scale for per-minute traffic: 0=idle, 1-2=low, 3-5=medium, 6-10=high, 10+=very high
+    if (messagesPerMinute == 0) {
         return speed0_icon;
-    } else if (messagesPerHour < 15) {
+    } else if (messagesPerMinute < 3) {
         return speed25_icon;
-    } else if (messagesPerHour < 40) {
+    } else if (messagesPerMinute < 6) {
         return speed50_icon;
-    } else if (messagesPerHour < 80) {
+    } else if (messagesPerMinute < 10) {
         return speed75_icon;
     } else {
         return speed100_icon;
@@ -628,12 +627,12 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     const int16_t lvlIconW = lvl_icon_width * scale;
     const int16_t lvlIconH = lvl_icon_height * scale;
 
-    // Mood indicator in top-left corner (below header) - shifted up 1px
-    drawMoodIndicator(display, x + 1, contentY + 3 * scale - 1, scale);
+    // Mood indicator in top-left corner (below header)
+    drawMoodIndicator(display, x + 1, contentY + 3 * scale, scale);
 
-    // Show level under mood indicator - icon with number below
+    // Show level under mood indicator - icon with number below (stays up 1px from mood)
     int16_t lvlIconX = x + 3;
-    int16_t lvlIconY = contentY + 3 * scale + moodSize - 1; // shifted up 1px
+    int16_t lvlIconY = contentY + 3 * scale + moodSize - 1;
     if (scale > 1) {
         drawXbmScaled(display, lvlIconX, lvlIconY, lvl_icon_width, lvl_icon_height, lvl_icon, scale);
     } else {
@@ -643,15 +642,15 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     snprintf(lvlBuf, sizeof(lvlBuf), "%u", level);
     display->setFont(FONT_SMALL);
     display->setTextAlignment(TEXT_ALIGN_CENTER);
-    int16_t lvlNumY = (scale > 1) ? (lvlIconY + lvlIconH - 1) : (contentY + 3 + 16 + lvl_icon_height - 3 - 1); // shifted up 1px
+    int16_t lvlNumY = (scale > 1) ? (lvlIconY + lvlIconH - 1) : (contentY + 3 + 16 + lvl_icon_height - 3 - 1);
     display->drawString(lvlIconX + (lvlIconW / 2), lvlNumY, lvlBuf);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
 
-    // Pet area - wider box for pet
+    // Pet area - wider box for pet (shifted down 1px)
     const int16_t petBoxW = petW + 32 * scale;
     const int16_t petBoxH = petH + 4 * scale;
     const int16_t petBoxX = x + 18 * scale; // After mood indicator
-    const int16_t petBoxY = contentY + 3 * scale;
+    const int16_t petBoxY = contentY + 3 * scale + 1;
 
     // Draw pet area with border
     drawPetArea(display, petBoxX, petBoxY, petBoxW, petBoxH, scale);
@@ -662,13 +661,13 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     int16_t petDrawY = petBoxY + (petBoxH - petH) / 2;
     drawPet(display, petDrawX, petDrawY, scale);
 
-    // Stats on the right side - align with top of pet box
+    // Stats on the right side - align with top of pet box (shifted down 1px with pet box)
     const int16_t statsX = petBoxX + petBoxW + 3 * scale;
     drawStats(display, statsX, petBoxY - 3, screenW - statsX);
 
     // Row below pet and stats: Traffic rate with speedometer, msg/hr, hops, and time
-    // Add 2 pixel gap after the third row
-    int16_t lastY = petBoxY + petBoxH + (scale > 1 ? 4 : 0);
+    // Shifted up 1px
+    int16_t lastY = petBoxY + petBoxH + (scale > 1 ? 3 : -1);
     char buf[48];
 
     // Calculate icon scale based on font size
@@ -677,15 +676,15 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     int16_t iconH = speed_icon_height * iconScale;
     int16_t textOffset = iconW + 2;
 
-    // Get messages per hour and select appropriate speedometer icon
-    uint16_t msgPerHour = getMessagesPerHour();
-    const uint8_t *speedIcon = getSpeedIcon(msgPerHour);
+    // Get messages per minute and select appropriate speedometer icon
+    uint16_t msgPerMin = getMessagesPerMinute();
+    const uint8_t *speedIcon = getSpeedIcon(msgPerMin);
 
     // Draw speedometer icon (shifted up 1px for alignment)
     drawXbmScaled(display, x, lastY + (FONT_HEIGHT_SMALL - iconH) / 2 - 1, speed_icon_width, speed_icon_height, speedIcon,
                   iconScale);
 
-    // Format: "123/h Text [3] (2m)" - messages per hour, type, last hops, time since last
+    // Format: "5/m Text [3] (2m)" - messages per minute, type, last hops, time since last
     if (lastMessageTime > 0) {
         uint32_t elapsed = (millis() - lastMessageTime) / 1000; // seconds
         char timeBuf[8];
@@ -696,14 +695,13 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         } else {
             snprintf(timeBuf, sizeof(timeBuf), "%luh", (unsigned long)(elapsed / 3600));
         }
-        snprintf(buf, sizeof(buf), "%u/h %s [%u] (%s)", msgPerHour, getMessageTypeName(lastMessageType), lastMessageHops,
-                 timeBuf);
+        snprintf(buf, sizeof(buf), "%u/m %s [%u] (%s)", msgPerMin, getMessageTypeName(lastMessageType), lastMessageHops, timeBuf);
     } else {
-        snprintf(buf, sizeof(buf), "%u/h", msgPerHour);
+        snprintf(buf, sizeof(buf), "%u/m", msgPerMin);
     }
     display->drawString(x + textOffset, lastY + (iconScale > 1 ? 2 : 0), buf);
 
-    // Status bars directly below Last (with extra padding for high-res)
+    // Status bars directly below Last (shifted up 1px with lastY)
     int16_t barY = lastY + FONT_HEIGHT_SMALL - 1 + (iconScale > 1 ? 4 : 0);
     int16_t barW = (screenW / 2) - 3;
 
