@@ -139,6 +139,13 @@ class PetModule : public MeshModule, public Observable<const UIFrameEvent *>, pr
     uint8_t lastMessageHops = 0;  // Hops the last message traveled
     uint32_t lastMessageTime = 0; // When last message was received (millis)
 
+    // Rolling message history for traffic rate (12 five-minute buckets = 1 hour)
+    static constexpr uint8_t MESSAGE_HISTORY_BUCKETS = 12;
+    static constexpr uint32_t BUCKET_DURATION_MS = 300000; // 5 minutes per bucket
+    uint16_t messageHistory[MESSAGE_HISTORY_BUCKETS] = {0};
+    uint8_t historyBucketIndex = 0;
+    uint32_t lastBucketRotation = 0;
+
     // Animation state
     PetMood currentMood = PetMood::NEUTRAL;
     PetAnimation currentAnimation = PetAnimation::IDLE;
@@ -167,6 +174,9 @@ class PetModule : public MeshModule, public Observable<const UIFrameEvent *>, pr
     void advanceFrame();
     uint8_t getFrameCount() const;
     void updateHappiness();
+    uint8_t calculateHealth() const;
+    uint16_t getMessagesPerHour() const;
+    const uint8_t *getSpeedIcon(uint16_t messagesPerHour) const;
 
 #if HAS_SCREEN
     void drawPet(OLEDDisplay *display, int16_t x, int16_t y, uint8_t scale = 1);

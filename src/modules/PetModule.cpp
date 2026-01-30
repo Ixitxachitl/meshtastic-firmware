@@ -78,6 +78,13 @@ int32_t PetModule::runOnce()
         lastMoodUpdate = now;
     }
 
+    // Rotate message history bucket every 5 minutes
+    if (now - lastBucketRotation >= BUCKET_DURATION_MS) {
+        historyBucketIndex = (historyBucketIndex + 1) % MESSAGE_HISTORY_BUCKETS;
+        messageHistory[historyBucketIndex] = 0; // Reset new bucket
+        lastBucketRotation = now;
+    }
+
     return 100; // Run frequently for smooth animation
 }
 
@@ -87,6 +94,11 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
     messagesReceived++;
     lastActivityTime = millis();
     lastMessageTime = lastActivityTime;
+
+    // Increment current bucket for rolling message rate
+    if (messageHistory[historyBucketIndex] < UINT16_MAX) {
+        messageHistory[historyBucketIndex]++;
+    }
 
     // Calculate hops traveled (hop_start - hop_limit gives hops used)
     if (mp.hop_start > 0 && mp.hop_limit <= mp.hop_start) {
@@ -325,9 +337,67 @@ void PetModule::updateHappiness()
         return;
     }
 
-    // Happiness decays slowly over time without activity
-    if (timeSinceActivity > 60000 && happiness > 10) { // 1 minute
-        happiness--;
+    // More nuanced happiness decay based on time since last activity
+    // Decay faster the longer inactive: ~1 point per minute after first minute
+    uint32_t inactiveMinutes = timeSinceActivity / 60000;
+    if (inactiveMinutes > 0 && happiness > 5) {
+        // Cap decay to prevent going below minimum happiness of 5
+        uint8_t maxDecay = happiness - 5;
+        uint8_t decay = (inactiveMinutes < maxDecay) ? (uint8_t)inactiveMinutes : maxDecay;
+        // Only decay 1 point per mood update cycle to smooth out changes
+        if (decay > 0) {
+            happiness--;
+        }
+    }
+}
+
+uint8_t PetModule::calculateHealth() const
+{
+    // Composite health score from multiple factors:
+    // 40% happiness, 30% energy (battery), 20% recent activity, 10% network
+
+    // Activity score: high if recent activity, decays over time
+    uint32_t timeSinceActivity = millis() - lastActivityTime;
+    uint32_t inactiveMinutes = timeSinceActivity / 60000;
+    uint8_t activityScore = 0;
+    if (messagesReceived > 0) {
+        // Start at 100, lose ~1 point per minute of inactivity, min 0
+        activityScore = (inactiveMinutes < 100) ? (100 - (uint8_t)inactiveMinutes) : 0;
+    }
+
+    // Network score: more nodes = better, caps at 10 nodes for max score
+    uint8_t networkScore = (nodesDiscovered >= 10) ? 100 : (uint8_t)(nodesDiscovered * 10);
+
+    // Weighted average
+    uint16_t health = (happiness * 40 + energy * 30 + activityScore * 20 + networkScore * 10) / 100;
+
+    return (health > 100) ? 100 : (uint8_t)health;
+}
+
+uint16_t PetModule::getMessagesPerHour() const
+{
+    // Sum all buckets to get messages in the last hour
+    uint16_t total = 0;
+    for (uint8_t i = 0; i < MESSAGE_HISTORY_BUCKETS; i++) {
+        total += messageHistory[i];
+    }
+    return total;
+}
+
+const uint8_t *PetModule::getSpeedIcon(uint16_t messagesPerHour) const
+{
+    // Scale: 0=idle, 10=low, 30=medium, 60=high, 100+=very high
+    // These thresholds can be adjusted based on typical mesh traffic
+    if (messagesPerHour == 0) {
+        return speed0_icon;
+    } else if (messagesPerHour < 15) {
+        return speed25_icon;
+    } else if (messagesPerHour < 40) {
+        return speed50_icon;
+    } else if (messagesPerHour < 80) {
+        return speed75_icon;
+    } else {
+        return speed100_icon;
     }
 }
 
@@ -339,70 +409,114 @@ void PetModule::updateMood()
     // Update happiness/energy first
     updateHappiness();
 
-    // Random chance to play (5% each update when happy)
-    bool wantsToPlay = (happiness > 60) && (rand() % 20 == 0);
+    // Calculate composite health for mood decisions
+    uint8_t health = calculateHealth();
 
-    // Determine mood based on recent activity and stats
-    // Low battery (under 30%) - pet takes a nap temporarily
-    if (energy < 30 && energy > 0) {
+    // Priority 1: Critical battery states (most important)
+    if (energy > 0 && energy < 20) {
         currentMood = PetMood::SLEEPING;
         currentAnimation = PetAnimation::SLEEPING;
-    } else if (energy < 50) {
-        // Low-ish battery - pet is hungry (wants charging)
+        return;
+    }
+    if (energy >= 20 && energy < 40) {
         currentMood = PetMood::HUNGRY;
         currentAnimation = PetAnimation::SAD;
-    } else if (timeSinceActivity > IDLE_THRESHOLD_MS) {
-        // Been idle for a while - pet goes to sleep
+        return;
+    }
+
+    // Priority 2: Extended inactivity - pet sleeps
+    if (timeSinceActivity > IDLE_THRESHOLD_MS) {
         currentMood = PetMood::SLEEPING;
         currentAnimation = PetAnimation::SLEEPING;
-    } else if (happiness < 30) {
-        // Unhappy - needs attention, use SAD animation
+        return;
+    }
+
+    // Priority 3: Emotional states based on health/happiness
+    if (health < 25 || happiness < 25) {
         currentMood = PetMood::SAD;
         currentAnimation = PetAnimation::SAD;
-    } else if (timeSinceActivity < 2000) {
-        // Very recent activity - alert/attentive
+        return;
+    }
+
+    // Priority 4: Recent activity responses (within 5 seconds)
+    if (timeSinceActivity < 5000) {
         currentMood = PetMood::ALERT;
         currentAnimation = PetAnimation::ALERT;
-    } else if (timeSinceActivity > IDLE_THRESHOLD_MS / 2) {
-        // Getting bored
-        currentMood = PetMood::NEUTRAL;
-        currentAnimation = PetAnimation::IDLE;
-    } else if (wantsToPlay && currentAnimation != PetAnimation::PLAYING) {
-        // Random play - pick a happy animation
-        currentMood = PetMood::HAPPY;
-        uint8_t playChoice = rand() % 3;
-        if (playChoice == 0) {
-            currentAnimation = PetAnimation::PLAYING;
-        } else if (playChoice == 1) {
-            currentAnimation = PetAnimation::DANCING;
-        } else {
-            currentAnimation = PetAnimation::HOPPING;
-        }
-    } else if (messagesReceived > 0 && (now - lastActivityTime) < 10000) {
-        // Recently received a message - eating animation
+        return;
+    }
+
+    // Priority 5: Semi-recent activity (within 30 seconds) - eating
+    if (timeSinceActivity < 30000 && messagesReceived > 0) {
         currentMood = PetMood::HAPPY;
         currentAnimation = PetAnimation::EATING;
-    } else if (messagesReceived > 0 && (messagesReceived % 10) < 3) {
-        // Normal activity - walking or hopping around
+        return;
+    }
+
+    // Priority 6: Getting bored (halfway to sleep threshold)
+    if (timeSinceActivity > IDLE_THRESHOLD_MS / 2) {
         currentMood = PetMood::NEUTRAL;
-        currentAnimation = (rand() % 3 == 0) ? PetAnimation::HOPPING : PetAnimation::WALKING;
-    } else if (timeSinceActivity > 30000 && (rand() % 10 == 0)) {
-        // Getting a bit bored - might yawn or scratch
-        currentMood = PetMood::NEUTRAL;
-        currentAnimation = (rand() % 2 == 0) ? PetAnimation::YAWNING : PetAnimation::SCRATCHING;
-    } else if (happiness > 70 && (rand() % 8 == 0)) {
-        // Happy and curious - sniff around
-        currentMood = PetMood::HAPPY;
-        currentAnimation = PetAnimation::SNIFFING;
-    } else {
-        // Good activity - variety of idle animations
-        currentMood = PetMood::HAPPY;
-        uint8_t idleChoice = rand() % 4;
-        if (idleChoice == 0) {
-            currentAnimation = PetAnimation::HAPPY_BOUNCE;
+        // Occasionally yawn or scratch when bored
+        if (rand() % 10 == 0) {
+            currentAnimation = (rand() % 2 == 0) ? PetAnimation::YAWNING : PetAnimation::SCRATCHING;
         } else {
             currentAnimation = PetAnimation::IDLE;
         }
+        return;
+    }
+
+    // Priority 7: Content state - random behaviors based on happiness
+    // Higher happiness = more playful behaviors
+    if (happiness > 70) {
+        // Very happy - more active behaviors
+        uint8_t choice = rand() % 100;
+        if (choice < 15) {
+            // 15% chance to play
+            currentMood = PetMood::HAPPY;
+            uint8_t playChoice = rand() % 3;
+            if (playChoice == 0) {
+                currentAnimation = PetAnimation::PLAYING;
+            } else if (playChoice == 1) {
+                currentAnimation = PetAnimation::DANCING;
+            } else {
+                currentAnimation = PetAnimation::HOPPING;
+            }
+        } else if (choice < 25) {
+            // 10% chance to sniff around
+            currentMood = PetMood::HAPPY;
+            currentAnimation = PetAnimation::SNIFFING;
+        } else if (choice < 40) {
+            // 15% chance to bounce happily
+            currentMood = PetMood::HAPPY;
+            currentAnimation = PetAnimation::HAPPY_BOUNCE;
+        } else if (choice < 55) {
+            // 15% chance to walk/hop around
+            currentMood = PetMood::HAPPY;
+            currentAnimation = (rand() % 2 == 0) ? PetAnimation::WALKING : PetAnimation::HOPPING;
+        } else {
+            // 45% chance to idle happily
+            currentMood = PetMood::HAPPY;
+            currentAnimation = PetAnimation::IDLE;
+        }
+    } else if (happiness > 40) {
+        // Moderately happy - calmer behaviors
+        uint8_t choice = rand() % 100;
+        if (choice < 20) {
+            // 20% chance to walk
+            currentMood = PetMood::NEUTRAL;
+            currentAnimation = PetAnimation::WALKING;
+        } else if (choice < 30) {
+            // 10% chance to look around
+            currentMood = PetMood::NEUTRAL;
+            currentAnimation = PetAnimation::LOOKING;
+        } else {
+            // 70% chance to idle
+            currentMood = PetMood::NEUTRAL;
+            currentAnimation = PetAnimation::IDLE;
+        }
+    } else {
+        // Low happiness but not sad - mostly idle
+        currentMood = PetMood::NEUTRAL;
+        currentAnimation = PetAnimation::IDLE;
     }
 }
 
@@ -505,7 +619,7 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     // Get display dimensions
     const int16_t screenW = display->getWidth();
     const int16_t screenH = display->getHeight();
-    const int16_t contentY = y + FONT_HEIGHT_SMALL; // Tighter - right below header
+    const int16_t contentY = y + FONT_HEIGHT_SMALL - 2; // Tighter - right below header, shifted up 2px
 
     // Scaled dimensions
     const int16_t moodSize = 16 * scale;
@@ -514,22 +628,22 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     const int16_t lvlIconW = lvl_icon_width * scale;
     const int16_t lvlIconH = lvl_icon_height * scale;
 
-    // Mood indicator in top-left corner (below header)
-    drawMoodIndicator(display, x + 1, contentY + 3 * scale, scale);
+    // Mood indicator in top-left corner (below header) - shifted up 1px
+    drawMoodIndicator(display, x + 1, contentY + 3 * scale - 1, scale);
 
     // Show level under mood indicator - icon with number below
     int16_t lvlIconX = x + 3;
-    int16_t lvlIconY = contentY + 3 * scale + moodSize;
+    int16_t lvlIconY = contentY + 3 * scale + moodSize - 1; // shifted up 1px
     if (scale > 1) {
         drawXbmScaled(display, lvlIconX, lvlIconY, lvl_icon_width, lvl_icon_height, lvl_icon, scale);
     } else {
-        display->drawXbm(lvlIconX, contentY + 3 + 16, lvl_icon_width, lvl_icon_height, lvl_icon);
+        display->drawXbm(lvlIconX, contentY + 3 + 16 - 1, lvl_icon_width, lvl_icon_height, lvl_icon);
     }
     char lvlBuf[8];
     snprintf(lvlBuf, sizeof(lvlBuf), "%u", level);
     display->setFont(FONT_SMALL);
     display->setTextAlignment(TEXT_ALIGN_CENTER);
-    int16_t lvlNumY = (scale > 1) ? (lvlIconY + lvlIconH - 1) : (contentY + 3 + 16 + lvl_icon_height - 3);
+    int16_t lvlNumY = (scale > 1) ? (lvlIconY + lvlIconH - 1) : (contentY + 3 + 16 + lvl_icon_height - 3 - 1); // shifted up 1px
     display->drawString(lvlIconX + (lvlIconW / 2), lvlNumY, lvlBuf);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
 
@@ -552,23 +666,29 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     const int16_t statsX = petBoxX + petBoxW + 3 * scale;
     drawStats(display, statsX, petBoxY - 3, screenW - statsX);
 
-    // Row below pet and stats: Last packet type with hops and time ago
-    int16_t lastY = petBoxY + petBoxH + (scale > 1 ? 2 : -2);
+    // Row below pet and stats: Traffic rate with speedometer, msg/hr, hops, and time
+    // Add 2 pixel gap after the third row
+    int16_t lastY = petBoxY + petBoxH + (scale > 1 ? 4 : 0);
     char buf[48];
 
     // Calculate icon scale based on font size
     uint8_t iconScale = (FONT_HEIGHT_SMALL >= 16) ? 2 : 1;
-    int16_t iconW = last_icon_width * iconScale;
-    int16_t iconH = last_icon_height * iconScale;
+    int16_t iconW = speed_icon_width * iconScale;
+    int16_t iconH = speed_icon_height * iconScale;
     int16_t textOffset = iconW + 2;
 
-    // Draw last icon
-    drawXbmScaled(display, x, lastY + (FONT_HEIGHT_SMALL - iconH) / 2, last_icon_width, last_icon_height, last_icon, iconScale);
+    // Get messages per hour and select appropriate speedometer icon
+    uint16_t msgPerHour = getMessagesPerHour();
+    const uint8_t *speedIcon = getSpeedIcon(msgPerHour);
 
-    // Format time ago
-    char timeBuf[8];
+    // Draw speedometer icon (shifted up 1px for alignment)
+    drawXbmScaled(display, x, lastY + (FONT_HEIGHT_SMALL - iconH) / 2 - 1, speed_icon_width, speed_icon_height, speedIcon,
+                  iconScale);
+
+    // Format: "123/h Text [3] (2m)" - messages per hour, type, last hops, time since last
     if (lastMessageTime > 0) {
         uint32_t elapsed = (millis() - lastMessageTime) / 1000; // seconds
+        char timeBuf[8];
         if (elapsed < 60) {
             snprintf(timeBuf, sizeof(timeBuf), "%lus", (unsigned long)elapsed);
         } else if (elapsed < 3600) {
@@ -576,9 +696,10 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         } else {
             snprintf(timeBuf, sizeof(timeBuf), "%luh", (unsigned long)(elapsed / 3600));
         }
-        snprintf(buf, sizeof(buf), "%s [%u] (%s)", getMessageTypeName(lastMessageType), lastMessageHops, timeBuf);
+        snprintf(buf, sizeof(buf), "%u/h %s [%u] (%s)", msgPerHour, getMessageTypeName(lastMessageType), lastMessageHops,
+                 timeBuf);
     } else {
-        snprintf(buf, sizeof(buf), "%s", getMessageTypeName(lastMessageType));
+        snprintf(buf, sizeof(buf), "%u/h", msgPerHour);
     }
     display->drawString(x + textOffset, lastY + (iconScale > 1 ? 2 : 0), buf);
 
@@ -763,11 +884,15 @@ void PetModule::drawStats(OLEDDisplay *display, int16_t x, int16_t y, int16_t wi
     display->drawString(x + textOffset, y + lineH + textYOffset, buf);
 
     // Row 3: Uptime (clock icon) - icon shifted down 1 pixel
-    uint32_t uptimeHours = getUptimeMinutes() / 60;
-    uint32_t uptimeMins = getUptimeMinutes() % 60;
+    uint32_t totalMins = getUptimeMinutes();
+    uint32_t uptimeDays = totalMins / 1440; // 1440 minutes per day
+    uint32_t uptimeHours = (totalMins % 1440) / 60;
+    uint32_t uptimeMins = totalMins % 60;
     drawXbmScaled(display, x, y + 1 + lineH * 2 + (lineH - iconH) / 2, uptime_icon_width, uptime_icon_height, uptime_icon,
                   iconScale);
-    if (uptimeHours > 0) {
+    if (uptimeDays > 0) {
+        snprintf(buf, sizeof(buf), "%lud%luh", (unsigned long)uptimeDays, (unsigned long)uptimeHours);
+    } else if (uptimeHours > 0) {
         snprintf(buf, sizeof(buf), "%luh%02lum", (unsigned long)uptimeHours, (unsigned long)uptimeMins);
     } else {
         snprintf(buf, sizeof(buf), "%lum", (unsigned long)uptimeMins);
