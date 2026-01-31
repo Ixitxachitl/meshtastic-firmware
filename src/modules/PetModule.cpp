@@ -277,7 +277,7 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
         // Extract data preview based on message type
         // Use specific type name for telemetry variants
         const char *typeName = getMessageTypeName(lastMessageType);
-        char dataBuf[64] = "";
+        char dataBuf[120] = "";
         if (mp.pki_encrypted) {
             // PKI encrypted message - we can't see the contents
             snprintf(dataBuf, sizeof(dataBuf), "[encrypted]");
@@ -287,7 +287,7 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
             case LastMessageType::TEXT_COMPRESSED: {
                 // Show channel name and text message (no truncation - let the display wrap)
                 const char *chanName = channels.getName(mp.channel);
-                char textPreview[48];
+                char textPreview[100];
                 size_t j = 0;
                 for (size_t i = 0; i < mp.decoded.payload.size && j < sizeof(textPreview) - 1; i++) {
                     char c = ((const char *)mp.decoded.payload.bytes)[i];
@@ -306,38 +306,37 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
                 if (pb_decode_from_bytes(mp.decoded.payload.bytes, mp.decoded.payload.size, &meshtastic_Telemetry_msg, &telem)) {
                     if (telem.which_variant == meshtastic_Telemetry_device_metrics_tag) {
                         typeName = "Device";
-                        auto &dm = telem.variant.device_metrics;
-                        // Build string with all available device metrics
-                        char parts[4][16];
-                        int partCount = 0;
-                        // Only show battery if voltage is valid (>2.5V indicates real battery)
-                        // and battery level is reasonable (1-100%)
-                        if (dm.has_voltage && dm.voltage >= 2.5f && dm.has_battery_level && dm.battery_level > 0 &&
-                            dm.battery_level <= 100) {
-                            snprintf(parts[partCount++], 16, "%.0f%%/%.1fV", dm.battery_level, dm.voltage);
-                        }
-                        if (dm.has_channel_utilization && dm.channel_utilization > 0) {
-                            snprintf(parts[partCount++], 16, "Ch:%.0f%%", dm.channel_utilization);
-                        }
-                        if (dm.has_air_util_tx && dm.air_util_tx > 0) {
-                            snprintf(parts[partCount++], 16, "Air:%.0f%%", dm.air_util_tx);
-                        }
-                        if (dm.has_uptime_seconds && dm.uptime_seconds > 0 && partCount < 3) {
-                            uint32_t up = dm.uptime_seconds;
-                            if (up >= 86400) {
-                                snprintf(parts[partCount++], 16, "%lud", (unsigned long)(up / 86400));
-                            } else if (up >= 3600) {
-                                snprintf(parts[partCount++], 16, "%luh", (unsigned long)(up / 3600));
-                            } else {
-                                snprintf(parts[partCount++], 16, "%lum", (unsigned long)(up / 60));
+                        // Get device metrics from NodeDB which has the properly decoded values
+                        meshtastic_NodeInfoLite *node = nodeDB ? nodeDB->getMeshNode(mp.from) : nullptr;
+                        if (node && node->has_device_metrics) {
+                            auto &dm = node->device_metrics;
+                            char parts[4][16];
+                            int partCount = 0;
+                            if (dm.has_battery_level && dm.has_voltage) {
+                                snprintf(parts[partCount++], 16, "%u%%/%.1fV", (unsigned int)dm.battery_level, dm.voltage);
                             }
-                        }
-                        // Join parts with spaces
-                        dataBuf[0] = '\0';
-                        for (int i = 0; i < partCount && i < 3; i++) {
-                            if (i > 0)
-                                strncat(dataBuf, " ", sizeof(dataBuf) - strlen(dataBuf) - 1);
-                            strncat(dataBuf, parts[i], sizeof(dataBuf) - strlen(dataBuf) - 1);
+                            if (dm.has_channel_utilization) {
+                                snprintf(parts[partCount++], 16, "Ch:%.0f%%", dm.channel_utilization);
+                            }
+                            if (dm.has_air_util_tx) {
+                                snprintf(parts[partCount++], 16, "Air:%.0f%%", dm.air_util_tx);
+                            }
+                            if (dm.has_uptime_seconds && partCount < 3) {
+                                uint32_t up = dm.uptime_seconds;
+                                if (up >= 86400) {
+                                    snprintf(parts[partCount++], 16, "%lud", (unsigned long)(up / 86400));
+                                } else if (up >= 3600) {
+                                    snprintf(parts[partCount++], 16, "%luh", (unsigned long)(up / 3600));
+                                } else {
+                                    snprintf(parts[partCount++], 16, "%lum", (unsigned long)(up / 60));
+                                }
+                            }
+                            dataBuf[0] = '\0';
+                            for (int i = 0; i < partCount && i < 4; i++) {
+                                if (i > 0)
+                                    strncat(dataBuf, " ", sizeof(dataBuf) - strlen(dataBuf) - 1);
+                                strncat(dataBuf, parts[i], sizeof(dataBuf) - strlen(dataBuf) - 1);
+                            }
                         }
                     } else if (telem.which_variant == meshtastic_Telemetry_environment_metrics_tag) {
                         typeName = "Env";
@@ -347,55 +346,55 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
                         char parts[12][20];
                         int partCount = 0;
                         // Temperature and humidity (combine if both present)
-                        if (em.has_temperature && em.temperature != 0) {
+                        if (em.has_temperature) {
                             float temp = useFahrenheit ? UnitConversions::CelsiusToFahrenheit(em.temperature) : em.temperature;
-                            if (em.has_relative_humidity && em.relative_humidity != 0) {
+                            if (em.has_relative_humidity) {
                                 snprintf(parts[partCount++], 20, "%.1f%s/%.0f%%", temp, useFahrenheit ? "F" : "C",
                                          em.relative_humidity);
                             } else {
                                 snprintf(parts[partCount++], 20, "%.1f%s", temp, useFahrenheit ? "F" : "C");
                             }
-                        } else if (em.has_relative_humidity && em.relative_humidity != 0) {
+                        } else if (em.has_relative_humidity) {
                             snprintf(parts[partCount++], 20, "%.0f%%RH", em.relative_humidity);
                         }
-                        // Voltage/current from INA sensors (solar monitoring)
-                        if (em.has_voltage && em.voltage > 0) {
+                        // Voltage/current from INA sensors (solar monitoring) - prefix with Sol:
+                        if (em.has_voltage) {
                             if (em.has_current) {
-                                snprintf(parts[partCount++], 20, "%.1fV/%.0fmA", em.voltage, em.current * 1000);
+                                snprintf(parts[partCount++], 20, "Sol:%.1fV/%.0fmA", em.voltage, em.current * 1000);
                             } else {
-                                snprintf(parts[partCount++], 20, "%.1fV", em.voltage);
+                                snprintf(parts[partCount++], 20, "Sol:%.1fV", em.voltage);
                             }
                         }
                         // Barometric pressure
-                        if (em.has_barometric_pressure && em.barometric_pressure != 0) {
+                        if (em.has_barometric_pressure) {
                             snprintf(parts[partCount++], 20, "%.0fhPa", em.barometric_pressure);
                         }
                         // IAQ (air quality index)
-                        if (em.has_iaq && em.iaq != 0) {
+                        if (em.has_iaq) {
                             snprintf(parts[partCount++], 20, "IAQ:%u", em.iaq);
                         }
                         // Wind speed
-                        if (em.has_wind_speed && em.wind_speed != 0) {
+                        if (em.has_wind_speed) {
                             snprintf(parts[partCount++], 20, "%.1fm/s", em.wind_speed);
                         }
                         // Lux
-                        if (em.has_lux && em.lux != 0) {
+                        if (em.has_lux) {
                             snprintf(parts[partCount++], 20, "%.0flux", em.lux);
                         }
                         // Distance
-                        if (em.has_distance && em.distance != 0) {
+                        if (em.has_distance) {
                             snprintf(parts[partCount++], 20, "%.0fmm", em.distance);
                         }
                         // Radiation
-                        if (em.has_radiation && em.radiation != 0) {
+                        if (em.has_radiation) {
                             snprintf(parts[partCount++], 20, "%.1fuR/h", em.radiation);
                         }
                         // Weight
-                        if (em.has_weight && em.weight != 0) {
+                        if (em.has_weight) {
                             snprintf(parts[partCount++], 20, "%.1fkg", em.weight);
                         }
                         // Soil moisture
-                        if (em.has_soil_moisture && em.soil_moisture != 0) {
+                        if (em.has_soil_moisture) {
                             snprintf(parts[partCount++], 20, "Soil:%u%%", em.soil_moisture);
                         }
                         // Join all parts with spaces
@@ -409,9 +408,9 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
                         typeName = "Power";
                         auto &pm = telem.variant.power_metrics;
                         // Show first channel with data
-                        if (pm.has_ch1_voltage && pm.ch1_voltage > 0) {
+                        if (pm.has_ch1_voltage) {
                             snprintf(dataBuf, sizeof(dataBuf), "%.1fV/%.0fmA", pm.ch1_voltage, pm.ch1_current * 1000);
-                        } else if (pm.has_ch2_voltage && pm.ch2_voltage > 0) {
+                        } else if (pm.has_ch2_voltage) {
                             snprintf(dataBuf, sizeof(dataBuf), "%.1fV/%.0fmA", pm.ch2_voltage, pm.ch2_current * 1000);
                         } else {
                             snprintf(dataBuf, sizeof(dataBuf), "Pwr");
@@ -419,9 +418,9 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
                     } else if (telem.which_variant == meshtastic_Telemetry_air_quality_metrics_tag) {
                         typeName = "AirQual";
                         auto &aq = telem.variant.air_quality_metrics;
-                        if (aq.has_pm25_standard && aq.pm25_standard > 0) {
+                        if (aq.has_pm25_standard) {
                             snprintf(dataBuf, sizeof(dataBuf), "PM2.5:%u", aq.pm25_standard);
-                        } else if (aq.has_co2 && aq.co2 > 0) {
+                        } else if (aq.has_co2) {
                             snprintf(dataBuf, sizeof(dataBuf), "CO2:%uppm", aq.co2);
                         } else {
                             snprintf(dataBuf, sizeof(dataBuf), "AQI");
@@ -433,9 +432,9 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
                     } else if (telem.which_variant == meshtastic_Telemetry_health_metrics_tag) {
                         typeName = "Health";
                         auto &hm = telem.variant.health_metrics;
-                        if (hm.has_heart_bpm && hm.heart_bpm > 0) {
+                        if (hm.has_heart_bpm) {
                             snprintf(dataBuf, sizeof(dataBuf), "%ubpm", hm.heart_bpm);
-                        } else if (hm.has_spO2 && hm.spO2 > 0) {
+                        } else if (hm.has_spO2) {
                             snprintf(dataBuf, sizeof(dataBuf), "SpO2:%u%%", hm.spO2);
                         }
                     }
