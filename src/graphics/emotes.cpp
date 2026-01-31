@@ -139,24 +139,32 @@ const Emote emotes[] = {
     {"\u2193", downwards_arrow, downwards_arrow_width, downwards_arrow_height},          // ↓ Downwards Arrow
     {"\u2193\uFE0E", downwards_arrow, downwards_arrow_width, downwards_arrow_height},    // ↓︎ Downwards Arrow (text)
     {"\u2193\uFE0F", downwards_arrow, downwards_arrow_width, downwards_arrow_height},    // ↓️ Downwards Arrow (emoji)
+    {"\u2B07\uFE0F", downwards_arrow, downwards_arrow_width, downwards_arrow_height},    // ⬇️ Downwards Heavy Arrow (emoji)
+    {"\u2B07", downwards_arrow, downwards_arrow_width, downwards_arrow_height},          // ⬇ Downwards Heavy Arrow (text)
     {"\u2199", south_west_arrow, south_west_arrow_width, south_west_arrow_height},       // ↙ South West Arrow
     {"\u2199\uFE0E", south_west_arrow, south_west_arrow_width, south_west_arrow_height}, // ↙︎ South West Arrow (text)
     {"\u2199\uFE0F", south_west_arrow, south_west_arrow_width, south_west_arrow_height}, // ↙️ South West Arrow (emoji)
     {"\u2190", leftwards_arrow, leftwards_arrow_width, leftwards_arrow_height},          // ← Leftwards Arrow
     {"\u2190\uFE0E", leftwards_arrow, leftwards_arrow_width, leftwards_arrow_height},    // ←︎ Leftwards Arrow (text)
     {"\u2190\uFE0F", leftwards_arrow, leftwards_arrow_width, leftwards_arrow_height},    // ←️ Leftwards Arrow (emoji)
+    {"\u2B05\uFE0F", leftwards_arrow, leftwards_arrow_width, leftwards_arrow_height},    // ⬅️ Leftwards Heavy Arrow (emoji)
+    {"\u2B05", leftwards_arrow, leftwards_arrow_width, leftwards_arrow_height},          // ⬅ Leftwards Heavy Arrow (text)
     {"\u2196", north_west_arrow, north_west_arrow_width, north_west_arrow_height},       // ↖ North West Arrow
     {"\u2196\uFE0E", north_west_arrow, north_west_arrow_width, north_west_arrow_height}, // ↖︎ North West Arrow (text)
     {"\u2196\uFE0F", north_west_arrow, north_west_arrow_width, north_west_arrow_height}, // ↖️ North West Arrow (emoji)
     {"\u2191", upwards_arrow, upwards_arrow_width, upwards_arrow_height},                // ↑ Upwards Arrow
     {"\u2191\uFE0E", upwards_arrow, upwards_arrow_width, upwards_arrow_height},          // ↑︎ Upwards Arrow (text)
     {"\u2191\uFE0F", upwards_arrow, upwards_arrow_width, upwards_arrow_height},          // ↑️ Upwards Arrow (emoji)
+    {"\u2B06\uFE0F", upwards_arrow, upwards_arrow_width, upwards_arrow_height},          // ⬆️ Upwards Heavy Arrow (emoji)
+    {"\u2B06", upwards_arrow, upwards_arrow_width, upwards_arrow_height},                // ⬆ Upwards Heavy Arrow (text)
     {"\u2197", north_east_arrow, north_east_arrow_width, north_east_arrow_height},       // ↗ North East Arrow
     {"\u2197\uFE0E", north_east_arrow, north_east_arrow_width, north_east_arrow_height}, // ↗︎ North East Arrow (text)
     {"\u2197\uFE0F", north_east_arrow, north_east_arrow_width, north_east_arrow_height}, // ↗️ North East Arrow (emoji)
     {"\u2192", rightwards_arrow, rightwards_arrow_width, rightwards_arrow_height},       // → Rightwards Arrow
     {"\u2192\uFE0E", rightwards_arrow, rightwards_arrow_width, rightwards_arrow_height}, // →︎ Rightwards Arrow (text)
     {"\u2192\uFE0F", rightwards_arrow, rightwards_arrow_width, rightwards_arrow_height}, // →️ Rightwards Arrow (emoji)
+    {"\u27A1\uFE0F", rightwards_arrow, rightwards_arrow_width, rightwards_arrow_height}, // ➡️ Rightwards Heavy Arrow (emoji)
+    {"\u27A1", rightwards_arrow, rightwards_arrow_width, rightwards_arrow_height},       // ➡ Rightwards Heavy Arrow (text)
     {"\u2198", south_east_arrow, south_east_arrow_width, south_east_arrow_height},       // ↘ South East Arrow
     {"\u2198\uFE0E", south_east_arrow, south_east_arrow_width, south_east_arrow_height}, // ↘︎ South East Arrow (text)
     {"\u2198\uFE0F", south_east_arrow, south_east_arrow_width, south_east_arrow_height}, // ↘️ South East Arrow (emoji)
