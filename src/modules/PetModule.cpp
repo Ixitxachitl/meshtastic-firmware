@@ -11,6 +11,7 @@
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/images.h"
 #include "main.h"
+#include "mesh/Channels.h"
 #include "mesh/generated/meshtastic/telemetry.pb.h"
 #include "pb_decode.h"
 
@@ -274,16 +275,26 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
 
         // Extract data preview based on message type
         char dataBuf[32] = "";
-        if (mp.decoded.payload.size > 0) {
+        if (mp.pki_encrypted) {
+            // PKI encrypted message - we can't see the contents
+            snprintf(dataBuf, sizeof(dataBuf), "[encrypted]");
+        } else if (mp.decoded.payload.size > 0) {
             switch (lastMessageType) {
             case LastMessageType::TEXT:
             case LastMessageType::TEXT_COMPRESSED: {
-                // Show first ~20 chars of text message
-                size_t len = mp.decoded.payload.size;
-                if (len > 20)
-                    len = 20;
-                snprintf(dataBuf, sizeof(dataBuf), "\"%.20s%s\"", (const char *)mp.decoded.payload.bytes,
-                         mp.decoded.payload.size > 20 ? ".." : "");
+                // Show channel name and first ~16 chars of text, stripping newlines
+                const char *chanName = channels.getName(mp.channel);
+                char textPreview[24];
+                size_t j = 0;
+                for (size_t i = 0; i < mp.decoded.payload.size && j < 16; i++) {
+                    char c = ((const char *)mp.decoded.payload.bytes)[i];
+                    if (c != '\n' && c != '\r') {
+                        textPreview[j++] = c;
+                    }
+                }
+                textPreview[j] = '\0';
+                snprintf(dataBuf, sizeof(dataBuf), "#%s \"%.16s%s\"", chanName, textPreview,
+                         mp.decoded.payload.size > 16 ? ".." : "");
                 break;
             }
             case LastMessageType::TELEMETRY: {
@@ -292,14 +303,26 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
                 memset(&telem, 0, sizeof(telem));
                 if (pb_decode_from_bytes(mp.decoded.payload.bytes, mp.decoded.payload.size, &meshtastic_Telemetry_msg, &telem)) {
                     if (telem.which_variant == meshtastic_Telemetry_device_metrics_tag) {
-                        snprintf(dataBuf, sizeof(dataBuf), "%.0f%%/%.1fV", telem.variant.device_metrics.battery_level,
-                                 telem.variant.device_metrics.voltage);
+                        float voltage = telem.variant.device_metrics.voltage;
+                        float battery = telem.variant.device_metrics.battery_level;
+                        // Only show if voltage is sensible (> 1V) and battery is in valid range (0-101)
+                        if (voltage > 1.0f && battery >= 0 && battery <= 101) {
+                            snprintf(dataBuf, sizeof(dataBuf), "%.0f%%/%.1fV", battery, voltage);
+                        }
                     } else if (telem.which_variant == meshtastic_Telemetry_environment_metrics_tag) {
-                        snprintf(dataBuf, sizeof(dataBuf), "%.1fC/%.0f%%", telem.variant.environment_metrics.temperature,
-                                 telem.variant.environment_metrics.relative_humidity);
-                    } else {
-                        snprintf(dataBuf, sizeof(dataBuf), "%uB", (unsigned)mp.decoded.payload.size);
+                        float temp = telem.variant.environment_metrics.temperature;
+                        float humidity = telem.variant.environment_metrics.relative_humidity;
+                        if (temp != 0 || humidity != 0) {
+                            snprintf(dataBuf, sizeof(dataBuf), "%.1fC/%.0f%%", temp, humidity);
+                        }
+                    } else if (telem.which_variant == meshtastic_Telemetry_power_metrics_tag) {
+                        snprintf(dataBuf, sizeof(dataBuf), "Pwr");
+                    } else if (telem.which_variant == meshtastic_Telemetry_air_quality_metrics_tag) {
+                        snprintf(dataBuf, sizeof(dataBuf), "AQI");
+                    } else if (telem.which_variant == meshtastic_Telemetry_local_stats_tag) {
+                        snprintf(dataBuf, sizeof(dataBuf), "Stats");
                     }
+                    // else leave dataBuf empty for unknown variants
                 }
                 break;
             }
@@ -329,11 +352,136 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
                 }
                 break;
             }
-            default:
-                // Just show payload size for other types
-                if (mp.decoded.payload.size > 0) {
-                    snprintf(dataBuf, sizeof(dataBuf), "%uB", (unsigned)mp.decoded.payload.size);
+            case LastMessageType::WAYPOINT: {
+                // Decode waypoint for name
+                meshtastic_Waypoint wp;
+                memset(&wp, 0, sizeof(wp));
+                if (pb_decode_from_bytes(mp.decoded.payload.bytes, mp.decoded.payload.size, &meshtastic_Waypoint_msg, &wp)) {
+                    if (wp.name[0]) {
+                        snprintf(dataBuf, sizeof(dataBuf), "%.20s", wp.name);
+                    }
                 }
+                break;
+            }
+            case LastMessageType::NEIGHBOR: {
+                // Decode neighbor info for count
+                meshtastic_NeighborInfo ni;
+                memset(&ni, 0, sizeof(ni));
+                if (pb_decode_from_bytes(mp.decoded.payload.bytes, mp.decoded.payload.size, &meshtastic_NeighborInfo_msg, &ni)) {
+                    snprintf(dataBuf, sizeof(dataBuf), "%u neighbors", ni.neighbors_count);
+                }
+                break;
+            }
+            case LastMessageType::TRACEROUTE: {
+                // Show origin -> destination or origin <- destination with hop count
+                // route_back_count > 0 means this is the return path
+                char fromStr[12];
+                char toStr[12];
+                if (nodeDB) {
+                    meshtastic_NodeInfoLite *fromNode = nodeDB->getMeshNode(mp.from);
+                    meshtastic_NodeInfoLite *toNode = nodeDB->getMeshNode(mp.to);
+                    if (fromNode && fromNode->has_user && fromNode->user.short_name[0])
+                        snprintf(fromStr, sizeof(fromStr), "%s", fromNode->user.short_name);
+                    else
+                        snprintf(fromStr, sizeof(fromStr), "%08x", mp.from);
+                    if (toNode && toNode->has_user && toNode->user.short_name[0])
+                        snprintf(toStr, sizeof(toStr), "%s", toNode->user.short_name);
+                    else
+                        snprintf(toStr, sizeof(toStr), "%08x", mp.to);
+                } else {
+                    snprintf(fromStr, sizeof(fromStr), "%08x", mp.from);
+                    snprintf(toStr, sizeof(toStr), "%08x", mp.to);
+                }
+                meshtastic_RouteDiscovery tr;
+                memset(&tr, 0, sizeof(tr));
+                if (pb_decode_from_bytes(mp.decoded.payload.bytes, mp.decoded.payload.size, &meshtastic_RouteDiscovery_msg,
+                                         &tr)) {
+                    bool isReturn = tr.route_back_count > 0;
+                    uint8_t hops = isReturn ? tr.route_back_count : tr.route_count;
+                    snprintf(dataBuf, sizeof(dataBuf), "%s%s%s %uh", fromStr, isReturn ? "<-" : "->", toStr, hops);
+                }
+                break;
+            }
+            case LastMessageType::ROUTING: {
+                // Decode routing info
+                meshtastic_Routing routing;
+                memset(&routing, 0, sizeof(routing));
+                if (pb_decode_from_bytes(mp.decoded.payload.bytes, mp.decoded.payload.size, &meshtastic_Routing_msg, &routing)) {
+                    if (routing.which_variant == meshtastic_Routing_error_reason_tag) {
+                        const char *errStr = "err";
+                        switch (routing.error_reason) {
+                        case meshtastic_Routing_Error_NONE:
+                            errStr = "OK";
+                            break;
+                        case meshtastic_Routing_Error_NO_ROUTE:
+                            errStr = "no route";
+                            break;
+                        case meshtastic_Routing_Error_GOT_NAK:
+                            errStr = "NAK";
+                            break;
+                        case meshtastic_Routing_Error_TIMEOUT:
+                            errStr = "timeout";
+                            break;
+                        case meshtastic_Routing_Error_NO_INTERFACE:
+                            errStr = "no iface";
+                            break;
+                        case meshtastic_Routing_Error_MAX_RETRANSMIT:
+                            errStr = "max retx";
+                            break;
+                        case meshtastic_Routing_Error_NO_CHANNEL:
+                            errStr = "no chan";
+                            break;
+                        case meshtastic_Routing_Error_TOO_LARGE:
+                            errStr = "too big";
+                            break;
+                        case meshtastic_Routing_Error_NO_RESPONSE:
+                            errStr = "no resp";
+                            break;
+                        case meshtastic_Routing_Error_DUTY_CYCLE_LIMIT:
+                            errStr = "duty lim";
+                            break;
+                        case meshtastic_Routing_Error_BAD_REQUEST:
+                            errStr = "bad req";
+                            break;
+                        case meshtastic_Routing_Error_NOT_AUTHORIZED:
+                            errStr = "unauth";
+                            break;
+                        case meshtastic_Routing_Error_PKI_FAILED:
+                            errStr = "PKI fail";
+                            break;
+                        case meshtastic_Routing_Error_PKI_UNKNOWN_PUBKEY:
+                            errStr = "unk key";
+                            break;
+                        case meshtastic_Routing_Error_ADMIN_BAD_SESSION_KEY:
+                            errStr = "bad sess";
+                            break;
+                        case meshtastic_Routing_Error_ADMIN_PUBLIC_KEY_UNAUTHORIZED:
+                            errStr = "key unauth";
+                            break;
+                        default:
+                            break;
+                        }
+                        snprintf(dataBuf, sizeof(dataBuf), "%s", errStr);
+                    }
+                }
+                break;
+            }
+            case LastMessageType::RANGE_TEST: {
+                // Range test is just a text payload
+                if (mp.decoded.payload.size > 0 && mp.decoded.payload.size < 20) {
+                    snprintf(dataBuf, sizeof(dataBuf), "\"%.16s\"", (const char *)mp.decoded.payload.bytes);
+                }
+                break;
+            }
+            case LastMessageType::DETECTION: {
+                // Detection sensor - show the detection text
+                if (mp.decoded.payload.size > 0) {
+                    snprintf(dataBuf, sizeof(dataBuf), "\"%.16s\"", (const char *)mp.decoded.payload.bytes);
+                }
+                break;
+            }
+            default:
+                // Leave dataBuf empty for other message types
                 break;
             }
         }
