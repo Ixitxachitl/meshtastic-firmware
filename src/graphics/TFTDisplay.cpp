@@ -485,9 +485,31 @@ class TOUCH_CHSC6X : public ITouch
 } // namespace v1
 } // namespace lgfx
 #endif
+
+// T-Deck uses a custom panel class with GAMMASET command for proper initialization
+#if defined(T_DECK)
+class Panel_TDeck : public lgfx::Panel_ST7789
+{
+  protected:
+    const uint8_t *getInitCommands(uint8_t listno) const override
+    {
+        // GAMMASET command - Gamma curve 1, required for T-Deck display
+        static uint8_t list[] = {0x26, 1, 0x01, // CMD_GAMMASET = 0x26
+                                 0xFF, 0xFF};
+        if (listno == 1)
+            return list;
+        return Panel_ST7789::getInitCommands(listno);
+    }
+};
+#endif
+
 class LGFX : public lgfx::LGFX_Device
 {
+#if defined(T_DECK)
+    Panel_TDeck _panel_instance;
+#else
     lgfx::Panel_ST7789 _panel_instance;
+#endif
     lgfx::Bus_SPI _bus_instance;
     lgfx::Light_PWM _light_instance;
 #if HAS_TOUCHSCREEN
@@ -578,7 +600,11 @@ class LGFX : public lgfx::LGFX_Device
 
             cfg.pin_bl = ST7789_BL; // Pin number to which the backlight is connected
             cfg.invert = false;     // true to invert the brightness of the backlight
-            // cfg.pwm_channel = 0;
+#if defined(T_DECK)
+            // T-Deck uses AW9364DNR backlight driver - needs specific PWM settings for reliable initialization
+            cfg.freq = 44100;
+            cfg.pwm_channel = 7;
+#endif
 
             _light_instance.config(cfg);
             _panel_instance.setLight(&_light_instance); // Set the backlight on the panel.
