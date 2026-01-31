@@ -407,13 +407,16 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
                     } else if (telem.which_variant == meshtastic_Telemetry_power_metrics_tag) {
                         typeName = "Power";
                         auto &pm = telem.variant.power_metrics;
-                        // Show first channel with data
-                        if (pm.has_ch1_voltage) {
+                        // Show first channel with data (check has_ first, then value)
+                        if ((pm.has_ch1_voltage && pm.ch1_voltage != 0) || pm.ch1_voltage > 0.1f) {
                             snprintf(dataBuf, sizeof(dataBuf), "%.1fV/%.0fmA", pm.ch1_voltage, pm.ch1_current * 1000);
-                        } else if (pm.has_ch2_voltage) {
+                        } else if ((pm.has_ch2_voltage && pm.ch2_voltage != 0) || pm.ch2_voltage > 0.1f) {
                             snprintf(dataBuf, sizeof(dataBuf), "%.1fV/%.0fmA", pm.ch2_voltage, pm.ch2_current * 1000);
+                        } else if ((pm.has_ch3_voltage && pm.ch3_voltage != 0) || pm.ch3_voltage > 0.1f) {
+                            snprintf(dataBuf, sizeof(dataBuf), "%.1fV/%.0fmA", pm.ch3_voltage, pm.ch3_current * 1000);
                         } else {
-                            snprintf(dataBuf, sizeof(dataBuf), "Pwr");
+                            // No valid data, don't show meaningless "Pwr"
+                            dataBuf[0] = '\0';
                         }
                     } else if (telem.which_variant == meshtastic_Telemetry_air_quality_metrics_tag) {
                         typeName = "AirQual";
@@ -1178,6 +1181,57 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         return 1;     // Invalid, treat as 1
     };
 
+    // Helper to get full grapheme cluster length (handles ZWJ sequences, skin tone modifiers, etc.)
+    // This ensures compound emoji like 👨‍👩‍👧 or 👋🏽 are treated as single units
+    auto graphemeLen = [&utf8CharLen](const char *s, int16_t maxLen) -> int16_t {
+        if (maxLen <= 0 || !s[0])
+            return 0;
+        int16_t len = utf8CharLen((unsigned char)s[0]);
+        if (len > maxLen)
+            return maxLen;
+
+        // Check if this is a potential emoji (4-byte UTF-8 or certain 3-byte ranges)
+        bool maybeEmoji = (len >= 3);
+
+        if (maybeEmoji) {
+            // Continue consuming: ZWJ (E2 80 8D), variation selectors (EF B8 8E/8F),
+            // skin tone modifiers (F0 9F 8F BB-BF), regional indicators, etc.
+            while (len < maxLen) {
+                const unsigned char *next = (const unsigned char *)(s + len);
+                int16_t nextLen = utf8CharLen(next[0]);
+                if (len + nextLen > maxLen)
+                    break;
+
+                // ZWJ (U+200D) = E2 80 8D - joins emoji together
+                bool isZWJ = (nextLen == 3 && next[0] == 0xE2 && next[1] == 0x80 && next[2] == 0x8D);
+                // Variation selectors (U+FE0E, U+FE0F) = EF B8 8E/8F
+                bool isVarSel = (nextLen == 3 && next[0] == 0xEF && next[1] == 0xB8 && (next[2] == 0x8E || next[2] == 0x8F));
+                // Skin tone modifiers (U+1F3FB-1F3FF) = F0 9F 8F BB-BF
+                bool isSkinTone = (nextLen == 4 && next[0] == 0xF0 && next[1] == 0x9F && next[2] == 0x8F && next[3] >= 0xBB);
+                // Regional indicator symbols (U+1F1E6-1F1FF) for flags = F0 9F 87 A6-BF
+                bool isRegional = (nextLen == 4 && next[0] == 0xF0 && next[1] == 0x9F && next[2] == 0x87 && next[3] >= 0xA6);
+                // Combining enclosing keycap (U+20E3) = E2 83 A3
+                bool isKeycap = (nextLen == 3 && next[0] == 0xE2 && next[1] == 0x83 && next[2] == 0xA3);
+
+                if (isZWJ || isVarSel || isSkinTone || isKeycap) {
+                    len += nextLen;
+                    // After ZWJ, also consume the next emoji codepoint
+                    if (isZWJ && len < maxLen) {
+                        int16_t emojiLen = utf8CharLen((unsigned char)s[len]);
+                        if (len + emojiLen <= maxLen)
+                            len += emojiLen;
+                    }
+                } else if (isRegional) {
+                    // Flags: consume pairs of regional indicators
+                    len += nextLen;
+                } else {
+                    break;
+                }
+            }
+        }
+        return len;
+    };
+
     // Helper lambda to count lines needed for a message using pixel width (word-aware wrapping)
     auto countLinesForMsg = [&](const char *msg) -> int16_t {
         int16_t lines = 0;
@@ -1189,12 +1243,12 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             // Find how many bytes fit, tracking last word boundary for clean wrap
             int16_t byteCount = 0;
             int16_t lastWordBreak = 0; // Byte count at last space
-            char testBuf[128];
+            char testBuf[160];         // Larger buffer for emoji sequences
             int16_t testPos = pos;
-            while (testPos < msgLen && byteCount < (int16_t)sizeof(testBuf) - 4) {
-                int16_t charLen = utf8CharLen((unsigned char)msg[testPos]);
-                if (testPos + charLen > msgLen)
-                    charLen = msgLen - testPos;
+            while (testPos < msgLen && byteCount < (int16_t)sizeof(testBuf) - 32) {
+                int16_t charLen = graphemeLen(msg + testPos, msgLen - testPos);
+                if (charLen <= 0)
+                    break;
                 if (byteCount + charLen >= (int16_t)sizeof(testBuf))
                     break;
                 // Check for word boundary (space) before adding
@@ -1213,7 +1267,9 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 testPos += charLen;
             }
             if (byteCount == 0)
-                byteCount = utf8CharLen((unsigned char)msg[pos]);
+                byteCount = graphemeLen(msg + pos, msgLen - pos);
+            if (byteCount <= 0)
+                byteCount = 1; // Safety: advance at least 1 byte
             pos += byteCount;
             // Skip leading space on next line
             while (pos < msgLen && msg[pos] == ' ')
@@ -1266,12 +1322,12 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             // Find how many bytes fit, tracking last word boundary for clean wrap
             int16_t byteCount = 0;
             int16_t lastWordBreak = 0;
-            char lineBuf[128];
+            char lineBuf[160]; // Larger buffer for emoji sequences
             int16_t testPos = pos;
-            while (testPos < msgLen && byteCount < (int16_t)sizeof(lineBuf) - 4) {
-                int16_t charLen = utf8CharLen((unsigned char)msg[testPos]);
-                if (testPos + charLen > msgLen)
-                    charLen = msgLen - testPos;
+            while (testPos < msgLen && byteCount < (int16_t)sizeof(lineBuf) - 32) {
+                int16_t charLen = graphemeLen(msg + testPos, msgLen - testPos);
+                if (charLen <= 0)
+                    break;
                 if (byteCount + charLen >= (int16_t)sizeof(lineBuf))
                     break;
                 // Check for word boundary (space) before adding
@@ -1290,7 +1346,9 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 testPos += charLen;
             }
             if (byteCount == 0)
-                byteCount = utf8CharLen((unsigned char)msg[pos]);
+                byteCount = graphemeLen(msg + pos, msgLen - pos);
+            if (byteCount <= 0)
+                byteCount = 1; // Safety: advance at least 1 byte
             memcpy(lineBuf, msg + pos, byteCount);
             lineBuf[byteCount] = '\0';
 
