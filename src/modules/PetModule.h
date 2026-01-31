@@ -130,6 +130,16 @@ class PetModule : public MeshModule, public Observable<const UIFrameEvent *>, pr
     // Configuration
     bool enabled = true;
 
+#ifdef SENSECAP_INDICATOR
+    // Message log ring buffer (Indicator only - shows received messages)
+    static constexpr uint8_t MSG_LOG_LINES = 18;
+    static constexpr uint8_t MSG_LOG_LINE_LEN = 80;
+    char msgLogBuffer[MSG_LOG_LINES][MSG_LOG_LINE_LEN] = {{0}};
+    uint8_t msgLogHead = 0;
+    uint8_t msgLogCount = 0;
+    void addMessageLog(const char *line);
+#endif
+
     // Statistics tracking
     uint32_t messagesReceived = 0;
     uint32_t nodesDiscovered = 0;

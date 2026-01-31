@@ -7,9 +7,12 @@
 #include "PetImages.h"
 #include "PetModule.h"
 #include "PowerStatus.h"
+#include "gps/RTC.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/images.h"
 #include "main.h"
+#include "mesh/generated/meshtastic/telemetry.pb.h"
+#include "pb_decode.h"
 
 #if HAS_SCREEN
 #include "graphics/Screen.h"
@@ -36,6 +39,17 @@ PetModule::PetModule() : MeshModule("pet"), concurrency::OSThread("PetModule")
     // This module is promiscuous - it sees all packets to track activity
     isPromiscuous = true;
 }
+
+#ifdef SENSECAP_INDICATOR
+void PetModule::addMessageLog(const char *line)
+{
+    strncpy(msgLogBuffer[msgLogHead], line, MSG_LOG_LINE_LEN - 1);
+    msgLogBuffer[msgLogHead][MSG_LOG_LINE_LEN - 1] = '\0';
+    msgLogHead = (msgLogHead + 1) % MSG_LOG_LINES;
+    if (msgLogCount < MSG_LOG_LINES)
+        msgLogCount++;
+}
+#endif
 
 void PetModule::setEnabled(bool enable)
 {
@@ -212,6 +226,136 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
         lastMessageType = LastMessageType::UNKNOWN;
         break;
     }
+
+#ifdef SENSECAP_INDICATOR
+    // Log received message to on-screen buffer with timestamp, signal info, and node name
+    {
+        char logLine[MSG_LOG_LINE_LEN];
+        uint32_t fromNode = mp.from;
+
+        // Get timestamp - use real time if available, otherwise uptime
+        char timeBuf[16];
+        uint32_t rtc_sec = getValidTime(RTCQuality::RTCQualityDevice, true);
+        if (rtc_sec > 0) {
+            // Real time available - format based on 12/24 hour setting
+            long hms = rtc_sec % SEC_PER_DAY;
+            hms = (hms + SEC_PER_DAY) % SEC_PER_DAY;
+            int hour = hms / SEC_PER_HOUR;
+            int min = (hms % SEC_PER_HOUR) / SEC_PER_MIN;
+            int sec = hms % SEC_PER_MIN;
+            if (config.display.use_12h_clock) {
+                bool isPM = hour >= 12;
+                int hour12 = hour % 12;
+                if (hour12 == 0)
+                    hour12 = 12;
+                snprintf(timeBuf, sizeof(timeBuf), "%d:%02d:%02d%s", hour12, min, sec, isPM ? "p" : "a");
+            } else {
+                snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:%02d", hour, min, sec);
+            }
+        } else {
+            // No real time - use uptime as mm:ss or h:mm:ss
+            uint32_t secs = millis() / 1000;
+            if (secs < 3600) {
+                snprintf(timeBuf, sizeof(timeBuf), "%02lu:%02lu", (unsigned long)(secs / 60), (unsigned long)(secs % 60));
+            } else {
+                snprintf(timeBuf, sizeof(timeBuf), "%lu:%02lu:%02lu", (unsigned long)(secs / 3600),
+                         (unsigned long)((secs % 3600) / 60), (unsigned long)(secs % 60));
+            }
+        }
+
+        // Try to get long name from NodeDB
+        const char *nodeName = nullptr;
+        if (nodeDB) {
+            meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(fromNode);
+            if (node && node->has_user && node->user.long_name[0]) {
+                nodeName = node->user.long_name;
+            }
+        }
+
+        // Extract data preview based on message type
+        char dataBuf[32] = "";
+        if (mp.decoded.payload.size > 0) {
+            switch (lastMessageType) {
+            case LastMessageType::TEXT:
+            case LastMessageType::TEXT_COMPRESSED: {
+                // Show first ~20 chars of text message
+                size_t len = mp.decoded.payload.size;
+                if (len > 20)
+                    len = 20;
+                snprintf(dataBuf, sizeof(dataBuf), "\"%.20s%s\"", (const char *)mp.decoded.payload.bytes,
+                         mp.decoded.payload.size > 20 ? ".." : "");
+                break;
+            }
+            case LastMessageType::TELEMETRY: {
+                // Try to decode telemetry for useful data
+                meshtastic_Telemetry telem;
+                memset(&telem, 0, sizeof(telem));
+                if (pb_decode_from_bytes(mp.decoded.payload.bytes, mp.decoded.payload.size, &meshtastic_Telemetry_msg, &telem)) {
+                    if (telem.which_variant == meshtastic_Telemetry_device_metrics_tag) {
+                        snprintf(dataBuf, sizeof(dataBuf), "%.0f%%/%.1fV", telem.variant.device_metrics.battery_level,
+                                 telem.variant.device_metrics.voltage);
+                    } else if (telem.which_variant == meshtastic_Telemetry_environment_metrics_tag) {
+                        snprintf(dataBuf, sizeof(dataBuf), "%.1fC/%.0f%%", telem.variant.environment_metrics.temperature,
+                                 telem.variant.environment_metrics.relative_humidity);
+                    } else {
+                        snprintf(dataBuf, sizeof(dataBuf), "%uB", (unsigned)mp.decoded.payload.size);
+                    }
+                }
+                break;
+            }
+            case LastMessageType::POSITION: {
+                // Decode position for lat/lon
+                meshtastic_Position pos;
+                memset(&pos, 0, sizeof(pos));
+                if (pb_decode_from_bytes(mp.decoded.payload.bytes, mp.decoded.payload.size, &meshtastic_Position_msg, &pos)) {
+                    if (pos.latitude_i != 0 || pos.longitude_i != 0) {
+                        float lat = pos.latitude_i * 1e-7;
+                        float lon = pos.longitude_i * 1e-7;
+                        snprintf(dataBuf, sizeof(dataBuf), "%.4f,%.4f", lat, lon);
+                    } else if (pos.altitude != 0) {
+                        snprintf(dataBuf, sizeof(dataBuf), "alt:%dm", pos.altitude);
+                    }
+                }
+                break;
+            }
+            case LastMessageType::NODEINFO: {
+                // Decode nodeinfo for short name
+                meshtastic_User user;
+                memset(&user, 0, sizeof(user));
+                if (pb_decode_from_bytes(mp.decoded.payload.bytes, mp.decoded.payload.size, &meshtastic_User_msg, &user)) {
+                    if (user.short_name[0]) {
+                        snprintf(dataBuf, sizeof(dataBuf), "%s", user.short_name);
+                    }
+                }
+                break;
+            }
+            default:
+                // Just show payload size for other types
+                if (mp.decoded.payload.size > 0) {
+                    snprintf(dataBuf, sizeof(dataBuf), "%uB", (unsigned)mp.decoded.payload.size);
+                }
+                break;
+            }
+        }
+
+        // Format: "HH:MM:SS [hops] Type Data Name"
+        const char *nodeStr = nodeName ? nodeName : "!????????";
+        char nodeIdBuf[12];
+        if (!nodeName) {
+            snprintf(nodeIdBuf, sizeof(nodeIdBuf), "!%08x", fromNode);
+            nodeStr = nodeIdBuf;
+        }
+
+        if (dataBuf[0]) {
+            snprintf(logLine, sizeof(logLine), "%s [%u] %s %s %s", timeBuf, lastMessageHops, getMessageTypeName(lastMessageType),
+                     dataBuf, nodeStr);
+        } else {
+            snprintf(logLine, sizeof(logLine), "%s [%u] %s %s", timeBuf, lastMessageHops, getMessageTypeName(lastMessageType),
+                     nodeStr);
+        }
+        addMessageLog(logLine);
+    }
+#endif
 
     // Boost happiness when receiving messages (pet likes activity!)
     if (happiness < 95) {
@@ -647,7 +791,11 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     display->setTextAlignment(TEXT_ALIGN_LEFT);
 
     // Pet area - wider box for pet (shifted down 1px)
+#ifdef SENSECAP_INDICATOR
+    const int16_t petBoxW = (petW + 32 * scale) * 3; // 3x wider on Indicator
+#else
     const int16_t petBoxW = petW + 32 * scale;
+#endif
     const int16_t petBoxH = petH + 4 * scale;
     const int16_t petBoxX = x + 18 * scale; // After mood indicator
     const int16_t petBoxY = contentY + 3 * scale + 1;
@@ -684,7 +832,7 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     drawXbmScaled(display, x, lastY + (FONT_HEIGHT_SMALL - iconH) / 2 - 1, speed_icon_width, speed_icon_height, speedIcon,
                   iconScale);
 
-    // Format: "5/m Text [3] (2m)" - messages per minute, type, last hops, time since last
+    // Format: "5/m [hops] Type (time)" - messages per minute, hops, type, time since last
     if (lastMessageTime > 0) {
         uint32_t elapsed = (millis() - lastMessageTime) / 1000; // seconds
         char timeBuf[8];
@@ -695,7 +843,7 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         } else {
             snprintf(timeBuf, sizeof(timeBuf), "%luh", (unsigned long)(elapsed / 3600));
         }
-        snprintf(buf, sizeof(buf), "%u/m %s [%u] (%s)", msgPerMin, getMessageTypeName(lastMessageType), lastMessageHops, timeBuf);
+        snprintf(buf, sizeof(buf), "%u/m [%u] %s (%s)", msgPerMin, lastMessageHops, getMessageTypeName(lastMessageType), timeBuf);
     } else {
         snprintf(buf, sizeof(buf), "%u/m", msgPerMin);
     }
@@ -709,6 +857,126 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     drawStatusBarWithIcon(display, x, barY, barW, happiness, true, scale);
     uint8_t xpPercent = (xpForNextLevel > 0) ? (uint8_t)((experience * 100) / xpForNextLevel) : 0;
     drawStatusBarWithIcon(display, x + barW + 4, barY, barW, xpPercent, false, scale);
+
+#ifdef SENSECAP_INDICATOR
+    // Draw received message log at bottom of screen (Indicator only)
+    // Wrap long lines with indent, show as many entries as fit in 18 lines
+    int16_t logY = barY + (10 * scale) - 6; // Below the status bars, tighter gap
+    display->setFont(FONT_SMALL);
+    int16_t lineHeight = FONT_HEIGHT_SMALL;
+    int16_t indentX = 24; // Indent for wrapped lines
+
+    // Calculate available width in pixels
+    int16_t availableWidth = screenW - x - 2;
+    int16_t wrapWidth = availableWidth - indentX;
+
+    // Maximum 18 display lines
+    const int16_t maxDisplayLines = 18;
+    int16_t currentY = logY;
+
+    // Draw entries from oldest to newest, wrapping as needed
+    int16_t entriesToShow = msgLogCount;
+    if (entriesToShow > MSG_LOG_LINES)
+        entriesToShow = MSG_LOG_LINES;
+
+    // Helper lambda to count lines needed for a message using pixel width
+    auto countLinesForMsg = [&](const char *msg) -> int16_t {
+        int16_t lines = 0;
+        int16_t msgLen = strlen(msg);
+        int16_t pos = 0;
+        bool first = true;
+        while (pos < msgLen) {
+            int16_t maxW = first ? availableWidth : wrapWidth;
+            // Find how many chars fit in this line width
+            int16_t chars = 0;
+            char testBuf[128];
+            for (chars = 1; chars <= msgLen - pos && chars < (int16_t)sizeof(testBuf); chars++) {
+                strncpy(testBuf, msg + pos, chars);
+                testBuf[chars] = '\0';
+                if (display->getStringWidth(testBuf) > maxW) {
+                    chars--;
+                    break;
+                }
+            }
+            if (chars == 0)
+                chars = 1; // At least 1 char per line
+            pos += chars;
+            lines++;
+            first = false;
+        }
+        return lines > 0 ? lines : 1;
+    };
+
+    // First pass: figure out how many entries fit in 18 lines
+    int16_t startEntry = 0;
+    int16_t totalLines = 0;
+    for (int16_t i = 0; i < entriesToShow; i++) {
+        int16_t idx = (msgLogHead - entriesToShow + i + MSG_LOG_LINES) % MSG_LOG_LINES;
+        totalLines += countLinesForMsg(msgLogBuffer[idx]);
+    }
+
+    // If too many lines, skip older entries
+    if (totalLines > maxDisplayLines) {
+        totalLines = 0;
+        for (startEntry = entriesToShow - 1; startEntry >= 0; startEntry--) {
+            int16_t idx = (msgLogHead - entriesToShow + startEntry + MSG_LOG_LINES) % MSG_LOG_LINES;
+            int16_t linesNeeded = countLinesForMsg(msgLogBuffer[idx]);
+            if (totalLines + linesNeeded > maxDisplayLines) {
+                startEntry++;
+                break;
+            }
+            totalLines += linesNeeded;
+        }
+        if (startEntry < 0)
+            startEntry = 0;
+    }
+
+    // Second pass: actually draw with pixel-accurate wrapping
+    int16_t linesDrawn = 0;
+    for (int16_t i = startEntry; i < entriesToShow && linesDrawn < maxDisplayLines; i++) {
+        int16_t idx = (msgLogHead - entriesToShow + i + MSG_LOG_LINES) % MSG_LOG_LINES;
+        bool isNewest = (i == entriesToShow - 1);
+
+        const char *msg = msgLogBuffer[idx];
+        int16_t msgLen = strlen(msg);
+        int16_t pos = 0;
+        bool firstLine = true;
+
+        while (pos < msgLen && linesDrawn < maxDisplayLines) {
+            int16_t drawX = firstLine ? x : (x + indentX);
+            int16_t maxW = firstLine ? availableWidth : wrapWidth;
+
+            // Find how many chars fit using actual pixel width
+            int16_t chars = 0;
+            char lineBuf[128];
+            for (chars = 1; chars <= msgLen - pos && chars < (int16_t)sizeof(lineBuf) - 1; chars++) {
+                strncpy(lineBuf, msg + pos, chars);
+                lineBuf[chars] = '\0';
+                if (display->getStringWidth(lineBuf) > maxW) {
+                    chars--;
+                    break;
+                }
+            }
+            if (chars == 0)
+                chars = 1;
+            strncpy(lineBuf, msg + pos, chars);
+            lineBuf[chars] = '\0';
+
+            // Draw with bold effect for newest entry
+            if (isNewest) {
+                display->drawString(drawX, currentY, lineBuf);
+                display->drawString(drawX + 1, currentY, lineBuf);
+            } else {
+                display->drawString(drawX, currentY, lineBuf);
+            }
+
+            pos += chars;
+            currentY += lineHeight;
+            linesDrawn++;
+            firstLine = false;
+        }
+    }
+#endif
 }
 
 // Helper function to draw XBM bitmap scaled 2x (for high-resolution screens)
@@ -1019,9 +1287,9 @@ void PetModule::drawMoodIndicator(OLEDDisplay *display, int16_t x, int16_t y, ui
         moodHeight = weary_face_height;
         break;
     case PetMood::ALERT:
-        moodBitmap = graphics::bang;
-        moodWidth = bang_width;
-        moodHeight = bang_height;
+        moodBitmap = graphics::open_mouth;
+        moodWidth = open_mouth_width;
+        moodHeight = open_mouth_height;
         break;
     }
 

@@ -409,6 +409,10 @@ extern const unsigned char sleeping_face[] PROGMEM;
 #define weary_face_width 16
 #define weary_face_height 16
 extern const unsigned char weary_face[] PROGMEM;
+
+#define open_mouth_width 16
+#define open_mouth_height 16
+extern const unsigned char open_mouth[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
 } // namespace graphics
