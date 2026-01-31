@@ -13,10 +13,11 @@ const Emote emotes[] = {
     {"\U0001F44E", thumbdown, thumbs_width, thumbs_height}, // 👎 Thumbs Down
 
     // --- Smileys (Multiple Unicode Aliases) ---
-    {"\U0001F60A", smiling_eyes, smiling_eyes_width, smiling_eyes_height},             // 😊 Smiling Eyes
-    {"\U0001F600", grinning, grinning_width, grinning_height},                         // 😀 Grinning Face
-    {"\U0001F642", slightly_smiling, slightly_smiling_width, slightly_smiling_height}, // 🙂 Slightly Smiling Face
-    {"\U0001F609", winking_face, winking_face_width, winking_face_height},             // 😉 Winking Face
+    {"\U0001F60A", smiling_eyes, smiling_eyes_width, smiling_eyes_height},                // 😊 Smiling Eyes
+    {"\U0001F600", grinning, grinning_width, grinning_height},                            // 😀 Grinning Face
+    {"\U0001F603", grinning_big_eyes, grinning_big_eyes_width, grinning_big_eyes_height}, // 😃 Grinning Face with Big Eyes
+    {"\U0001F642", slightly_smiling, slightly_smiling_width, slightly_smiling_height},    // 🙂 Slightly Smiling Face
+    {"\U0001F609", winking_face, winking_face_width, winking_face_height},                // 😉 Winking Face
     {"\U0001F601", grinning_smiling_eyes, grinning_smiling_eyes_width, grinning_smiling_eyes_height}, // 😁 Grinning Smiling Eyes
     {"\U0001F60D", heart_eyes, heart_eyes_width, heart_eyes_height},                                  // 😍 Heart Eyes
     {"\U0001F970", heart_smile, heart_smile_width, heart_smile_height}, // 🥰 Smiling Face with Hearts
@@ -591,6 +592,10 @@ const unsigned char weary_face[] PROGMEM = {0x00, 0x00, 0xE0, 0x07, 0x18, 0x18, 
 const unsigned char open_mouth[] PROGMEM = {0x00, 0x00, 0xE0, 0x07, 0x18, 0x18, 0x04, 0x20, 0x24, 0x24, 0x52,
                                             0x4A, 0x22, 0x44, 0x02, 0x40, 0x82, 0x41, 0x42, 0x42, 0x42, 0x42,
                                             0x44, 0x22, 0x84, 0x21, 0x18, 0x18, 0xE0, 0x07, 0x00, 0x00};
+
+const unsigned char grinning_big_eyes[] PROGMEM = {0x00, 0x00, 0xE0, 0x07, 0x18, 0x18, 0x04, 0x20, 0x64, 0x26, 0x62,
+                                                   0x46, 0x62, 0x46, 0x02, 0x40, 0xF2, 0x4F, 0x12, 0x48, 0x22, 0x44,
+                                                   0xC4, 0x23, 0x04, 0x20, 0x18, 0x18, 0xE0, 0x07, 0x00, 0x00};
 #endif
 
 } // namespace graphics

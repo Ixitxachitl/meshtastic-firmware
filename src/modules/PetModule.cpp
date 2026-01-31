@@ -666,8 +666,12 @@ void PetModule::updateMood()
 void PetModule::updateAnimation()
 {
     // Handle walking animation - move pet back and forth within pet box
-    // petX ranges from 0 to 20, which gets scaled to actual walk range in drawFrame
+    // petX ranges from 0 to maxWalkX, which gets scaled to actual walk range in drawFrame
+#ifdef SENSECAP_INDICATOR
+    const int16_t maxWalkX = 60; // 3x wider box needs 3x more steps to maintain same speed
+#else
     const int16_t maxWalkX = 20;
+#endif
 
     if (currentAnimation == PetAnimation::WALKING || currentAnimation == PetAnimation::HOPPING) {
         petX += petDirection * 2; // Move 2 units per frame for visible movement

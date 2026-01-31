@@ -374,3 +374,7 @@ const int compass_ball_height = 8;
 #include "img/icon.xbm"
 #endif
 static_assert(sizeof(icon_bits) >= 0, "Silence unused variable warning");
+
+#ifdef SENSECAP_INDICATOR
+#include "img/icon_large.xbm"
+#endif
