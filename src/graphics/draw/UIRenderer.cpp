@@ -1077,6 +1077,26 @@ void UIRenderer::drawIconScreen(const char *upperMsg, OLEDDisplay *display, OLED
     // Large icon for SenseCAP Indicator's 480x480 TFT display
     display->drawXbm(x + (SCREEN_WIDTH - icon_large_width) / 2, y + (SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM - icon_large_height) / 2,
                      icon_large_width, icon_large_height, icon_large_bits);
+
+    display->setFont(FONT_MEDIUM);
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    const char *title = "meshtastic.org";
+    display->drawString(x + getStringCenteredX(title), y + SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM, title);
+    display->setFont(FONT_SMALL);
+    // Draw region in upper left
+    if (upperMsg)
+        display->drawString(x + 0, y + 0, upperMsg);
+
+    // Draw version and short name in upper right
+    char buf[25];
+    snprintf(buf, sizeof(buf), "%s\n%s", xstr(APP_VERSION_SHORT),
+             graphics::UIRenderer::haveGlyphs(owner.short_name) ? owner.short_name : "");
+
+    display->setTextAlignment(TEXT_ALIGN_RIGHT);
+    display->drawString(x + SCREEN_WIDTH, y + 0, buf);
+    screen->forceDisplay();
+
+    display->setTextAlignment(TEXT_ALIGN_LEFT); // Restore left align, just to be kind to any other unsuspecting code
 #elif defined(T_DECK)
     // T-Deck specific icon for 320x240 TFT display
     display->drawXbm(x + (SCREEN_WIDTH - icon_t_deck_width) / 2,

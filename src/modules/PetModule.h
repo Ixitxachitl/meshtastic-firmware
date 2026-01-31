@@ -135,7 +135,7 @@ class PetModule : public MeshModule, public Observable<const UIFrameEvent *>, pr
 #ifdef SENSECAP_INDICATOR
     static constexpr uint8_t MSG_LOG_LINES = 18;
 #else
-    static constexpr uint8_t MSG_LOG_LINES = 6;
+    static constexpr uint8_t MSG_LOG_LINES = 10;
 #endif
     static constexpr uint8_t MSG_LOG_LINE_LEN = 80;
     char msgLogBuffer[MSG_LOG_LINES][MSG_LOG_LINE_LEN] = {{0}};

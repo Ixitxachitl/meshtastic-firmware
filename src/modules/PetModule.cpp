@@ -1104,8 +1104,14 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     // Draw received message log at bottom of screen (wide screen devices)
     // Wrap long lines with indent, show as many entries as fit
     int16_t logY = barY + (10 * scale) - 6; // Below the status bars, tighter gap
+#ifdef T_DECK
+    // Use smaller font for T-Deck to fit more lines
+    display->setFont(FONT_SMALL_LOCAL);
+    int16_t lineHeight = _fontHeight(FONT_SMALL_LOCAL) - 3;
+#else
     display->setFont(FONT_SMALL);
     int16_t lineHeight = FONT_HEIGHT_SMALL;
+#endif
     int16_t indentX = 24; // Indent for wrapped lines
 
     // Calculate available width in pixels
@@ -1116,7 +1122,7 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 #ifdef SENSECAP_INDICATOR
     const int16_t maxDisplayLines = 18;
 #else
-    const int16_t maxDisplayLines = 6;
+    const int16_t maxDisplayLines = 10;
 #endif
     int16_t currentY = logY;
 
@@ -1124,6 +1130,19 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     int16_t entriesToShow = msgLogCount;
     if (entriesToShow > MSG_LOG_LINES)
         entriesToShow = MSG_LOG_LINES;
+
+    // Helper to get number of bytes in a UTF-8 codepoint starting at the given byte
+    auto utf8CharLen = [](unsigned char c) -> int16_t {
+        if ((c & 0x80) == 0)
+            return 1; // ASCII
+        if ((c & 0xE0) == 0xC0)
+            return 2; // 2-byte sequence
+        if ((c & 0xF0) == 0xE0)
+            return 3; // 3-byte sequence
+        if ((c & 0xF8) == 0xF0)
+            return 4; // 4-byte sequence (emoji)
+        return 1;     // Invalid, treat as 1
+    };
 
     // Helper lambda to count lines needed for a message using pixel width
     auto countLinesForMsg = [&](const char *msg) -> int16_t {
@@ -1133,20 +1152,30 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         bool first = true;
         while (pos < msgLen) {
             int16_t maxW = first ? availableWidth : wrapWidth;
-            // Find how many chars fit in this line width
-            int16_t chars = 0;
+            // Find how many bytes fit in this line width, advancing by UTF-8 codepoint
+            int16_t byteCount = 0;
             char testBuf[128];
-            for (chars = 1; chars <= msgLen - pos && chars < (int16_t)sizeof(testBuf); chars++) {
-                strncpy(testBuf, msg + pos, chars);
-                testBuf[chars] = '\0';
+            int16_t testPos = pos;
+            while (testPos < msgLen && byteCount < (int16_t)sizeof(testBuf) - 4) {
+                int16_t charLen = utf8CharLen((unsigned char)msg[testPos]);
+                if (testPos + charLen > msgLen)
+                    charLen = msgLen - testPos; // Truncated sequence
+                // Try adding this codepoint
+                if (byteCount + charLen >= (int16_t)sizeof(testBuf))
+                    break;
+                memcpy(testBuf + byteCount, msg + testPos, charLen);
+                byteCount += charLen;
+                testBuf[byteCount] = '\0';
                 if (display->getStringWidth(testBuf) > maxW) {
-                    chars--;
+                    // This char overflows, back off
+                    byteCount -= charLen;
                     break;
                 }
+                testPos += charLen;
             }
-            if (chars == 0)
-                chars = 1; // At least 1 char per line
-            pos += chars;
+            if (byteCount == 0)
+                byteCount = utf8CharLen((unsigned char)msg[pos]); // At least 1 codepoint
+            pos += byteCount;
             lines++;
             first = false;
         }
@@ -1192,21 +1221,29 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             int16_t drawX = firstLine ? x : (x + indentX);
             int16_t maxW = firstLine ? availableWidth : wrapWidth;
 
-            // Find how many chars fit using actual pixel width
-            int16_t chars = 0;
+            // Find how many bytes fit using actual pixel width, advancing by UTF-8 codepoint
+            int16_t byteCount = 0;
             char lineBuf[128];
-            for (chars = 1; chars <= msgLen - pos && chars < (int16_t)sizeof(lineBuf) - 1; chars++) {
-                strncpy(lineBuf, msg + pos, chars);
-                lineBuf[chars] = '\0';
+            int16_t testPos = pos;
+            while (testPos < msgLen && byteCount < (int16_t)sizeof(lineBuf) - 4) {
+                int16_t charLen = utf8CharLen((unsigned char)msg[testPos]);
+                if (testPos + charLen > msgLen)
+                    charLen = msgLen - testPos;
+                if (byteCount + charLen >= (int16_t)sizeof(lineBuf))
+                    break;
+                memcpy(lineBuf + byteCount, msg + testPos, charLen);
+                byteCount += charLen;
+                lineBuf[byteCount] = '\0';
                 if (display->getStringWidth(lineBuf) > maxW) {
-                    chars--;
+                    byteCount -= charLen;
                     break;
                 }
+                testPos += charLen;
             }
-            if (chars == 0)
-                chars = 1;
-            strncpy(lineBuf, msg + pos, chars);
-            lineBuf[chars] = '\0';
+            if (byteCount == 0)
+                byteCount = utf8CharLen((unsigned char)msg[pos]);
+            memcpy(lineBuf, msg + pos, byteCount);
+            lineBuf[byteCount] = '\0';
 
             // Draw with bold effect for newest entry
             if (isNewest) {
@@ -1216,7 +1253,7 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 display->drawString(drawX, currentY, lineBuf);
             }
 
-            pos += chars;
+            pos += byteCount;
             currentY += lineHeight;
             linesDrawn++;
             firstLine = false;
