@@ -7,6 +7,7 @@
 #include "PetImages.h"
 #include "PetModule.h"
 #include "PowerStatus.h"
+#include "Telemetry/UnitConversions.h"
 #include "gps/RTC.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/images.h"
@@ -303,24 +304,78 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
                 memset(&telem, 0, sizeof(telem));
                 if (pb_decode_from_bytes(mp.decoded.payload.bytes, mp.decoded.payload.size, &meshtastic_Telemetry_msg, &telem)) {
                     if (telem.which_variant == meshtastic_Telemetry_device_metrics_tag) {
-                        float voltage = telem.variant.device_metrics.voltage;
-                        float battery = telem.variant.device_metrics.battery_level;
-                        // Only show if voltage is sensible (> 1V) and battery is in valid range (0-101)
-                        if (voltage > 1.0f && battery >= 0 && battery <= 101) {
-                            snprintf(dataBuf, sizeof(dataBuf), "%.0f%%/%.1fV", battery, voltage);
+                        auto &dm = telem.variant.device_metrics;
+                        // Only show if voltage field is present, sensible (> 1V), and battery is in valid range
+                        if (dm.has_voltage && dm.voltage > 1.0f && dm.has_battery_level && dm.battery_level <= 101) {
+                            snprintf(dataBuf, sizeof(dataBuf), "%.0f%%/%.1fV", dm.battery_level, dm.voltage);
                         }
                     } else if (telem.which_variant == meshtastic_Telemetry_environment_metrics_tag) {
-                        float temp = telem.variant.environment_metrics.temperature;
-                        float humidity = telem.variant.environment_metrics.relative_humidity;
-                        if (temp != 0 || humidity != 0) {
-                            snprintf(dataBuf, sizeof(dataBuf), "%.1fC/%.0f%%", temp, humidity);
+                        auto &em = telem.variant.environment_metrics;
+                        bool useFahrenheit = moduleConfig.telemetry.environment_display_fahrenheit;
+                        // Build a compact string with available fields
+                        char tempStr[16] = "";
+                        if (em.has_temperature && em.temperature != 0) {
+                            float temp = useFahrenheit ? UnitConversions::CelsiusToFahrenheit(em.temperature) : em.temperature;
+                            snprintf(tempStr, sizeof(tempStr), "%.1f%s", temp, useFahrenheit ? "F" : "C");
+                        }
+                        if (em.has_relative_humidity && em.relative_humidity != 0) {
+                            if (tempStr[0]) {
+                                snprintf(dataBuf, sizeof(dataBuf), "%s/%.0f%%", tempStr, em.relative_humidity);
+                            } else {
+                                snprintf(dataBuf, sizeof(dataBuf), "%.0f%% RH", em.relative_humidity);
+                            }
+                        } else if (tempStr[0]) {
+                            snprintf(dataBuf, sizeof(dataBuf), "%s", tempStr);
+                        }
+                        // Override with other interesting fields if present
+                        if (dataBuf[0] == '\0') {
+                            if (em.has_barometric_pressure && em.barometric_pressure != 0) {
+                                snprintf(dataBuf, sizeof(dataBuf), "%.0fhPa", em.barometric_pressure);
+                            } else if (em.has_iaq && em.iaq != 0) {
+                                snprintf(dataBuf, sizeof(dataBuf), "IAQ:%u", em.iaq);
+                            } else if (em.has_wind_speed && em.wind_speed != 0) {
+                                snprintf(dataBuf, sizeof(dataBuf), "%.1fm/s", em.wind_speed);
+                            } else if (em.has_lux && em.lux != 0) {
+                                snprintf(dataBuf, sizeof(dataBuf), "%.0flux", em.lux);
+                            } else if (em.has_distance && em.distance != 0) {
+                                snprintf(dataBuf, sizeof(dataBuf), "%.0fmm", em.distance);
+                            } else if (em.has_radiation && em.radiation != 0) {
+                                snprintf(dataBuf, sizeof(dataBuf), "%.1fuR/h", em.radiation);
+                            } else if (em.has_weight && em.weight != 0) {
+                                snprintf(dataBuf, sizeof(dataBuf), "%.1fkg", em.weight);
+                            } else if (em.has_soil_moisture && em.soil_moisture != 0) {
+                                snprintf(dataBuf, sizeof(dataBuf), "Soil:%u%%", em.soil_moisture);
+                            }
                         }
                     } else if (telem.which_variant == meshtastic_Telemetry_power_metrics_tag) {
-                        snprintf(dataBuf, sizeof(dataBuf), "Pwr");
+                        auto &pm = telem.variant.power_metrics;
+                        // Show first channel with data
+                        if (pm.has_ch1_voltage && pm.ch1_voltage > 0) {
+                            snprintf(dataBuf, sizeof(dataBuf), "%.1fV/%.0fmA", pm.ch1_voltage, pm.ch1_current * 1000);
+                        } else if (pm.has_ch2_voltage && pm.ch2_voltage > 0) {
+                            snprintf(dataBuf, sizeof(dataBuf), "%.1fV/%.0fmA", pm.ch2_voltage, pm.ch2_current * 1000);
+                        } else {
+                            snprintf(dataBuf, sizeof(dataBuf), "Pwr");
+                        }
                     } else if (telem.which_variant == meshtastic_Telemetry_air_quality_metrics_tag) {
-                        snprintf(dataBuf, sizeof(dataBuf), "AQI");
+                        auto &aq = telem.variant.air_quality_metrics;
+                        if (aq.has_pm25_standard && aq.pm25_standard > 0) {
+                            snprintf(dataBuf, sizeof(dataBuf), "PM2.5:%u", aq.pm25_standard);
+                        } else if (aq.has_co2 && aq.co2 > 0) {
+                            snprintf(dataBuf, sizeof(dataBuf), "CO2:%uppm", aq.co2);
+                        } else {
+                            snprintf(dataBuf, sizeof(dataBuf), "AQI");
+                        }
                     } else if (telem.which_variant == meshtastic_Telemetry_local_stats_tag) {
-                        snprintf(dataBuf, sizeof(dataBuf), "Stats");
+                        auto &ls = telem.variant.local_stats;
+                        snprintf(dataBuf, sizeof(dataBuf), "%u nodes", ls.num_online_nodes);
+                    } else if (telem.which_variant == meshtastic_Telemetry_health_metrics_tag) {
+                        auto &hm = telem.variant.health_metrics;
+                        if (hm.has_heart_bpm && hm.heart_bpm > 0) {
+                            snprintf(dataBuf, sizeof(dataBuf), "%ubpm", hm.heart_bpm);
+                        } else if (hm.has_spO2 && hm.spO2 > 0) {
+                            snprintf(dataBuf, sizeof(dataBuf), "SpO2:%u%%", hm.spO2);
+                        }
                     }
                     // else leave dataBuf empty for unknown variants
                 }
@@ -383,14 +438,14 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
                     if (fromNode && fromNode->has_user && fromNode->user.short_name[0])
                         snprintf(fromStr, sizeof(fromStr), "%s", fromNode->user.short_name);
                     else
-                        snprintf(fromStr, sizeof(fromStr), "%08x", mp.from);
+                        snprintf(fromStr, sizeof(fromStr), "!%08x", mp.from);
                     if (toNode && toNode->has_user && toNode->user.short_name[0])
                         snprintf(toStr, sizeof(toStr), "%s", toNode->user.short_name);
                     else
-                        snprintf(toStr, sizeof(toStr), "%08x", mp.to);
+                        snprintf(toStr, sizeof(toStr), "!%08x", mp.to);
                 } else {
-                    snprintf(fromStr, sizeof(fromStr), "%08x", mp.from);
-                    snprintf(toStr, sizeof(toStr), "%08x", mp.to);
+                    snprintf(fromStr, sizeof(fromStr), "!%08x", mp.from);
+                    snprintf(toStr, sizeof(toStr), "!%08x", mp.to);
                 }
                 meshtastic_RouteDiscovery tr;
                 memset(&tr, 0, sizeof(tr));
@@ -398,7 +453,7 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
                                          &tr)) {
                     bool isReturn = tr.route_back_count > 0;
                     uint8_t hops = isReturn ? tr.route_back_count : tr.route_count;
-                    snprintf(dataBuf, sizeof(dataBuf), "%s%s%s %uh", fromStr, isReturn ? "<-" : "->", toStr, hops);
+                    snprintf(dataBuf, sizeof(dataBuf), "%s%s%s %u hops", fromStr, isReturn ? "<-" : "->", toStr, hops);
                 }
                 break;
             }
