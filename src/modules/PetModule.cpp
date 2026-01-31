@@ -809,7 +809,11 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 
     // Draw the pet at petX position within box
     int16_t walkRange = petBoxW - petW - 4 * scale; // Available walk space
-    int16_t petDrawX = petBoxX + 2 * scale + ((petX * walkRange) / 20);
+#ifdef SENSECAP_INDICATOR
+    int16_t petDrawX = petBoxX + 2 * scale + ((petX * walkRange) / 60); // Match maxWalkX=60
+#else
+    int16_t petDrawX = petBoxX + 2 * scale + ((petX * walkRange) / 20); // Match maxWalkX=20
+#endif
     int16_t petDrawY = petBoxY + (petBoxH - petH) / 2;
     drawPet(display, petDrawX, petDrawY, scale);
 
@@ -1106,8 +1110,6 @@ void PetModule::drawPet(OLEDDisplay *display, int16_t x, int16_t y, uint8_t scal
         break;
     case PetAnimation::SNIFFING:
         frameData = petSniffingFrames[animationFrame % PET_SNIFFING_FRAMES];
-        // Alternate direction while sniffing
-        flipHorizontal = (animationFrame % 2 == 1);
         break;
     }
 
