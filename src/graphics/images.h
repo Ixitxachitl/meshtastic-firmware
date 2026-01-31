@@ -378,3 +378,7 @@ static_assert(sizeof(icon_bits) >= 0, "Silence unused variable warning");
 #ifdef SENSECAP_INDICATOR
 #include "img/icon_large.xbm"
 #endif
+
+#ifdef T_DECK
+#include "img/icon_t_deck.xbm"
+#endif

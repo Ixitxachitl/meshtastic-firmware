@@ -42,7 +42,7 @@ PetModule::PetModule() : MeshModule("pet"), concurrency::OSThread("PetModule")
     isPromiscuous = true;
 }
 
-#ifdef SENSECAP_INDICATOR
+#if defined(SENSECAP_INDICATOR) || defined(T_DECK)
 void PetModule::addMessageLog(const char *line)
 {
     strncpy(msgLogBuffer[msgLogHead], line, MSG_LOG_LINE_LEN - 1);
@@ -229,7 +229,7 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
         break;
     }
 
-#ifdef SENSECAP_INDICATOR
+#if defined(SENSECAP_INDICATOR) || defined(T_DECK)
     // Log received message to on-screen buffer with timestamp, signal info, and node name
     {
         char logLine[MSG_LOG_LINE_LEN];
@@ -305,9 +305,34 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
                 if (pb_decode_from_bytes(mp.decoded.payload.bytes, mp.decoded.payload.size, &meshtastic_Telemetry_msg, &telem)) {
                     if (telem.which_variant == meshtastic_Telemetry_device_metrics_tag) {
                         auto &dm = telem.variant.device_metrics;
-                        // Only show if voltage field is present, sensible (> 1V), and battery is in valid range
-                        if (dm.has_voltage && dm.voltage > 1.0f && dm.has_battery_level && dm.battery_level <= 101) {
-                            snprintf(dataBuf, sizeof(dataBuf), "%.0f%%/%.1fV", dm.battery_level, dm.voltage);
+                        // Build string with all available device metrics
+                        char parts[4][16];
+                        int partCount = 0;
+                        if (dm.has_battery_level && dm.has_voltage && dm.voltage >= 2.5f) {
+                            snprintf(parts[partCount++], 16, "%.0f%%/%.1fV", dm.battery_level, dm.voltage);
+                        }
+                        if (dm.has_channel_utilization && dm.channel_utilization > 0) {
+                            snprintf(parts[partCount++], 16, "Ch:%.0f%%", dm.channel_utilization);
+                        }
+                        if (dm.has_air_util_tx && dm.air_util_tx > 0) {
+                            snprintf(parts[partCount++], 16, "Air:%.0f%%", dm.air_util_tx);
+                        }
+                        if (dm.has_uptime_seconds && dm.uptime_seconds > 0 && partCount < 3) {
+                            uint32_t up = dm.uptime_seconds;
+                            if (up >= 86400) {
+                                snprintf(parts[partCount++], 16, "%lud", (unsigned long)(up / 86400));
+                            } else if (up >= 3600) {
+                                snprintf(parts[partCount++], 16, "%luh", (unsigned long)(up / 3600));
+                            } else {
+                                snprintf(parts[partCount++], 16, "%lum", (unsigned long)(up / 60));
+                            }
+                        }
+                        // Join parts with spaces
+                        dataBuf[0] = '\0';
+                        for (int i = 0; i < partCount && i < 3; i++) {
+                            if (i > 0)
+                                strncat(dataBuf, " ", sizeof(dataBuf) - strlen(dataBuf) - 1);
+                            strncat(dataBuf, parts[i], sizeof(dataBuf) - strlen(dataBuf) - 1);
                         }
                     } else if (telem.which_variant == meshtastic_Telemetry_environment_metrics_tag) {
                         auto &em = telem.variant.environment_metrics;
@@ -872,6 +897,8 @@ void PetModule::updateAnimation()
     // petX ranges from 0 to maxWalkX, which gets scaled to actual walk range in drawFrame
 #ifdef SENSECAP_INDICATOR
     const int16_t maxWalkX = 60; // 3x wider box needs 3x more steps to maintain same speed
+#elif defined(T_DECK)
+    const int16_t maxWalkX = 35; // 1.75x wider box needs 1.75x more steps
 #else
     const int16_t maxWalkX = 20;
 #endif
@@ -1000,6 +1027,8 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     // Pet area - wider box for pet (shifted down 1px)
 #ifdef SENSECAP_INDICATOR
     const int16_t petBoxW = (petW + 32 * scale) * 3; // 3x wider on Indicator
+#elif defined(T_DECK)
+    const int16_t petBoxW = ((petW + 32 * scale) * 7) / 4;              // 1.75x wider on T-Deck
 #else
     const int16_t petBoxW = petW + 32 * scale;
 #endif
@@ -1014,6 +1043,8 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     int16_t walkRange = petBoxW - petW - 4 * scale; // Available walk space
 #ifdef SENSECAP_INDICATOR
     int16_t petDrawX = petBoxX + 2 * scale + ((petX * walkRange) / 60); // Match maxWalkX=60
+#elif defined(T_DECK)
+    int16_t petDrawX = petBoxX + 2 * scale + ((petX * walkRange) / 35); // Match maxWalkX=35
 #else
     int16_t petDrawX = petBoxX + 2 * scale + ((petX * walkRange) / 20); // Match maxWalkX=20
 #endif
@@ -1069,9 +1100,9 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     uint8_t xpPercent = (xpForNextLevel > 0) ? (uint8_t)((experience * 100) / xpForNextLevel) : 0;
     drawStatusBarWithIcon(display, x + barW + 4, barY, barW, xpPercent, false, scale);
 
-#ifdef SENSECAP_INDICATOR
-    // Draw received message log at bottom of screen (Indicator only)
-    // Wrap long lines with indent, show as many entries as fit in 18 lines
+#if defined(SENSECAP_INDICATOR) || defined(T_DECK)
+    // Draw received message log at bottom of screen (wide screen devices)
+    // Wrap long lines with indent, show as many entries as fit
     int16_t logY = barY + (10 * scale) - 6; // Below the status bars, tighter gap
     display->setFont(FONT_SMALL);
     int16_t lineHeight = FONT_HEIGHT_SMALL;
@@ -1081,8 +1112,12 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     int16_t availableWidth = screenW - x - 2;
     int16_t wrapWidth = availableWidth - indentX;
 
-    // Maximum 18 display lines
+    // Maximum display lines based on device
+#ifdef SENSECAP_INDICATOR
     const int16_t maxDisplayLines = 18;
+#else
+    const int16_t maxDisplayLines = 6;
+#endif
     int16_t currentY = logY;
 
     // Draw entries from oldest to newest, wrapping as needed

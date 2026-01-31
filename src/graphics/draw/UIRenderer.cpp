@@ -1077,6 +1077,11 @@ void UIRenderer::drawIconScreen(const char *upperMsg, OLEDDisplay *display, OLED
     // Large icon for SenseCAP Indicator's 480x480 TFT display
     display->drawXbm(x + (SCREEN_WIDTH - icon_large_width) / 2, y + (SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM - icon_large_height) / 2,
                      icon_large_width, icon_large_height, icon_large_bits);
+#elif defined(T_DECK)
+    // T-Deck specific icon for 320x240 TFT display
+    display->drawXbm(x + (SCREEN_WIDTH - icon_t_deck_width) / 2,
+                     y + (SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM - icon_t_deck_height) / 2, icon_t_deck_width, icon_t_deck_height,
+                     icon_t_deck_bits);
 
     display->setFont(FONT_MEDIUM);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
