@@ -137,7 +137,7 @@ class PetModule : public MeshModule, public Observable<const UIFrameEvent *>, pr
 #else
     static constexpr uint8_t MSG_LOG_LINES = 10;
 #endif
-    static constexpr uint8_t MSG_LOG_LINE_LEN = 80;
+    static constexpr uint8_t MSG_LOG_LINE_LEN = 128; // Allow longer text messages
     char msgLogBuffer[MSG_LOG_LINES][MSG_LOG_LINE_LEN] = {{0}};
     uint8_t msgLogHead = 0;
     uint8_t msgLogCount = 0;

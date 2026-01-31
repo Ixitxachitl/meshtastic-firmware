@@ -275,7 +275,9 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
         }
 
         // Extract data preview based on message type
-        char dataBuf[32] = "";
+        // Use specific type name for telemetry variants
+        const char *typeName = getMessageTypeName(lastMessageType);
+        char dataBuf[64] = "";
         if (mp.pki_encrypted) {
             // PKI encrypted message - we can't see the contents
             snprintf(dataBuf, sizeof(dataBuf), "[encrypted]");
@@ -283,19 +285,18 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
             switch (lastMessageType) {
             case LastMessageType::TEXT:
             case LastMessageType::TEXT_COMPRESSED: {
-                // Show channel name and first ~16 chars of text, stripping newlines
+                // Show channel name and text message (no truncation - let the display wrap)
                 const char *chanName = channels.getName(mp.channel);
-                char textPreview[24];
+                char textPreview[48];
                 size_t j = 0;
-                for (size_t i = 0; i < mp.decoded.payload.size && j < 16; i++) {
+                for (size_t i = 0; i < mp.decoded.payload.size && j < sizeof(textPreview) - 1; i++) {
                     char c = ((const char *)mp.decoded.payload.bytes)[i];
                     if (c != '\n' && c != '\r') {
                         textPreview[j++] = c;
                     }
                 }
                 textPreview[j] = '\0';
-                snprintf(dataBuf, sizeof(dataBuf), "#%s \"%.16s%s\"", chanName, textPreview,
-                         mp.decoded.payload.size > 16 ? ".." : "");
+                snprintf(dataBuf, sizeof(dataBuf), "#%s \"%s\"", chanName, textPreview);
                 break;
             }
             case LastMessageType::TELEMETRY: {
@@ -304,11 +305,15 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
                 memset(&telem, 0, sizeof(telem));
                 if (pb_decode_from_bytes(mp.decoded.payload.bytes, mp.decoded.payload.size, &meshtastic_Telemetry_msg, &telem)) {
                     if (telem.which_variant == meshtastic_Telemetry_device_metrics_tag) {
+                        typeName = "Device";
                         auto &dm = telem.variant.device_metrics;
                         // Build string with all available device metrics
                         char parts[4][16];
                         int partCount = 0;
-                        if (dm.has_battery_level && dm.has_voltage && dm.voltage >= 2.5f) {
+                        // Only show battery if voltage is valid (>2.5V indicates real battery)
+                        // and battery level is reasonable (1-100%)
+                        if (dm.has_voltage && dm.voltage >= 2.5f && dm.has_battery_level && dm.battery_level > 0 &&
+                            dm.battery_level <= 100) {
                             snprintf(parts[partCount++], 16, "%.0f%%/%.1fV", dm.battery_level, dm.voltage);
                         }
                         if (dm.has_channel_utilization && dm.channel_utilization > 0) {
@@ -335,44 +340,73 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
                             strncat(dataBuf, parts[i], sizeof(dataBuf) - strlen(dataBuf) - 1);
                         }
                     } else if (telem.which_variant == meshtastic_Telemetry_environment_metrics_tag) {
+                        typeName = "Env";
                         auto &em = telem.variant.environment_metrics;
                         bool useFahrenheit = moduleConfig.telemetry.environment_display_fahrenheit;
-                        // Build a compact string with available fields
-                        char tempStr[16] = "";
+                        // Build a compact string with all available environment fields
+                        char parts[12][20];
+                        int partCount = 0;
+                        // Temperature and humidity (combine if both present)
                         if (em.has_temperature && em.temperature != 0) {
                             float temp = useFahrenheit ? UnitConversions::CelsiusToFahrenheit(em.temperature) : em.temperature;
-                            snprintf(tempStr, sizeof(tempStr), "%.1f%s", temp, useFahrenheit ? "F" : "C");
-                        }
-                        if (em.has_relative_humidity && em.relative_humidity != 0) {
-                            if (tempStr[0]) {
-                                snprintf(dataBuf, sizeof(dataBuf), "%s/%.0f%%", tempStr, em.relative_humidity);
+                            if (em.has_relative_humidity && em.relative_humidity != 0) {
+                                snprintf(parts[partCount++], 20, "%.1f%s/%.0f%%", temp, useFahrenheit ? "F" : "C",
+                                         em.relative_humidity);
                             } else {
-                                snprintf(dataBuf, sizeof(dataBuf), "%.0f%% RH", em.relative_humidity);
+                                snprintf(parts[partCount++], 20, "%.1f%s", temp, useFahrenheit ? "F" : "C");
                             }
-                        } else if (tempStr[0]) {
-                            snprintf(dataBuf, sizeof(dataBuf), "%s", tempStr);
+                        } else if (em.has_relative_humidity && em.relative_humidity != 0) {
+                            snprintf(parts[partCount++], 20, "%.0f%%RH", em.relative_humidity);
                         }
-                        // Override with other interesting fields if present
-                        if (dataBuf[0] == '\0') {
-                            if (em.has_barometric_pressure && em.barometric_pressure != 0) {
-                                snprintf(dataBuf, sizeof(dataBuf), "%.0fhPa", em.barometric_pressure);
-                            } else if (em.has_iaq && em.iaq != 0) {
-                                snprintf(dataBuf, sizeof(dataBuf), "IAQ:%u", em.iaq);
-                            } else if (em.has_wind_speed && em.wind_speed != 0) {
-                                snprintf(dataBuf, sizeof(dataBuf), "%.1fm/s", em.wind_speed);
-                            } else if (em.has_lux && em.lux != 0) {
-                                snprintf(dataBuf, sizeof(dataBuf), "%.0flux", em.lux);
-                            } else if (em.has_distance && em.distance != 0) {
-                                snprintf(dataBuf, sizeof(dataBuf), "%.0fmm", em.distance);
-                            } else if (em.has_radiation && em.radiation != 0) {
-                                snprintf(dataBuf, sizeof(dataBuf), "%.1fuR/h", em.radiation);
-                            } else if (em.has_weight && em.weight != 0) {
-                                snprintf(dataBuf, sizeof(dataBuf), "%.1fkg", em.weight);
-                            } else if (em.has_soil_moisture && em.soil_moisture != 0) {
-                                snprintf(dataBuf, sizeof(dataBuf), "Soil:%u%%", em.soil_moisture);
+                        // Voltage/current from INA sensors (solar monitoring)
+                        if (em.has_voltage && em.voltage > 0) {
+                            if (em.has_current) {
+                                snprintf(parts[partCount++], 20, "%.1fV/%.0fmA", em.voltage, em.current * 1000);
+                            } else {
+                                snprintf(parts[partCount++], 20, "%.1fV", em.voltage);
                             }
+                        }
+                        // Barometric pressure
+                        if (em.has_barometric_pressure && em.barometric_pressure != 0) {
+                            snprintf(parts[partCount++], 20, "%.0fhPa", em.barometric_pressure);
+                        }
+                        // IAQ (air quality index)
+                        if (em.has_iaq && em.iaq != 0) {
+                            snprintf(parts[partCount++], 20, "IAQ:%u", em.iaq);
+                        }
+                        // Wind speed
+                        if (em.has_wind_speed && em.wind_speed != 0) {
+                            snprintf(parts[partCount++], 20, "%.1fm/s", em.wind_speed);
+                        }
+                        // Lux
+                        if (em.has_lux && em.lux != 0) {
+                            snprintf(parts[partCount++], 20, "%.0flux", em.lux);
+                        }
+                        // Distance
+                        if (em.has_distance && em.distance != 0) {
+                            snprintf(parts[partCount++], 20, "%.0fmm", em.distance);
+                        }
+                        // Radiation
+                        if (em.has_radiation && em.radiation != 0) {
+                            snprintf(parts[partCount++], 20, "%.1fuR/h", em.radiation);
+                        }
+                        // Weight
+                        if (em.has_weight && em.weight != 0) {
+                            snprintf(parts[partCount++], 20, "%.1fkg", em.weight);
+                        }
+                        // Soil moisture
+                        if (em.has_soil_moisture && em.soil_moisture != 0) {
+                            snprintf(parts[partCount++], 20, "Soil:%u%%", em.soil_moisture);
+                        }
+                        // Join all parts with spaces
+                        dataBuf[0] = '\0';
+                        for (int i = 0; i < partCount; i++) {
+                            if (i > 0)
+                                strncat(dataBuf, " ", sizeof(dataBuf) - strlen(dataBuf) - 1);
+                            strncat(dataBuf, parts[i], sizeof(dataBuf) - strlen(dataBuf) - 1);
                         }
                     } else if (telem.which_variant == meshtastic_Telemetry_power_metrics_tag) {
+                        typeName = "Power";
                         auto &pm = telem.variant.power_metrics;
                         // Show first channel with data
                         if (pm.has_ch1_voltage && pm.ch1_voltage > 0) {
@@ -383,6 +417,7 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
                             snprintf(dataBuf, sizeof(dataBuf), "Pwr");
                         }
                     } else if (telem.which_variant == meshtastic_Telemetry_air_quality_metrics_tag) {
+                        typeName = "AirQual";
                         auto &aq = telem.variant.air_quality_metrics;
                         if (aq.has_pm25_standard && aq.pm25_standard > 0) {
                             snprintf(dataBuf, sizeof(dataBuf), "PM2.5:%u", aq.pm25_standard);
@@ -392,9 +427,11 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
                             snprintf(dataBuf, sizeof(dataBuf), "AQI");
                         }
                     } else if (telem.which_variant == meshtastic_Telemetry_local_stats_tag) {
+                        typeName = "Stats";
                         auto &ls = telem.variant.local_stats;
                         snprintf(dataBuf, sizeof(dataBuf), "%u nodes", ls.num_online_nodes);
                     } else if (telem.which_variant == meshtastic_Telemetry_health_metrics_tag) {
+                        typeName = "Health";
                         auto &hm = telem.variant.health_metrics;
                         if (hm.has_heart_bpm && hm.heart_bpm > 0) {
                             snprintf(dataBuf, sizeof(dataBuf), "%ubpm", hm.heart_bpm);
@@ -575,11 +612,9 @@ ProcessMessage PetModule::handleReceived(const meshtastic_MeshPacket &mp)
         }
 
         if (dataBuf[0]) {
-            snprintf(logLine, sizeof(logLine), "%s [%u] %s %s %s", timeBuf, lastMessageHops, getMessageTypeName(lastMessageType),
-                     dataBuf, nodeStr);
+            snprintf(logLine, sizeof(logLine), "%s [%u] %s %s %s", timeBuf, lastMessageHops, typeName, dataBuf, nodeStr);
         } else {
-            snprintf(logLine, sizeof(logLine), "%s [%u] %s %s", timeBuf, lastMessageHops, getMessageTypeName(lastMessageType),
-                     nodeStr);
+            snprintf(logLine, sizeof(logLine), "%s [%u] %s %s", timeBuf, lastMessageHops, typeName, nodeStr);
         }
         addMessageLog(logLine);
     }
@@ -1144,7 +1179,7 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         return 1;     // Invalid, treat as 1
     };
 
-    // Helper lambda to count lines needed for a message using pixel width
+    // Helper lambda to count lines needed for a message using pixel width (word-aware wrapping)
     auto countLinesForMsg = [&](const char *msg) -> int16_t {
         int16_t lines = 0;
         int16_t msgLen = strlen(msg);
@@ -1152,30 +1187,38 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         bool first = true;
         while (pos < msgLen) {
             int16_t maxW = first ? availableWidth : wrapWidth;
-            // Find how many bytes fit in this line width, advancing by UTF-8 codepoint
+            // Find how many bytes fit, tracking last word boundary for clean wrap
             int16_t byteCount = 0;
+            int16_t lastWordBreak = 0; // Byte count at last space
             char testBuf[128];
             int16_t testPos = pos;
             while (testPos < msgLen && byteCount < (int16_t)sizeof(testBuf) - 4) {
                 int16_t charLen = utf8CharLen((unsigned char)msg[testPos]);
                 if (testPos + charLen > msgLen)
-                    charLen = msgLen - testPos; // Truncated sequence
-                // Try adding this codepoint
+                    charLen = msgLen - testPos;
                 if (byteCount + charLen >= (int16_t)sizeof(testBuf))
                     break;
+                // Check for word boundary (space) before adding
+                if (msg[testPos] == ' ' && byteCount > 0)
+                    lastWordBreak = byteCount;
                 memcpy(testBuf + byteCount, msg + testPos, charLen);
                 byteCount += charLen;
                 testBuf[byteCount] = '\0';
                 if (display->getStringWidth(testBuf) > maxW) {
-                    // This char overflows, back off
                     byteCount -= charLen;
+                    // Back up to last word break if we have one
+                    if (lastWordBreak > 0)
+                        byteCount = lastWordBreak;
                     break;
                 }
                 testPos += charLen;
             }
             if (byteCount == 0)
-                byteCount = utf8CharLen((unsigned char)msg[pos]); // At least 1 codepoint
+                byteCount = utf8CharLen((unsigned char)msg[pos]);
             pos += byteCount;
+            // Skip leading space on next line
+            while (pos < msgLen && msg[pos] == ' ')
+                pos++;
             lines++;
             first = false;
         }
@@ -1221,8 +1264,9 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             int16_t drawX = firstLine ? x : (x + indentX);
             int16_t maxW = firstLine ? availableWidth : wrapWidth;
 
-            // Find how many bytes fit using actual pixel width, advancing by UTF-8 codepoint
+            // Find how many bytes fit, tracking last word boundary for clean wrap
             int16_t byteCount = 0;
+            int16_t lastWordBreak = 0;
             char lineBuf[128];
             int16_t testPos = pos;
             while (testPos < msgLen && byteCount < (int16_t)sizeof(lineBuf) - 4) {
@@ -1231,11 +1275,17 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                     charLen = msgLen - testPos;
                 if (byteCount + charLen >= (int16_t)sizeof(lineBuf))
                     break;
+                // Check for word boundary (space) before adding
+                if (msg[testPos] == ' ' && byteCount > 0)
+                    lastWordBreak = byteCount;
                 memcpy(lineBuf + byteCount, msg + testPos, charLen);
                 byteCount += charLen;
                 lineBuf[byteCount] = '\0';
                 if (display->getStringWidth(lineBuf) > maxW) {
                     byteCount -= charLen;
+                    // Back up to last word break if we have one
+                    if (lastWordBreak > 0)
+                        byteCount = lastWordBreak;
                     break;
                 }
                 testPos += charLen;
@@ -1254,6 +1304,9 @@ void PetModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             }
 
             pos += byteCount;
+            // Skip leading space on next line
+            while (pos < msgLen && msg[pos] == ' ')
+                pos++;
             currentY += lineHeight;
             linesDrawn++;
             firstLine = false;
