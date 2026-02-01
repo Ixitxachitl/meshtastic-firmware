@@ -417,6 +417,10 @@ extern const unsigned char open_mouth[] PROGMEM;
 #define grinning_big_eyes_width 16
 #define grinning_big_eyes_height 16
 extern const unsigned char grinning_big_eyes[] PROGMEM;
+
+#define wood_width 16
+#define wood_height 16
+extern const unsigned char wood[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
 } // namespace graphics
