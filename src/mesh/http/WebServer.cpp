@@ -228,23 +228,45 @@ void initWebServer()
 {
     LOG_DEBUG("Init Web Server");
 
-    // We can now use the new certificate to setup our server as usual.
-    secureServer = new HTTPSServer(cert);
-    insecureServer = new HTTPServer();
+    // ESP32-C6 has limited RAM (~70KB free) and each SSL connection needs ~35KB
+    // So we can only handle 1 concurrent HTTPS connection on memory-constrained devices
+#ifdef CONFIG_IDF_TARGET_ESP32C6
+    const uint8_t maxHttpsConnections = 1; // Memory-constrained: 1 SSL connection max
+    const uint8_t maxHttpConnections = 2;
+    LOG_INFO("ESP32-C6: Limiting to %d HTTPS connection due to memory constraints", maxHttpsConnections);
+#else
+    const uint8_t maxHttpsConnections = 4; // Default for devices with more RAM
+    const uint8_t maxHttpConnections = 4;
+#endif
+    secureServer = new HTTPSServer(cert, 443, maxHttpsConnections);
+    insecureServer = new HTTPServer(80, maxHttpConnections);
 
     registerHandlers(insecureServer, secureServer);
 
+    bool httpsOk = false;
     if (secureServer) {
-        LOG_INFO("Start Secure Web Server");
+        LOG_INFO("Start Secure Web Server (HTTPS)");
         secureServer->start();
+        if (secureServer->isRunning()) {
+            LOG_INFO("HTTPS Server started successfully on port 443");
+            httpsOk = true;
+        } else {
+            LOG_WARN("HTTPS Server failed to start - SSL/TLS may not be available");
+        }
     }
-    LOG_INFO("Start Insecure Web Server");
+
+    LOG_INFO("Start Insecure Web Server (HTTP)");
     insecureServer->start();
     if (insecureServer->isRunning()) {
-        LOG_INFO("Web Servers Ready! :-) ");
+        LOG_INFO("HTTP Server started successfully on port 80");
         isWebServerReady = true;
+        if (httpsOk) {
+            LOG_INFO("Web Servers Ready! Both HTTP and HTTPS available");
+        } else {
+            LOG_WARN("Web Servers Ready! HTTP only (HTTPS failed)");
+        }
     } else {
-        LOG_ERROR("Web Servers Failed! ;-( ");
+        LOG_ERROR("Web Servers Failed! HTTP server did not start");
     }
 }
 #endif
