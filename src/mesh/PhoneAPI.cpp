@@ -69,10 +69,17 @@ void PhoneAPI::handleStartConfig()
         state = STATE_SEND_MY_INFO;
     }
     pauseBluetoothLogging = true;
+#if defined(CONFIG_IDF_TARGET_ESP32C6) || defined(MESHTASTIC_EXCLUDE_FILESYSTEM_MANIFEST)
+    // ESP32-C6 has limited RAM (no PSRAM), skip file manifest to avoid OOM
+    // The web UI doesn't need the full file list to function
+    filesManifest.clear();
+    LOG_DEBUG("File manifest skipped (limited RAM device)");
+#else
     spiLock->lock();
     filesManifest = getFiles("/", 10);
     spiLock->unlock();
     LOG_DEBUG("Got %d files in manifest", filesManifest.size());
+#endif
 
     LOG_INFO("Start API client config millis=%u", millis());
     // Protect against concurrent BLE callbacks: they run in NimBLE's FreeRTOS task and also touch nodeInfoQueue.

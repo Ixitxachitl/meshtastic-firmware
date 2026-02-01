@@ -258,8 +258,18 @@ void initWebServer()
     }
 #else
     // Full HTTPS + HTTP mode for platforms with TLS support
-    secureServer = new HTTPSServer(cert);
-    insecureServer = new HTTPServer();
+    // ESP32-C6 has limited RAM (~70KB free) and each SSL connection needs ~35KB
+    // So we can only handle 1 concurrent HTTPS connection on memory-constrained devices
+#ifdef CONFIG_IDF_TARGET_ESP32C6
+    const uint8_t maxHttpsConnections = 1; // Memory-constrained: 1 SSL connection max
+    const uint8_t maxHttpConnections = 2;
+    LOG_INFO("ESP32-C6: Limiting to %d HTTPS connection due to memory constraints", maxHttpsConnections);
+#else
+    const uint8_t maxHttpsConnections = 4;   // Default for devices with more RAM
+    const uint8_t maxHttpConnections = 4;
+#endif
+    secureServer = new HTTPSServer(cert, 443, maxHttpsConnections);
+    insecureServer = new HTTPServer(80, maxHttpConnections);
 
     registerHandlers(insecureServer, secureServer);
 
