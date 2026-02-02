@@ -1084,7 +1084,7 @@ class LGFX : public lgfx::LGFX_Device
             cfg.pin_cs = ST7701_CS;
             cfg.pin_sclk = ST7701_SCK;
             cfg.pin_mosi = ST7701_SDA;
-            cfg.use_psram = 1; // Enable PSRAM for frame buffer to ensure DMA cache coherency
+            // cfg.use_psram = 1;
             _panel_instance.config_detail(cfg);
         }
 
@@ -1587,12 +1587,7 @@ bool TFTDisplay::connect()
     tft->fillScreen(TFT_BLACK);
 
     if (this->linePixelBuffer == NULL) {
-#if defined(ARCH_ESP32) && defined(BOARD_HAS_PSRAM)
-        // Allocate TFT line buffer with DMA capability (can use PSRAM on ESP32-S3)
-        this->linePixelBuffer = (uint16_t *)heap_caps_malloc(sizeof(uint16_t) * displayWidth, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
-#else
         this->linePixelBuffer = (uint16_t *)malloc(sizeof(uint16_t) * displayWidth);
-#endif
 
         if (!this->linePixelBuffer) {
             LOG_ERROR("Not enough memory to create TFT line buffer\n");

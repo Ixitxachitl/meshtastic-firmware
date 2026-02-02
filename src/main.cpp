@@ -426,10 +426,8 @@ void setup()
     LOG_INFO("\n\n//\\ E S H T /\\ S T / C\n");
 
 #if defined(ARCH_ESP32) && defined(BOARD_HAS_PSRAM)
-#ifndef LGFX_DRIVER
-    // Use PSRAM for malloc calls > 256 bytes
-    // NOTE: Excluded for LGFX_DRIVER devices (especially RGB displays) as LovyanGFX
-    // manages PSRAM allocation internally with specific DMA-compatible memory attributes
+#ifndef SENSECAP_INDICATOR
+    // use PSRAM for malloc calls > 256 bytes
     heap_caps_malloc_extmem_enable(256);
 #endif
 #endif
@@ -929,7 +927,7 @@ SPI1.begin();
 SPI.begin();
 #endif
 #else
-        // ESP32
+    // ESP32
 #if defined(HW_SPI1_DEVICE)
 SPI1.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
 LOG_DEBUG("SPI1.begin(SCK=%d, MISO=%d, MOSI=%d, NSS=%d)", LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
