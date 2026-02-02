@@ -135,8 +135,9 @@ const Emote emotes[] = {
     {"\U0001F573\uFE0F", hole, hole_width, hole_height},               // 🕳️ Hole
     {"\U0001F3B3", bowling, bowling_width, bowling_height},            // 🎳 Bowling
     {"\u2615", hot_beverage, hot_beverage_width, hot_beverage_height}, // ☕ Hot Beverage
-    {"\U0001F954", potato, potato_width, potato_height},               // 🥔 Potato
-    {"\U0001FAB5", wood, wood_width, wood_height},                     // 🪵 Wood
+    {"\U0001F37A", beer, beer_width, beer_height},
+    {"\U0001F954", potato, potato_width, potato_height}, // 🥔 Potato
+    {"\U0001FAB5", wood, wood_width, wood_height},       // 🪵 Wood
 
     // --- Arrows ---
     {"\u2193", downwards_arrow, downwards_arrow_width, downwards_arrow_height},          // ↓ Downwards Arrow
@@ -601,6 +602,10 @@ const unsigned char grinning_big_eyes[] PROGMEM = {0x00, 0x00, 0xE0, 0x07, 0x18,
 const unsigned char wood[] PROGMEM = {0xF0, 0x0F, 0x08, 0x10, 0x04, 0x20, 0x0C, 0x30, 0xF4, 0x2F, 0x06,
                                       0x20, 0x05, 0x20, 0x09, 0x60, 0x01, 0xA0, 0x02, 0x90, 0x0C, 0x80,
                                       0x04, 0x40, 0x04, 0x30, 0x04, 0x20, 0x08, 0x10, 0xF0, 0x0F};
+
+const unsigned char beer[] PROGMEM = {0x00, 0x00, 0x50, 0x05, 0xA8, 0x0A, 0x5C, 0x1D, 0xE4, 0x13, 0x1C,
+                                      0x7C, 0xE4, 0x73, 0x04, 0x50, 0x04, 0x51, 0x14, 0x50, 0x44, 0x54,
+                                      0x04, 0x71, 0x44, 0x70, 0x04, 0x10, 0x18, 0x0C, 0xE0, 0x03};
 #endif
 
 } // namespace graphics
