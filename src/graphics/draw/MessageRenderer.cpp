@@ -47,6 +47,45 @@ static inline size_t utf8CharLen(uint8_t c)
     return 1;
 }
 
+// Draw a rounded rectangle with selective corner rounding
+// cornerMask bits: 1=top-right, 2=top-left, 4=bottom-left, 8=bottom-right
+static void drawRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r,
+                            uint8_t cornerMask = 0x0F)
+{
+    // Clamp radius to half the smallest dimension
+    int maxR = std::min(w, h) / 2;
+    if (r > maxR)
+        r = maxR;
+    if (r < 1)
+        r = 1;
+
+    // Top line
+    int topLeftR = (cornerMask & 2) ? r : 0;
+    int topRightR = (cornerMask & 1) ? r : 0;
+    display->drawHorizontalLine(x + topLeftR, y, w - topLeftR - topRightR);
+
+    // Bottom line
+    int bottomLeftR = (cornerMask & 4) ? r : 0;
+    int bottomRightR = (cornerMask & 8) ? r : 0;
+    display->drawHorizontalLine(x + bottomLeftR, y + h - 1, w - bottomLeftR - bottomRightR);
+
+    // Left line
+    display->drawVerticalLine(x, y + topLeftR, h - topLeftR - bottomLeftR);
+
+    // Right line
+    display->drawVerticalLine(x + w - 1, y + topRightR, h - topRightR - bottomRightR);
+
+    // Draw rounded corners using circle arcs where enabled
+    if (cornerMask & 2) // Top-left
+        display->drawCircleQuads(x + r, y + r, r, 2);
+    if (cornerMask & 1) // Top-right
+        display->drawCircleQuads(x + w - 1 - r, y + r, r, 1);
+    if (cornerMask & 4) // Bottom-left
+        display->drawCircleQuads(x + r, y + h - 1 - r, r, 4);
+    if (cornerMask & 8) // Bottom-right
+        display->drawCircleQuads(x + w - 1 - r, y + h - 1 - r, r, 8);
+}
+
 // Remove variation selectors (FE0F), skin tone modifiers, and keycap modifiers from emoji so they match your labels
 static std::string normalizeEmoji(const std::string &s)
 {
@@ -1270,37 +1309,13 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             bubbleW = std::max(1, rightEdge - bubbleX);
 
         if (bubbleW > 1 && bubbleH > 1) {
-            int x1 = bubbleX + bubbleW - 1;
-            int y1 = topY + bubbleH - 1;
-
+            // Corner mask bits: 1=top-right, 2=top-left, 4=bottom-left, 8=bottom-right
             if (b.mine) {
-                // Send Message (Right side)
-                display->drawRect(x1 + 2 - bubbleW, y1 - bubbleH, bubbleW, bubbleH);
-                // Top Right Corner
-                display->drawRect(x1, topY, 2, 1);
-                display->drawRect(x1, topY, 1, 2);
-                // Bottom Right Corner
-                display->drawRect(x1 - 1, bottomY - 2, 2, 1);
-                display->drawRect(x1, bottomY - 3, 1, 2);
-                // Knock the corners off to make a bubble
-                display->setColor(BLACK);
-                display->drawRect(x1 - bubbleW, topY - 1, 1, 1);
-                display->drawRect(x1 - bubbleW, bottomY - 1, 1, 1);
-                display->setColor(WHITE);
+                // Outgoing message: round all corners except bottom-right (skip bit 8)
+                drawRoundedRect(display, bubbleX, topY, bubbleW, bubbleH, BUBBLE_RADIUS, 0x07);
             } else {
-                // Received Message (Left Side)
-                display->drawRect(bubbleX, topY, bubbleW + 1, bubbleH);
-                // Top Left Corner
-                display->drawRect(bubbleX + 1, topY + 1, 2, 1);
-                display->drawRect(bubbleX + 1, topY + 1, 1, 2);
-                // Bottom Left Corner
-                display->drawRect(bubbleX + 1, bottomY - 1, 2, 1);
-                display->drawRect(bubbleX + 1, bottomY - 2, 1, 2);
-                // Knock the corners off to make a bubble
-                display->setColor(BLACK);
-                display->drawRect(bubbleX + bubbleW, topY, 1, 1);
-                display->drawRect(bubbleX + bubbleW, bottomY, 1, 1);
-                display->setColor(WHITE);
+                // Incoming message: round all corners except top-left (skip bit 2)
+                drawRoundedRect(display, bubbleX, topY, bubbleW, bubbleH, BUBBLE_RADIUS, 0x0D);
             }
         }
     }
