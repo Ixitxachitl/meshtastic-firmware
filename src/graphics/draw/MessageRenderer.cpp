@@ -877,7 +877,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     constexpr int RIGHT_MARGIN = 2;
     constexpr int SCROLLBAR_WIDTH = 3;
     constexpr int BUBBLE_PAD_X = 3;
-    constexpr int BUBBLE_PAD_Y = 4;
+    constexpr int BUBBLE_PAD_Y = 2;
     constexpr int BUBBLE_RADIUS = 4;
     constexpr int BUBBLE_MIN_W = 24;
     constexpr int BUBBLE_TEXT_INDENT = 2;
