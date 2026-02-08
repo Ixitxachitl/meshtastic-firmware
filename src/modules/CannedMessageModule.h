@@ -141,6 +141,13 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
 
     // === Display and UI ===
     int displayHeight = 64;
+
+    // === Emote Grid State (set by drawEmotePickerScreen, used by handleEmotePickerInput) ===
+    int emoteGridCols = 0;
+    int emoteGridRows = 0;
+    int emoteCellSize = 0;
+    float emoteScrollOffset = 0;
+
     int destIndex = 0;
     int scrollIndex = 0;
     int visibleRows = 0;
