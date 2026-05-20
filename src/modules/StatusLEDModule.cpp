@@ -17,13 +17,33 @@ StatusLEDModule::StatusLEDModule() : concurrency::OSThread("StatusLEDModule")
     if (inputBroker)
         inputObserver.observe(inputBroker);
 #endif
+#ifdef NEOPIXEL_STATUS_POWER_PIN
+    powerPixel.begin();
+    powerPixel.clear();
+    powerPixel.show();
+#endif
+#ifdef NEOPIXEL_STATUS_PAIRING_PIN
+    pairingPixel.begin();
+    pairingPixel.clear();
+    pairingPixel.show();
+#endif
 }
+
+// Helper: write a 1-pixel NeoPixel strand to `color` when stateOn, else clear.
+// Kept as a static inline here (rather than a member) so it compiles out
+// completely when no NeoPixel status pins are defined.
+#if defined(NEOPIXEL_STATUS_POWER_PIN) || defined(NEOPIXEL_STATUS_PAIRING_PIN)
+static inline void writeStatusPixel(Adafruit_NeoPixel &pixel, uint32_t color, bool stateOn)
+{
+    pixel.setPixelColor(0, stateOn ? color : 0);
+    pixel.show();
+}
+#endif
 
 int StatusLEDModule::handleStatusUpdate(const meshtastic::Status *arg)
 {
     switch (arg->getStatusType()) {
     case STATUS_TYPE_POWER: {
-        meshtastic::PowerStatus *powerStatus = (meshtastic::PowerStatus *)arg;
         if (powerStatus->getHasUSB() || powerStatus->getIsCharging()) {
             power_state = charging;
             if (powerStatus->getBatteryChargePercent() >= 100) {
@@ -39,7 +59,6 @@ int StatusLEDModule::handleStatusUpdate(const meshtastic::Status *arg)
         break;
     }
     case STATUS_TYPE_BLUETOOTH: {
-        meshtastic::BluetoothStatus *bluetoothStatus = (meshtastic::BluetoothStatus *)arg;
         switch (bluetoothStatus->getConnectionState()) {
         case meshtastic::BluetoothStatus::ConnectionState::DISCONNECTED: {
             ble_state = unpaired;
@@ -97,8 +116,23 @@ int32_t StatusLEDModule::runOnce()
             }
         }
     }
-
-    if (power_state != charging && power_state != charged && !doing_fast_blink) {
+// If we want a LED to be dedicated to the simple hearbeat, we can use that instead of the charge LED
+#if defined(LED_HEARTBEAT)
+    if (power_state != charging && power_state != charged && !doing_fast_blink && !config.device.led_heartbeat_disabled) {
+        if (HEARTBEAT_LED_state == LED_STATE_ON) {
+            HEARTBEAT_LED_state = LED_STATE_OFF;
+            my_interval = 999;
+        } else {
+            HEARTBEAT_LED_state = LED_STATE_ON;
+            my_interval = 1;
+        }
+        digitalWrite(LED_HEARTBEAT, HEARTBEAT_LED_state);
+    } else {
+        HEARTBEAT_LED_state = LED_STATE_OFF;
+        digitalWrite(LED_HEARTBEAT, HEARTBEAT_LED_state);
+    }
+#else
+    if (power_state != charging && power_state != charged && !doing_fast_blink && !config.device.led_heartbeat_disabled) {
         if (CHARGE_LED_state == LED_STATE_ON) {
             CHARGE_LED_state = LED_STATE_OFF;
             my_interval = 999;
@@ -107,7 +141,7 @@ int32_t StatusLEDModule::runOnce()
             my_interval = 1;
         }
     }
-
+#endif
     if (!config.bluetooth.enabled || PAIRING_LED_starttime + 30 * 1000 < millis() || doing_fast_blink) {
         PAIRING_LED_state = LED_STATE_OFF;
     } else if (ble_state == unpaired) {
@@ -163,6 +197,22 @@ int32_t StatusLEDModule::runOnce()
 #ifdef LED_PAIRING
     digitalWrite(LED_PAIRING, PAIRING_LED_state);
 #endif
+#ifdef NEOPIXEL_STATUS_POWER_PIN
+    writeStatusPixel(powerPixel, NEOPIXEL_STATUS_POWER_COLOR, CHARGE_LED_state == LED_STATE_ON);
+#endif
+#ifdef NEOPIXEL_STATUS_PAIRING_PIN
+    writeStatusPixel(pairingPixel, NEOPIXEL_STATUS_PAIRING_COLOR, PAIRING_LED_state == LED_STATE_ON);
+#endif
+
+#ifdef RGB_LED_POWER
+    if (!config.device.led_heartbeat_disabled) {
+        if (CHARGE_LED_state == LED_STATE_ON) {
+            ambientLightingThread->setLighting(10, 255, 0, 0);
+        } else {
+            ambientLightingThread->setLighting(0, 0, 0, 0);
+        }
+    }
+#endif
 
 #ifdef Battery_LED_1
     digitalWrite(Battery_LED_1, chargeIndicatorLED1);
@@ -189,33 +239,36 @@ void StatusLEDModule::setPowerLED(bool LEDon)
         PMU->setChargingLedMode(LEDon ? XPOWERS_CHG_LED_ON : XPOWERS_CHG_LED_OFF);
     }
 #endif
-    if (LEDon)
-        LEDon = LED_STATE_ON;
-    else
-        LEDon = LED_STATE_OFF;
+    uint8_t ledState = LEDon ? LED_STATE_ON : LED_STATE_OFF;
 #ifdef PCA_LED_POWER
-    io.digitalWrite(PCA_LED_POWER, LEDon);
+    io.digitalWrite(PCA_LED_POWER, ledState);
 #endif
 #ifdef PCA_LED_ENABLE
-    io.digitalWrite(PCA_LED_ENABLE, LEDon);
+    io.digitalWrite(PCA_LED_ENABLE, ledState);
 #endif
 #ifdef LED_POWER
-    digitalWrite(LED_POWER, LEDon);
+    digitalWrite(LED_POWER, ledState);
 #endif
 #ifdef LED_PAIRING
-    digitalWrite(LED_PAIRING, LEDon);
+    digitalWrite(LED_PAIRING, ledState);
+#endif
+#ifdef NEOPIXEL_STATUS_POWER_PIN
+    writeStatusPixel(powerPixel, NEOPIXEL_STATUS_POWER_COLOR, LEDon);
+#endif
+#ifdef NEOPIXEL_STATUS_PAIRING_PIN
+    writeStatusPixel(pairingPixel, NEOPIXEL_STATUS_PAIRING_COLOR, LEDon);
 #endif
 
 #ifdef Battery_LED_1
-    digitalWrite(Battery_LED_1, LEDon);
+    digitalWrite(Battery_LED_1, ledState);
 #endif
 #ifdef Battery_LED_2
-    digitalWrite(Battery_LED_2, LEDon);
+    digitalWrite(Battery_LED_2, ledState);
 #endif
 #ifdef Battery_LED_3
-    digitalWrite(Battery_LED_3, LEDon);
+    digitalWrite(Battery_LED_3, ledState);
 #endif
 #ifdef Battery_LED_4
-    digitalWrite(Battery_LED_4, LEDon);
+    digitalWrite(Battery_LED_4, ledState);
 #endif
 }
