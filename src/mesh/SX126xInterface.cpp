@@ -275,6 +275,12 @@ template <typename T> void SX126xInterface<T>::setStandby()
     checkNotification(); // handle any pending interrupts before we force standby
 
     int err = lora.standby();
+    if (err == RADIOLIB_ERR_SPI_CMD_TIMEOUT) {
+        // SX126x returned STATUS_CMD_TIMEOUT — briefly mid-operation (e.g. post-TX cleanup).
+        // Retry after a short wait; this is the same reason RadioLib's init() retries standby.
+        delay(2);
+        err = lora.standby();
+    }
 
     if (err != RADIOLIB_ERR_NONE)
         LOG_DEBUG("SX126x standby %s%d", radioLibErr, err);
@@ -300,6 +306,11 @@ template <typename T> void SX126xInterface<T>::addReceiveMetadata(meshtastic_Mes
     mp->rx_snr = lora.getSNR();
     mp->rx_rssi = lround(lora.getRSSI());
     LOG_DEBUG("Corrected frequency offset: %f", lora.getFrequencyError());
+#if defined(USE_SX1262)
+    // Signal the waterfall renderer to inject a row for this reception.
+    spectralScanLastPacketRSSI = (int16_t)mp->rx_rssi;
+    spectralScanPacketReceived = true;
+#endif
 }
 
 /** We override to turn on transmitter power as needed.
@@ -321,6 +332,25 @@ template <typename T> void SX126xInterface<T>::startReceive()
 
     setTransmitEnable(false);
     setStandby();
+
+    // Execute any pending AGC reset now that radio is in standby (radio task context — safe).
+    if (agcResetRequest) {
+        agcResetRequest = false;
+        doResetAGC();
+        spectralScanRequest = false; // skip sweep this cycle; don’t stack two heavyweight operations
+        // After doResetAGC() the radio is back in STDBY_RC; fall through to startReceiveDutyCycleAuto.
+    }
+
+    // Execute any pending frequency sweep now that radio is in standby (radio thread context — safe).
+    if (spectralScanRequest) {
+        spectralScanRequest = false;
+        doFrequencySweep();
+        // doFrequencySweep() ends with lora.standby() at the original frequency — no extra setStandby() needed.
+    }
+
+    // Waterfall frame is visible and holds the radio for continuous sweeping — skip normal duty-cycle RX.
+    if (spectralScanHoldRadio)
+        return;
 
     // We use a 16 bit preamble so this should save some power by letting radio sit in standby mostly.
     int err = lora.startReceiveDutyCycleAuto(preambleLength, 8, MESHTASTIC_RADIOLIB_IRQ_RX_FLAGS);
@@ -404,19 +434,25 @@ template <typename T> bool SX126xInterface<T>::sleep()
     return true;
 }
 
+// resetAGC() is called from the main-loop task (different FreeRTOS task to the radio task).
+// All lora.* SPI operations must happen in the radio task — so just set a flag here.
+// doResetAGC() does the actual work when startReceive() next runs in the radio task.
 template <typename T> void SX126xInterface<T>::resetAGC()
 {
-    // Safety: don't reset mid-packet
-    if (sendingPacket != NULL || (isReceiving && isActivelyReceiving()))
-        return;
+    agcResetRequest = true;
+}
 
+// Called from startReceive() (radio task) after setStandby() — radio is guaranteed to be in STDBY_RC.
+// Does NOT call startReceive(); the caller continues directly to startReceiveDutyCycleAuto().
+template <typename T> void SX126xInterface<T>::doResetAGC()
+{
     LOG_DEBUG("SX126x AGC reset: warm sleep + Calibrate(0x7F)");
 
     // 1. Warm sleep — powers down the entire analog frontend, resetting AGC state.
     //    A plain standby→startReceive cycle does NOT reset the AGC.
     lora.sleep(true);
 
-    // 2. Wake to RC standby for stable calibration
+    // 2. Wake to RC standby for stable calibration (wakeup=true skips the pre-cmd BUSY wait)
     lora.standby(RADIOLIB_SX126X_STANDBY_RC, true);
 
     // 3. Calibrate all blocks (ADC, PLL, image, RC oscillators)
@@ -434,38 +470,22 @@ template <typename T> void SX126xInterface<T>::resetAGC()
 
     if (module.hal->digitalRead(module.getGpio())) {
         LOG_WARN("SX126x AGC reset: calibration did not complete within 50ms");
-        startReceive();
-        return;
+        return; // startReceive() will still run startReceiveDutyCycleAuto on best-effort basis
     }
 
     // 5. Re-calibrate image rejection for actual operating frequency
-    //    Calibrate(0x7F) defaults to 902-928 MHz which is wrong for other regions.
     lora.calibrateImage(getFreq());
 
     // Re-apply settings that calibration may have reset
-
-    // DIO2 as RF switch
 #ifdef SX126X_DIO2_AS_RF_SWITCH
     lora.setDio2AsRfSwitch(true);
 #elif defined(ARCH_PORTDUINO)
     if (portduino_config.dio2_as_rf_switch)
         lora.setDio2AsRfSwitch(true);
 #endif
-
-    // RX boosted gain mode
     lora.setRxBoostedGainMode(config.lora.sx126x_rx_boosted_gain);
-
-    // Re-apply the undocumented 0x8B5 RX sensitivity patch that was set in init().
-    // The CALIBRATE_ALL (0x7F) command above clears bit 0 of register 0x8B5, which
-    // silently removes the RX sensitivity improvement introduced in #9571 / #9777.
-    // Without this re-apply, every SX1262 node loses its RX boost ~60s after boot
-    // and never recovers until reboot. See empirical evidence in the PR description.
-    if (module.SPIsetRegValue(0x8B5, 0x01, 0, 0) != RADIOLIB_ERR_NONE) {
+    if (module.SPIsetRegValue(0x8B5, 0x01, 0, 0) != RADIOLIB_ERR_NONE)
         LOG_WARN("SX126x resetAGC: failed to re-apply 0x8B5 RX sensitivity patch");
-    }
-
-    // 6. Resume receiving
-    startReceive();
 }
 
 /** Control PA mode for GC1109 FEM - CPS pin selects full PA (txon=true) or bypass mode (txon=false) */
@@ -478,6 +498,80 @@ template <typename T> void SX126xInterface<T>::setTransmitEnable(bool txon)
         loraFEMInterface.setRxModeEnable();
     }
 #endif
+}
+
+// Executes a frequency sweep in the radio thread (called from startReceive after setStandby).
+// Scans ±SWEEP_HALF_MHZ around the current channel center, storing per-bin RSSI (mapped to
+// uint16 [0..65535], 0 = −120 dBm, 65535 = 0 dBm) in spectralScanResultsBuf[].
+// Radio must already be in standby.  Leaves radio in standby at the original frequency.
+template <typename T> void SX126xInterface<T>::doFrequencySweep()
+{
+    static constexpr uint8_t N = 33;              // must match WATERFALL_BINS / spectralScanResultsBuf size
+    static constexpr float SWEEP_HALF_MHZ = 5.0f; // ±5 MHz = 10 MHz total; keep in sync with WATERFALL_SWEEP_HALF_KHZ
+
+    const float centerMHz = getFreq();
+    const float stepMHz = (2.0f * SWEEP_HALF_MHZ) / (N - 1); // ≈31.25 kHz/bin
+
+    spectralScanCenterFreqKHz = (uint32_t)(centerMHz * 1000.0f + 0.5f);
+
+    uint16_t results[N];
+    for (uint8_t bin = 0; bin < N; bin++) {
+        float freq = centerMHz - SWEEP_HALF_MHZ + bin * stepMHz;
+
+        lora.standby();
+        lora.setFrequency(freq);
+        lora.startReceive();                 // enter RX so getRSSI samples the channel's RF power
+        module.hal->delay(1);                // 1 ms for AGC to settle
+        float rssiDbm = lora.getRSSI(false); // instantaneous RSSI, not packet RSSI
+
+        // Map RSSI [−110..−40 dBm] → uint16 [0..65535]
+        // Typical LoRa indoor RSSI: −50 to −90 dBm → maps to upper half of colour ramp.
+        // helrazr reference: RSSI_MIN=-135, RSSI_MAX=-40; they mark ≥-80 red, ≥-100 yellow.
+        // Using -110 floor keeps dark noise floor visually dark while giving warm colours to
+        // receivable signals: -90 → blue, -80 → cyan, -70 → green, -60 → yellow, -50 → red.
+        int r = (int)rssiDbm;
+        if (r < -110)
+            r = -110;
+        if (r > -40)
+            r = -40;
+        results[bin] = (uint16_t)((r + 110) * 936U); // 70 × 936 = 65520 ≈ 65535
+    }
+
+    // Restore original frequency; leave radio in standby for startReceiveDutyCycleAuto().
+    lora.standby();
+    lora.setFrequency(centerMHz);
+
+    for (uint8_t i = 0; i < N; i++)
+        spectralScanResultsBuf[i] = results[i];
+    spectralScanReady = true;
+}
+
+template <typename T> bool SX126xInterface<T>::sampleSpectrum(uint16_t *results, uint16_t numSamples)
+{
+    // Don't interrupt an active packet transfer
+    if (sendingPacket != nullptr || (isReceiving && isActivelyReceiving()))
+        return false;
+
+    int err = lora.spectralScanStart(numSamples);
+    if (err != RADIOLIB_ERR_NONE) {
+        // Radio is still in its original state (RX/idle) — do not call startReceive() or setStandby().
+        return false;
+    }
+
+    // Wait up to 500 ms for the scan to complete (1024 samples * 8.2 us = ~8.4 ms typical)
+    uint32_t start = millis();
+    while (lora.spectralScanGetStatus() != RADIOLIB_ERR_NONE) {
+        if (millis() - start > 500) {
+            lora.spectralScanAbort();
+            startReceive();
+            return false;
+        }
+        delay(1);
+    }
+
+    lora.spectralScanGetResult(results);
+    startReceive();
+    return true;
 }
 
 #endif

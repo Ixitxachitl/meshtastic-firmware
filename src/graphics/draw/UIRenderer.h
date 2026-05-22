@@ -49,6 +49,8 @@ class UIRenderer
 
     // Navigation bar overlay
     static void drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *state);
+    // True for ~2 s after the user switches frames — callers may suppress overdraw.
+    static bool isNavigationBarVisible();
 
     static void drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
 

@@ -728,6 +728,8 @@ void setup()
     router = new ReliableRouter();
 
     // only play start melody when role is not tracker or sensor
+    // audioThread is not created yet — melody queues via queueRttl() and
+    // flushes in loop() once the I2S DMA has warmed up (pumpTicks >= 20).
     if (config.power.is_power_saving == true &&
         IS_ONE_OF(config.device.role, meshtastic_Config_DeviceConfig_Role_TRACKER,
                   meshtastic_Config_DeviceConfig_Role_TAK_TRACKER, meshtastic_Config_DeviceConfig_Role_SENSOR))
@@ -896,6 +898,15 @@ void setup()
 #ifdef HAS_I2S
     LOG_DEBUG("Start audio thread");
     audioThread = new AudioThread();
+#if defined(ARDUINO_ARCH_ESP32)
+    if (audioThread && audioThread->isFreeRTOSTask()) {
+        if (!audioThread->startFreeRTOSTask()) {
+            LOG_ERROR("Failed to start AudioThread FreeRTOS task");
+            delete audioThread;
+            audioThread = nullptr;
+        }
+    }
+#endif
 #endif
 
 #ifdef HAS_UDP_MULTICAST
@@ -1176,6 +1187,24 @@ void loop()
 #if !MESHTASTIC_EXCLUDE_INPUTBROKER && defined(HAS_FREE_RTOS) && !defined(ARCH_RP2040)
     if (inputBroker)
         inputBroker->processInputEventQueue();
+#endif
+
+// Flush queued boot melody once I2S DMA has warmed up (20 pump ticks ~= 1s)
+#if defined(HAS_I2S) && defined(ARDUINO_ARCH_ESP32)
+    {
+        static bool bootMelodyFlushed = false;
+        static uint32_t flushStartMs = 0;
+        if (!bootMelodyFlushed && audioThread) {
+            if (flushStartMs == 0)
+                flushStartMs = millis();
+            const bool warmedUp = (audioThread->pumpTicks() >= 20);
+            const bool timeFallback = ((millis() - flushStartMs) >= 800);
+            if (warmedUp || timeFallback) {
+                buzzOnAudioThreadReady();
+                bootMelodyFlushed = true;
+            }
+        }
+    }
 #endif
 #if ARCH_PORTDUINO
     if (portduino_config.lora_spi_dev == "ch341" && ch341Hal != nullptr) {

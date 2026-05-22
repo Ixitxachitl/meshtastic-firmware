@@ -39,6 +39,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "draw/NodeListRenderer.h"
 #include "draw/NotificationRenderer.h"
 #include "draw/UIRenderer.h"
+#include "draw/WaterfallRenderer.h"
 #include "graphics/TFTColorRegions.h"
 #include "modules/CannedMessageModule.h"
 
@@ -794,6 +795,11 @@ void Screen::setup()
     messageStore.loadFromFlash();
     LOG_INFO("MessageStore loaded from flash");
 
+#if defined(USE_SX1262) && GRAPHICS_TFT_COLORING_ENABLED
+    if (!graphics::WaterfallRenderer::instance)
+        new graphics::WaterfallRenderer();
+#endif
+
     // Notify modules that support UI events
     MeshModule::observeUIEvents(&uiFrameEventObserver);
 }
@@ -999,6 +1005,15 @@ int32_t Screen::runOnce()
     // this must be before the frameState == FIXED check, because we always
     // want to draw at least one FIXED frame before doing forceDisplay
     updateUiFrame(ui);
+
+    // Waterfall SPI pixels are written after the OLEDDisplayUi flush so they sit on top.
+    // The nav bar overlay draws over the waterfall briefly (2 s) — that is intentional.
+#if defined(USE_SX1262) && GRAPHICS_TFT_COLORING_ENABLED
+    if (showingNormalScreen && framesetInfo.positions.waterfall != 255 &&
+        ui->getUiState()->currentFrame == framesetInfo.positions.waterfall) {
+        graphics::WaterfallRenderer::postDraw();
+    }
+#endif
 
     // Switch to a low framerate (to save CPU) when we are not in transition
     // but we should only call setTargetFPS when framestate changes, because
@@ -1222,6 +1237,13 @@ void Screen::setFrames(FrameFocus focus)
         normalFrames[numframes++] = graphics::DebugRenderer::drawLoRaFocused;
         indicatorIcons.push_back(icon_radio);
     }
+#if defined(USE_SX1262) && GRAPHICS_TFT_COLORING_ENABLED
+    if (!hiddenFrames.waterfall && graphics::WaterfallRenderer::instance) {
+        fsi.positions.waterfall = numframes;
+        normalFrames[numframes++] = graphics::WaterfallRenderer::drawWaterfallFrame;
+        indicatorIcons.push_back(icon_radio);
+    }
+#endif
     if (!hiddenFrames.system) {
         fsi.positions.system = numframes;
         normalFrames[numframes++] = graphics::DebugRenderer::drawSystemScreen;

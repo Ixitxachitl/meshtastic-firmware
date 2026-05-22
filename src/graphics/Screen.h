@@ -706,6 +706,7 @@ class Screen : public concurrency::OSThread
             uint8_t firstFavorite = 255;
             uint8_t lastFavorite = 255;
             uint8_t lora = 255;
+            uint8_t waterfall = 255;
         } positions;
 
         uint8_t frameCount = 0;
@@ -736,6 +737,7 @@ class Screen : public concurrency::OSThread
         bool lora = false;
         bool show_favorites = false;
         bool chirpy = true;
+        bool waterfall = false;
     } hiddenFrames;
 
     /// Try to start drawing ASAP

@@ -41,6 +41,9 @@ OSThread::OSThread(const char *_name, uint32_t period, ThreadController *_contro
 
 OSThread::~OSThread()
 {
+#if defined(ARDUINO_ARCH_ESP32)
+    stopFreeRTOSTask();
+#endif
     if (controller)
         controller->remove(this);
 }
@@ -121,6 +124,74 @@ int32_t OSThread::disable()
  * this makes it guaranteed that the global mainController is fully constructed first.
  */
 bool hasBeenSetup;
+
+#if defined(ARDUINO_ARCH_ESP32)
+void OSThread::setFreeRTOSTask(bool enable, uint32_t stackSizeWords, UBaseType_t priority, BaseType_t coreAffinity)
+{
+    if (taskHandle != nullptr) {
+        LOG_WARN("Cannot reconfigure FreeRTOS task while it's running");
+        return;
+    }
+    rtosConfig.enabled = enable;
+    rtosConfig.stackSizeWords = stackSizeWords;
+    rtosConfig.priority = priority;
+    rtosConfig.coreAffinity = coreAffinity;
+    if (enable && controller) {
+        controller->remove(this);
+        controller = nullptr;
+    }
+}
+
+bool OSThread::startFreeRTOSTask()
+{
+    if (!rtosConfig.enabled) {
+        LOG_WARN("Thread %s: FreeRTOS task not enabled", ThreadName.c_str());
+        return false;
+    }
+    if (taskHandle != nullptr) {
+        LOG_WARN("Thread %s: FreeRTOS task already running", ThreadName.c_str());
+        return false;
+    }
+    BaseType_t result = xTaskCreatePinnedToCore(rtosTaskEntryPoint, ThreadName.c_str(), rtosConfig.stackSizeWords, this,
+                                                rtosConfig.priority, &taskHandle, rtosConfig.coreAffinity);
+    if (result == pdPASS) {
+        LOG_INFO("Thread %s: FreeRTOS task started", ThreadName.c_str());
+        return true;
+    }
+    LOG_ERROR("Thread %s: Failed to create FreeRTOS task", ThreadName.c_str());
+    taskHandle = nullptr;
+    return false;
+}
+
+void OSThread::stopFreeRTOSTask()
+{
+    if (taskHandle != nullptr) {
+        vTaskDelete(taskHandle);
+        taskHandle = nullptr;
+    }
+}
+
+void OSThread::rtosTaskEntryPoint(void *pvParameters)
+{
+    OSThread *instance = static_cast<OSThread *>(pvParameters);
+    if (instance)
+        instance->rtosTaskLoop();
+    vTaskDelete(nullptr);
+}
+
+void OSThread::rtosTaskLoop()
+{
+    for (;;) {
+        currentThread = this;
+        int32_t delayMs = runOnce();
+        currentThread = nullptr;
+        if (delayMs <= 0)
+            taskYIELD();
+        else
+            vTaskDelay(pdMS_TO_TICKS(delayMs));
+    }
+}
+#endif // ARDUINO_ARCH_ESP32
 
 void assertIsSetup()
 {

@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <stdint.h>
 
+#include "../freertosinc.h"
 #include "Thread.h"
 #include "ThreadController.h"
 #include "concurrency/InterruptableDelay.h"
@@ -14,6 +15,15 @@ extern ThreadController mainController, timerController;
 extern InterruptableDelay mainDelay;
 
 #define RUN_SAME -1
+
+#if defined(ARDUINO_ARCH_ESP32)
+struct FreeRTOSTaskConfig {
+    uint32_t stackSizeWords = 2048;
+    UBaseType_t priority = tskIDLE_PRIORITY + 1;
+    BaseType_t coreAffinity = tskNO_AFFINITY;
+    bool enabled = false;
+};
+#endif
 
 /**
  * @brief Base threading
@@ -41,6 +51,13 @@ class OSThread : public Thread
     /// Show debugging info for threads we decide not to run;
     static bool showWaiting;
 
+#if defined(ARDUINO_ARCH_ESP32)
+    FreeRTOSTaskConfig rtosConfig;
+    TaskHandle_t taskHandle = nullptr;
+    static void rtosTaskEntryPoint(void *pvParameters);
+    void rtosTaskLoop();
+#endif
+
   public:
     /// For debug printing only (might be null)
     static const OSThread *currentThread;
@@ -59,6 +76,14 @@ class OSThread : public Thread
      * Wait a specified number msecs starting from the current time (rather than the last time we were run)
      */
     void setIntervalFromNow(unsigned long _interval);
+
+#if defined(ARDUINO_ARCH_ESP32)
+    void setFreeRTOSTask(bool enable = true, uint32_t stackSizeWords = 2048, UBaseType_t priority = tskIDLE_PRIORITY + 1,
+                         BaseType_t coreAffinity = tskNO_AFFINITY);
+    bool startFreeRTOSTask();
+    void stopFreeRTOSTask();
+    bool isFreeRTOSTask() const { return rtosConfig.enabled; }
+#endif
 
   protected:
     /**
