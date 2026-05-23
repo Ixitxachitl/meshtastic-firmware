@@ -99,6 +99,12 @@ namespace graphics
 
 // DEBUG
 #define NUM_EXTRA_FRAMES 3 // text message and debug frame
+// Upper bound on the normalFrames[] slot count. Built-in frames (~17) + module frames (~8) + favorite-node
+// frames make up the total. Historically this was sized at MAX_NUM_NODES + NUM_EXTRA_FRAMES, but that
+// reserved ~3 KB for slots that never get used. 48 leaves ~23 slots for favorites after typical use.
+#ifndef MAX_NORMAL_FRAMES
+#define MAX_NORMAL_FRAMES 48
+#endif
 // if defined a pixel will blink to show redraws
 // #define SHOW_REDRAWS
 #define ASCII_BELL '\x07'
@@ -404,7 +410,7 @@ SPIClass SPI1(HSPI);
 Screen::Screen(ScanI2C::DeviceAddress address, meshtastic_Config_DisplayConfig_OledType screenType, OLEDDISPLAY_GEOMETRY geometry)
     : concurrency::OSThread("Screen"), address_found(address), model(screenType), geometry(geometry), cmdQueue(32)
 {
-    graphics::normalFrames = new FrameCallback[MAX_NUM_NODES + NUM_EXTRA_FRAMES];
+    graphics::normalFrames = new FrameCallback[MAX_NORMAL_FRAMES + NUM_EXTRA_FRAMES];
 
 #if defined(USE_SH1106) || defined(USE_SH1107) || defined(USE_SH1107_128_64)
     dispdev = new SH1106Wire(address.address, -1, -1, geometry,
@@ -1284,6 +1290,10 @@ void Screen::setFrames(FrameFocus focus)
     for (auto i = moduleFrames.begin(); i != moduleFrames.end(); ++i) {
         // Draw the module frame, using the hack described above
         if (*i != nullptr) {
+            if (numframes >= MAX_NORMAL_FRAMES + NUM_EXTRA_FRAMES) {
+                LOG_WARN("normalFrames full; dropping module frame");
+                break;
+            }
             normalFrames[numframes] = drawModuleFrame;
 
             // Check if the module being drawn has requested focus
@@ -1321,6 +1331,11 @@ void Screen::setFrames(FrameFocus focus)
         if (!favoriteFrames.empty()) {
             fsi.positions.firstFavorite = numframes;
             for (const auto &f : favoriteFrames) {
+                if (numframes >= MAX_NORMAL_FRAMES + NUM_EXTRA_FRAMES) {
+                    LOG_WARN("normalFrames full; dropping %u favorite frames",
+                             (unsigned)(favoriteFrames.size() - (numframes - fsi.positions.firstFavorite)));
+                    break;
+                }
                 normalFrames[numframes++] = f;
                 indicatorIcons.push_back(icon_node);
             }

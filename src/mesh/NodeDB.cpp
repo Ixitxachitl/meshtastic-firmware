@@ -754,7 +754,8 @@ void NodeDB::installDefaultNodeDatabase()
 {
     LOG_DEBUG("Install default NodeDatabase");
     nodeDatabase.version = DEVICESTATE_CUR_VER;
-    nodeDatabase.nodes = std::vector<meshtastic_NodeInfoLite>(MAX_NUM_NODES);
+    // Grow lazily as peers are discovered; pre-allocating MAX_NUM_NODES wastes ~13 KB heap on boot.
+    nodeDatabase.nodes.clear();
     numMeshNodes = 0;
     meshNodes = &nodeDatabase.nodes;
     concurrency::LockGuard satelliteGuard(&satelliteMutex);
@@ -1292,7 +1293,8 @@ void NodeDB::resetNodes(bool keepFavorites)
             if (gone)
                 eraseNodeSatellites(gone);
         }
-        std::fill(nodeDatabase.nodes.begin() + 1, nodeDatabase.nodes.end(), meshtastic_NodeInfoLite());
+        if (meshNodes->size() > 1)
+            meshNodes->resize(1);
     }
     (void)ourNum;
     devicestate.has_rx_waypoint = false;
@@ -1312,8 +1314,8 @@ void NodeDB::removeNodeByNum(NodeNum nodeNum)
             removed++;
     }
     numMeshNodes -= removed;
-    std::fill(nodeDatabase.nodes.begin() + numMeshNodes, nodeDatabase.nodes.begin() + numMeshNodes + 1,
-              meshtastic_NodeInfoLite());
+    if (meshNodes->size() > (size_t)numMeshNodes)
+        meshNodes->resize(numMeshNodes);
     if (removed)
         eraseNodeSatellites(nodeNum);
     LOG_DEBUG("NodeDB::removeNodeByNum purged %d entries. Save changes", removed);
@@ -1485,8 +1487,8 @@ void NodeDB::cleanupMeshDB()
         }
     }
     numMeshNodes -= removed;
-    std::fill(nodeDatabase.nodes.begin() + numMeshNodes, nodeDatabase.nodes.begin() + numMeshNodes + removed,
-              meshtastic_NodeInfoLite());
+    if (meshNodes->size() > (size_t)numMeshNodes)
+        meshNodes->resize(numMeshNodes);
     LOG_DEBUG("cleanupMeshDB purged %d entries", removed);
 }
 
@@ -1652,8 +1654,9 @@ void NodeDB::loadFromDisk()
         ~Disarm() { self.disarmNodeDatabaseDecodeTargets(); }
     } disarm{*this};
 
-    // Avoid push_back's power-of-2 capacity growth wasting RAM at small N.
-    nodeDatabase.nodes.reserve(MAX_NUM_NODES);
+    // Grow lazily during decode; the decode callback push_backs entries as they arrive.
+    // Avoiding reserve(MAX_NUM_NODES) saves ~13 KB heap when the saved DB is much smaller than MAX_NUM_NODES.
+    nodeDatabase.nodes.clear();
 
     auto state = loadProto(nodeDatabaseFileName, getMaxNodesAllocatedSize(), sizeof(meshtastic_NodeDatabase),
                            &meshtastic_NodeDatabase_msg, &nodeDatabase);
@@ -1700,8 +1703,8 @@ void NodeDB::loadFromDisk()
     if (numMeshNodes > MAX_NUM_NODES) {
         LOG_WARN("Node count %d exceeds MAX_NUM_NODES %d, truncating", numMeshNodes, MAX_NUM_NODES);
         numMeshNodes = MAX_NUM_NODES;
+        meshNodes->resize(MAX_NUM_NODES);
     }
-    meshNodes->resize(MAX_NUM_NODES);
 
     // static DeviceState scratch; We no longer read into a tempbuf because this structure is 15KB of valuable RAM
     state = loadProto(deviceStateFileName, meshtastic_DeviceState_size, sizeof(meshtastic_DeviceState),
@@ -2729,8 +2732,10 @@ meshtastic_NodeInfoLite *NodeDB::getOrCreateMeshNode(NodeNum n)
                 (numMeshNodes)--;
             }
         }
-        // add the node at the end
-        lite = &meshNodes->at((numMeshNodes)++);
+        // add the node at the end, growing the vector lazily as peers are discovered.
+        if ((size_t)numMeshNodes >= meshNodes->size())
+            meshNodes->emplace_back();
+        lite = &meshNodes->at(numMeshNodes++);
 
         // everything is missing except the nodenum
         memset(lite, 0, sizeof(*lite));

@@ -506,29 +506,38 @@ template <typename T> void SX126xInterface<T>::setTransmitEnable(bool txon)
 // Radio must already be in standby.  Leaves radio in standby at the original frequency.
 template <typename T> void SX126xInterface<T>::doFrequencySweep()
 {
-    static constexpr uint8_t N = 33;              // must match WATERFALL_BINS / spectralScanResultsBuf size
-    static constexpr float SWEEP_HALF_MHZ = 5.0f; // ±5 MHz = 10 MHz total; keep in sync with WATERFALL_SWEEP_HALF_KHZ
+    static constexpr uint8_t N = RadioLibInterface::SPECTRAL_SCAN_BINS;
 
+    // Sweep the full operating region (e.g. 902–928 MHz for US915) when a region is set;
+    // fall back to a ±5 MHz window around the current channel otherwise.
     const float centerMHz = getFreq();
-    const float stepMHz = (2.0f * SWEEP_HALF_MHZ) / (N - 1); // ≈31.25 kHz/bin
+    float startMHz, endMHz;
+    if (myRegion && myRegion->freqEnd > myRegion->freqStart) {
+        startMHz = myRegion->freqStart;
+        endMHz = myRegion->freqEnd;
+    } else {
+        startMHz = centerMHz - 5.0f;
+        endMHz = centerMHz + 5.0f;
+    }
+    const float stepMHz = (endMHz - startMHz) / (N - 1);
 
-    spectralScanCenterFreqKHz = (uint32_t)(centerMHz * 1000.0f + 0.5f);
+    spectralScanCenterFreqKHz = (uint32_t)(((startMHz + endMHz) * 0.5f) * 1000.0f + 0.5f);
+    spectralScanStartFreqKHz = (uint32_t)(startMHz * 1000.0f + 0.5f);
+    spectralScanEndFreqKHz = (uint32_t)(endMHz * 1000.0f + 0.5f);
 
     uint16_t results[N];
     for (uint8_t bin = 0; bin < N; bin++) {
-        float freq = centerMHz - SWEEP_HALF_MHZ + bin * stepMHz;
+        float freq = startMHz + bin * stepMHz;
 
         lora.standby();
         lora.setFrequency(freq);
         lora.startReceive();                 // enter RX so getRSSI samples the channel's RF power
-        module.hal->delay(1);                // 1 ms for AGC to settle
+        module.hal->delayMicroseconds(500);  // AGC settle — 250 µs is too short, AGC reads noise-floor garbage
         float rssiDbm = lora.getRSSI(false); // instantaneous RSSI, not packet RSSI
 
         // Map RSSI [−110..−40 dBm] → uint16 [0..65535]
-        // Typical LoRa indoor RSSI: −50 to −90 dBm → maps to upper half of colour ramp.
-        // helrazr reference: RSSI_MIN=-135, RSSI_MAX=-40; they mark ≥-80 red, ≥-100 yellow.
-        // Using -110 floor keeps dark noise floor visually dark while giving warm colours to
-        // receivable signals: -90 → blue, -80 → cyan, -70 → green, -60 → yellow, -50 → red.
+        // RSSI well outside the matched band attenuates by the antenna/LNA match (off-band roll-off),
+        // so edge bins on a wide sweep read low. That's expected; treat absolute dBm as approximate.
         int r = (int)rssiDbm;
         if (r < -110)
             r = -110;

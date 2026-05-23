@@ -84,16 +84,26 @@ void WaterfallRenderer::doScan()
     };
 
     // If a packet was received (by the normal duty-cycle RX path), inject a row showing the signal
-    // centered at the channel frequency with an approximate LoRa bandwidth envelope.
+    // at the channel frequency's bin with an approximate LoRa bandwidth envelope.
     if (RadioLibInterface::spectralScanPacketReceived) {
         RadioLibInterface::spectralScanPacketReceived = false;
         uint8_t sigN = rssiToN(RadioLibInterface::spectralScanLastPacketRSSI);
+
+        // Map channel freq → bin index within the current sweep range.
+        const uint32_t startKHz = RadioLibInterface::spectralScanStartFreqKHz;
+        const uint32_t endKHz = RadioLibInterface::spectralScanEndFreqKHz;
+        const uint32_t chKHz = (uint32_t)(RadioLibInterface::instance->getFreq() * 1000.0f + 0.5f);
+        uint8_t centerBin = WATERFALL_BINS / 2;
+        if (endKHz > startKHz && chKHz >= startKHz && chKHz <= endKHz) {
+            centerBin = static_cast<uint8_t>(((uint64_t)(chKHz - startKHz) * (WATERFALL_BINS - 1)) / (endKHz - startKHz));
+        }
+
         concurrency::LockGuard g(&lock_);
         uint8_t slot = head_.load(std::memory_order_relaxed);
         for (uint8_t i = 0; i < WATERFALL_BINS; i++) {
-            // Distance from center bin — shape approximates a LoRa ~250 kHz signal within a 1 MHz sweep.
-            uint8_t d = (i >= WATERFALL_BINS / 2) ? (i - WATERFALL_BINS / 2) : (WATERFALL_BINS / 2 - i);
-            histBuf_[slot][i] = (d <= 4) ? sigN : (d <= 7) ? static_cast<uint8_t>(sigN >> 1) : 0;
+            // Distance from channel-freq bin — shape approximates a LoRa ~250 kHz signal envelope.
+            uint8_t d = (i >= centerBin) ? (i - centerBin) : (centerBin - i);
+            histBuf_[slot][i] = (d <= 1) ? sigN : (d <= 2) ? static_cast<uint8_t>(sigN >> 1) : 0;
         }
         head_.store((slot + 1) % WATERFALL_ROWS, std::memory_order_release);
     }
@@ -161,19 +171,53 @@ uint16_t WaterfallRenderer::countToRgb565(uint8_t n)
     return TFTPalette::rgb565(r, g, b);
 }
 
+// Pre-baked palette: 256 RGB565 colours stored as already-byte-swapped (big-endian) byte pairs
+// so the inner paint loop is two raw byte writes per pixel with no shifts.
+static uint8_t s_paletteBE[256][2];
+static bool s_paletteReady = false;
+static void buildPaletteIfNeeded()
+{
+    if (s_paletteReady)
+        return;
+    for (int n = 0; n < 256; n++) {
+        uint16_t c = WaterfallRenderer::countToRgb565(static_cast<uint8_t>(n));
+        s_paletteBE[n][0] = static_cast<uint8_t>(c >> 8);
+        s_paletteBE[n][1] = static_cast<uint8_t>(c & 0xFF);
+    }
+    s_paletteReady = true;
+}
+
+// Per-bin pixel span: s_binStart[i]..s_binStart[i+1] is the pixel range source bin i covers.
+// 33 bins over 240 pixels → ~7-8 px each; lets the paint loop avoid a per-pixel divide.
+static uint8_t s_binStart[WATERFALL_BINS + 1];
+static bool s_binStartReady = false;
+static void buildBinSpansIfNeeded()
+{
+    if (s_binStartReady)
+        return;
+    // Match the original nearest-neighbour mapping `bin = px * BINS / W`:
+    // bin i covers pixels [ceil(i*W/BINS), ceil((i+1)*W/BINS)).
+    for (int i = 0; i <= WATERFALL_BINS; i++) {
+        s_binStart[i] = static_cast<uint8_t>((i * WATERFALL_W + WATERFALL_BINS - 1) / WATERFALL_BINS);
+    }
+    s_binStartReady = true;
+}
+
 void WaterfallRenderer::drawWaterfallFrame(OLEDDisplay *display, OLEDDisplayUiState * /*state*/, int16_t x, int16_t y)
 {
     drawCommonHeader(display, x, y, "Waterfall");
 
     // Footer: left = sweep start freq, center = "MHz", right = sweep end freq.
     // Use FONT_SMALL_LOCAL (ArialMT_Plain_10, 13 px) so the footer is as compact as possible.
+    uint32_t startKHz = RadioLibInterface::spectralScanStartFreqKHz;
+    uint32_t endKHz = RadioLibInterface::spectralScanEndFreqKHz;
     uint32_t centerKHz = RadioLibInterface::spectralScanCenterFreqKHz;
-    if (centerKHz > 0) {
+    if (centerKHz > 0 && endKHz > startKHz) {
         char left[10], right[10];
         char center[16];
-        snprintf(left, sizeof(left), "%.3f", (centerKHz - WATERFALL_SWEEP_HALF_KHZ) / 1000.0f);
+        snprintf(left, sizeof(left), "%.3f", startKHz / 1000.0f);
         snprintf(center, sizeof(center), "%.3f MHz", centerKHz / 1000.0f);
-        snprintf(right, sizeof(right), "%.3f", (centerKHz + WATERFALL_SWEEP_HALF_KHZ) / 1000.0f);
+        snprintf(right, sizeof(right), "%.3f", endKHz / 1000.0f);
         const int16_t footerH = _fontHeight(FONT_SMALL_LOCAL); // 13 px
         const int16_t footerY = y + (display->getHeight() - footerH);
         display->setFont(FONT_SMALL_LOCAL);
@@ -192,16 +236,30 @@ void WaterfallRenderer::postDraw()
     if (!instance)
         return;
 
-    // Snapshot the ring-buffer head under lock, then release before the long SPI transfer
-    uint8_t rowBuf[WATERFALL_W * 2]; // 480 bytes on stack
-    const SPISettings settings(40000000, MSBFIRST, SPI_MODE0);
+    // Mark frame visible so runOnce() continues scanning, regardless of whether we paint below.
+    // Doing this first means a skipped repaint still keeps the scan loop alive.
+    instance->active_.store(true, std::memory_order_relaxed);
+
+    // Atomic load — no lock needed for a single uint8_t atomic read.
+    uint8_t head = instance->head_.load(std::memory_order_acquire);
+
+    // Skip the entire SPI transaction when no new scan data has landed since the last paint.
+    // postDraw() is called every UI frame (~30 Hz) but scans complete at ~12 Hz, so most calls
+    // would otherwise repaint identical pixels (~48 KB SPI / frame wasted).
+    if (head == instance->lastPaintedHead_)
+        return;
+    instance->lastPaintedHead_ = head;
+
+    buildPaletteIfNeeded();
+    buildBinSpansIfNeeded();
+
+    static const SPISettings settings(40000000, MSBFIRST, SPI_MODE0);
 
     // When the nav bar overlay is visible (~2 s after a frame switch) skip painting
     // the bottom rows that overlap the icon strip so the nav bar stays on top.
-    // Nav bar icons are 16 px tall and sit at logical Y = SCREEN_HEIGHT - iconSize - 1 = 118.
     uint8_t rowsToPaint = WATERFALL_ROWS;
     if (UIRenderer::isNavigationBarVisible()) {
-        const uint8_t navTopY = 118; // logical Y where the nav bar begins on TFT (135 - 16 - 1)
+        const uint8_t navTopY = 118; // 135 - 16 - 1
         if (navTopY > WATERFALL_Y && (navTopY - WATERFALL_Y) < rowsToPaint)
             rowsToPaint = navTopY - WATERFALL_Y;
     }
@@ -211,58 +269,49 @@ void WaterfallRenderer::postDraw()
     const uint16_t x2 = x1 + WATERFALL_W - 1;
     const uint16_t y2 = y1 + rowsToPaint - 1;
 
-    // Build pixel data and send in one SPI window for efficiency
+    uint8_t rowBuf[WATERFALL_W * 2]; // 480 B on stack
+
     digitalWrite(ST7789_NSS, LOW);
     SPI1.beginTransaction(settings);
 
-    // Set column address window
     digitalWrite(ST7789_RS, LOW);
     SPI1.write(ST77XX_CASET);
     digitalWrite(ST7789_RS, HIGH);
     uint8_t caset[4] = {(uint8_t)(x1 >> 8), (uint8_t)x1, (uint8_t)(x2 >> 8), (uint8_t)x2};
     SPI1.writeBytes(caset, 4);
 
-    // Set row address window
     digitalWrite(ST7789_RS, LOW);
     SPI1.write(ST77XX_RASET);
     digitalWrite(ST7789_RS, HIGH);
     uint8_t raset[4] = {(uint8_t)(y1 >> 8), (uint8_t)y1, (uint8_t)(y2 >> 8), (uint8_t)y2};
     SPI1.writeBytes(raset, 4);
 
-    // Begin RAM write
     digitalWrite(ST7789_RS, LOW);
     SPI1.write(ST77XX_RAMWR);
     digitalWrite(ST7789_RS, HIGH);
 
-    // Paint rows newest-at-top.  We hold the lock only to read head_, then
-    // read the buffer without locking (a torn newest row is visually harmless).
-    uint8_t head;
-    {
-        concurrency::LockGuard g(&instance->lock_);
-        head = instance->head_.load(std::memory_order_acquire);
-    }
-
+    // Paint rows newest-at-top. Lock-free read of the histogram is intentional: a torn
+    // newest row at ~12 Hz is visually imperceptible (one row of one frame).
     for (uint8_t row = 0; row < rowsToPaint; row++) {
-        // newest scan first: (head - 1 - row + ROWS) % ROWS
         uint8_t bufIdx = (head + WATERFALL_ROWS - 1 - row) % WATERFALL_ROWS;
         const uint8_t *hist = instance->histBuf_[bufIdx];
 
-        // Expand 33 bins → 240 pixels (nearest-neighbour)
+        // Fill rowBuf bin-span by bin-span — no per-pixel divide, just byte-pair fan-out.
         uint8_t *p = rowBuf;
-        for (uint16_t px = 0; px < WATERFALL_W; px++) {
-            uint8_t bin = (uint32_t)px * WATERFALL_BINS / WATERFALL_W;
-            uint16_t color16 = countToRgb565(hist[bin]);
-            *p++ = (uint8_t)(color16 >> 8);
-            *p++ = (uint8_t)(color16 & 0xFF);
+        for (uint8_t bin = 0; bin < WATERFALL_BINS; bin++) {
+            const uint8_t hi = s_paletteBE[hist[bin]][0];
+            const uint8_t lo = s_paletteBE[hist[bin]][1];
+            const uint8_t spanEnd = s_binStart[bin + 1];
+            for (uint8_t px = s_binStart[bin]; px < spanEnd; px++) {
+                *p++ = hi;
+                *p++ = lo;
+            }
         }
         SPI1.writeBytes(rowBuf, WATERFALL_W * 2);
     }
 
     SPI1.endTransaction();
     digitalWrite(ST7789_NSS, HIGH);
-
-    // Mark frame visible so runOnce() continues scanning.
-    instance->active_.store(true, std::memory_order_relaxed);
 }
 
 } // namespace graphics

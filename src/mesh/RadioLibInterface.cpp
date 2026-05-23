@@ -49,7 +49,9 @@ RadioLibInterface::RadioLibInterface(LockingArduinoHal *hal, RADIOLIB_PIN_TYPE c
 #if defined(USE_SX1262)
 volatile bool RadioLibInterface::spectralScanRequest = false;
 volatile bool RadioLibInterface::spectralScanReady = false;
-volatile uint16_t RadioLibInterface::spectralScanResultsBuf[33] = {};
+volatile uint16_t RadioLibInterface::spectralScanResultsBuf[RadioLibInterface::SPECTRAL_SCAN_BINS] = {};
+volatile uint32_t RadioLibInterface::spectralScanStartFreqKHz = 0;
+volatile uint32_t RadioLibInterface::spectralScanEndFreqKHz = 0;
 volatile bool RadioLibInterface::spectralScanInProgress = false;
 volatile uint32_t RadioLibInterface::spectralScanCenterFreqKHz = 0;
 volatile bool RadioLibInterface::spectralScanHoldRadio = false;

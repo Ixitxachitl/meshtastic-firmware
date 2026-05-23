@@ -12,10 +12,8 @@
 namespace graphics
 {
 
-// Number of spectral-scan result bins from SX126x (RADIOLIB_SX126X_SPECTRAL_SCAN_RES_SIZE)
-static constexpr uint8_t WATERFALL_BINS = 33;
-// Half-width of the frequency sweep in kHz (must match SWEEP_HALF_MHZ in doFrequencySweep()).
-static constexpr uint32_t WATERFALL_SWEEP_HALF_KHZ = 5000; // ±5 MHz = 10 MHz total
+// Number of spectral-scan result bins — must equal RadioLibInterface::SPECTRAL_SCAN_BINS.
+static constexpr uint8_t WATERFALL_BINS = 60;
 // Height of the scrolling history in pixels (also the number of stored rows).
 // 135 total − 20 px header − 1 px gap − 13 px footer (FONT_SMALL_LOCAL) = 101 rows.
 static constexpr uint8_t WATERFALL_ROWS = 101;
@@ -46,6 +44,10 @@ class WaterfallRenderer : public concurrency::OSThread
     // Called by Screen::runOnce() AFTER updateUiFrame() to paint colored pixels
     static void postDraw();
 
+    // Map a normalised count (0–255) to an RGB565 heatmap colour.
+    // Public so the palette-LUT builder in the .cpp can call it once at startup.
+    static uint16_t countToRgb565(uint8_t normalised);
+
   protected:
     int32_t runOnce() override;
 
@@ -55,10 +57,11 @@ class WaterfallRenderer : public concurrency::OSThread
     std::atomic<uint8_t> head_{0};
     concurrency::Lock lock_;
 
-    void doScan();
+    // Last head_ value painted by postDraw(), used to skip SPI work when nothing changed.
+    // Initialised to a sentinel that can't equal a real head value so the first paint always runs.
+    uint8_t lastPaintedHead_{0xFF};
 
-    // Map a normalised count (0–255) to an RGB565 heatmap colour
-    static uint16_t countToRgb565(uint8_t normalised);
+    void doScan();
 
     // Set true by postDraw() each time the frame is painted; consumed (exchanged) by runOnce().
     static std::atomic<bool> active_;

@@ -194,10 +194,13 @@ class RadioLibInterface : public RadioInterface, protected concurrency::Notified
     // volatile is sufficient: one writer (WaterfallRenderer), one reader+writer (radio thread).
     static volatile bool spectralScanRequest;
     static volatile bool spectralScanReady;
-    static volatile uint16_t spectralScanResultsBuf[33]; // RADIOLIB_SX126X_SPECTRAL_SCAN_RES_SIZE
+    static constexpr uint8_t SPECTRAL_SCAN_BINS = 60; // bins per sweep — 60 bins × 500 µs = 30 ms sweep, leaves ~60% RX time
+    static volatile uint16_t spectralScanResultsBuf[SPECTRAL_SCAN_BINS];
     static volatile bool spectralScanInProgress;
-    // Center frequency of the last frequency sweep (kHz), for waterfall axis labels.
+    // Center / band-edge frequencies of the last frequency sweep (kHz), for waterfall axis labels.
     static volatile uint32_t spectralScanCenterFreqKHz;
+    static volatile uint32_t spectralScanStartFreqKHz;
+    static volatile uint32_t spectralScanEndFreqKHz;
     // When true, startReceive() skips startReceiveDutyCycleAuto so the waterfall holds the radio.
     static volatile bool spectralScanHoldRadio;
     // Set by handleReceiveInterrupt() when a valid packet arrives while holding the radio for the waterfall.
