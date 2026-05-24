@@ -50,22 +50,19 @@ WaterfallRenderer::WaterfallRenderer() : OSThread("WaterfallRenderer", 1500)
 
 int32_t WaterfallRenderer::runOnce()
 {
-    if (!active_.exchange(false, std::memory_order_acq_rel)) {
-        // Frame not visible — release radio hold and kick the radio back into duty-cycle RX immediately.
-        if (RadioLibInterface::spectralScanHoldRadio) {
-            RadioLibInterface::spectralScanHoldRadio = false;
-            RadioLibInterface::spectralScanRequest = false;
-            RadioLibInterface::triggerSpectralScan(); // wake radio → startReceive() → startReceiveDutyCycleAuto()
-        }
-        return 500;
-    }
+    // Scan continuously, even when the waterfall frame isn't visible or the screen is off.
+    // This lets the renderer keep histogramming RF activity in the background so the user sees
+    // recent history the moment they switch to the waterfall frame.
+    const bool visible = active_.exchange(false, std::memory_order_acq_rel);
     doScan();
 #if !MESHTASTIC_EXCLUDE_POWER_FSM
-    powerFSM.trigger(EVENT_RECEIVED_MSG); // keep screen awake while waterfall is visible
+    if (visible)
+        powerFSM.trigger(EVENT_RECEIVED_MSG); // keep screen awake while waterfall is being watched
 #endif
-    // Sweep itself takes ~50 ms in the radio task (33 bins × ~1.5 ms each).
-    // Returning 80 ms here gives ~12 Hz waterfall scroll while leaving the radio time to finish.
-    return 80;
+    // LoRa preamble + header at LONG_FAST (SF11/BW250) takes >100 ms; a packet runs 1–2 s.
+    // Returning 2000 ms gives ~98% contiguous RX time between sweeps so we don't shred packet RX,
+    // while still updating the waterfall ~30 rows/min plus an immediate blip whenever a packet lands.
+    return 2000;
 }
 
 void WaterfallRenderer::doScan()
@@ -205,6 +202,12 @@ static void buildBinSpansIfNeeded()
 
 void WaterfallRenderer::drawWaterfallFrame(OLEDDisplay *display, OLEDDisplayUiState * /*state*/, int16_t x, int16_t y)
 {
+    // The OLEDDisplayUi framebuffer flush that follows this call wipes the waterfall body region
+    // to black (we only draw the header/footer text into the framebuffer). Force postDraw to
+    // repaint the body on top of that fresh-zeroed area, even if no new scan data has landed.
+    if (instance)
+        instance->lastPaintedHead_ = 0xFF;
+
     drawCommonHeader(display, x, y, "Waterfall");
 
     // Footer: left = sweep start freq, center = "MHz", right = sweep end freq.
