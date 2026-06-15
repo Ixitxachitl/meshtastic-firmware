@@ -15,7 +15,7 @@
  * - Bytes 0-3: Frequency in Hz (little-endian uint32_t)
  * - Bytes 4-7: Duration in ms (little-endian uint32_t)
  *
- * Supported addresses (auto-detected when HAS_I2C_BUZZER is defined):
+ * Supported addresses (auto-detected by I2C scanner):
  * - 0x1E: Modulino Buzzer default address (distinguished from HMC5883L via probe)
  * - 0x3C: Modulino Buzzer pinstrap address (distinguished from OLED via probe)
  */

@@ -324,7 +324,6 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
             switch (addr.address) {
             case SSD1306_ADDRESS_H:
             case SSD1306_ADDRESS_L:
-#ifdef HAS_I2C_BUZZER
                 // 0x3C can be either an OLED or a Modulino Buzzer (pinstrap address)
                 // Probe for OLED first - if nothing detected, assume buzzer
                 type = probeOLED(addr);
@@ -332,9 +331,6 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
                     logFoundDevice("I2C Buzzer", (uint8_t)addr.address);
                     type = I2C_BUZZER;
                 }
-#else
-                type = probeOLED(addr);
-#endif
                 break;
 
 #ifdef RV3028_RTC
@@ -626,7 +622,6 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
             case QMC5883L_ADDR: {
                 logFoundDevice("QMC5883L", (uint8_t)addr.address);
                 type = QMC5883L;
-                ScanI2C::setMagOnPort(port, true);
                 break;
             }
             case HMC5883L_ADDR: {
@@ -635,14 +630,10 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
                 if (probeHMC5883L(addr)) {
                     logFoundDevice("HMC5883L", (uint8_t)addr.address);
                     type = HMC5883L;
-                    ScanI2C::setMagOnPort(port, true);
-                }
-#ifdef HAS_I2C_BUZZER
-                else {
+                } else {
                     logFoundDevice("I2C Buzzer", (uint8_t)addr.address);
                     type = I2C_BUZZER;
                 }
-#endif
                 break;
             }
 #ifdef HAS_QMA6100P

@@ -5,9 +5,6 @@
 #define I2C_SDA 8
 #define I2C_SCL 9
 
-// I2C Buzzer (Modulino compatible) - auto-detected at 0x1E or 0x3C
-#define HAS_I2C_BUZZER
-
 // GPS - Quectel L76K
 #define GPS_RX_PIN 5
 #define GPS_TX_PIN 6
