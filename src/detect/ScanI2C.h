@@ -101,6 +101,7 @@ class ScanI2C
         ADS1115,
         IIS2MDCTR,
         ISM330DHCX,
+        I2C_BUZZER,
     } DeviceType;
 
     // typedef uint8_t DeviceAddress;
@@ -158,6 +159,8 @@ class ScanI2C
     FoundDevice firstAQI() const;
 
     FoundDevice firstRGBLED() const;
+
+    FoundDevice firstBuzzer() const;
 
     virtual FoundDevice find(DeviceType) const;
 

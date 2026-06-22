@@ -28,6 +28,7 @@
 #include "power.h"
 
 #if !MESHTASTIC_EXCLUDE_I2C
+#include "buzz/I2CBuzzer.h"
 #include "detect/ScanI2CConsumer.h"
 #include "detect/ScanI2CTwoWire.h"
 #include <Wire.h>
@@ -719,6 +720,17 @@ void setup()
 #ifdef HAS_RGB_LED
     rgb_found = i2cScanner->firstRGBLED();
 #endif
+
+    // I2C Buzzer initialization (Modulino-compatible protocol)
+    auto buzzer_info = i2cScanner->firstBuzzer();
+    if (buzzer_info.type == ScanI2C::DeviceType::I2C_BUZZER) {
+        i2cBuzzer = new I2CBuzzer();
+        if (!i2cBuzzer->begin(buzzer_info)) {
+            LOG_WARN("Failed to initialize I2C Buzzer");
+            delete i2cBuzzer;
+            i2cBuzzer = nullptr;
+        }
+    }
 
 #ifdef HAS_TPS65233
     // TPS65233 is a power management IC for satellite modems, used in the Dreamcatcher
