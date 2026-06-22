@@ -622,35 +622,30 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
                 }
                 break;
 
-                SCAN_SIMPLE_CASE(QMC5883L_ADDR, QMC5883L, "QMC5883L", (uint8_t)addr.address)
-            case HMC5883L_ADDR:
-                registerValue = getRegisterValue(ScanI2CTwoWire::RegisterLocation(addr, 0x4FU), 1); // get ID
-                if (registerValue == 0x40) {
-                    type = IIS2MDCTR;
-                    logFoundDevice("IIS2MDCTR", (uint8_t)addr.address);
-                    break;
-                } else {
-                    type = HMC5883L;
-                    logFoundDevice("HMC5883L", (uint8_t)addr.address);
-                    break;
-                }
-            case QMC5883L_ADDR: {
+            case QMC5883L_ADDR:
                 logFoundDevice("QMC5883L", (uint8_t)addr.address);
                 type = QMC5883L;
                 break;
-            }
-            case HMC5883L_ADDR: {
-                // 0x1E can be HMC5883L magnetometer or Modulino Buzzer (default address)
-                // Probe for HMC5883L ID registers to distinguish
-                if (probeHMC5883L(addr)) {
-                    logFoundDevice("HMC5883L", (uint8_t)addr.address);
+
+            case HMC5883L_ADDR:
+                // 0x1E can be IIS2MDCTR, HMC5883L magnetometer, or Modulino Buzzer.
+                // Step 1: Check for IIS2MDCTR via register 0x4F
+                registerValue = getRegisterValue(ScanI2CTwoWire::RegisterLocation(addr, 0x4FU), 1);
+                if (registerValue == 0x40) {
+                    type = IIS2MDCTR;
+                    logFoundDevice("IIS2MDCTR", (uint8_t)addr.address);
+                }
+                // Step 2: Probe for HMC5883L ID registers to distinguish from Buzzer
+                else if (probeHMC5883L(addr)) {
                     type = HMC5883L;
-                } else {
-                    logFoundDevice("I2C Buzzer", (uint8_t)addr.address);
+                    logFoundDevice("HMC5883L", (uint8_t)addr.address);
+                }
+                // Step 3: Default fallback if it's at this address but neither of the above
+                else {
                     type = I2C_BUZZER;
+                    logFoundDevice("I2C Buzzer", (uint8_t)addr.address);
                 }
                 break;
-            }
 #ifdef HAS_QMA6100P
                 SCAN_SIMPLE_CASE(QMA6100P_ADDR, QMA6100P, "QMA6100P", (uint8_t)addr.address)
 #else
