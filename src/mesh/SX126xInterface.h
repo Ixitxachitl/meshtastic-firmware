@@ -78,7 +78,11 @@ template <class T> class SX126xInterface : public RadioLibInterface
 
     uint32_t getPacketTime(uint32_t pl, bool received) override { return computePacketTime(lora, pl, received); }
 
+    bool sampleSpectrum(uint16_t *results, uint16_t numSamples) override;
+
   private:
+    void doFrequencySweep(); // frequency-sweep RSSI scan; called from startReceive() in radio thread
+    void doResetAGC();       // executes AGC warm-reset in-place; called from startReceive() in radio thread
     /** Some boards require GPIO control of tx vs rx paths */
     void setTransmitEnable(bool txon);
 };

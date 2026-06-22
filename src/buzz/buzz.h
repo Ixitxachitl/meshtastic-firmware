@@ -15,3 +15,10 @@ void playClick();
 void playLongPressLeadUp();
 bool playNextLeadUpNote();  // Play the next note in the lead-up sequence
 void resetLeadUpSequence(); // Reset the lead-up sequence to start from beginning
+
+#ifdef HAS_I2S
+void ensureAudioPumpTaskStarted();
+void buzzBoostFor(uint32_t ms);
+bool buzzBoostActive();
+void buzzOnAudioThreadReady();
+#endif

@@ -54,6 +54,21 @@ RadioLibInterface::RadioLibInterface(LockingArduinoHal *hal, RADIOLIB_PIN_TYPE c
 #endif
 }
 
+#if defined(USE_SX1262)
+volatile bool RadioLibInterface::spectralScanRequest = false;
+volatile bool RadioLibInterface::spectralScanReady = false;
+volatile uint16_t RadioLibInterface::spectralScanResultsBuf[RadioLibInterface::SPECTRAL_SCAN_BINS] = {};
+volatile uint32_t RadioLibInterface::spectralScanStartFreqKHz = 0;
+volatile uint32_t RadioLibInterface::spectralScanEndFreqKHz = 0;
+volatile bool RadioLibInterface::spectralScanInProgress = false;
+volatile uint32_t RadioLibInterface::spectralScanCenterFreqKHz = 0;
+volatile bool RadioLibInterface::spectralScanHoldRadio = false;
+volatile bool RadioLibInterface::rxGoodWhileScanning = false;
+volatile bool RadioLibInterface::spectralScanPacketReceived = false;
+volatile int16_t RadioLibInterface::spectralScanLastPacketRSSI = -100;
+volatile bool RadioLibInterface::agcResetRequest = false;
+#endif
+
 #ifdef ARCH_ESP32
 // ESP32 doesn't use that flag
 #define YIELD_FROM_ISR(x) portYIELD_FROM_ISR()
@@ -374,6 +389,9 @@ void RadioLibInterface::onNotify(uint32_t notification)
         startReceive();
         setTransmitDelay();
         break;
+    case SPECTRAL_SCAN_TRIGGER:
+        startReceive();
+        break;
     case TRANSMIT_DELAY_COMPLETED:
 
         // If we are not currently in receive mode, then restart the random delay (this can happen if the main thread
@@ -579,6 +597,10 @@ void RadioLibInterface::handleReceiveInterrupt()
             airTime->logAirtime(RX_ALL_LOG, rxMsec);
         } else {
             rxGood++;
+#if defined(USE_SX1262)
+            if (spectralScanHoldRadio) // notify waterfall that a valid packet arrived during scan hold
+                rxGoodWhileScanning = true;
+#endif
             // altered packet with "from == 0" can do Remote Node Administration without permission
             if (radioBuffer.header.from == 0) {
                 LOG_WARN("Ignore received packet without sender");

@@ -39,6 +39,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "draw/NodeListRenderer.h"
 #include "draw/NotificationRenderer.h"
 #include "draw/UIRenderer.h"
+#include "draw/WaterfallRenderer.h"
 #include "graphics/TFTColorRegions.h"
 #include "modules/CannedMessageModule.h"
 #include "security/LockdownDisplay.h"
@@ -100,6 +101,12 @@ namespace graphics
 
 // DEBUG
 #define NUM_EXTRA_FRAMES 3 // text message and debug frame
+// Upper bound on the normalFrames[] slot count. Built-in frames (~17) + module frames (~8) + favorite-node
+// frames make up the total. Historically this was sized at MAX_NUM_NODES + NUM_EXTRA_FRAMES, but that
+// reserved ~3 KB for slots that never get used. 48 leaves ~23 slots for favorites after typical use.
+#ifndef MAX_NORMAL_FRAMES
+#define MAX_NORMAL_FRAMES 48
+#endif
 // if defined a pixel will blink to show redraws
 // #define SHOW_REDRAWS
 #define ASCII_BELL '\x07'
@@ -476,7 +483,7 @@ SPIClass SPI1(HSPI);
 Screen::Screen(ScanI2C::DeviceAddress address, meshtastic_Config_DisplayConfig_OledType screenType, OLEDDISPLAY_GEOMETRY geometry)
     : concurrency::OSThread("Screen"), address_found(address), model(screenType), geometry(geometry), cmdQueue(32)
 {
-    graphics::normalFrames = new FrameCallback[MAX_NUM_NODES + NUM_EXTRA_FRAMES];
+    graphics::normalFrames = new FrameCallback[MAX_NORMAL_FRAMES + NUM_EXTRA_FRAMES];
 
 #if defined(USE_SH1106) || defined(USE_SH1107) || defined(USE_SH1107_128_64)
     dispdev = new SH1106Wire(address.address, -1, -1, geometry,
@@ -907,6 +914,11 @@ void Screen::setup()
     messageStore.loadFromFlash();
     LOG_INFO("MessageStore loaded from flash");
 
+#if defined(USE_SX1262) && GRAPHICS_TFT_COLORING_ENABLED
+    if (!graphics::WaterfallRenderer::instance)
+        new graphics::WaterfallRenderer();
+#endif
+
     // Notify modules that support UI events
     MeshModule::observeUIEvents(&uiFrameEventObserver);
 }
@@ -1128,6 +1140,15 @@ int32_t Screen::runOnce()
     // this must be before the frameState == FIXED check, because we always
     // want to draw at least one FIXED frame before doing forceDisplay
     updateUiFrame(ui);
+
+    // Waterfall SPI pixels are written after the OLEDDisplayUi flush so they sit on top.
+    // The nav bar overlay draws over the waterfall briefly (2 s) — that is intentional.
+#if defined(USE_SX1262) && GRAPHICS_TFT_COLORING_ENABLED
+    if (showingNormalScreen && framesetInfo.positions.waterfall != 255 &&
+        ui->getUiState()->currentFrame == framesetInfo.positions.waterfall) {
+        graphics::WaterfallRenderer::postDraw();
+    }
+#endif
 
     // Switch to a low framerate (to save CPU) when we are not in transition
     // but we should only call setTargetFPS when framestate changes, because
@@ -1351,6 +1372,13 @@ void Screen::setFrames(FrameFocus focus)
         normalFrames[numframes++] = graphics::DebugRenderer::drawLoRaFocused;
         indicatorIcons.push_back(icon_radio);
     }
+#if defined(USE_SX1262) && GRAPHICS_TFT_COLORING_ENABLED
+    if (!hiddenFrames.waterfall && graphics::WaterfallRenderer::instance) {
+        fsi.positions.waterfall = numframes;
+        normalFrames[numframes++] = graphics::WaterfallRenderer::drawWaterfallFrame;
+        indicatorIcons.push_back(icon_radio);
+    }
+#endif
     if (!hiddenFrames.system) {
         fsi.positions.system = numframes;
         normalFrames[numframes++] = graphics::DebugRenderer::drawSystemScreen;
@@ -1391,6 +1419,10 @@ void Screen::setFrames(FrameFocus focus)
     for (auto i = moduleFrames.begin(); i != moduleFrames.end(); ++i) {
         // Draw the module frame, using the hack described above
         if (*i != nullptr) {
+            if (numframes >= MAX_NORMAL_FRAMES + NUM_EXTRA_FRAMES) {
+                LOG_WARN("normalFrames full; dropping module frame");
+                break;
+            }
             normalFrames[numframes] = drawModuleFrame;
 
             // Check if the module being drawn has requested focus
@@ -1428,6 +1460,11 @@ void Screen::setFrames(FrameFocus focus)
         if (!favoriteFrames.empty()) {
             fsi.positions.firstFavorite = numframes;
             for (const auto &f : favoriteFrames) {
+                if (numframes >= MAX_NORMAL_FRAMES + NUM_EXTRA_FRAMES) {
+                    LOG_WARN("normalFrames full; dropping %u favorite frames",
+                             (unsigned)(favoriteFrames.size() - (numframes - fsi.positions.firstFavorite)));
+                    break;
+                }
                 normalFrames[numframes++] = f;
                 indicatorIcons.push_back(icon_node);
             }

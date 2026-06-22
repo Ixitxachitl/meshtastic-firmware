@@ -831,7 +831,8 @@ void NodeDB::installDefaultNodeDatabase()
 {
     LOG_DEBUG("Install default NodeDatabase");
     nodeDatabase.version = DEVICESTATE_CUR_VER;
-    nodeDatabase.nodes = std::vector<meshtastic_NodeInfoLite>(MAX_NUM_NODES);
+    // Grow lazily as peers are discovered; pre-allocating MAX_NUM_NODES wastes ~13 KB heap on boot.
+    nodeDatabase.nodes.clear();
     numMeshNodes = 0;
     meshNodes = &nodeDatabase.nodes;
     concurrency::LockGuard satelliteGuard(&satelliteMutex);
@@ -1428,7 +1429,8 @@ void NodeDB::resetNodes(bool keepFavorites)
             if (gone)
                 eraseNodeSatellites(gone);
         }
-        std::fill(nodeDatabase.nodes.begin() + 1, nodeDatabase.nodes.end(), meshtastic_NodeInfoLite());
+        if (meshNodes->size() > 1)
+            meshNodes->resize(1);
     }
     (void)ourNum;
 #if WARM_NODE_COUNT > 0
@@ -1452,8 +1454,8 @@ void NodeDB::removeNodeByNum(NodeNum nodeNum)
             removed++;
     }
     numMeshNodes -= removed;
-    std::fill(nodeDatabase.nodes.begin() + numMeshNodes, nodeDatabase.nodes.begin() + numMeshNodes + 1,
-              meshtastic_NodeInfoLite());
+    if (meshNodes->size() > (size_t)numMeshNodes)
+        meshNodes->resize(numMeshNodes);
     if (removed)
         eraseNodeSatellites(nodeNum);
 #if WARM_NODE_COUNT > 0
@@ -1703,8 +1705,8 @@ void NodeDB::cleanupMeshDB()
         }
     }
     numMeshNodes -= removed;
-    std::fill(nodeDatabase.nodes.begin() + numMeshNodes, nodeDatabase.nodes.begin() + numMeshNodes + removed,
-              meshtastic_NodeInfoLite());
+    if (meshNodes->size() > (size_t)numMeshNodes)
+        meshNodes->resize(numMeshNodes);
     LOG_DEBUG("cleanupMeshDB purged %d entries", removed);
 }
 
@@ -2062,8 +2064,9 @@ void NodeDB::loadFromDisk()
         ~Disarm() { self.disarmNodeDatabaseDecodeTargets(); }
     } disarm{*this};
 
-    // Avoid push_back's power-of-2 capacity growth wasting RAM at small N.
-    nodeDatabase.nodes.reserve(MAX_NUM_NODES);
+    // Grow lazily during decode; the decode callback push_backs entries as they arrive.
+    // Avoiding reserve(MAX_NUM_NODES) saves ~13 KB heap when the saved DB is much smaller than MAX_NUM_NODES.
+    nodeDatabase.nodes.clear();
 
     auto state = loadProto(nodeDatabaseFileName, getMaxNodesAllocatedSize(), sizeof(meshtastic_NodeDatabase),
                            &meshtastic_NodeDatabase_msg, &nodeDatabase);

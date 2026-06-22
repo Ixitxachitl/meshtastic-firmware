@@ -1794,6 +1794,11 @@ static int16_t lastFrameIndex = -1;
 static uint32_t lastFrameChangeTime = 0;
 constexpr uint32_t ICON_DISPLAY_DURATION_MS = 2000;
 
+bool UIRenderer::isNavigationBarVisible()
+{
+    return lastFrameChangeTime != 0 && (millis() - lastFrameChangeTime <= ICON_DISPLAY_DURATION_MS);
+}
+
 // cppcheck-suppress constParameterPointer; signature must match OverlayCallback typedef from OLEDDisplayUi library
 void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *state)
 {

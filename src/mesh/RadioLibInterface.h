@@ -53,7 +53,7 @@ class STM32WLx_ModuleWrapper : public STM32WLx_Module
 class RadioLibInterface : public RadioInterface, protected concurrency::NotifiedWorkerThread
 {
     /// Used as our notification from the ISR
-    enum PendingISR { ISR_NONE = 0, ISR_RX, ISR_TX, TRANSMIT_DELAY_COMPLETED };
+    enum PendingISR { ISR_NONE = 0, ISR_RX, ISR_TX, TRANSMIT_DELAY_COMPLETED, SPECTRAL_SCAN_TRIGGER };
 
     /**
      * Raw ISR handler that just calls our polymorphic method
@@ -123,6 +123,15 @@ class RadioLibInterface : public RadioInterface, protected concurrency::Notified
     /** Our ISR code currently needs this to find our active instance
      */
     static RadioLibInterface *instance;
+
+#if defined(USE_SX1262)
+    // Kick the radio task so it calls startReceive() and executes any pending spectral scan.
+    static void triggerSpectralScan()
+    {
+        if (instance)
+            instance->notify(SPECTRAL_SCAN_TRIGGER, true);
+    }
+#endif
 
     /** Clear instance on destruction so stale pointer checks in loop() are safe */
     virtual ~RadioLibInterface()
@@ -203,6 +212,36 @@ class RadioLibInterface : public RadioInterface, protected concurrency::Notified
      * This method is public, intending to expose this information to other firmware components
      */
     virtual bool isSending();
+
+    /**
+     * Collect a 33-bin RSSI histogram at the current channel frequency using the SX126x spectral scan.
+     * Blocks for roughly numSamples * 8.2 us. Returns false when the radio is busy (TX or active RX).
+     * results[] must point to RADIOLIB_SX126X_SPECTRAL_SCAN_RES_SIZE (33) uint16_t entries.
+     */
+    virtual bool sampleSpectrum(uint16_t *results, uint16_t numSamples) { return false; }
+
+#if defined(USE_SX1262)
+    // Spectral scan request/result — written by WaterfallRenderer, executed by radio thread in startReceive().
+    // volatile is sufficient: one writer (WaterfallRenderer), one reader+writer (radio thread).
+    static volatile bool spectralScanRequest;
+    static volatile bool spectralScanReady;
+    static constexpr uint8_t SPECTRAL_SCAN_BINS = 60; // bins per sweep — 60 bins × 500 µs = 30 ms sweep, leaves ~60% RX time
+    static volatile uint16_t spectralScanResultsBuf[SPECTRAL_SCAN_BINS];
+    static volatile bool spectralScanInProgress;
+    // Center / band-edge frequencies of the last frequency sweep (kHz), for waterfall axis labels.
+    static volatile uint32_t spectralScanCenterFreqKHz;
+    static volatile uint32_t spectralScanStartFreqKHz;
+    static volatile uint32_t spectralScanEndFreqKHz;
+    // When true, startReceive() skips startReceiveDutyCycleAuto so the waterfall holds the radio.
+    static volatile bool spectralScanHoldRadio;
+    // Set by handleReceiveInterrupt() when a valid packet arrives while holding the radio for the waterfall.
+    static volatile bool rxGoodWhileScanning;
+    // Set by addReceiveMetadata() so the waterfall can inject a row for every received packet.
+    static volatile bool spectralScanPacketReceived;
+    static volatile int16_t spectralScanLastPacketRSSI;
+    // AGC reset request — set by main loop, executed by radio task inside startReceive().
+    static volatile bool agcResetRequest;
+#endif
 
     /** Attempt to cancel a previously sent packet.  Returns true if a packet was found we could cancel */
     virtual bool cancelSending(NodeNum from, PacketId id) override;
