@@ -136,6 +136,10 @@ void printPartitionTable()
 #include "motion/AccelerometerThread.h"
 AccelerometerThread *accelerometerThread = nullptr;
 #endif
+#if !defined(ARCH_STM32WL) && !MESHTASTIC_EXCLUDE_I2C && !MESHTASTIC_EXCLUDE_MAGNETOMETER
+#include "motion/MagnetometerThread.h"
+MagnetometerThread *magnetometerThread = nullptr;
+#endif
 
 #ifdef HAS_I2S
 #include "AudioThread.h"
@@ -206,6 +210,8 @@ bool osk_found = false;
 ScanI2C::DeviceAddress rtc_found = ScanI2C::ADDRESS_NONE;
 // The I2C address of the Accelerometer (if found)
 ScanI2C::DeviceAddress accelerometer_found = ScanI2C::ADDRESS_NONE;
+// The I2C address of the Magnetometer (if found)
+ScanI2C::DeviceAddress magnetometer_found = ScanI2C::ADDRESS_NONE;
 // The I2C address of the RGB LED (if found)
 ScanI2C::FoundDevice rgb_found = ScanI2C::FoundDevice(ScanI2C::DeviceType::NONE, ScanI2C::ADDRESS_NONE);
 /// The I2C address of our Air Quality Indicator (if found)
@@ -671,6 +677,11 @@ void setup()
     accelerometer_found = acc_info.type != ScanI2C::DeviceType::NONE ? acc_info.address : accelerometer_found;
     LOG_DEBUG("acc_info = %i", acc_info.type);
 #endif
+#if !defined(ARCH_STM32WL) && !MESHTASTIC_EXCLUDE_MAGNETOMETER
+    auto mag_info = i2cScanner->firstMagnetometer();
+    magnetometer_found = mag_info.type != ScanI2C::DeviceType::NONE ? mag_info.address : magnetometer_found;
+    LOG_DEBUG("mag_info = %i", mag_info.type);
+#endif
 
     scannerToSensorsMap(i2cScanner, ScanI2C::DeviceType::INA260, meshtastic_TelemetrySensorType_INA260);
     scannerToSensorsMap(i2cScanner, ScanI2C::DeviceType::INA226, meshtastic_TelemetrySensorType_INA226);
@@ -766,6 +777,11 @@ void setup()
 #if !defined(ARCH_STM32WL) && !MESHTASTIC_EXCLUDE_ACCELEROMETER
     if (acc_info.type != ScanI2C::DeviceType::NONE) {
         accelerometerThread = new AccelerometerThread(acc_info.type);
+    }
+#endif
+#if !defined(ARCH_STM32WL) && !MESHTASTIC_EXCLUDE_MAGNETOMETER
+    if (mag_info.type != ScanI2C::DeviceType::NONE) {
+        magnetometerThread = new MagnetometerThread(mag_info.type);
     }
 #endif
 
