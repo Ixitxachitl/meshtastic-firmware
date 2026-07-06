@@ -101,6 +101,7 @@ class ScanI2C
         ADS1115,
         IIS2MDCTR,
         ISM330DHCX,
+        SPA06,
         I2C_BUZZER,
     } DeviceType;
 
