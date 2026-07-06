@@ -2,6 +2,10 @@
 #include "NodeDB.h"
 #include "configuration.h"
 
+#if !MESHTASTIC_EXCLUDE_I2C
+#include "I2CBuzzer.h"
+#endif
+
 #if !defined(ARCH_ESP32) && !defined(ARCH_RP2040) && !defined(ARCH_PORTDUINO)
 #include "Tone.h"
 #endif
@@ -112,6 +116,20 @@ void playTones(const ToneDuration *tone_durations, int size)
         return;
     }
 #endif
+
+#if !MESHTASTIC_EXCLUDE_I2C
+    if (i2cBuzzer && i2cBuzzer->isAvailable()) {
+        for (int i = 0; i < size; i++) {
+            const auto &tone_duration = tone_durations[i];
+            if (tone_duration.frequency_khz > 0) {
+                i2cBuzzer->tone(tone_duration.frequency_khz, tone_duration.duration_ms);
+            }
+            delay(1.3 * tone_duration.duration_ms);
+        }
+        return;
+    }
+#endif
+
 #if defined(PIN_BUZZER)
     if (!config.device.buzzer_gpio)
         config.device.buzzer_gpio = PIN_BUZZER;

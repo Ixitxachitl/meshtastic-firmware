@@ -104,6 +104,29 @@ ScanI2C::DeviceType ScanI2CTwoWire::probeOLED(ScanI2C::DeviceAddress addr) const
 
     return o_probe;
 }
+
+bool ScanI2CTwoWire::probeHMC5883L(ScanI2C::DeviceAddress addr) const
+{
+    // HMC5883L has identification registers at 0x0A, 0x0B, 0x0C
+    // They should return 'H' (0x48), '4' (0x34), '3' (0x33)
+    TwoWire *i2cBus = fetchI2CBus(addr);
+
+    i2cBus->beginTransmission(addr.address);
+    i2cBus->write((uint8_t)0x0A); // ID Register A
+    if (i2cBus->endTransmission(false) != 0)
+        return false;
+
+    if (i2cBus->requestFrom((int)addr.address, 3) != 3)
+        return false;
+
+    uint8_t idA = i2cBus->read();
+    uint8_t idB = i2cBus->read();
+    uint8_t idC = i2cBus->read();
+
+    // HMC5883L returns 'H', '4', '3' (0x48, 0x34, 0x33)
+    return (idA == 0x48 && idB == 0x34 && idC == 0x33);
+}
+
 uint16_t ScanI2CTwoWire::getRegisterValue(const ScanI2CTwoWire::RegisterLocation &registerLocation,
                                           ScanI2CTwoWire::ResponseWidth responseWidth, bool zeropad = false) const
 {
@@ -313,7 +336,13 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
             switch (addr.address) {
             case SSD1306_ADDRESS_H:
             case SSD1306_ADDRESS_L:
+                // 0x3C can be either an OLED or a Modulino Buzzer (pinstrap address)
+                // Probe for OLED first - if nothing detected, assume buzzer
                 type = probeOLED(addr);
+                if (type == SCREEN_UNKNOWN) {
+                    logFoundDevice("I2C Buzzer", (uint8_t)addr.address);
+                    type = I2C_BUZZER;
+                }
                 break;
 
 #ifdef RV3028_RTC
@@ -609,18 +638,30 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
                 }
                 break;
 
-                SCAN_SIMPLE_CASE(QMC5883L_ADDR, QMC5883L, "QMC5883L", (uint8_t)addr.address)
+            case QMC5883L_ADDR:
+                logFoundDevice("QMC5883L", (uint8_t)addr.address);
+                type = QMC5883L;
+                break;
+
             case HMC5883L_ADDR:
-                registerValue = getRegisterValue(ScanI2CTwoWire::RegisterLocation(addr, 0x4FU), 1); // get ID
+                // 0x1E can be IIS2MDCTR, HMC5883L magnetometer, or Modulino Buzzer.
+                // Step 1: Check for IIS2MDCTR via register 0x4F
+                registerValue = getRegisterValue(ScanI2CTwoWire::RegisterLocation(addr, 0x4FU), 1);
                 if (registerValue == 0x40) {
                     type = IIS2MDCTR;
                     logFoundDevice("IIS2MDCTR", (uint8_t)addr.address);
-                    break;
-                } else {
+                }
+                // Step 2: Probe for HMC5883L ID registers to distinguish from Buzzer
+                else if (probeHMC5883L(addr)) {
                     type = HMC5883L;
                     logFoundDevice("HMC5883L", (uint8_t)addr.address);
-                    break;
                 }
+                // Step 3: Default fallback if it's at this address but neither of the above
+                else {
+                    type = I2C_BUZZER;
+                    logFoundDevice("I2C Buzzer", (uint8_t)addr.address);
+                }
+                break;
 #ifdef HAS_QMA6100P
                 SCAN_SIMPLE_CASE(QMA6100P_ADDR, QMA6100P, "QMA6100P", (uint8_t)addr.address)
 #else
