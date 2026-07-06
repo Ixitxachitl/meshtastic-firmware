@@ -93,8 +93,7 @@ const int DURATION_3_4 = 750;  // 3/4 note
 const int DURATION_1_1 = 1000; // 1/1 note
 
 #ifdef HAS_I2S
-// Full chromatic note map — octave stored separately so tonesToRtttl can shift
-// octaves into the 4-7 range that AudioGeneratorRTTTL supports.
+// Full chromatic note map used to convert raw Hz frequencies to RTTTL note names.
 struct NoteToken {
     int freq;
     const char *note;
@@ -153,29 +152,19 @@ static inline void chooseDur(int ms, int &denom, bool &dotted)
 }
 
 // Build a full RTTTL string from a ToneDuration array.
-// Normalizes octaves into the 4-7 range that AudioGeneratorRTTTL supports.
+// Writes octaves explicitly on every note so the RTTTL parser never falls back
+// to the header defaultOctave. AudioGeneratorRTTTL3 supports octaves 3-7.
 static size_t tonesToRtttl(char *out, size_t cap, const ToneDuration *td, int n, const char *name = "sys")
 {
     if (!out || cap == 0 || !td || n <= 0)
         return 0;
     out[0] = '\0';
 
-    // Find lowest octave in the melody, then shift everything up so it starts at 4.
-    int minOctave = 10;
-    for (int i = 0; i < n; ++i) {
-        int idx = freqToNoteIndex(td[i].frequency_khz);
-        if (idx >= 0 && kNoteMap[idx].octave < minOctave)
-            minOctave = kNoteMap[idx].octave;
-    }
-    const int octaveShift = (minOctave < 10) ? (4 - minOctave) : 0;
-    const int defaultOctave = 4;
-
-    int wrote = snprintf(out, cap, "%s:d=4,o=%d,b=240:", name, defaultOctave);
+    int wrote = snprintf(out, cap, "%s:d=4,o=4,b=240:", name);
     if (wrote <= 0 || (size_t)wrote >= cap)
         return (size_t)std::max(0, wrote);
     size_t pos = (size_t)wrote;
 
-    int currentOctave = defaultOctave;
     for (int i = 0; i < n; ++i) {
         int denom;
         bool dotted;
@@ -187,14 +176,11 @@ static size_t tonesToRtttl(char *out, size_t cap, const ToneDuration *td, int n,
         if (noteIdx < 0) {
             snprintf(token, sizeof(token), dotted ? "%dp." : "%dp", denom);
         } else {
+            // Always include the explicit octave; the RTTTL parser has no
+            // "current octave" state and would otherwise use defaultOctave.
             const char *noteName = kNoteMap[noteIdx].note;
-            int noteOctave = kNoteMap[noteIdx].octave + octaveShift;
-            if (noteOctave != currentOctave) {
-                snprintf(token, sizeof(token), dotted ? "%d%s%d." : "%d%s%d", denom, noteName, noteOctave);
-                currentOctave = noteOctave;
-            } else {
-                snprintf(token, sizeof(token), dotted ? "%d%s." : "%d%s", denom, noteName);
-            }
+            int noteOctave = kNoteMap[noteIdx].octave;
+            snprintf(token, sizeof(token), dotted ? "%d%s%d." : "%d%s%d", denom, noteName, noteOctave);
         }
 
         const char *sep = (i + 1 < n) ? ((td[i].duration_ms < 80) ? ",32p," : ",") : "";

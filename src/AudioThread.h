@@ -8,8 +8,8 @@
 #include <memory>
 
 #ifdef HAS_I2S
+#include "audio/AudioGeneratorRTTTL3.h"
 #include <AudioFileSourcePROGMEM.h>
-#include <AudioGeneratorRTTTL.h>
 #include <AudioOutputI2S.h>
 #include <ESP8266SAM.h>
 
@@ -19,6 +19,87 @@ extern ExtensionIOXL9555 io;
 #endif
 
 #define AUDIO_THREAD_INTERVAL_MS 50
+
+// Tone entry for direct I2S square-wave playback (bypasses RTTTL octave limits).
+struct BuzzerToneEntry {
+    int freq_hz; // Hz, 0 = silence
+    int dur_ms;  // milliseconds
+};
+
+// Lightweight square-wave generator that plays any frequency directly via
+// AudioOutputI2S without going through AudioGeneratorRTTTL (which clamps to
+// octaves 4-7 and cannot reproduce octave 3 and below).
+class BuzzerToneGenerator
+{
+  public:
+    static constexpr int kRate = 22050;
+
+    bool begin(const BuzzerToneEntry *notes, int count, AudioOutput *out)
+    {
+        list_ = notes;
+        count_ = count;
+        output_ = out;
+        idx_ = 0;
+        samplesLeft_ = 0;
+        phase_ = 0;
+        running_ = (count > 0);
+        if (running_)
+            loadNote();
+        return running_;
+    }
+
+    bool loop()
+    {
+        if (!running_)
+            return false;
+        while (running_) {
+            if (samplesLeft_ == 0) {
+                if (++idx_ >= count_) {
+                    running_ = false;
+                    output_->stop();
+                    return false;
+                }
+                loadNote();
+            }
+            int16_t val = 0;
+            if (wavePeriodFP10_ > 0) {
+                int32_t rem = (phase_ << 10) % wavePeriodFP10_;
+                val = (rem > wavePeriodFP10_ / 2) ? 8192 : -8192;
+            }
+            int16_t s[2] = {val, val};
+            if (!output_->ConsumeSample(s))
+                return true; // DMA full, resume next call
+            phase_++;
+            samplesLeft_--;
+        }
+        return false;
+    }
+
+    bool stop()
+    {
+        running_ = false;
+        return true;
+    }
+    bool isRunning() const { return running_; }
+
+  private:
+    void loadNote()
+    {
+        int freq = list_[idx_].freq_hz;
+        samplesLeft_ = ((int32_t)list_[idx_].dur_ms * kRate) / 1000;
+        phase_ = 0;
+        wavePeriodFP10_ = (freq > 0) ? ((kRate << 10) / freq) : 0;
+    }
+
+    const BuzzerToneEntry *list_ = nullptr;
+    int count_ = 0;
+    AudioOutput *output_ = nullptr;
+    int idx_ = 0;
+    int32_t samplesLeft_ = 0;
+    int32_t phase_ = 0;
+    int32_t wavePeriodFP10_ = 0;
+    bool running_ = false;
+};
 
 class AudioThread : public concurrency::OSThread
 {
@@ -46,7 +127,7 @@ class AudioThread : public concurrency::OSThread
 #endif
         setCPUFast(true);
         rtttlFile = std::unique_ptr<AudioFileSourcePROGMEM>(new AudioFileSourcePROGMEM(data, len));
-        i2sRtttl = std::unique_ptr<AudioGeneratorRTTTL>(new AudioGeneratorRTTTL());
+        i2sRtttl = std::unique_ptr<AudioGeneratorRTTTL3>(new AudioGeneratorRTTTL3());
         if (!i2sRtttl->begin(rtttlFile.get(), audioOut.get())) {
             i2sRtttl = nullptr;
             rtttlFile = nullptr;
@@ -137,7 +218,7 @@ class AudioThread : public concurrency::OSThread
         audioOut->SetGain(0.2);
     };
 
-    std::unique_ptr<AudioGeneratorRTTTL> i2sRtttl = nullptr;
+    std::unique_ptr<AudioGeneratorRTTTL3> i2sRtttl = nullptr;
     std::unique_ptr<AudioOutputI2S> audioOut = nullptr;
     std::unique_ptr<AudioFileSourcePROGMEM> rtttlFile = nullptr;
     concurrency::Lock audioMutex;
