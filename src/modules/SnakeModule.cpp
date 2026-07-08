@@ -28,8 +28,16 @@ static constexpr int16_t SCORE_H = 16;
 
 static constexpr const char *SNAKE_HS_FILE = "/prefs/snake.dat";
 
+static constexpr uint8_t SNAKE_WIRE_VERSION = 1;
+struct SnakeScoreWire {
+    uint8_t version;
+    char shortName[5];
+    uint32_t score;
+} __attribute__((packed));
+
 SnakeModule::SnakeModule() : SinglePortModule("snake", meshtastic_PortNum_PRIVATE_APP), concurrency::OSThread("Snake")
 {
+    loadHighScores();
     inputObserver.observe(inputBroker);
     disable(); // idle until the player launches the game from the menu
 }
@@ -65,30 +73,22 @@ void SnakeModule::enterGameOver()
     lastWasNewTop = false;
     uiState = SNAKE_GAMEOVER;
 
-    // Arcade-style: if the score placed, prompt for initials, then record it in the picker's
-    // callback. Otherwise just show the game-over screen.
     if (qualifiesForHighScore(lastScore))
-        promptForInitials();
+        recordHighScore();
 
     requestRedraw(UIFrameEvent::Action::REDRAW_ONLY);
 }
 
-void SnakeModule::promptForInitials()
-{
-    screen->showAlphanumericPicker("New High Score!\nEnter initials", "AAA", 60000, INITIALS_LEN,
-                                   [this](const std::string &initials) { this->recordHighScore(initials.c_str()); });
-}
-
-void SnakeModule::recordHighScore(const char *initials)
+void SnakeModule::recordHighScore()
 {
     bool isNewTop = false;
-    lastRank = insertHighScore(lastScore, initials, isNewTop);
+    lastRank = insertHighScore(lastScore, owner.short_name, nodeDB ? nodeDB->getNodeNum() : 0, isNewTop);
     lastWasNewTop = isNewTop;
     if (lastRank >= 0)
-        saveHighScores(); // table changed -- the only time we write flash
+        saveHighScores();
 #if SNAKE_ANNOUNCE_HIGH_SCORE
-    if (isNewTop && lastScore > 0)
-        announceHighScore(initials, lastScore);
+    if (lastRank >= 0 && lastScore > 0)
+        announceHighScore(lastScore);
 #endif
     requestRedraw(UIFrameEvent::Action::REDRAW_ONLY);
 }
@@ -166,13 +166,21 @@ bool SnakeModule::applyDirection(input_broker_event ev)
 
 int SnakeModule::handleInputEvent(const InputEvent *event)
 {
-    if (uiState == SNAKE_IDLE)
-        return 0; // not our turn -- let other modules handle it
     if (screen && screen->isOverlayBannerShowing())
         return 0; // a menu banner is up; don't steal its input
 
     const input_broker_event ev = event->inputEvent;
     const bool isBack = (ev == INPUT_BROKER_CANCEL || ev == INPUT_BROKER_BACK);
+
+    if (uiState == SNAKE_IDLE) {
+        // Long-press SELECT on the attract screen opens the high-score table.
+        if (ev == INPUT_BROKER_SELECT_LONG) {
+            uiState = SNAKE_HISCORES;
+            requestRedraw(UIFrameEvent::Action::REDRAW_ONLY);
+            return 1;
+        }
+        return 0; // all other input passes through for normal frame navigation
+    }
 
     switch (uiState) {
     case SNAKE_PLAYING:
@@ -304,7 +312,7 @@ void SnakeModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int
         char hi[24];
         snprintf(hi, sizeof(hi), "High: %lu", static_cast<unsigned long>(highScores[0].score));
         display->drawString(cx, y + 34, hi);
-        display->drawString(cx, y + 48, "SELECT to play");
+        display->drawString(cx, y + 48, "SEL=play  hold=scores");
         break;
     }
     case SNAKE_PLAYING:
@@ -348,7 +356,7 @@ bool SnakeModule::qualifiesForHighScore(uint32_t score) const
     return false;
 }
 
-int SnakeModule::insertHighScore(uint32_t score, const char *initials, bool &isNewTop)
+int SnakeModule::insertHighScore(uint32_t score, const char *name, uint32_t nodeNum, bool &isNewTop)
 {
     isNewTop = false;
     if (score == 0)
@@ -362,7 +370,7 @@ int SnakeModule::insertHighScore(uint32_t score, const char *initials, bool &isN
         }
     }
     if (pos < 0)
-        return -1; // not good enough to place
+        return -1;
 
     for (int i = HS_COUNT - 1; i > pos; i--)
         highScores[i] = highScores[i - 1];
@@ -370,33 +378,57 @@ int SnakeModule::insertHighScore(uint32_t score, const char *initials, bool &isN
     HighScoreEntry &e = highScores[pos];
     memset(&e, 0, sizeof(e));
     e.score = score;
-    e.nodeNum = nodeDB ? nodeDB->getNodeNum() : 0;
-    strncpy(e.shortName, (initials && initials[0]) ? initials : owner.short_name, sizeof(e.shortName) - 1);
+    e.nodeNum = nodeNum;
+    strncpy(e.shortName, (name && name[0]) ? name : owner.short_name, sizeof(e.shortName) - 1);
     e.shortName[sizeof(e.shortName) - 1] = '\0';
-    e.epoch = getValidTime(RTCQualityDevice, false); // 0 when no valid RTC
+    e.epoch = getValidTime(RTCQualityDevice, false);
 
     isNewTop = (pos == 0);
     return pos;
 }
 
 #if SNAKE_ANNOUNCE_HIGH_SCORE
-void SnakeModule::announceHighScore(const char *initials, uint32_t score)
+void SnakeModule::announceHighScore(uint32_t score)
 {
     if (!service)
         return;
-    meshtastic_MeshPacket *p = allocDataPacket();
+    SnakeScoreWire wire;
+    wire.version = SNAKE_WIRE_VERSION;
+    strncpy(wire.shortName, owner.short_name, sizeof(wire.shortName) - 1);
+    wire.shortName[sizeof(wire.shortName) - 1] = '\0';
+    wire.score = score;
+
+    meshtastic_MeshPacket *p = allocDataPacket(); // portnum = PRIVATE_APP
     p->to = NODENUM_BROADCAST;
-    p->channel = 0; // primary channel for v1
-    p->decoded.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
-    // ASCII only -- avoids tofu if a receiving node's font lacks an emoji glyph.
-    p->decoded.payload.size =
-        snprintf(reinterpret_cast<char *>(p->decoded.payload.bytes), sizeof(p->decoded.payload.bytes),
-                 "%s set a new Snake high score: %lu", (initials && initials[0]) ? initials : owner.short_name,
-                 static_cast<unsigned long>(score));
+    p->channel = 0;
+    static_assert(sizeof(wire) <= sizeof(p->decoded.payload.bytes), "SnakeScoreWire too large");
+    memcpy(p->decoded.payload.bytes, &wire, sizeof(wire));
+    p->decoded.payload.size = sizeof(wire);
     service->sendToMesh(p);
-    LOG_INFO("Snake: announced new high score %lu", static_cast<unsigned long>(score));
+    LOG_INFO("Snake: broadcast score %lu", static_cast<unsigned long>(score));
 }
 #endif
+
+ProcessMessage SnakeModule::handleReceived(const meshtastic_MeshPacket &mp)
+{
+    if (mp.decoded.payload.size < sizeof(SnakeScoreWire))
+        return ProcessMessage::CONTINUE;
+    SnakeScoreWire wire;
+    memcpy(&wire, mp.decoded.payload.bytes, sizeof(wire));
+    if (wire.version != SNAKE_WIRE_VERSION || wire.score == 0)
+        return ProcessMessage::CONTINUE;
+    wire.shortName[sizeof(wire.shortName) - 1] = '\0';
+
+    bool dummy = false;
+    const int rank = insertHighScore(wire.score, wire.shortName, mp.from, dummy);
+    if (rank >= 0) {
+        saveHighScores();
+        requestRedraw(UIFrameEvent::Action::REDRAW_ONLY);
+        LOG_INFO("Snake: remote score %lu from 0x%08x placed at rank %d", static_cast<unsigned long>(wire.score), mp.from,
+                 rank + 1);
+    }
+    return ProcessMessage::CONTINUE;
+}
 
 // ---------------------------------------------------------------------------
 // Persistence (SafeFile, atomic; CRC + magic + version guarded)
@@ -430,8 +462,10 @@ void SnakeModule::loadHighScores()
 void SnakeModule::saveHighScores()
 {
 #ifdef FSCom
-    spiLock->lock();
-    FSCom.mkdir("/prefs");
+    {
+        concurrency::LockGuard g(spiLock);
+        FSCom.mkdir("/prefs");
+    }
     HighScoreFile file;
     memset(&file, 0, sizeof(file));
     file.magic = HS_MAGIC;
@@ -442,8 +476,6 @@ void SnakeModule::saveHighScores()
 
     auto sf = SafeFile(SNAKE_HS_FILE, true);
     const size_t written = sf.write(reinterpret_cast<uint8_t *>(&file), sizeof(file));
-    // unlock here because SafeFile.close() takes the lock internally
-    spiLock->unlock();
     if (!sf.close() || written != sizeof(file))
         LOG_WARN("Snake: failed to save high scores");
 #endif

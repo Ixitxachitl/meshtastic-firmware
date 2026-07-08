@@ -53,6 +53,7 @@ class SnakeModule : public SinglePortModule, public Observable<const UIFrameEven
   protected:
     virtual int32_t runOnce() override; // game tick
     virtual Observable<const UIFrameEvent *> *getUIFrameObservable() override { return this; }
+    virtual ProcessMessage handleReceived(const meshtastic_MeshPacket &mp) override;
 
   private:
     int handleInputEvent(const InputEvent *event);
@@ -84,7 +85,6 @@ class SnakeModule : public SinglePortModule, public Observable<const UIFrameEven
     static constexpr uint8_t HS_COUNT = 5;
     static constexpr uint32_t HS_MAGIC = 0x534E454Bu; // 'SNEK'
     static constexpr uint8_t HS_VERSION = 1;
-    static constexpr uint8_t INITIALS_LEN = 3; // arcade-style initials captured per high score
 
     struct HighScoreFile {
         uint32_t magic;
@@ -99,15 +99,12 @@ class SnakeModule : public SinglePortModule, public Observable<const UIFrameEven
     void saveHighScores();
     // True if `score` would place on the sorted-descending table (peek; no mutation).
     bool qualifiesForHighScore(uint32_t score) const;
-    // Insert into the sorted-descending table under the given initials. Returns the 0-based rank
-    // if it placed, else -1. isNewTop is set when the score took the #1 slot.
-    int insertHighScore(uint32_t score, const char *initials, bool &isNewTop);
-    // Arcade-style flow: open the initials picker (or fall back to the node short name when
-    // headless), then record + persist the score in the picker's callback.
-    void promptForInitials();
-    void recordHighScore(const char *initials);
+    // Insert into the sorted-descending table. Returns the 0-based rank if it placed, else -1.
+    // isNewTop is set when the score took the #1 slot.
+    int insertHighScore(uint32_t score, const char *name, uint32_t nodeNum, bool &isNewTop);
+    void recordHighScore();
 #if SNAKE_ANNOUNCE_HIGH_SCORE
-    void announceHighScore(const char *initials, uint32_t score);
+    void announceHighScore(uint32_t score);
 #endif
 
     HighScoreEntry highScores[HS_COUNT] = {};
