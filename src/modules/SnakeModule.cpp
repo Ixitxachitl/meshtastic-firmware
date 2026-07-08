@@ -250,8 +250,25 @@ int SnakeModule::handleInputEvent(const InputEvent *event)
         return 1;
 
     case SNAKE_HISCORES:
-        if (ev == INPUT_BROKER_SELECT || isBack)
+        if (ev == INPUT_BROKER_SELECT_LONG) {
+            static const char *opts[] = {"No", "Yes"};
+            graphics::BannerOverlayOptions confirm;
+            confirm.message = "Clear all\nhigh scores?";
+            confirm.optionsArrayPtr = opts;
+            confirm.optionsCount = 2;
+            confirm.bannerCallback = [this](int selected) {
+                if (selected == 1) {
+                    memset(highScores, 0, sizeof(highScores));
+                    saveHighScores();
+                    requestRedraw(UIFrameEvent::Action::REDRAW_ONLY);
+                    LOG_INFO("Snake: high scores cleared");
+                }
+            };
+            if (screen)
+                screen->showOverlayBanner(confirm);
+        } else if (ev == INPUT_BROKER_SELECT || isBack) {
             exitToIdle();
+        }
         return 1;
 
     default:
@@ -281,9 +298,11 @@ void SnakeModule::drawHighScores(OLEDDisplay *display, int16_t x, int16_t y)
 {
     display->setFont(FONT_SMALL);
     display->setColor(WHITE);
-    display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->drawString(x + display->getWidth() / 2, y, "HIGH SCORES");
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    display->drawString(x, y, "HIGH SCORES");
 
+    display->setTextAlignment(TEXT_ALIGN_RIGHT);
+    display->drawString(x + display->getWidth() - 2, y, "Hold=Clear");
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     const int16_t rowH = (display->getHeight() - FONT_HEIGHT_SMALL) / HS_COUNT;
     for (uint8_t i = 0; i < HS_COUNT; i++) {
@@ -489,6 +508,18 @@ void SnakeModule::announceHighScore(uint32_t score)
 
 ProcessMessage SnakeModule::handleReceived(const meshtastic_MeshPacket &mp)
 {
+    // Helper: returns true if a nodeNum is in our DB and marked ignored.
+    auto isIgnored = [](NodeNum num) -> bool {
+        if (!nodeDB || num == 0)
+            return false;
+        const meshtastic_NodeInfoLite *n = nodeDB->getMeshNode(num);
+        return n && nodeInfoLiteIsIgnored(n);
+    };
+
+    // Drop everything from an ignored sender.
+    if (isIgnored(mp.from))
+        return ProcessMessage::CONTINUE;
+
     const size_t sz = mp.decoded.payload.size;
 
     if (sz == sizeof(SnakeTableWire)) {
