@@ -105,6 +105,8 @@ class SnakeModule : public SinglePortModule, public Observable<const UIFrameEven
     void recordHighScore();
 #if SNAKE_ANNOUNCE_HIGH_SCORE
     void announceHighScore(uint32_t score);
+    void broadcastAllScores(); // send full table; called on first load and every 12 h
+    int32_t nextBroadcastIntervalMs() const;
 #endif
 
     HighScoreEntry highScores[HS_COUNT] = {};
@@ -117,6 +119,9 @@ class SnakeModule : public SinglePortModule, public Observable<const UIFrameEven
     int lastRank = -1;            // rank achieved last game (-1 == didn't place)
     bool lastWasNewTop = false;   // last game set a new all-time #1
     uint32_t lastAwakeKickMs = 0; // throttles the power-FSM wake nudge during long runs
+#if SNAKE_ANNOUNCE_HIGH_SCORE
+    uint32_t lastBroadcastMs = 0; // millis() of last broadcastAllScores(); 0 = never
+#endif
 };
 
 extern SnakeModule *snakeModule;

@@ -29,17 +29,37 @@ static constexpr int16_t SCORE_H = 16;
 static constexpr const char *SNAKE_HS_FILE = "/prefs/snake.dat";
 
 static constexpr uint8_t SNAKE_WIRE_VERSION = 1;
+#if SNAKE_ANNOUNCE_HIGH_SCORE
+static constexpr uint32_t BROADCAST_INITIAL_MS = 60000UL;                // 1 min after boot
+static constexpr uint32_t BROADCAST_INTERVAL_MS = 12UL * 60 * 60 * 1000; // 12 h
+#endif
 struct SnakeScoreWire {
     uint8_t version;
     char shortName[5];
     uint32_t score;
-} __attribute__((packed));
+} __attribute__((packed)); // 10 bytes - single-score announcement
+
+struct SnakeTableEntry {
+    uint32_t nodeNum;
+    char shortName[5];
+    uint32_t score;
+} __attribute__((packed)); // 13 bytes per entry
+
+struct SnakeTableWire {
+    uint8_t version;
+    uint8_t count;
+    SnakeTableEntry entries[5]; // HS_COUNT, always sent at full size
+} __attribute__((packed));      // 67 bytes - full table broadcast
 
 SnakeModule::SnakeModule() : SinglePortModule("snake", meshtastic_PortNum_PRIVATE_APP), concurrency::OSThread("Snake")
 {
     loadHighScores();
     inputObserver.observe(inputBroker);
+#if SNAKE_ANNOUNCE_HIGH_SCORE
+    setIntervalFromNow(BROADCAST_INITIAL_MS); // stay alive to broadcast scores periodically
+#else
     disable(); // idle until the player launches the game from the menu
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -96,7 +116,12 @@ void SnakeModule::recordHighScore()
 void SnakeModule::exitToIdle()
 {
     uiState = SNAKE_IDLE;
+#if SNAKE_ANNOUNCE_HIGH_SCORE
+    // Keep the thread alive so the periodic broadcast timer can still fire.
+    setIntervalFromNow(static_cast<uint32_t>(nextBroadcastIntervalMs()));
+#else
     disable();
+#endif
     // The games frame is always present, so we just return it to the attract screen and redraw --
     // no frameset change. interceptingKeyboardInput() now returns false, so the D-pad navigates
     // between frames again.
@@ -125,23 +150,33 @@ int32_t SnakeModule::tickIntervalMs() const
 
 int32_t SnakeModule::runOnce()
 {
-    if (uiState != SNAKE_PLAYING)
-        return disable();
-
-    if (!game.step()) {
-        enterGameOver();
-        return disable();
+    if (uiState == SNAKE_PLAYING) {
+        if (!game.step()) {
+            enterGameOver();
+            // fall through to broadcast scheduling
+        } else {
+            // Keep the display awake through long straight runs that generate no key presses.
+            const uint32_t now = millis();
+            if (now - lastAwakeKickMs > 1500) {
+                powerFSM.trigger(EVENT_PRESS);
+                lastAwakeKickMs = now;
+            }
+            requestRedraw(UIFrameEvent::Action::REDRAW_ONLY);
+            return tickIntervalMs();
+        }
     }
 
-    // Keep the display awake through long straight runs that generate no key presses.
-    const uint32_t now = millis();
-    if (now - lastAwakeKickMs > 1500) {
-        powerFSM.trigger(EVENT_PRESS);
-        lastAwakeKickMs = now;
+#if SNAKE_ANNOUNCE_HIGH_SCORE
+    const int32_t bcastMs = nextBroadcastIntervalMs();
+    if (bcastMs == 0) {
+        broadcastAllScores();
+        lastBroadcastMs = millis();
+        return static_cast<int32_t>(BROADCAST_INTERVAL_MS);
     }
-
-    requestRedraw(UIFrameEvent::Action::REDRAW_ONLY);
-    return tickIntervalMs();
+    return bcastMs;
+#else
+    return disable();
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -391,6 +426,46 @@ int SnakeModule::insertHighScore(uint32_t score, const char *name, uint32_t node
 }
 
 #if SNAKE_ANNOUNCE_HIGH_SCORE
+int32_t SnakeModule::nextBroadcastIntervalMs() const
+{
+    const uint32_t now = millis();
+    if (lastBroadcastMs == 0) {
+        // First broadcast: wait BROADCAST_INITIAL_MS from boot (millis() is time-since-boot).
+        return (now >= BROADCAST_INITIAL_MS) ? 0 : static_cast<int32_t>(BROADCAST_INITIAL_MS - now);
+    }
+    const uint32_t elapsed = now - lastBroadcastMs;
+    return (elapsed >= BROADCAST_INTERVAL_MS) ? 0 : static_cast<int32_t>(BROADCAST_INTERVAL_MS - elapsed);
+}
+
+void SnakeModule::broadcastAllScores()
+{
+    if (!service)
+        return;
+    SnakeTableWire tbl;
+    memset(&tbl, 0, sizeof(tbl));
+    tbl.version = SNAKE_WIRE_VERSION;
+    tbl.count = 0;
+    for (uint8_t i = 0; i < HS_COUNT; i++) {
+        if (highScores[i].score == 0)
+            break;
+        tbl.entries[tbl.count].nodeNum = highScores[i].nodeNum;
+        strncpy(tbl.entries[tbl.count].shortName, highScores[i].shortName, sizeof(tbl.entries[0].shortName) - 1);
+        tbl.entries[tbl.count].shortName[sizeof(tbl.entries[0].shortName) - 1] = '\0';
+        tbl.entries[tbl.count].score = highScores[i].score;
+        tbl.count++;
+    }
+    if (tbl.count == 0)
+        return;
+    static_assert(sizeof(tbl) <= sizeof(meshtastic_MeshPacket().decoded.payload.bytes), "SnakeTableWire too large");
+    meshtastic_MeshPacket *p = allocDataPacket();
+    p->to = NODENUM_BROADCAST;
+    p->channel = 0;
+    memcpy(p->decoded.payload.bytes, &tbl, sizeof(tbl));
+    p->decoded.payload.size = sizeof(tbl);
+    service->sendToMesh(p);
+    LOG_INFO("Snake: broadcast table (%u entries)", tbl.count);
+}
+
 void SnakeModule::announceHighScore(uint32_t score)
 {
     if (!service)
@@ -414,22 +489,53 @@ void SnakeModule::announceHighScore(uint32_t score)
 
 ProcessMessage SnakeModule::handleReceived(const meshtastic_MeshPacket &mp)
 {
-    if (mp.decoded.payload.size < sizeof(SnakeScoreWire))
-        return ProcessMessage::CONTINUE;
-    SnakeScoreWire wire;
-    memcpy(&wire, mp.decoded.payload.bytes, sizeof(wire));
-    if (wire.version != SNAKE_WIRE_VERSION || wire.score == 0)
-        return ProcessMessage::CONTINUE;
-    wire.shortName[sizeof(wire.shortName) - 1] = '\0';
+    const size_t sz = mp.decoded.payload.size;
 
-    bool dummy = false;
-    const int rank = insertHighScore(wire.score, wire.shortName, mp.from, dummy);
-    if (rank >= 0) {
-        saveHighScores();
-        requestRedraw(UIFrameEvent::Action::REDRAW_ONLY);
-        LOG_INFO("Snake: remote score %lu from 0x%08x placed at rank %d", static_cast<unsigned long>(wire.score), mp.from,
-                 rank + 1);
+    if (sz == sizeof(SnakeTableWire)) {
+        // Full table broadcast - merge each entry using the embedded nodeNum.
+        SnakeTableWire tbl;
+        memcpy(&tbl, mp.decoded.payload.bytes, sizeof(tbl));
+        if (tbl.version != SNAKE_WIRE_VERSION)
+            return ProcessMessage::CONTINUE;
+        const uint8_t count = tbl.count < HS_COUNT ? tbl.count : HS_COUNT;
+        bool changed = false;
+        for (uint8_t i = 0; i < count; i++) {
+            if (tbl.entries[i].score == 0)
+                continue;
+            tbl.entries[i].shortName[sizeof(tbl.entries[0].shortName) - 1] = '\0';
+            bool dummy = false;
+            const int rank = insertHighScore(tbl.entries[i].score, tbl.entries[i].shortName, tbl.entries[i].nodeNum, dummy);
+            if (rank >= 0) {
+                changed = true;
+                LOG_INFO("Snake: table entry %s %lu placed at rank %d", tbl.entries[i].shortName,
+                         static_cast<unsigned long>(tbl.entries[i].score), rank + 1);
+            }
+        }
+        if (changed) {
+            saveHighScores();
+            requestRedraw(UIFrameEvent::Action::REDRAW_ONLY);
+        }
+        return ProcessMessage::CONTINUE;
     }
+
+    if (sz == sizeof(SnakeScoreWire)) {
+        // Single-score announcement - nodeNum comes from the packet header.
+        SnakeScoreWire wire;
+        memcpy(&wire, mp.decoded.payload.bytes, sizeof(wire));
+        if (wire.version != SNAKE_WIRE_VERSION || wire.score == 0)
+            return ProcessMessage::CONTINUE;
+        wire.shortName[sizeof(wire.shortName) - 1] = '\0';
+        bool dummy = false;
+        const int rank = insertHighScore(wire.score, wire.shortName, mp.from, dummy);
+        if (rank >= 0) {
+            saveHighScores();
+            requestRedraw(UIFrameEvent::Action::REDRAW_ONLY);
+            LOG_INFO("Snake: remote score %lu from 0x%08x placed at rank %d", static_cast<unsigned long>(wire.score), mp.from,
+                     rank + 1);
+        }
+        return ProcessMessage::CONTINUE;
+    }
+
     return ProcessMessage::CONTINUE;
 }
 
