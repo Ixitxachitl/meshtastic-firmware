@@ -72,6 +72,26 @@ class TetrisGame
     const Piece &current() const { return cur; }
     const Piece &next() const { return nxt; }
 
+    /** Returns true if the current piece cannot fall further (is resting on a surface). */
+    bool isGrounded() const;
+
+    /** Move the current piece down one row if possible. Never locks. Returns true if it moved. */
+    bool tryGravity();
+
+    /** Lock the current piece, clear lines, and advance to the next piece.
+     *  Call only when isGrounded() is true. Sets alive=false if spawn fails. */
+    void lockNow();
+
+    /** Swap the current piece with the held piece (or hold it if empty).
+     *  Returns false if hold was already used this piece. */
+    bool holdPiece();
+
+    /** Type index (0..6) of the held piece, or 255 if nothing is held. */
+    uint8_t heldPieceType() const { return heldType; }
+
+    /** Number of lines cleared during the last lock (lockNow / hardDrop / softDrop). */
+    int lastLinesClearedCount() const { return lastCleared; }
+
     /**
      * Returns the top row the current piece would occupy if instantly dropped.
      * Used by the renderer to show a ghost/shadow piece.
@@ -87,6 +107,9 @@ class TetrisGame
   private:
     Piece cur = {};
     Piece nxt = {};
+    uint8_t heldType = 255; // 255 = no piece held
+    bool holdUsed = false;  // can't hold again until next piece
+    int lastCleared = 0;    // lines cleared in last lock
     uint32_t pts = 0;
     uint8_t lvl = 1;
     uint16_t lines = 0;

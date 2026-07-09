@@ -17,6 +17,11 @@
 #define SNAKE_ANNOUNCE_HIGH_SCORE 0
 #endif
 
+// GAME_DEMO_MODE default off
+#ifndef GAME_DEMO_MODE
+#define GAME_DEMO_MODE 0
+#endif
+
 enum SnakeUiState : uint8_t {
     SNAKE_IDLE,     // attract screen on the always-present games frame; OSThread disabled
     SNAKE_PLAYING,  // game running; OSThread ticking
@@ -102,9 +107,12 @@ class SnakeModule : public SinglePortModule, public Observable<const UIFrameEven
     // Insert into the sorted-descending table. Returns the 0-based rank if it placed, else -1.
     // isNewTop is set when the score took the #1 slot.
     int insertHighScore(uint32_t score, const char *name, uint32_t nodeNum, bool &isNewTop);
-    void recordHighScore();
+    void recordHighScore(const char *initials = nullptr);
+#if GAME_DEMO_MODE
+    void promptForInitials();
+#endif
 #if SNAKE_ANNOUNCE_HIGH_SCORE
-    void announceHighScore(uint32_t score);
+    void announceHighScore(uint32_t score, const char *name = nullptr);
     void broadcastAllScores(); // send full table; called on first load and every 12 h
     int32_t nextBroadcastIntervalMs() const;
 #endif

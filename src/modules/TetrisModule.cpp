@@ -8,6 +8,7 @@
 #include "PowerFSM.h"
 #include "SPILock.h"
 #include "SafeFile.h"
+#include "buzz/buzz.h"
 #include "concurrency/LockGuard.h"
 #include "gps/RTC.h"
 #include "graphics/Screen.h"
@@ -100,6 +101,7 @@ void TetrisModule::startPlaying()
 {
     game.reset(static_cast<uint32_t>(random()) ^ millis());
     uiState = TETRIS_PLAYING;
+    lockDelayActive = false;
     lastAwakeKickMs = millis();
     kickTick();
     requestRedraw();
@@ -113,11 +115,12 @@ void TetrisModule::enterGameOver()
     lastRank = -1;
     lastWasNewTop = false;
     uiState = TETRIS_GAMEOVER;
+#if GAME_DEMO_MODE
+    if (qualifiesForHighScore(lastScore))
+        promptForInitials();
+#else
     if (qualifiesForHighScore(lastScore))
         recordHighScore();
-#if TETRIS_ANNOUNCE_HIGH_SCORE
-    if (lastRank >= 0 && lastScore > 0)
-        announceHighScore(lastScore);
 #endif
     requestRedraw();
 }
@@ -170,12 +173,38 @@ int32_t TetrisModule::runOnce()
 #endif
     }
 
-    if (!game.step()) {
-        enterGameOver();
-        return disable();
+    const uint32_t now = millis();
+
+    if (pendingLineClearChirp) {
+        pendingLineClearChirp = false;
+        playChirp();
     }
 
-    const uint32_t now = millis();
+    if (game.isGrounded()) {
+        if (!lockDelayActive) {
+            // Piece just landed - start the lock-delay countdown.
+            lockDelayStartMs = now;
+            lockDelayActive = true;
+        } else if (now - lockDelayStartMs >= LOCK_DELAY_MS) {
+            // Delay expired - lock the piece.
+            lockDelayActive = false;
+            game.lockNow();
+            if (!game.isPlaying()) {
+                enterGameOver();
+                return disable();
+            }
+            if (game.lastLinesClearedCount() > 0)
+                playChirp();
+        } else {
+            // Still waiting - come back when the delay expires.
+            requestRedraw();
+            return static_cast<int32_t>(LOCK_DELAY_MS - (now - lockDelayStartMs));
+        }
+    } else {
+        lockDelayActive = false;
+        game.tryGravity();
+    }
+
     if (now - lastAwakeKickMs > 1500) {
         powerFSM.trigger(EVENT_PRESS);
         lastAwakeKickMs = now;
@@ -203,7 +232,11 @@ int TetrisModule::handleInputEvent(const InputEvent *event)
         if (ev == INPUT_BROKER_SELECT) {
             startPlaying();
             return 1;
-        } else if (isBack || ev == INPUT_BROKER_UP || ev == INPUT_BROKER_DOWN) {
+        } else if (isBack) {
+            // Let the normal system handle BACK (turns display off), but clean up first.
+            exitToIdle();
+            return 0;
+        } else if (ev == INPUT_BROKER_UP || ev == INPUT_BROKER_DOWN) {
             exitToIdle();
             return 1;
         } else if (ev == INPUT_BROKER_SELECT_LONG) {
@@ -227,31 +260,48 @@ int TetrisModule::handleInputEvent(const InputEvent *event)
         if (isBack) {
             uiState = TETRIS_PAUSED;
             disable();
+            lockDelayActive = false;
             requestRedraw();
         } else {
             switch (ev) {
             case INPUT_BROKER_UP:
-                game.rotate();
+                if (game.rotate() && lockDelayActive)
+                    lockDelayStartMs = millis(); // reset lock delay on successful rotate
                 break;
             case INPUT_BROKER_LEFT:
-                game.moveLeft();
+                if (game.moveLeft() && lockDelayActive)
+                    lockDelayStartMs = millis();
                 break;
             case INPUT_BROKER_RIGHT:
-                game.moveRight();
+                if (game.moveRight() && lockDelayActive)
+                    lockDelayStartMs = millis();
                 break;
             case INPUT_BROKER_DOWN:
-                game.softDrop();
-                if (!game.isPlaying()) {
-                    enterGameOver();
-                    return 1;
+                if (game.tryGravity()) {
+                    lockDelayActive = false; // moved down, no longer grounded
+                } else if (lockDelayActive) {
+                    lockDelayStartMs = millis(); // reset timer on soft drop while grounded
                 }
                 break;
             case INPUT_BROKER_SELECT:
-            case INPUT_BROKER_SELECT_LONG:
+                // Hard drop: bypass lock delay and lock immediately.
+                lockDelayActive = false;
                 game.hardDrop();
                 if (!game.isPlaying()) {
                     enterGameOver();
                     return 1;
+                }
+                if (game.lastLinesClearedCount() > 0)
+                    pendingLineClearChirp = true;
+                break;
+            case INPUT_BROKER_SELECT_LONG:
+                // Hold / swap piece.
+                if (game.holdPiece()) {
+                    lockDelayActive = false; // new piece in play, reset delay
+                    if (!game.isPlaying()) {
+                        enterGameOver();
+                        return 1;
+                    }
                 }
                 break;
             default:
@@ -350,17 +400,17 @@ void TetrisModule::drawHighScores(OLEDDisplay *display, int16_t x, int16_t y)
 
 void TetrisModule::drawPlayfield(OLEDDisplay *display, int16_t x, int16_t y)
 {
-    // Centered vertical layout:
-    //   board: 10 cols × CELL_PX wide, fills display height (BOARD_ROWS × CELL_PX)
-    //   left panel  (NXT preview) : x = 0 .. ox-2
-    //   right panel (SCR / LVL)   : x = ox+boardW+1 .. display.width-1
-    const int16_t boardW = TetrisGame::BOARD_COLS * CELL_PX;   // 40
-    const int16_t ox = x + (display->getWidth() - boardW) / 2; // horizontal centre
+    // Layout (128×64 OLED):
+    //   left panel  (SCR / LVL)       : x = 0 .. ox-2
+    //   board (centered, 40×64 px)    : x = ox .. ox+boardW-1
+    //   right panel (NXT / HLD)        : x = ox+boardW+1 .. 127
+    const int16_t boardW = TetrisGame::BOARD_COLS * CELL_PX;   // 40 px
+    const int16_t ox = x + (display->getWidth() - boardW) / 2; // board left edge
     const int16_t oy = y;
 
     display->setColor(WHITE);
 
-    // Separator lines either side of the board, plus bottom wall.
+    // Board separator lines and bottom wall.
     display->drawLine(ox - 1, oy, ox - 1, oy + display->getHeight() - 1);
     display->drawLine(ox + boardW, oy, ox + boardW, oy + display->getHeight() - 1);
     display->drawLine(ox - 1, oy + display->getHeight() - 1, ox + boardW, oy + display->getHeight() - 1);
@@ -406,33 +456,51 @@ void TetrisModule::drawPlayfield(OLEDDisplay *display, int16_t x, int16_t y)
         }
     }
 
-    // --- Right panel: SCR and LVL ---
-    const int16_t rpx = ox + boardW + 2;
+    // --- Left panel: SCR and LVL ---
     char buf[12];
     display->setFont(FONT_SMALL);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
-    display->drawString(rpx, y + 2, "SCR");
+    display->drawString(x + 2, y + 2, "SCR");
     snprintf(buf, sizeof(buf), "%lu", static_cast<unsigned long>(game.score()));
-    display->drawString(rpx, y + 2 + FONT_HEIGHT_SMALL, buf);
-    display->drawString(rpx, y + 2 + FONT_HEIGHT_SMALL * 2 + 2, "LVL");
+    display->drawString(x + 2, y + 2 + FONT_HEIGHT_SMALL, buf);
+    display->drawString(x + 2, y + 2 + FONT_HEIGHT_SMALL * 2 + 2, "LVL");
     snprintf(buf, sizeof(buf), "%u", static_cast<unsigned>(game.level()));
-    display->drawString(rpx, y + 2 + FONT_HEIGHT_SMALL * 3 + 2, buf);
+    display->drawString(x + 2, y + 2 + FONT_HEIGHT_SMALL * 3 + 2, buf);
 
-    // --- Left panel: NXT (next piece preview) centred in the panel ---
-    const int16_t lpanelW = ox - 2;       // pixels available left of board separator
-    static constexpr int16_t PREV_PX = 3; // px per preview cell
-    const int16_t previewW = 4 * PREV_PX; // 12 px
-    const int16_t lpx = x + (lpanelW - previewW) / 2;
-    const int16_t nxtLabelY = y + 2;
-    const int16_t nxtPreviewY = nxtLabelY + FONT_HEIGHT_SMALL + 2;
+    // --- Right panel: NXT and HLD previews ---
+    const int16_t rpx = ox + boardW + 2;               // right panel left edge
+    const int16_t rpanelW = display->getWidth() - rpx; // ~42 px
+    const int16_t rcx = rpx + rpanelW / 2;             // centre of right panel
+    static constexpr int16_t PREV_PX = 3;              // preview cell size (px)
+    const int16_t previewW = 4 * PREV_PX;              // 12 px
+    const int16_t previewX = rpx + (rpanelW - previewW) / 2;
+
     display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->drawString(x + lpanelW / 2, nxtLabelY, "NXT");
+
+    // NXT label + preview
+    display->drawString(rcx, y + 2, "NXT");
+    const int16_t nxtY = y + 2 + FONT_HEIGHT_SMALL;
     const TetrisGame::Piece &nxt = game.next();
     for (uint8_t pr = 0; pr < 4; pr++)
         for (uint8_t pc = 0; pc < 4; pc++)
             if (TetrisGame::pieceCell(nxt.type, nxt.rot, pr, pc))
-                display->fillRect(lpx + static_cast<int16_t>(pc) * PREV_PX, nxtPreviewY + static_cast<int16_t>(pr) * PREV_PX,
+                display->fillRect(previewX + static_cast<int16_t>(pc) * PREV_PX, nxtY + static_cast<int16_t>(pr) * PREV_PX,
                                   PREV_PX - 1, PREV_PX - 1);
+
+    // HLD label + preview (or dashes if empty)
+    const int16_t hldLabelY = nxtY + 4 * PREV_PX + 3;
+    display->drawString(rcx, hldLabelY, "HLD");
+    const int16_t hldY = hldLabelY + FONT_HEIGHT_SMALL;
+    const uint8_t heldType = game.heldPieceType();
+    if (heldType != 255u) {
+        for (uint8_t pr = 0; pr < 4; pr++)
+            for (uint8_t pc = 0; pc < 4; pc++)
+                if (TetrisGame::pieceCell(heldType, 0, pr, pc))
+                    display->fillRect(previewX + static_cast<int16_t>(pc) * PREV_PX, hldY + static_cast<int16_t>(pr) * PREV_PX,
+                                      PREV_PX - 1, PREV_PX - 1);
+    } else {
+        display->drawString(rcx, hldY + PREV_PX, "---");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -533,13 +601,29 @@ int TetrisModule::insertHighScore(uint32_t score, const char *name, uint32_t nod
     return pos;
 }
 
-void TetrisModule::recordHighScore()
+#if GAME_DEMO_MODE
+void TetrisModule::promptForInitials()
+{
+    if (screen)
+        screen->showAlphanumericPicker("New High Score!\nEnter initials", "AAA", 60000, 3,
+                                       [this](const std::string &initials) { this->recordHighScore(initials.c_str()); });
+    else
+        recordHighScore(nullptr);
+}
+#endif
+
+void TetrisModule::recordHighScore(const char *initials)
 {
     bool isNewTop = false;
-    lastRank = insertHighScore(lastScore, owner.short_name, nodeDB ? nodeDB->getNodeNum() : 0, isNewTop);
+    const char *name = (initials && initials[0]) ? initials : owner.short_name;
+    lastRank = insertHighScore(lastScore, name, nodeDB ? nodeDB->getNodeNum() : 0, isNewTop);
     lastWasNewTop = isNewTop;
     if (lastRank >= 0)
         saveHighScores();
+#if TETRIS_ANNOUNCE_HIGH_SCORE
+    if (isNewTop && lastScore > 0)
+        announceHighScore(lastScore, name);
+#endif
     requestRedraw();
 }
 
@@ -615,6 +699,9 @@ int32_t TetrisModule::nextBroadcastIntervalMs() const
 
 void TetrisModule::broadcastAllScores()
 {
+#if GAME_DEMO_MODE
+    return; // Demo mode: individual scores are broadcast as text; no binary table.
+#endif
     if (!service)
         return;
     TetrisTableWire tbl;
@@ -643,14 +730,31 @@ void TetrisModule::broadcastAllScores()
     LOG_INFO("Tetris: broadcast table (%u entries)", tbl.count);
 }
 
-void TetrisModule::announceHighScore(uint32_t score)
+void TetrisModule::announceHighScore(uint32_t score, const char *name)
 {
     if (!service)
         return;
+
+#if GAME_DEMO_MODE
+    char msg[64];
+    const char *n = (name && name[0]) ? name : owner.short_name;
+    snprintf(msg, sizeof(msg), "%s set a new Tetris high score: %lu", n, static_cast<unsigned long>(score));
+    meshtastic_MeshPacket *p = allocDataPacket();
+    p->to = NODENUM_BROADCAST;
+    p->channel = channels.getPrimaryIndex();
+    p->decoded.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
+    p->want_ack = false;
+    pb_size_t msgLen = static_cast<pb_size_t>(strnlen(msg, sizeof(msg) - 1));
+    memcpy(p->decoded.payload.bytes, msg, msgLen);
+    p->decoded.payload.size = msgLen;
+    service->sendToMesh(p);
+    LOG_INFO("Tetris Demo: broadcast text '%s'", msg);
+#else
     TetrisScoreWire wire;
     wire.game_id = TETRIS_WIRE_GAME_ID;
     wire.version = TETRIS_WIRE_VERSION;
-    strncpy(wire.shortName, owner.short_name, sizeof(wire.shortName) - 1);
+    const char *n = (name && name[0]) ? name : owner.short_name;
+    strncpy(wire.shortName, n, sizeof(wire.shortName) - 1);
     wire.shortName[sizeof(wire.shortName) - 1] = '\0';
     wire.score = score;
     static_assert(sizeof(wire) <= sizeof(meshtastic_MeshPacket().decoded.payload.bytes), "TetrisScoreWire too large");
@@ -661,6 +765,7 @@ void TetrisModule::announceHighScore(uint32_t score)
     p->decoded.payload.size = sizeof(wire);
     service->sendToMesh(p);
     LOG_INFO("Tetris: broadcast score %lu", static_cast<unsigned long>(score));
+#endif
 }
 #endif // TETRIS_ANNOUNCE_HIGH_SCORE
 

@@ -93,23 +93,38 @@ void SnakeModule::enterGameOver()
     lastRank = -1;
     lastWasNewTop = false;
     uiState = SNAKE_GAMEOVER;
-
+#if GAME_DEMO_MODE
+    if (qualifiesForHighScore(lastScore))
+        promptForInitials();
+#else
     if (qualifiesForHighScore(lastScore))
         recordHighScore();
-
+#endif
     requestRedraw(UIFrameEvent::Action::REDRAW_ONLY);
 }
 
-void SnakeModule::recordHighScore()
+#if GAME_DEMO_MODE
+void SnakeModule::promptForInitials()
+{
+    if (screen)
+        screen->showAlphanumericPicker("New High Score!\nEnter initials", "AAA", 60000, 3,
+                                       [this](const std::string &initials) { this->recordHighScore(initials.c_str()); });
+    else
+        recordHighScore(nullptr);
+}
+#endif
+
+void SnakeModule::recordHighScore(const char *initials)
 {
     bool isNewTop = false;
-    lastRank = insertHighScore(lastScore, owner.short_name, nodeDB ? nodeDB->getNodeNum() : 0, isNewTop);
+    const char *name = (initials && initials[0]) ? initials : owner.short_name;
+    lastRank = insertHighScore(lastScore, name, nodeDB ? nodeDB->getNodeNum() : 0, isNewTop);
     lastWasNewTop = isNewTop;
     if (lastRank >= 0)
         saveHighScores();
 #if SNAKE_ANNOUNCE_HIGH_SCORE
-    if (lastRank >= 0 && lastScore > 0)
-        announceHighScore(lastScore);
+    if (isNewTop && lastScore > 0)
+        announceHighScore(lastScore, name);
 #endif
     requestRedraw(UIFrameEvent::Action::REDRAW_ONLY);
 }
@@ -395,7 +410,7 @@ void SnakeModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int
         char scoreLine[24];
         snprintf(scoreLine, sizeof(scoreLine), "Score: %lu", static_cast<unsigned long>(lastScore));
         const char *status = lastWasNewTop ? "NEW HIGH SCORE!" : lastRank >= 0 ? "You made the top 5!" : "";
-        const char *lines[] = {"GAME OVER", scoreLine, status, "SELECT: scores"};
+        const char *lines[] = {"GAME OVER", scoreLine, status, "SEL: scores  BCK: exit"};
         drawCenteredLines(display, x, y, lines, 4);
         break;
     }
@@ -467,6 +482,9 @@ int32_t SnakeModule::nextBroadcastIntervalMs() const
 
 void SnakeModule::broadcastAllScores()
 {
+#if GAME_DEMO_MODE
+    return; // Demo mode: individual scores are broadcast as text; no binary table.
+#endif
     if (!service)
         return;
     SnakeTableWire tbl;
@@ -494,13 +512,31 @@ void SnakeModule::broadcastAllScores()
     LOG_INFO("Snake: broadcast table (%u entries)", tbl.count);
 }
 
-void SnakeModule::announceHighScore(uint32_t score)
+void SnakeModule::announceHighScore(uint32_t score, const char *name)
 {
     if (!service)
         return;
+
+#if GAME_DEMO_MODE
+    // Demo mode: plain text to the primary channel instead of a PRIVATE_APP wire packet.
+    char msg[64];
+    const char *n = (name && name[0]) ? name : owner.short_name;
+    snprintf(msg, sizeof(msg), "%s set a new Snake high score: %lu", n, static_cast<unsigned long>(score));
+    meshtastic_MeshPacket *p = allocDataPacket();
+    p->to = NODENUM_BROADCAST;
+    p->channel = channels.getPrimaryIndex();
+    p->decoded.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
+    p->want_ack = false;
+    pb_size_t msgLen = static_cast<pb_size_t>(strnlen(msg, sizeof(msg) - 1));
+    memcpy(p->decoded.payload.bytes, msg, msgLen);
+    p->decoded.payload.size = msgLen;
+    service->sendToMesh(p);
+    LOG_INFO("Snake Demo: broadcast text '%s'", msg);
+#else
     SnakeScoreWire wire;
     wire.version = SNAKE_WIRE_VERSION;
-    strncpy(wire.shortName, owner.short_name, sizeof(wire.shortName) - 1);
+    const char *n = (name && name[0]) ? name : owner.short_name;
+    strncpy(wire.shortName, n, sizeof(wire.shortName) - 1);
     wire.shortName[sizeof(wire.shortName) - 1] = '\0';
     wire.score = score;
 
@@ -512,6 +548,7 @@ void SnakeModule::announceHighScore(uint32_t score)
     p->decoded.payload.size = sizeof(wire);
     service->sendToMesh(p);
     LOG_INFO("Snake: broadcast score %lu", static_cast<unsigned long>(score));
+#endif
 }
 #endif
 

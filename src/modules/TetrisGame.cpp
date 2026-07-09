@@ -120,6 +120,7 @@ void TetrisGame::advanceNext()
     lockPiece();
 
     const int cleared = clearLines();
+    lastCleared = cleared;
     if (cleared > 0) {
         lines += static_cast<uint16_t>(cleared);
         // Nintendo-style line-clear scoring (×level).
@@ -129,6 +130,8 @@ void TetrisGame::advanceNext()
         const uint8_t newLvl = static_cast<uint8_t>(lines / 10 + 1);
         lvl = newLvl > 20 ? 20 : newLvl;
     }
+
+    holdUsed = false; // new piece - hold is available again
 
     // nxt becomes the active piece; generate a fresh nxt.
     cur = nxt;
@@ -150,6 +153,9 @@ void TetrisGame::reset(uint32_t seed)
     lvl = 1;
     lines = 0;
     alive = true;
+    heldType = 255;
+    holdUsed = false;
+    lastCleared = 0;
     rng = seed ? seed : 0xA5A5A5A5u;
     cur = spawnPiece(static_cast<uint8_t>(nextRandom() % PIECE_TYPES));
     nxt = spawnPiece(static_cast<uint8_t>(nextRandom() % PIECE_TYPES));
@@ -215,6 +221,56 @@ void TetrisGame::hardDrop()
     pts += dropped * 2;
     cur.row = land;
     advanceNext();
+}
+
+bool TetrisGame::isGrounded() const
+{
+    Piece p = cur;
+    p.row++;
+    return !canPlace(p);
+}
+
+bool TetrisGame::tryGravity()
+{
+    Piece p = cur;
+    p.row++;
+    if (!canPlace(p))
+        return false;
+    cur = p;
+    return true;
+}
+
+void TetrisGame::lockNow()
+{
+    advanceNext();
+}
+
+bool TetrisGame::holdPiece()
+{
+    if (holdUsed)
+        return false;
+    holdUsed = true;
+    lastCleared = 0;
+    if (heldType == 255u) {
+        // Nothing held yet - send current to hold, advance nxt→cur
+        heldType = cur.type;
+        cur = nxt;
+        if (!canPlace(cur)) {
+            alive = false;
+            return true;
+        }
+        nxt = spawnPiece(static_cast<uint8_t>(nextRandom() % PIECE_TYPES));
+    } else {
+        // Swap current type with held
+        const uint8_t prevHeld = heldType;
+        heldType = cur.type;
+        cur = spawnPiece(prevHeld);
+        if (!canPlace(cur)) {
+            alive = false;
+            return true;
+        }
+    }
+    return true;
 }
 
 int8_t TetrisGame::ghostRow() const

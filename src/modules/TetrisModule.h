@@ -15,6 +15,11 @@
 #define TETRIS_ANNOUNCE_HIGH_SCORE 0
 #endif
 
+// GAME_DEMO_MODE default off (defined in SnakeModule.h; safe to redefine here)
+#ifndef GAME_DEMO_MODE
+#define GAME_DEMO_MODE 0
+#endif
+
 enum TetrisUiState : uint8_t {
     TETRIS_INACTIVE, // not launched; games frame shows the Snake attract screen
     TETRIS_TITLE,    // title/attract screen for Tetris
@@ -115,9 +120,12 @@ class TetrisModule : public SinglePortModule, public Observable<const UIFrameEve
     void saveHighScores();
     bool qualifiesForHighScore(uint32_t score) const;
     int insertHighScore(uint32_t score, const char *name, uint32_t nodeNum, bool &isNewTop);
-    void recordHighScore();
+    void recordHighScore(const char *initials = nullptr);
+#if GAME_DEMO_MODE
+    void promptForInitials();
+#endif
 #if TETRIS_ANNOUNCE_HIGH_SCORE
-    void announceHighScore(uint32_t score);
+    void announceHighScore(uint32_t score, const char *name = nullptr);
     void broadcastAllScores();
     int32_t nextBroadcastIntervalMs() const;
 #endif
@@ -132,6 +140,13 @@ class TetrisModule : public SinglePortModule, public Observable<const UIFrameEve
     int lastRank = -1;
     bool lastWasNewTop = false;
     uint32_t lastAwakeKickMs = 0;
+
+    // Lock-delay: piece doesn't snap-lock the moment it lands; player gets
+    // LOCK_DELAY_MS ms to slide/rotate before it locks.
+    static constexpr uint32_t LOCK_DELAY_MS = 400;
+    uint32_t lockDelayStartMs = 0;
+    bool lockDelayActive = false;
+    bool pendingLineClearChirp = false; // deferred until after button-press buzz completes
 #if TETRIS_ANNOUNCE_HIGH_SCORE
     uint32_t lastBroadcastMs = 0;
 #endif
