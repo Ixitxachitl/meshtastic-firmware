@@ -8,6 +8,7 @@
 #include "PowerFSM.h"
 #include "SPILock.h"
 #include "SafeFile.h"
+#include "TetrisModule.h"
 #include "concurrency/LockGuard.h"
 #include "gps/RTC.h"
 #include "graphics/Screen.h"
@@ -203,12 +204,20 @@ int SnakeModule::handleInputEvent(const InputEvent *event)
 {
     if (screen && screen->isOverlayBannerShowing())
         return 0; // a menu banner is up; don't steal its input
+    // While Tetris owns the screen, all input belongs to it.
+    if (tetrisModule && tetrisModule->isActive())
+        return 0;
 
     const input_broker_event ev = event->inputEvent;
     const bool isBack = (ev == INPUT_BROKER_CANCEL || ev == INPUT_BROKER_BACK);
 
     if (uiState == SNAKE_IDLE) {
-        // Long-press SELECT on the attract screen opens the high-score table.
+        // UP or DOWN on the attract screen shows the Tetris title screen.
+        if ((ev == INPUT_BROKER_DOWN || ev == INPUT_BROKER_UP) && tetrisModule && !tetrisModule->isActive()) {
+            tetrisModule->showTitle();
+            return 1;
+        }
+        // Long-press SELECT opens the Snake high-score table.
         if (ev == INPUT_BROKER_SELECT_LONG) {
             uiState = SNAKE_HISCORES;
             requestRedraw(UIFrameEvent::Action::REDRAW_ONLY);
@@ -253,7 +262,7 @@ int SnakeModule::handleInputEvent(const InputEvent *event)
         if (ev == INPUT_BROKER_SELECT_LONG) {
             static const char *opts[] = {"No", "Yes"};
             graphics::BannerOverlayOptions confirm;
-            confirm.message = "Clear all\nhigh scores?";
+            confirm.message = "Clear Scores?";
             confirm.optionsArrayPtr = opts;
             confirm.optionsCount = 2;
             confirm.bannerCallback = [this](int selected) {
