@@ -633,6 +633,9 @@ void TetrisModule::recordHighScore(const char *initials)
 
 ProcessMessage TetrisModule::handleReceived(const meshtastic_MeshPacket &mp)
 {
+#if !TETRIS_ANNOUNCE_HIGH_SCORE
+    return ProcessMessage::CONTINUE;
+#else
     auto isIgnored = [](NodeNum num) -> bool {
         if (!nodeDB || num == 0)
             return false;
@@ -686,136 +689,137 @@ ProcessMessage TetrisModule::handleReceived(const meshtastic_MeshPacket &mp)
 
     return ProcessMessage::CONTINUE;
 }
-
-#if TETRIS_ANNOUNCE_HIGH_SCORE
-int32_t TetrisModule::nextBroadcastIntervalMs() const
-{
-    const uint32_t now = millis();
-    if (lastBroadcastMs == 0)
-        return (now >= BROADCAST_INITIAL_MS) ? 0 : static_cast<int32_t>(BROADCAST_INITIAL_MS - now);
-    const uint32_t elapsed = now - lastBroadcastMs;
-    return (elapsed >= BROADCAST_INTERVAL_MS) ? 0 : static_cast<int32_t>(BROADCAST_INTERVAL_MS - elapsed);
-}
-
-void TetrisModule::broadcastAllScores()
-{
-#if GAME_DEMO_MODE
-    return; // Demo mode: individual scores are broadcast as text; no binary table.
-#endif
-    if (!service)
-        return;
-    TetrisTableWire tbl;
-    memset(&tbl, 0, sizeof(tbl));
-    tbl.game_id = TETRIS_WIRE_GAME_ID;
-    tbl.version = TETRIS_WIRE_VERSION;
-    tbl.count = 0;
-    for (uint8_t i = 0; i < HS_COUNT; i++) {
-        if (highScores[i].score == 0)
-            break;
-        tbl.entries[tbl.count].nodeNum = highScores[i].nodeNum;
-        strncpy(tbl.entries[tbl.count].shortName, highScores[i].shortName, sizeof(tbl.entries[0].shortName) - 1);
-        tbl.entries[tbl.count].shortName[sizeof(tbl.entries[0].shortName) - 1] = '\0';
-        tbl.entries[tbl.count].score = highScores[i].score;
-        tbl.count++;
-    }
-    if (tbl.count == 0)
-        return;
-    static_assert(sizeof(tbl) <= sizeof(meshtastic_MeshPacket().decoded.payload.bytes), "TetrisTableWire too large");
-    meshtastic_MeshPacket *p = allocDataPacket();
-    p->to = NODENUM_BROADCAST;
-    p->channel = 0;
-    memcpy(p->decoded.payload.bytes, &tbl, sizeof(tbl));
-    p->decoded.payload.size = sizeof(tbl);
-    service->sendToMesh(p);
-    LOG_INFO("Tetris: broadcast table (%u entries)", tbl.count);
-}
-
-void TetrisModule::announceHighScore(uint32_t score, const char *name)
-{
-    if (!service)
-        return;
-
-#if GAME_DEMO_MODE
-    char msg[64];
-    const char *n = (name && name[0]) ? name : owner.short_name;
-    snprintf(msg, sizeof(msg), "%s set a new Tetris high score: %lu", n, static_cast<unsigned long>(score));
-    meshtastic_MeshPacket *p = allocDataPacket();
-    p->to = NODENUM_BROADCAST;
-    p->channel = channels.getPrimaryIndex();
-    p->decoded.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
-    p->want_ack = false;
-    pb_size_t msgLen = static_cast<pb_size_t>(strnlen(msg, sizeof(msg) - 1));
-    memcpy(p->decoded.payload.bytes, msg, msgLen);
-    p->decoded.payload.size = msgLen;
-    service->sendToMesh(p);
-    LOG_INFO("Tetris Demo: broadcast text '%s'", msg);
-#else
-    TetrisScoreWire wire;
-    wire.game_id = TETRIS_WIRE_GAME_ID;
-    wire.version = TETRIS_WIRE_VERSION;
-    const char *n = (name && name[0]) ? name : owner.short_name;
-    strncpy(wire.shortName, n, sizeof(wire.shortName) - 1);
-    wire.shortName[sizeof(wire.shortName) - 1] = '\0';
-    wire.score = score;
-    static_assert(sizeof(wire) <= sizeof(meshtastic_MeshPacket().decoded.payload.bytes), "TetrisScoreWire too large");
-    meshtastic_MeshPacket *p = allocDataPacket();
-    p->to = NODENUM_BROADCAST;
-    p->channel = 0;
-    memcpy(p->decoded.payload.bytes, &wire, sizeof(wire));
-    p->decoded.payload.size = sizeof(wire);
-    service->sendToMesh(p);
-    LOG_INFO("Tetris: broadcast score %lu", static_cast<unsigned long>(score));
-#endif
-}
 #endif // TETRIS_ANNOUNCE_HIGH_SCORE
 
-// ---------------------------------------------------------------------------
-// Persistence
-// ---------------------------------------------------------------------------
-
-void TetrisModule::loadHighScores()
-{
-    highScoresLoaded = true;
-    memset(highScores, 0, sizeof(highScores));
-#ifdef FSCom
-    concurrency::LockGuard g(spiLock);
-    auto f = FSCom.open(TETRIS_HS_FILE, FILE_O_READ);
-    if (!f)
-        return;
-    HighScoreFile file;
-    const bool ok = (f.read(reinterpret_cast<uint8_t *>(&file), sizeof(file)) == sizeof(file));
-    f.close();
-    if (!ok || file.magic != HS_MAGIC || file.version != HS_VERSION) {
-        LOG_DEBUG("Tetris: no valid high-score file");
-        return;
-    }
-    if (crc32Buffer(&file, offsetof(HighScoreFile, crc)) != file.crc) {
-        LOG_WARN("Tetris: high-score CRC mismatch, resetting");
-        return;
-    }
-    memcpy(highScores, file.entries, sizeof(highScores));
-    LOG_INFO("Tetris: loaded high scores (top=%lu)", static_cast<unsigned long>(highScores[0].score));
-#endif
-}
-
-void TetrisModule::saveHighScores()
-{
-#ifdef FSCom
+#if TETRIS_ANNOUNCE_HIGH_SCORE
+    int32_t TetrisModule::nextBroadcastIntervalMs() const
     {
-        concurrency::LockGuard g(spiLock);
-        FSCom.mkdir("/prefs");
+        const uint32_t now = millis();
+        if (lastBroadcastMs == 0)
+            return (now >= BROADCAST_INITIAL_MS) ? 0 : static_cast<int32_t>(BROADCAST_INITIAL_MS - now);
+        const uint32_t elapsed = now - lastBroadcastMs;
+        return (elapsed >= BROADCAST_INTERVAL_MS) ? 0 : static_cast<int32_t>(BROADCAST_INTERVAL_MS - elapsed);
     }
-    HighScoreFile file;
-    memset(&file, 0, sizeof(file));
-    file.magic = HS_MAGIC;
-    file.version = HS_VERSION;
-    memcpy(file.entries, highScores, sizeof(highScores));
-    file.crc = crc32Buffer(&file, offsetof(HighScoreFile, crc));
-    auto sf = SafeFile(TETRIS_HS_FILE, true);
-    const size_t written = sf.write(reinterpret_cast<uint8_t *>(&file), sizeof(file));
-    if (!sf.close() || written != sizeof(file))
-        LOG_WARN("Tetris: failed to save high scores");
+
+    void TetrisModule::broadcastAllScores()
+    {
+#if GAME_DEMO_MODE
+        return; // Demo mode: individual scores are broadcast as text; no binary table.
 #endif
-}
+        if (!service)
+            return;
+        TetrisTableWire tbl;
+        memset(&tbl, 0, sizeof(tbl));
+        tbl.game_id = TETRIS_WIRE_GAME_ID;
+        tbl.version = TETRIS_WIRE_VERSION;
+        tbl.count = 0;
+        for (uint8_t i = 0; i < HS_COUNT; i++) {
+            if (highScores[i].score == 0)
+                break;
+            tbl.entries[tbl.count].nodeNum = highScores[i].nodeNum;
+            strncpy(tbl.entries[tbl.count].shortName, highScores[i].shortName, sizeof(tbl.entries[0].shortName) - 1);
+            tbl.entries[tbl.count].shortName[sizeof(tbl.entries[0].shortName) - 1] = '\0';
+            tbl.entries[tbl.count].score = highScores[i].score;
+            tbl.count++;
+        }
+        if (tbl.count == 0)
+            return;
+        static_assert(sizeof(tbl) <= sizeof(meshtastic_MeshPacket().decoded.payload.bytes), "TetrisTableWire too large");
+        meshtastic_MeshPacket *p = allocDataPacket();
+        p->to = NODENUM_BROADCAST;
+        p->channel = 0;
+        memcpy(p->decoded.payload.bytes, &tbl, sizeof(tbl));
+        p->decoded.payload.size = sizeof(tbl);
+        service->sendToMesh(p);
+        LOG_INFO("Tetris: broadcast table (%u entries)", tbl.count);
+    }
+
+    void TetrisModule::announceHighScore(uint32_t score, const char *name)
+    {
+        if (!service)
+            return;
+
+#if GAME_DEMO_MODE
+        char msg[64];
+        const char *n = (name && name[0]) ? name : owner.short_name;
+        snprintf(msg, sizeof(msg), "%s set a new Tetris high score: %lu", n, static_cast<unsigned long>(score));
+        meshtastic_MeshPacket *p = allocDataPacket();
+        p->to = NODENUM_BROADCAST;
+        p->channel = channels.getPrimaryIndex();
+        p->decoded.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
+        p->want_ack = false;
+        pb_size_t msgLen = static_cast<pb_size_t>(strnlen(msg, sizeof(msg) - 1));
+        memcpy(p->decoded.payload.bytes, msg, msgLen);
+        p->decoded.payload.size = msgLen;
+        service->sendToMesh(p);
+        LOG_INFO("Tetris Demo: broadcast text '%s'", msg);
+#else
+        TetrisScoreWire wire;
+        wire.game_id = TETRIS_WIRE_GAME_ID;
+        wire.version = TETRIS_WIRE_VERSION;
+        const char *n = (name && name[0]) ? name : owner.short_name;
+        strncpy(wire.shortName, n, sizeof(wire.shortName) - 1);
+        wire.shortName[sizeof(wire.shortName) - 1] = '\0';
+        wire.score = score;
+        static_assert(sizeof(wire) <= sizeof(meshtastic_MeshPacket().decoded.payload.bytes), "TetrisScoreWire too large");
+        meshtastic_MeshPacket *p = allocDataPacket();
+        p->to = NODENUM_BROADCAST;
+        p->channel = 0;
+        memcpy(p->decoded.payload.bytes, &wire, sizeof(wire));
+        p->decoded.payload.size = sizeof(wire);
+        service->sendToMesh(p);
+        LOG_INFO("Tetris: broadcast score %lu", static_cast<unsigned long>(score));
+#endif
+    }
+#endif // TETRIS_ANNOUNCE_HIGH_SCORE
+
+    // ---------------------------------------------------------------------------
+    // Persistence
+    // ---------------------------------------------------------------------------
+
+    void TetrisModule::loadHighScores()
+    {
+        highScoresLoaded = true;
+        memset(highScores, 0, sizeof(highScores));
+#ifdef FSCom
+        concurrency::LockGuard g(spiLock);
+        auto f = FSCom.open(TETRIS_HS_FILE, FILE_O_READ);
+        if (!f)
+            return;
+        HighScoreFile file;
+        const bool ok = (f.read(reinterpret_cast<uint8_t *>(&file), sizeof(file)) == sizeof(file));
+        f.close();
+        if (!ok || file.magic != HS_MAGIC || file.version != HS_VERSION) {
+            LOG_DEBUG("Tetris: no valid high-score file");
+            return;
+        }
+        if (crc32Buffer(&file, offsetof(HighScoreFile, crc)) != file.crc) {
+            LOG_WARN("Tetris: high-score CRC mismatch, resetting");
+            return;
+        }
+        memcpy(highScores, file.entries, sizeof(highScores));
+        LOG_INFO("Tetris: loaded high scores (top=%lu)", static_cast<unsigned long>(highScores[0].score));
+#endif
+    }
+
+    void TetrisModule::saveHighScores()
+    {
+#ifdef FSCom
+        {
+            concurrency::LockGuard g(spiLock);
+            FSCom.mkdir("/prefs");
+        }
+        HighScoreFile file;
+        memset(&file, 0, sizeof(file));
+        file.magic = HS_MAGIC;
+        file.version = HS_VERSION;
+        memcpy(file.entries, highScores, sizeof(highScores));
+        file.crc = crc32Buffer(&file, offsetof(HighScoreFile, crc));
+        auto sf = SafeFile(TETRIS_HS_FILE, true);
+        const size_t written = sf.write(reinterpret_cast<uint8_t *>(&file), sizeof(file));
+        if (!sf.close() || written != sizeof(file))
+            LOG_WARN("Tetris: failed to save high scores");
+#endif
+    }
 
 #endif // HAS_SCREEN && BASEUI_HAS_GAMES
