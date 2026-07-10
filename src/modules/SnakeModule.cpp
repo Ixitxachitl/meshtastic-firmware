@@ -427,7 +427,7 @@ bool SnakeModule::qualifiesForHighScore(uint32_t score) const
     return false;
 }
 
-int SnakeModule::insertHighScore(uint32_t score, const char *name, uint32_t nodeNum, bool &isNewTop)
+int SnakeModule::insertHighScore(uint32_t score, const char *name, uint32_t nodeNum, bool &isNewTop, uint32_t scoreId)
 {
     isNewTop = false;
     if (score == 0)
@@ -443,6 +443,14 @@ int SnakeModule::insertHighScore(uint32_t score, const char *name, uint32_t node
     if (pos < 0)
         return -1;
 
+    // Dedup: skip if we already have this exact game session (same node + scoreId).
+    if (scoreId != 0) {
+        for (int i = 0; i < HS_COUNT; i++) {
+            if (highScores[i].nodeNum == nodeNum && highScores[i].scoreId == scoreId)
+                return -1;
+        }
+    }
+
     for (int i = HS_COUNT - 1; i > pos; i--)
         highScores[i] = highScores[i - 1];
 
@@ -453,6 +461,9 @@ int SnakeModule::insertHighScore(uint32_t score, const char *name, uint32_t node
     strncpy(e.shortName, (name && name[0]) ? name : owner.short_name, sizeof(e.shortName) - 1);
     e.shortName[sizeof(e.shortName) - 1] = '\0';
     e.epoch = getValidTime(RTCQualityDevice, false);
+    e.scoreId = (scoreId != 0) ? scoreId : static_cast<uint32_t>(random());
+    if (e.scoreId == 0)
+        e.scoreId = 1; // never store 0 (reserved for "no ID")
 
     isNewTop = (pos == 0);
     return pos;
@@ -488,6 +499,7 @@ void SnakeModule::broadcastAllScores()
         strncpy(e.short_name, highScores[i].shortName, sizeof(e.short_name) - 1);
         e.short_name[sizeof(e.short_name) - 1] = '\0';
         e.score = highScores[i].score;
+        e.score_id = highScores[i].scoreId;
         lb.entries_count++;
     }
     if (lb.entries_count == 0)
@@ -534,6 +546,14 @@ void SnakeModule::announceHighScore(uint32_t score, const char *name)
     strncpy(lb.entries[0].short_name, n, sizeof(lb.entries[0].short_name) - 1);
     lb.entries[0].short_name[sizeof(lb.entries[0].short_name) - 1] = '\0';
     lb.entries[0].score = score;
+    // Find the scoreId we assigned when this score was recorded locally.
+    lb.entries[0].score_id = 0;
+    for (int i = 0; i < HS_COUNT; i++) {
+        if (highScores[i].score == score && highScores[i].nodeNum == lb.entries[0].node_num) {
+            lb.entries[0].score_id = highScores[i].scoreId;
+            break;
+        }
+    }
     meshtastic_MeshPacket *p = allocDataPacket();
     p->to = NODENUM_BROADCAST;
     p->channel = 0;
@@ -579,7 +599,7 @@ ProcessMessage SnakeModule::handleReceived(const meshtastic_MeshPacket &mp)
         e.short_name[sizeof(e.short_name) - 1] = '\0';
         const NodeNum nodeNum = (e.node_num != 0) ? e.node_num : mp.from;
         bool dummy = false;
-        const int rank = insertHighScore(e.score, e.short_name, nodeNum, dummy);
+        const int rank = insertHighScore(e.score, e.short_name, nodeNum, dummy, e.score_id);
         if (rank >= 0) {
             changed = true;
             LOG_INFO("Snake: remote score %lu from 0x%08x placed at rank %d", static_cast<unsigned long>(e.score), nodeNum,

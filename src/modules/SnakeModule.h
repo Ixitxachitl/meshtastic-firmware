@@ -85,6 +85,7 @@ class SnakeModule : public SinglePortModule, public Observable<const UIFrameEven
         uint32_t nodeNum;
         char shortName[5]; // three characters, NUL-terminated
         uint32_t epoch;    // getValidTime(), 0 if no RTC
+        uint32_t scoreId;  // random nonce for dedup of re-broadcasts
     } __attribute__((packed));
 
     static constexpr uint8_t HS_COUNT = 5;
@@ -106,7 +107,7 @@ class SnakeModule : public SinglePortModule, public Observable<const UIFrameEven
     bool qualifiesForHighScore(uint32_t score) const;
     // Insert into the sorted-descending table. Returns the 0-based rank if it placed, else -1.
     // isNewTop is set when the score took the #1 slot.
-    int insertHighScore(uint32_t score, const char *name, uint32_t nodeNum, bool &isNewTop);
+    int insertHighScore(uint32_t score, const char *name, uint32_t nodeNum, bool &isNewTop, uint32_t scoreId = 0);
     void recordHighScore(const char *initials = nullptr);
 #if GAME_DEMO_MODE
     void promptForInitials();

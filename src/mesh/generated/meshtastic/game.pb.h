@@ -27,6 +27,10 @@ typedef struct _meshtastic_GameLeaderboardEntry {
     char short_name[5];
     /* Score value. */
     uint32_t score;
+    /* Random nonce generated once when this score is recorded locally.
+ Used by receivers to deduplicate periodic table re-broadcasts.
+ Paired with node_num as the dedup key: (node_num, score_id). */
+    uint32_t score_id;
 } meshtastic_GameLeaderboardEntry;
 
 /* Leaderboard broadcast for a single game.
@@ -57,15 +61,16 @@ extern "C" {
 
 
 /* Initializer values for message structs */
-#define meshtastic_GameLeaderboardEntry_init_default {0, "", 0}
+#define meshtastic_GameLeaderboardEntry_init_default {0, "", 0, 0}
 #define meshtastic_GameLeaderboard_init_default  {_meshtastic_GameType_MIN, 0, {meshtastic_GameLeaderboardEntry_init_default, meshtastic_GameLeaderboardEntry_init_default, meshtastic_GameLeaderboardEntry_init_default, meshtastic_GameLeaderboardEntry_init_default, meshtastic_GameLeaderboardEntry_init_default}}
-#define meshtastic_GameLeaderboardEntry_init_zero {0, "", 0}
+#define meshtastic_GameLeaderboardEntry_init_zero {0, "", 0, 0}
 #define meshtastic_GameLeaderboard_init_zero     {_meshtastic_GameType_MIN, 0, {meshtastic_GameLeaderboardEntry_init_zero, meshtastic_GameLeaderboardEntry_init_zero, meshtastic_GameLeaderboardEntry_init_zero, meshtastic_GameLeaderboardEntry_init_zero, meshtastic_GameLeaderboardEntry_init_zero}}
 
 /* Field tags (for use in manual encoding/decoding) */
 #define meshtastic_GameLeaderboardEntry_node_num_tag 1
 #define meshtastic_GameLeaderboardEntry_short_name_tag 2
 #define meshtastic_GameLeaderboardEntry_score_tag 3
+#define meshtastic_GameLeaderboardEntry_score_id_tag 4
 #define meshtastic_GameLeaderboard_game_tag      1
 #define meshtastic_GameLeaderboard_entries_tag   2
 
@@ -73,7 +78,8 @@ extern "C" {
 #define meshtastic_GameLeaderboardEntry_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, UINT32,   node_num,          1) \
 X(a, STATIC,   SINGULAR, STRING,   short_name,        2) \
-X(a, STATIC,   SINGULAR, UINT32,   score,             3)
+X(a, STATIC,   SINGULAR, UINT32,   score,             3) \
+X(a, STATIC,   SINGULAR, UINT32,   score_id,          4)
 #define meshtastic_GameLeaderboardEntry_CALLBACK NULL
 #define meshtastic_GameLeaderboardEntry_DEFAULT NULL
 
@@ -93,8 +99,8 @@ extern const pb_msgdesc_t meshtastic_GameLeaderboard_msg;
 
 /* Maximum encoded size of messages (where known) */
 #define MESHTASTIC_MESHTASTIC_GAME_PB_H_MAX_SIZE meshtastic_GameLeaderboard_size
-#define meshtastic_GameLeaderboardEntry_size     18
-#define meshtastic_GameLeaderboard_size          102
+#define meshtastic_GameLeaderboardEntry_size     24
+#define meshtastic_GameLeaderboard_size          132
 
 #ifdef __cplusplus
 } /* extern "C" */
