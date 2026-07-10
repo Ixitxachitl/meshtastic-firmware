@@ -621,8 +621,12 @@ void TetrisModule::recordHighScore(const char *initials)
     if (lastRank >= 0)
         saveHighScores();
 #if TETRIS_ANNOUNCE_HIGH_SCORE
-    if (isNewTop && lastScore > 0)
-        announceHighScore(lastScore, name);
+    if (lastScore > 0 && lastRank >= 0) {
+#if GAME_DEMO_MODE
+        if (isNewTop)
+#endif
+            announceHighScore(lastScore, name);
+    }
 #endif
     requestRedraw();
 }
