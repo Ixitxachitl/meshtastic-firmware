@@ -176,6 +176,10 @@ typedef enum _meshtastic_PortNum {
     /* ATAK Forwarder Module https://github.com/paulmandal/atak-forwarder
  ENCODING: libcotshrink */
     meshtastic_PortNum_ATAK_FORWARDER = 257,
+    /* Meshtastic games (Snake, Tetris) high-score sharing.
+ See game.proto for message definitions.
+ ENCODING: protobuf */
+    meshtastic_PortNum_GAME_APP = 258,
     /* Currently we limit port nums to no higher than this value */
     meshtastic_PortNum_MAX = 511
 } meshtastic_PortNum;

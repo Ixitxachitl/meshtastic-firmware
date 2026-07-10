@@ -15,59 +15,23 @@
 #include "graphics/ScreenFonts.h"
 #include "graphics/images.h"
 #include "main.h"
+#include "mesh/generated/meshtastic/game.pb.h"
 #include <ErriezCRC32.h>
 #include <cstddef>
+#include <pb_decode.h>
+#include <pb_encode.h>
 
 TetrisModule *tetrisModule;
 
-static constexpr uint8_t TETRIS_WIRE_VERSION = 1;
-static constexpr uint8_t TETRIS_WIRE_GAME_ID = 0x54u; // 'T'
+static constexpr int16_t CELL_PX = 4;
+static constexpr const char *TETRIS_HS_FILE = "/prefs/tetris.dat";
+
 #if TETRIS_ANNOUNCE_HIGH_SCORE
 static constexpr uint32_t BROADCAST_INITIAL_MS = 60000UL;
 static constexpr uint32_t BROADCAST_INTERVAL_MS = 12UL * 60 * 60 * 1000;
 #endif
 
-// Wire structs - game_id byte makes sizes 11 / 68 (vs Snake's 10 / 67).
-struct TetrisScoreWire {
-    uint8_t game_id; // = TETRIS_WIRE_GAME_ID
-    uint8_t version;
-    char shortName[5];
-    uint32_t score;
-} __attribute__((packed)); // 11 bytes
-
-struct TetrisTableEntry {
-    uint32_t nodeNum;
-    char shortName[5];
-    uint32_t score;
-} __attribute__((packed)); // 13 bytes
-
-struct TetrisTableWire {
-    uint8_t game_id; // = TETRIS_WIRE_GAME_ID
-    uint8_t version;
-    uint8_t count;
-    TetrisTableEntry entries[5];
-} __attribute__((packed)); // 68 bytes
-
-// ---------------------------------------------------------------------------
-// Vertical pixel layout on a 128×64 OLED
-//
-//  Board occupies the left side of the screen:
-//    x = col × CELL_PX   (col 0 at left edge)
-//    y = row × CELL_PX   (row 0 at top edge)
-//    10 cols × 4 px = 40 px wide
-//    16 rows × 4 px = 64 px tall  (fills the full display height)
-//
-//  Score panel: x = SCORE_OX .. 127  (86 px wide)
-//    Labels (SCR / LVL / NXT) + values + next-piece preview.
-// ---------------------------------------------------------------------------
-static constexpr int16_t CELL_PX = 4;
-static constexpr const char *TETRIS_HS_FILE = "/prefs/tetris.dat";
-
-// ---------------------------------------------------------------------------
-// Constructor
-// ---------------------------------------------------------------------------
-
-TetrisModule::TetrisModule() : SinglePortModule("tetris", meshtastic_PortNum_PRIVATE_APP), concurrency::OSThread("Tetris")
+TetrisModule::TetrisModule() : SinglePortModule("tetris", meshtastic_PortNum_GAME_APP), concurrency::OSThread("Tetris")
 {
     loadHighScores();
     inputObserver.observe(inputBroker);
@@ -649,50 +613,34 @@ ProcessMessage TetrisModule::handleReceived(const meshtastic_MeshPacket &mp)
     if (isIgnored(mp.from))
         return ProcessMessage::CONTINUE;
 
-    const size_t sz = mp.decoded.payload.size;
-
-    if (sz == sizeof(TetrisTableWire)) {
-        TetrisTableWire tbl;
-        memcpy(&tbl, mp.decoded.payload.bytes, sizeof(tbl));
-        if (tbl.game_id != TETRIS_WIRE_GAME_ID || tbl.version != TETRIS_WIRE_VERSION)
-            return ProcessMessage::CONTINUE;
-        const uint8_t count = tbl.count < HS_COUNT ? tbl.count : HS_COUNT;
-        bool changed = false;
-        for (uint8_t i = 0; i < count; i++) {
-            if (tbl.entries[i].score == 0)
-                continue;
-            tbl.entries[i].shortName[sizeof(tbl.entries[0].shortName) - 1] = '\0';
-            bool dummy = false;
-            const int rank = insertHighScore(tbl.entries[i].score, tbl.entries[i].shortName, tbl.entries[i].nodeNum, dummy);
-            if (rank >= 0)
-                changed = true;
-        }
-        if (changed) {
-            saveHighScores();
-            requestRedraw();
-        }
+    meshtastic_GameLeaderboard lb = meshtastic_GameLeaderboard_init_default;
+    pb_istream_t stream = pb_istream_from_buffer(mp.decoded.payload.bytes, mp.decoded.payload.size);
+    if (!pb_decode(&stream, meshtastic_GameLeaderboard_fields, &lb))
         return ProcessMessage::CONTINUE;
-    }
+    if (lb.game != meshtastic_GameType_GAME_TETRIS || lb.entries_count == 0)
+        return ProcessMessage::CONTINUE;
 
-    if (sz == sizeof(TetrisScoreWire)) {
-        TetrisScoreWire wire;
-        memcpy(&wire, mp.decoded.payload.bytes, sizeof(wire));
-        if (wire.game_id != TETRIS_WIRE_GAME_ID || wire.version != TETRIS_WIRE_VERSION || wire.score == 0)
-            return ProcessMessage::CONTINUE;
-        wire.shortName[sizeof(wire.shortName) - 1] = '\0';
+    bool changed = false;
+    for (pb_size_t i = 0; i < lb.entries_count; i++) {
+        auto &e = lb.entries[i];
+        if (e.score == 0)
+            continue;
+        e.short_name[sizeof(e.short_name) - 1] = '\0';
+        const NodeNum nodeNum = (e.node_num != 0) ? e.node_num : mp.from;
         bool dummy = false;
-        const int rank = insertHighScore(wire.score, wire.shortName, mp.from, dummy);
+        const int rank = insertHighScore(e.score, e.short_name, nodeNum, dummy);
         if (rank >= 0) {
-            saveHighScores();
-            requestRedraw();
-            LOG_INFO("Tetris: remote score %lu from 0x%08x placed at rank %d", static_cast<unsigned long>(wire.score), mp.from,
+            changed = true;
+            LOG_INFO("Tetris: remote score %lu from 0x%08x placed at rank %d", static_cast<unsigned long>(e.score), nodeNum,
                      rank + 1);
         }
-        return ProcessMessage::CONTINUE;
     }
-
+    if (changed) {
+        saveHighScores();
+        requestRedraw();
+    }
     return ProcessMessage::CONTINUE;
-#endif // TETRIS_ANNOUNCE_HIGH_SCORE
+#endif
 }
 
 #if TETRIS_ANNOUNCE_HIGH_SCORE
@@ -708,34 +656,37 @@ int32_t TetrisModule::nextBroadcastIntervalMs() const
 void TetrisModule::broadcastAllScores()
 {
 #if GAME_DEMO_MODE
-    return; // Demo mode: individual scores are broadcast as text; no binary table.
+    return;
 #endif
     if (!service)
         return;
-    TetrisTableWire tbl;
-    memset(&tbl, 0, sizeof(tbl));
-    tbl.game_id = TETRIS_WIRE_GAME_ID;
-    tbl.version = TETRIS_WIRE_VERSION;
-    tbl.count = 0;
+    meshtastic_GameLeaderboard lb = meshtastic_GameLeaderboard_init_default;
+    lb.game = meshtastic_GameType_GAME_TETRIS;
+    lb.entries_count = 0;
     for (uint8_t i = 0; i < HS_COUNT; i++) {
         if (highScores[i].score == 0)
             break;
-        tbl.entries[tbl.count].nodeNum = highScores[i].nodeNum;
-        strncpy(tbl.entries[tbl.count].shortName, highScores[i].shortName, sizeof(tbl.entries[0].shortName) - 1);
-        tbl.entries[tbl.count].shortName[sizeof(tbl.entries[0].shortName) - 1] = '\0';
-        tbl.entries[tbl.count].score = highScores[i].score;
-        tbl.count++;
+        auto &e = lb.entries[lb.entries_count];
+        e.node_num = highScores[i].nodeNum;
+        strncpy(e.short_name, highScores[i].shortName, sizeof(e.short_name) - 1);
+        e.short_name[sizeof(e.short_name) - 1] = '\0';
+        e.score = highScores[i].score;
+        lb.entries_count++;
     }
-    if (tbl.count == 0)
+    if (lb.entries_count == 0)
         return;
-    static_assert(sizeof(tbl) <= sizeof(meshtastic_MeshPacket().decoded.payload.bytes), "TetrisTableWire too large");
     meshtastic_MeshPacket *p = allocDataPacket();
     p->to = NODENUM_BROADCAST;
     p->channel = 0;
-    memcpy(p->decoded.payload.bytes, &tbl, sizeof(tbl));
-    p->decoded.payload.size = sizeof(tbl);
-    service->sendToMesh(p);
-    LOG_INFO("Tetris: broadcast table (%u entries)", tbl.count);
+    pb_ostream_t stream = pb_ostream_from_buffer(p->decoded.payload.bytes, sizeof(p->decoded.payload.bytes));
+    if (pb_encode(&stream, meshtastic_GameLeaderboard_fields, &lb)) {
+        p->decoded.payload.size = static_cast<pb_size_t>(stream.bytes_written);
+        service->sendToMesh(p);
+        LOG_INFO("Tetris: broadcast table (%u entries)", lb.entries_count);
+    } else {
+        LOG_WARN("Tetris: pb_encode table failed");
+        packetPool.release(p);
+    }
 }
 
 void TetrisModule::announceHighScore(uint32_t score, const char *name)
@@ -758,21 +709,26 @@ void TetrisModule::announceHighScore(uint32_t score, const char *name)
     service->sendToMesh(p);
     LOG_INFO("Tetris Demo: broadcast text '%s'", msg);
 #else
-    TetrisScoreWire wire;
-    wire.game_id = TETRIS_WIRE_GAME_ID;
-    wire.version = TETRIS_WIRE_VERSION;
+    meshtastic_GameLeaderboard lb = meshtastic_GameLeaderboard_init_default;
+    lb.game = meshtastic_GameType_GAME_TETRIS;
+    lb.entries_count = 1;
     const char *n = (name && name[0]) ? name : owner.short_name;
-    strncpy(wire.shortName, n, sizeof(wire.shortName) - 1);
-    wire.shortName[sizeof(wire.shortName) - 1] = '\0';
-    wire.score = score;
-    static_assert(sizeof(wire) <= sizeof(meshtastic_MeshPacket().decoded.payload.bytes), "TetrisScoreWire too large");
+    lb.entries[0].node_num = nodeDB ? nodeDB->getNodeNum() : 0;
+    strncpy(lb.entries[0].short_name, n, sizeof(lb.entries[0].short_name) - 1);
+    lb.entries[0].short_name[sizeof(lb.entries[0].short_name) - 1] = '\0';
+    lb.entries[0].score = score;
     meshtastic_MeshPacket *p = allocDataPacket();
     p->to = NODENUM_BROADCAST;
     p->channel = 0;
-    memcpy(p->decoded.payload.bytes, &wire, sizeof(wire));
-    p->decoded.payload.size = sizeof(wire);
-    service->sendToMesh(p);
-    LOG_INFO("Tetris: broadcast score %lu", static_cast<unsigned long>(score));
+    pb_ostream_t stream = pb_ostream_from_buffer(p->decoded.payload.bytes, sizeof(p->decoded.payload.bytes));
+    if (pb_encode(&stream, meshtastic_GameLeaderboard_fields, &lb)) {
+        p->decoded.payload.size = static_cast<pb_size_t>(stream.bytes_written);
+        service->sendToMesh(p);
+        LOG_INFO("Tetris: broadcast score %lu", static_cast<unsigned long>(score));
+    } else {
+        LOG_WARN("Tetris: pb_encode score failed");
+        packetPool.release(p);
+    }
 #endif
 }
 #endif // TETRIS_ANNOUNCE_HIGH_SCORE

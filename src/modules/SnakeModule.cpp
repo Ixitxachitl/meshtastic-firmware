@@ -15,8 +15,11 @@
 #include "graphics/ScreenFonts.h"
 #include "graphics/images.h"
 #include "main.h"
+#include "mesh/generated/meshtastic/game.pb.h"
 #include <ErriezCRC32.h>
 #include <cstddef>
+#include <pb_decode.h>
+#include <pb_encode.h>
 
 SnakeModule *snakeModule;
 
@@ -29,30 +32,12 @@ static constexpr int16_t SCORE_H = 16;
 
 static constexpr const char *SNAKE_HS_FILE = "/prefs/snake.dat";
 
-static constexpr uint8_t SNAKE_WIRE_VERSION = 1;
 #if SNAKE_ANNOUNCE_HIGH_SCORE
-static constexpr uint32_t BROADCAST_INITIAL_MS = 60000UL;                // 1 min after boot
-static constexpr uint32_t BROADCAST_INTERVAL_MS = 12UL * 60 * 60 * 1000; // 12 h
+static constexpr uint32_t BROADCAST_INITIAL_MS = 60000UL;
+static constexpr uint32_t BROADCAST_INTERVAL_MS = 12UL * 60 * 60 * 1000;
 #endif
-struct SnakeScoreWire {
-    uint8_t version;
-    char shortName[5];
-    uint32_t score;
-} __attribute__((packed)); // 10 bytes - single-score announcement
 
-struct SnakeTableEntry {
-    uint32_t nodeNum;
-    char shortName[5];
-    uint32_t score;
-} __attribute__((packed)); // 13 bytes per entry
-
-struct SnakeTableWire {
-    uint8_t version;
-    uint8_t count;
-    SnakeTableEntry entries[5]; // HS_COUNT, always sent at full size
-} __attribute__((packed));      // 67 bytes - full table broadcast
-
-SnakeModule::SnakeModule() : SinglePortModule("snake", meshtastic_PortNum_PRIVATE_APP), concurrency::OSThread("Snake")
+SnakeModule::SnakeModule() : SinglePortModule("snake", meshtastic_PortNum_GAME_APP), concurrency::OSThread("Snake")
 {
     loadHighScores();
     inputObserver.observe(inputBroker);
@@ -488,33 +473,37 @@ int32_t SnakeModule::nextBroadcastIntervalMs() const
 void SnakeModule::broadcastAllScores()
 {
 #if GAME_DEMO_MODE
-    return; // Demo mode: individual scores are broadcast as text; no binary table.
+    return;
 #endif
     if (!service)
         return;
-    SnakeTableWire tbl;
-    memset(&tbl, 0, sizeof(tbl));
-    tbl.version = SNAKE_WIRE_VERSION;
-    tbl.count = 0;
+    meshtastic_GameLeaderboard lb = meshtastic_GameLeaderboard_init_default;
+    lb.game = meshtastic_GameType_GAME_SNAKE;
+    lb.entries_count = 0;
     for (uint8_t i = 0; i < HS_COUNT; i++) {
         if (highScores[i].score == 0)
             break;
-        tbl.entries[tbl.count].nodeNum = highScores[i].nodeNum;
-        strncpy(tbl.entries[tbl.count].shortName, highScores[i].shortName, sizeof(tbl.entries[0].shortName) - 1);
-        tbl.entries[tbl.count].shortName[sizeof(tbl.entries[0].shortName) - 1] = '\0';
-        tbl.entries[tbl.count].score = highScores[i].score;
-        tbl.count++;
+        auto &e = lb.entries[lb.entries_count];
+        e.node_num = highScores[i].nodeNum;
+        strncpy(e.short_name, highScores[i].shortName, sizeof(e.short_name) - 1);
+        e.short_name[sizeof(e.short_name) - 1] = '\0';
+        e.score = highScores[i].score;
+        lb.entries_count++;
     }
-    if (tbl.count == 0)
+    if (lb.entries_count == 0)
         return;
-    static_assert(sizeof(tbl) <= sizeof(meshtastic_MeshPacket().decoded.payload.bytes), "SnakeTableWire too large");
     meshtastic_MeshPacket *p = allocDataPacket();
     p->to = NODENUM_BROADCAST;
     p->channel = 0;
-    memcpy(p->decoded.payload.bytes, &tbl, sizeof(tbl));
-    p->decoded.payload.size = sizeof(tbl);
-    service->sendToMesh(p);
-    LOG_INFO("Snake: broadcast table (%u entries)", tbl.count);
+    pb_ostream_t stream = pb_ostream_from_buffer(p->decoded.payload.bytes, sizeof(p->decoded.payload.bytes));
+    if (pb_encode(&stream, meshtastic_GameLeaderboard_fields, &lb)) {
+        p->decoded.payload.size = static_cast<pb_size_t>(stream.bytes_written);
+        service->sendToMesh(p);
+        LOG_INFO("Snake: broadcast table (%u entries)", lb.entries_count);
+    } else {
+        LOG_WARN("Snake: pb_encode table failed");
+        packetPool.release(p);
+    }
 }
 
 void SnakeModule::announceHighScore(uint32_t score, const char *name)
@@ -523,7 +512,6 @@ void SnakeModule::announceHighScore(uint32_t score, const char *name)
         return;
 
 #if GAME_DEMO_MODE
-    // Demo mode: plain text to the primary channel instead of a PRIVATE_APP wire packet.
     char msg[64];
     const char *n = (name && name[0]) ? name : owner.short_name;
     snprintf(msg, sizeof(msg), "%s set a new Snake high score: %lu", n, static_cast<unsigned long>(score));
@@ -538,21 +526,26 @@ void SnakeModule::announceHighScore(uint32_t score, const char *name)
     service->sendToMesh(p);
     LOG_INFO("Snake Demo: broadcast text '%s'", msg);
 #else
-    SnakeScoreWire wire;
-    wire.version = SNAKE_WIRE_VERSION;
+    meshtastic_GameLeaderboard lb = meshtastic_GameLeaderboard_init_default;
+    lb.game = meshtastic_GameType_GAME_SNAKE;
+    lb.entries_count = 1;
     const char *n = (name && name[0]) ? name : owner.short_name;
-    strncpy(wire.shortName, n, sizeof(wire.shortName) - 1);
-    wire.shortName[sizeof(wire.shortName) - 1] = '\0';
-    wire.score = score;
-
-    meshtastic_MeshPacket *p = allocDataPacket(); // portnum = PRIVATE_APP
+    lb.entries[0].node_num = nodeDB ? nodeDB->getNodeNum() : 0;
+    strncpy(lb.entries[0].short_name, n, sizeof(lb.entries[0].short_name) - 1);
+    lb.entries[0].short_name[sizeof(lb.entries[0].short_name) - 1] = '\0';
+    lb.entries[0].score = score;
+    meshtastic_MeshPacket *p = allocDataPacket();
     p->to = NODENUM_BROADCAST;
     p->channel = 0;
-    static_assert(sizeof(wire) <= sizeof(p->decoded.payload.bytes), "SnakeScoreWire too large");
-    memcpy(p->decoded.payload.bytes, &wire, sizeof(wire));
-    p->decoded.payload.size = sizeof(wire);
-    service->sendToMesh(p);
-    LOG_INFO("Snake: broadcast score %lu", static_cast<unsigned long>(score));
+    pb_ostream_t stream = pb_ostream_from_buffer(p->decoded.payload.bytes, sizeof(p->decoded.payload.bytes));
+    if (pb_encode(&stream, meshtastic_GameLeaderboard_fields, &lb)) {
+        p->decoded.payload.size = static_cast<pb_size_t>(stream.bytes_written);
+        service->sendToMesh(p);
+        LOG_INFO("Snake: broadcast score %lu", static_cast<unsigned long>(score));
+    } else {
+        LOG_WARN("Snake: pb_encode score failed");
+        packetPool.release(p);
+    }
 #endif
 }
 #endif
@@ -562,67 +555,43 @@ ProcessMessage SnakeModule::handleReceived(const meshtastic_MeshPacket &mp)
 #if !SNAKE_ANNOUNCE_HIGH_SCORE
     return ProcessMessage::CONTINUE;
 #else
-    // Helper: returns true if a nodeNum is in our DB and marked ignored.
     auto isIgnored = [](NodeNum num) -> bool {
         if (!nodeDB || num == 0)
             return false;
         const meshtastic_NodeInfoLite *n = nodeDB->getMeshNode(num);
         return n && nodeInfoLiteIsIgnored(n);
     };
-
-    // Drop everything from an ignored sender.
     if (isIgnored(mp.from))
         return ProcessMessage::CONTINUE;
 
-    const size_t sz = mp.decoded.payload.size;
-
-    if (sz == sizeof(SnakeTableWire)) {
-        // Full table broadcast - merge each entry using the embedded nodeNum.
-        SnakeTableWire tbl;
-        memcpy(&tbl, mp.decoded.payload.bytes, sizeof(tbl));
-        if (tbl.version != SNAKE_WIRE_VERSION)
-            return ProcessMessage::CONTINUE;
-        const uint8_t count = tbl.count < HS_COUNT ? tbl.count : HS_COUNT;
-        bool changed = false;
-        for (uint8_t i = 0; i < count; i++) {
-            if (tbl.entries[i].score == 0)
-                continue;
-            tbl.entries[i].shortName[sizeof(tbl.entries[0].shortName) - 1] = '\0';
-            bool dummy = false;
-            const int rank = insertHighScore(tbl.entries[i].score, tbl.entries[i].shortName, tbl.entries[i].nodeNum, dummy);
-            if (rank >= 0) {
-                changed = true;
-                LOG_INFO("Snake: table entry %s %lu placed at rank %d", tbl.entries[i].shortName,
-                         static_cast<unsigned long>(tbl.entries[i].score), rank + 1);
-            }
-        }
-        if (changed) {
-            saveHighScores();
-            requestRedraw(UIFrameEvent::Action::REDRAW_ONLY);
-        }
+    meshtastic_GameLeaderboard lb = meshtastic_GameLeaderboard_init_default;
+    pb_istream_t stream = pb_istream_from_buffer(mp.decoded.payload.bytes, mp.decoded.payload.size);
+    if (!pb_decode(&stream, meshtastic_GameLeaderboard_fields, &lb))
         return ProcessMessage::CONTINUE;
-    }
+    if (lb.game != meshtastic_GameType_GAME_SNAKE || lb.entries_count == 0)
+        return ProcessMessage::CONTINUE;
 
-    if (sz == sizeof(SnakeScoreWire)) {
-        // Single-score announcement - nodeNum comes from the packet header.
-        SnakeScoreWire wire;
-        memcpy(&wire, mp.decoded.payload.bytes, sizeof(wire));
-        if (wire.version != SNAKE_WIRE_VERSION || wire.score == 0)
-            return ProcessMessage::CONTINUE;
-        wire.shortName[sizeof(wire.shortName) - 1] = '\0';
+    bool changed = false;
+    for (pb_size_t i = 0; i < lb.entries_count; i++) {
+        auto &e = lb.entries[i];
+        if (e.score == 0)
+            continue;
+        e.short_name[sizeof(e.short_name) - 1] = '\0';
+        const NodeNum nodeNum = (e.node_num != 0) ? e.node_num : mp.from;
         bool dummy = false;
-        const int rank = insertHighScore(wire.score, wire.shortName, mp.from, dummy);
+        const int rank = insertHighScore(e.score, e.short_name, nodeNum, dummy);
         if (rank >= 0) {
-            saveHighScores();
-            requestRedraw(UIFrameEvent::Action::REDRAW_ONLY);
-            LOG_INFO("Snake: remote score %lu from 0x%08x placed at rank %d", static_cast<unsigned long>(wire.score), mp.from,
+            changed = true;
+            LOG_INFO("Snake: remote score %lu from 0x%08x placed at rank %d", static_cast<unsigned long>(e.score), nodeNum,
                      rank + 1);
         }
-        return ProcessMessage::CONTINUE;
     }
-
+    if (changed) {
+        saveHighScores();
+        requestRedraw(UIFrameEvent::Action::REDRAW_ONLY);
+    }
     return ProcessMessage::CONTINUE;
-#endif // SNAKE_ANNOUNCE_HIGH_SCORE
+#endif
 }
 
 // ---------------------------------------------------------------------------
