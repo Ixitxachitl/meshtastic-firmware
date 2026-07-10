@@ -227,8 +227,9 @@ int SnakeModule::handleInputEvent(const InputEvent *event)
     const bool isBack = (ev == INPUT_BROKER_CANCEL || ev == INPUT_BROKER_BACK);
 
     if (uiState == SNAKE_IDLE) {
-        // UP or DOWN on the attract screen shows the Tetris title screen.
-        if ((ev == INPUT_BROKER_DOWN || ev == INPUT_BROKER_UP) && tetrisModule && !tetrisModule->isActive()) {
+        // UP or DOWN on the attract screen shows the Tetris title screen (only when games frame is visible).
+        if ((ev == INPUT_BROKER_DOWN || ev == INPUT_BROKER_UP) && tetrisModule && !tetrisModule->isActive() && screen &&
+            screen->isOnGamesFrame()) {
             tetrisModule->showTitle();
             return 1;
         }
