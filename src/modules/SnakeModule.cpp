@@ -622,58 +622,58 @@ ProcessMessage SnakeModule::handleReceived(const meshtastic_MeshPacket &mp)
     }
 
     return ProcessMessage::CONTINUE;
-}
 #endif // SNAKE_ANNOUNCE_HIGH_SCORE
+}
 
-    // ---------------------------------------------------------------------------
-    // Persistence (SafeFile, atomic; CRC + magic + version guarded)
-    // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Persistence (SafeFile, atomic; CRC + magic + version guarded)
+// ---------------------------------------------------------------------------
 
-    void SnakeModule::loadHighScores()
-    {
-        highScoresLoaded = true;
-        memset(highScores, 0, sizeof(highScores));
+void SnakeModule::loadHighScores()
+{
+    highScoresLoaded = true;
+    memset(highScores, 0, sizeof(highScores));
 #ifdef FSCom
+    concurrency::LockGuard g(spiLock);
+    auto f = FSCom.open(SNAKE_HS_FILE, FILE_O_READ);
+    if (!f)
+        return;
+    HighScoreFile file;
+    const bool readOk = (f.read(reinterpret_cast<uint8_t *>(&file), sizeof(file)) == sizeof(file));
+    f.close();
+    if (!readOk || file.magic != HS_MAGIC || file.version != HS_VERSION) {
+        LOG_DEBUG("Snake: no valid high-score file, starting fresh");
+        return;
+    }
+    if (crc32Buffer(&file, offsetof(HighScoreFile, crc)) != file.crc) {
+        LOG_WARN("Snake: high-score CRC mismatch, resetting table");
+        return;
+    }
+    memcpy(highScores, file.entries, sizeof(highScores));
+    LOG_INFO("Snake: loaded high scores (top=%lu)", static_cast<unsigned long>(highScores[0].score));
+#endif
+}
+
+void SnakeModule::saveHighScores()
+{
+#ifdef FSCom
+    {
         concurrency::LockGuard g(spiLock);
-        auto f = FSCom.open(SNAKE_HS_FILE, FILE_O_READ);
-        if (!f)
-            return;
-        HighScoreFile file;
-        const bool readOk = (f.read(reinterpret_cast<uint8_t *>(&file), sizeof(file)) == sizeof(file));
-        f.close();
-        if (!readOk || file.magic != HS_MAGIC || file.version != HS_VERSION) {
-            LOG_DEBUG("Snake: no valid high-score file, starting fresh");
-            return;
-        }
-        if (crc32Buffer(&file, offsetof(HighScoreFile, crc)) != file.crc) {
-            LOG_WARN("Snake: high-score CRC mismatch, resetting table");
-            return;
-        }
-        memcpy(highScores, file.entries, sizeof(highScores));
-        LOG_INFO("Snake: loaded high scores (top=%lu)", static_cast<unsigned long>(highScores[0].score));
-#endif
+        FSCom.mkdir("/prefs");
     }
+    HighScoreFile file;
+    memset(&file, 0, sizeof(file));
+    file.magic = HS_MAGIC;
+    file.version = HS_VERSION;
+    file.settings = 0; // reserved
+    memcpy(file.entries, highScores, sizeof(highScores));
+    file.crc = crc32Buffer(&file, offsetof(HighScoreFile, crc));
 
-    void SnakeModule::saveHighScores()
-    {
-#ifdef FSCom
-        {
-            concurrency::LockGuard g(spiLock);
-            FSCom.mkdir("/prefs");
-        }
-        HighScoreFile file;
-        memset(&file, 0, sizeof(file));
-        file.magic = HS_MAGIC;
-        file.version = HS_VERSION;
-        file.settings = 0; // reserved
-        memcpy(file.entries, highScores, sizeof(highScores));
-        file.crc = crc32Buffer(&file, offsetof(HighScoreFile, crc));
-
-        auto sf = SafeFile(SNAKE_HS_FILE, true);
-        const size_t written = sf.write(reinterpret_cast<uint8_t *>(&file), sizeof(file));
-        if (!sf.close() || written != sizeof(file))
-            LOG_WARN("Snake: failed to save high scores");
+    auto sf = SafeFile(SNAKE_HS_FILE, true);
+    const size_t written = sf.write(reinterpret_cast<uint8_t *>(&file), sizeof(file));
+    if (!sf.close() || written != sizeof(file))
+        LOG_WARN("Snake: failed to save high scores");
 #endif
-    }
+}
 
 #endif // HAS_SCREEN && BASEUI_HAS_GAMES
