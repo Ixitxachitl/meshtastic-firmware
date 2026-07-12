@@ -10,10 +10,7 @@
 #include "modules/StatusMessageModule.h"
 #endif
 #if BASEUI_HAS_GAMES
-#include "modules/SnakeModule.h"
-#if BASEUI_HAS_GAMES
-#include "modules/TetrisModule.h"
-#endif
+#include "modules/games/GamesModule.h"
 #endif
 #include "UIRenderer.h"
 #include "airtime.h"
@@ -1824,9 +1821,7 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
 {
 #if BASEUI_HAS_GAMES
     // Hide the navigation bar while a game owns the screen.
-    if (snakeModule && snakeModule->interceptingKeyboardInput())
-        return;
-    if (tetrisModule && tetrisModule->interceptingKeyboardInput() && !tetrisModule->isTitleScreen())
+    if (gamesModule && gamesModule->interceptingKeyboardInput())
         return;
 #endif
 

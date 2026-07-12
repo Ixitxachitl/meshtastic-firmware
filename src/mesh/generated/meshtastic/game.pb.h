@@ -15,7 +15,11 @@ typedef enum _meshtastic_GameType {
     /* Snake */
     meshtastic_GameType_GAME_SNAKE = 0,
     /* Tetris */
-    meshtastic_GameType_GAME_TETRIS = 1
+    meshtastic_GameType_GAME_TETRIS = 1,
+    /* Breakout */
+    meshtastic_GameType_GAME_BREAKOUT = 2,
+    /* Chirpy Runner */
+    meshtastic_GameType_GAME_CHIRPY_RUNNER = 3
 } meshtastic_GameType;
 
 /* Struct definitions */
@@ -53,8 +57,8 @@ extern "C" {
 
 /* Helper constants for enums */
 #define _meshtastic_GameType_MIN meshtastic_GameType_GAME_SNAKE
-#define _meshtastic_GameType_MAX meshtastic_GameType_GAME_TETRIS
-#define _meshtastic_GameType_ARRAYSIZE ((meshtastic_GameType)(meshtastic_GameType_GAME_TETRIS+1))
+#define _meshtastic_GameType_MAX meshtastic_GameType_GAME_CHIRPY_RUNNER
+#define _meshtastic_GameType_ARRAYSIZE ((meshtastic_GameType)(meshtastic_GameType_GAME_CHIRPY_RUNNER+1))
 
 
 #define meshtastic_GameLeaderboard_game_ENUMTYPE meshtastic_GameType

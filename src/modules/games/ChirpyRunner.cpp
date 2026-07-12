@@ -1,0 +1,464 @@
+#include "ChirpyRunner.h"
+
+// ===========================================================================
+// Pure ChirpyRunnerGame logic (no display/FS dependencies; always compiled)
+// ===========================================================================
+
+uint32_t ChirpyRunnerGame::nextRandom()
+{
+    uint32_t x = rng;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    rng = x;
+    return x;
+}
+
+int16_t ChirpyRunnerGame::pickGapSteps()
+{
+    return static_cast<int16_t>(GAP_STEPS_MIN + static_cast<int16_t>(nextRandom() % (GAP_STEPS_MAX - GAP_STEPS_MIN + 1)));
+}
+
+void ChirpyRunnerGame::resetClouds()
+{
+    // Spread the clouds across the sky at staggered x, at varied heights near the top.
+    for (uint8_t i = 0; i < CLOUD_COUNT; i++) {
+        cloud[i].xSub = static_cast<int32_t>(i * (BOARD_W / CLOUD_COUNT) + 6) * SUBPX;
+        cloud[i].y = static_cast<int16_t>(10 + nextRandom() % 10u); // 10..19 (below the score row)
+    }
+}
+
+void ChirpyRunnerGame::scrollClouds()
+{
+    // Slow parallax drift; wrap back to the right (at a fresh height) once off the left edge.
+    for (uint8_t i = 0; i < CLOUD_COUNT; i++) {
+        cloud[i].xSub -= CLOUD_SPEED_SUB;
+        if (cloud[i].xSub / SUBPX + CLOUD_W < 0) {
+            cloud[i].xSub = static_cast<int32_t>(BOARD_W + nextRandom() % 24u) * SUBPX;
+            cloud[i].y = static_cast<int16_t>(10 + nextRandom() % 10u);
+        }
+    }
+}
+
+void ChirpyRunnerGame::spawnObstacle()
+{
+    for (uint8_t i = 0; i < MAX_OBSTACLES; i++) {
+        if (obst[i].active)
+            continue;
+        obst[i].active = true;
+        obst[i].scored = false;
+        obst[i].xSub = static_cast<int32_t>(BOARD_W) * SUBPX;
+        obst[i].w = OBST_W;
+        // Three height tiers so timing varies (kept clearable with margin for a forgiving jump).
+        const uint32_t tier = nextRandom() % 3u;
+        obst[i].h = tier == 0 ? 8 : (tier == 1 ? 11 : 15);
+        obst[i].colorIdx = static_cast<uint8_t>((spawnCount / 10u) % OBST_COLOR_COUNT);
+        spawnCount++;
+        return;
+    }
+}
+
+void ChirpyRunnerGame::reset(uint32_t seed)
+{
+    rng = seed ? seed : 0xA5A5A5A5u; // xorshift32 must never be seeded with 0
+    points = 0;
+    alive = true;
+    chirpyTop = groundedTopSub();
+    vy = 0;
+    grounded = true;
+    for (uint8_t i = 0; i < MAX_OBSTACLES; i++)
+        obst[i] = {};
+    speedSub = SPEED_BASE;
+    spawnTimer = 0; // first obstacle spawns on the first step
+    spawnCount = 0;
+    resetClouds();
+}
+
+void ChirpyRunnerGame::jump()
+{
+    if (!alive || !grounded)
+        return;
+    vy = -JUMP_V;
+    grounded = false;
+}
+
+bool ChirpyRunnerGame::step()
+{
+    if (!alive)
+        return false;
+
+    scrollClouds(); // decorative background parallax
+
+    // --- Chirpy vertical motion ---
+    vy += GRAVITY;
+    chirpyTop += vy;
+    const int32_t gt = groundedTopSub();
+    if (chirpyTop >= gt) {
+        chirpyTop = gt;
+        vy = 0;
+        grounded = true;
+    } else {
+        grounded = false;
+    }
+
+    // --- Scroll obstacles, score, retire off-screen ones ---
+    for (uint8_t i = 0; i < MAX_OBSTACLES; i++) {
+        if (!obst[i].active)
+            continue;
+        obst[i].xSub -= speedSub;
+        const int16_t ox = obstacleX(i);
+        if (!obst[i].scored && ox + obst[i].w < CHIRPY_X) {
+            obst[i].scored = true;
+            points++;
+        }
+        if (ox + obst[i].w < 0)
+            obst[i].active = false;
+    }
+
+    // --- Spawn on a tick timer (time-based spacing that scales with speed) ---
+    if (spawnTimer > 0)
+        spawnTimer--;
+    if (spawnTimer <= 0) {
+        spawnObstacle();
+        spawnTimer = pickGapSteps();
+    }
+
+    // --- Difficulty ramp (scroll speed grows with score, then caps) ---
+    const uint32_t capped = points < SPEED_CAP_PTS ? points : SPEED_CAP_PTS;
+    speedSub = SPEED_BASE + static_cast<int32_t>(capped) * SPEED_INC;
+
+    // --- Collision (forgiving hitbox: skip the antenna, inset the sides) ---
+    const int16_t hx = CHIRPY_X + 2;
+    const int16_t hxr = hx + (CHIRPY_W - 4);
+    const int16_t hBottom = chirpyY() + CHIRPY_H;
+    const int16_t hTop = chirpyY() + 4;
+    for (uint8_t i = 0; i < MAX_OBSTACLES; i++) {
+        if (!obst[i].active)
+            continue;
+        const int16_t ox = obstacleX(i);
+        const int16_t oxr = ox + obst[i].w;
+        const int16_t oTop = GROUND_Y - obst[i].h;
+        if (hx < oxr && hxr > ox && hTop < GROUND_Y && hBottom > oTop) {
+            alive = false;
+            return false;
+        }
+    }
+
+    return alive;
+}
+
+// ===========================================================================
+// ChirpyRunner adapter (display + persistence; BaseUI games build only)
+// ===========================================================================
+
+#if HAS_SCREEN && BASEUI_HAS_GAMES
+
+#include "MeshService.h"
+#include "NodeDB.h"
+#include "graphics/Screen.h"
+#include "graphics/ScreenFonts.h"
+#include "graphics/TFTColorRegions.h"
+#include "graphics/TFTPalette.h"
+#include "graphics/images.h"
+#include "main.h"
+#include "mesh/generated/meshtastic/game.pb.h"
+#include <pb_decode.h>
+#include <pb_encode.h>
+
+ChirpyRunner::ChirpyRunner()
+{
+    scores_.load();
+}
+
+void ChirpyRunner::handleInput(input_broker_event ev)
+{
+    // SELECT is the jump (as requested); UP is accepted as a convenient alternate.
+    if (ev == INPUT_BROKER_SELECT || ev == INPUT_BROKER_SELECT_LONG || ev == INPUT_BROKER_UP)
+        game.jump();
+}
+
+void ChirpyRunner::drawAttract(OLEDDisplay *display, int16_t x, int16_t y)
+{
+    display->setColor(WHITE);
+    const int16_t w = display->getWidth();
+    const int16_t cx = x + w / 2;
+    display->setFont(FONT_SMALL);
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    display->drawString(cx, y, "CHIRPY RUNNER");
+    const int16_t logoX = x + (w - chirpy_run_width) / 2;
+    const int16_t logoY = y + 15;
+    display->drawXbm(logoX, logoY, chirpy_run_width, chirpy_run_height, chirpy_run);
+#if GRAPHICS_TFT_COLORING_ENABLED
+    // Chirpy is green, with white eyes. The eyes are the lit pixels at rows 5-7, cols 4-7 of the
+    // glyph; a white region registered after the green one wins there.
+    graphics::registerTFTColorRegionDirect(logoX, logoY, chirpy_run_width, chirpy_run_height,
+                                           graphics::TFTPalette::MeshtasticGreen, graphics::getThemeBodyBg());
+    graphics::registerTFTColorRegionDirect(logoX + 4, logoY + 5, 4, 3, graphics::TFTPalette::White, graphics::getThemeBodyBg());
+#endif
+    char hi[32];
+    if (scores_.scoreAt(0) > 0 && scores_.nameAt(0)[0] != '\0')
+        snprintf(hi, sizeof(hi), "High: %s %lu", scores_.nameAt(0), static_cast<unsigned long>(scores_.scoreAt(0)));
+    else
+        snprintf(hi, sizeof(hi), "High: %lu", static_cast<unsigned long>(scores_.scoreAt(0)));
+    display->drawString(cx, y + 34, hi);
+    display->drawString(cx, y + 48, "SEL=Play  Hold=Scores");
+}
+
+#if GRAPHICS_TFT_COLORING_ENABLED
+// Obstacle colour palette; the game logic advances the index every 10 spawns.
+static uint16_t obstacleColor(uint8_t idx)
+{
+    using namespace graphics;
+    switch (idx) {
+    case 0:
+        return TFTPalette::Red;
+    case 1:
+        return TFTPalette::Orange;
+    case 2:
+        return TFTPalette::Yellow;
+    case 3:
+        return TFTPalette::Magenta;
+    case 4:
+        return TFTPalette::Cyan;
+    default:
+        return TFTPalette::Blue;
+    }
+}
+#endif
+
+void ChirpyRunner::drawPlaying(OLEDDisplay *display, int16_t x, int16_t y)
+{
+    display->setColor(WHITE);
+    display->setFont(FONT_SMALL);
+
+    // Clouds drifting in the background (drawn first so everything else sits in front).
+    for (uint8_t i = 0; i < ChirpyRunnerGame::cloudSlots(); i++) {
+        const int16_t cxp = x + game.cloudX(i);
+        const int16_t cyp = y + game.cloudY(i);
+        display->fillRect(cxp + 2, cyp, 4, 1);
+        display->fillRect(cxp + 1, cyp + 1, 6, 1);
+        display->fillRect(cxp, cyp + 2, 8, 1);
+#if GRAPHICS_TFT_COLORING_ENABLED
+        graphics::registerTFTColorRegionDirect(cxp, cyp, 8, 3, graphics::TFTPalette::LightGray, graphics::getThemeBodyBg());
+#endif
+    }
+
+    // Score (top-left).
+    char buf[16];
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    snprintf(buf, sizeof(buf), "Sc %lu", static_cast<unsigned long>(game.score()));
+    display->drawString(x + 2, y, buf);
+
+    // Ground line.
+    display->drawLine(x, y + ChirpyRunnerGame::GROUND_Y, x + display->getWidth() - 1, y + ChirpyRunnerGame::GROUND_Y);
+
+    // Obstacles drawn as little buildings: a solid tower with two columns of punched-out windows
+    // (dark holes). On colour displays the walls cycle colour every 10 spawns and the windows glow
+    // (they are the region's off-pixels, so they take the off-colour).
+    for (uint8_t i = 0; i < ChirpyRunnerGame::obstacleSlots(); i++) {
+        if (!game.obstacleActive(i))
+            continue;
+        const int16_t oh = game.obstacleH(i);
+        const int16_t ow = game.obstacleW(i);
+        const int16_t oxp = x + game.obstacleX(i);
+        const int16_t oyp = y + ChirpyRunnerGame::GROUND_Y - oh;
+
+        display->setColor(WHITE);
+        display->fillRect(oxp, oyp, ow, oh);
+        // Windows: 1px holes in the left and right columns, every other row, skipping the roof row
+        // and the ground-floor rows so the tower reads as a building.
+        display->setColor(BLACK);
+        for (int16_t wy = oyp + 2; wy <= oyp + oh - 3; wy += 2) {
+            display->fillRect(oxp + 1, wy, 1, 1);
+            display->fillRect(oxp + ow - 2, wy, 1, 1);
+        }
+        display->setColor(WHITE);
+#if GRAPHICS_TFT_COLORING_ENABLED
+        graphics::registerTFTColorRegionDirect(oxp, oyp, ow, oh, obstacleColor(game.obstacleColorIndex(i)),
+                                               graphics::TFTPalette::White); // lit windows
+#endif
+    }
+
+    // Chirpy.
+    const int16_t cxp = x + ChirpyRunnerGame::CHIRPY_X;
+    const int16_t cyp = y + game.chirpyY();
+    display->drawXbm(cxp, cyp, chirpy_run_width, chirpy_run_height, chirpy_run);
+#if GRAPHICS_TFT_COLORING_ENABLED
+    graphics::registerTFTColorRegionDirect(cxp, cyp, chirpy_run_width, chirpy_run_height, graphics::TFTPalette::MeshtasticGreen,
+                                           graphics::getThemeBodyBg());
+    graphics::registerTFTColorRegionDirect(cxp + 4, cyp + 5, 4, 3, graphics::TFTPalette::White, graphics::getThemeBodyBg());
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// Mesh receive
+// ---------------------------------------------------------------------------
+
+ProcessMessage ChirpyRunner::handleReceived(const meshtastic_MeshPacket &mp)
+{
+#if !CHIRPY_ANNOUNCE_HIGH_SCORE
+    (void)mp;
+    return ProcessMessage::CONTINUE;
+#else
+    auto isIgnored = [](NodeNum num) -> bool {
+        if (!nodeDB || num == 0)
+            return false;
+        const meshtastic_NodeInfoLite *n = nodeDB->getMeshNode(num);
+        return n && nodeInfoLiteIsIgnored(n);
+    };
+    if (isIgnored(mp.from))
+        return ProcessMessage::CONTINUE;
+
+    meshtastic_GameLeaderboard lb = meshtastic_GameLeaderboard_init_default;
+    pb_istream_t stream = pb_istream_from_buffer(mp.decoded.payload.bytes, mp.decoded.payload.size);
+    if (!pb_decode(&stream, meshtastic_GameLeaderboard_fields, &lb))
+        return ProcessMessage::CONTINUE;
+    if (lb.game != meshtastic_GameType_GAME_CHIRPY_RUNNER || lb.entries_count == 0)
+        return ProcessMessage::CONTINUE;
+
+    bool changed = false;
+    for (pb_size_t i = 0; i < lb.entries_count; i++) {
+        auto &e = lb.entries[i];
+        if (e.score == 0)
+            continue;
+        e.short_name[sizeof(e.short_name) - 1] = '\0';
+        const NodeNum nodeNum = (e.node_num != 0) ? e.node_num : mp.from;
+        bool dummy = false;
+        const int rank = scores_.insert(e.score, e.short_name, nodeNum, dummy, e.score_id);
+        if (rank >= 0) {
+            changed = true;
+            LOG_INFO("Chirpy: remote score %lu from 0x%08x placed at rank %d", static_cast<unsigned long>(e.score), nodeNum,
+                     rank + 1);
+        }
+    }
+    if (changed)
+        scores_.save();
+    return ProcessMessage::CONTINUE;
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// Mesh announce (CHIRPY_ANNOUNCE_HIGH_SCORE only)
+// ---------------------------------------------------------------------------
+
+#if CHIRPY_ANNOUNCE_HIGH_SCORE
+
+int32_t ChirpyRunner::nextBroadcastIntervalMs() const
+{
+    const uint32_t now = millis();
+    if (lastBroadcastMs == 0)
+        return (now >= BROADCAST_INITIAL_MS) ? 0 : static_cast<int32_t>(BROADCAST_INITIAL_MS - now);
+    const uint32_t elapsed = now - lastBroadcastMs;
+    return (elapsed >= BROADCAST_INTERVAL_MS) ? 0 : static_cast<int32_t>(BROADCAST_INTERVAL_MS - elapsed);
+}
+
+int32_t ChirpyRunner::meshTick(GamesModule &host)
+{
+    const int32_t ms = nextBroadcastIntervalMs();
+    if (ms == 0) {
+        broadcastAllScores(host);
+        lastBroadcastMs = millis();
+        return static_cast<int32_t>(BROADCAST_INTERVAL_MS);
+    }
+    return ms;
+}
+
+void ChirpyRunner::broadcastAllScores(GamesModule &host)
+{
+#if GAME_DEMO_MODE
+    return;
+#endif
+    if (!service)
+        return;
+    meshtastic_GameLeaderboard lb = meshtastic_GameLeaderboard_init_default;
+    lb.game = meshtastic_GameType_GAME_CHIRPY_RUNNER;
+    lb.entries_count = 0;
+    for (uint8_t i = 0; i < HighScoreTableBase::HS_COUNT; i++) {
+        if (scores_.scoreAt(i) == 0)
+            break;
+        auto &e = lb.entries[lb.entries_count];
+        e.node_num = scores_.entryAt(i).nodeNum;
+        strncpy(e.short_name, scores_.entryAt(i).shortName, sizeof(e.short_name) - 1);
+        e.short_name[sizeof(e.short_name) - 1] = '\0';
+        e.score = scores_.entryAt(i).score;
+        e.score_id = scores_.entryAt(i).scoreId;
+        lb.entries_count++;
+    }
+    if (lb.entries_count == 0)
+        return;
+    meshtastic_MeshPacket *p = host.gameAllocDataPacket();
+    p->to = NODENUM_BROADCAST;
+    p->channel = 0;
+    pb_ostream_t stream = pb_ostream_from_buffer(p->decoded.payload.bytes, sizeof(p->decoded.payload.bytes));
+    if (pb_encode(&stream, meshtastic_GameLeaderboard_fields, &lb)) {
+        p->decoded.payload.size = static_cast<pb_size_t>(stream.bytes_written);
+        service->sendToMesh(p);
+        LOG_INFO("Chirpy: broadcast table (%u entries)", lb.entries_count);
+    } else {
+        LOG_WARN("Chirpy: pb_encode table failed");
+        packetPool.release(p);
+    }
+}
+
+void ChirpyRunner::onNewHighScore(GamesModule &host, const char *initials, uint32_t score, bool isNewTop)
+{
+    if (score == 0 || !service)
+        return;
+#if GAME_DEMO_MODE
+    if (!isNewTop)
+        return;
+    char msg[64];
+    const char *n = (initials && initials[0]) ? initials : owner.short_name;
+    snprintf(msg, sizeof(msg), "%s set a new Chirpy Runner high score: %lu", n, static_cast<unsigned long>(score));
+    meshtastic_MeshPacket *p = host.gameAllocDataPacket();
+    p->to = NODENUM_BROADCAST;
+    p->channel = channels.getPrimaryIndex();
+    p->decoded.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
+    p->want_ack = false;
+    const pb_size_t msgLen = static_cast<pb_size_t>(strnlen(msg, sizeof(msg) - 1));
+    memcpy(p->decoded.payload.bytes, msg, msgLen);
+    p->decoded.payload.size = msgLen;
+    service->sendToMesh(p);
+    LOG_INFO("Chirpy Demo: broadcast text '%s'", msg);
+#else
+    announceHighScore(host, score, initials);
+#endif
+}
+
+void ChirpyRunner::announceHighScore(GamesModule &host, uint32_t score, const char *name)
+{
+    if (!service)
+        return;
+    meshtastic_GameLeaderboard lb = meshtastic_GameLeaderboard_init_default;
+    lb.game = meshtastic_GameType_GAME_CHIRPY_RUNNER;
+    lb.entries_count = 1;
+    const char *n = (name && name[0]) ? name : owner.short_name;
+    const uint32_t localNum = nodeDB ? nodeDB->getNodeNum() : 0;
+    lb.entries[0].node_num = localNum;
+    strncpy(lb.entries[0].short_name, n, sizeof(lb.entries[0].short_name) - 1);
+    lb.entries[0].short_name[sizeof(lb.entries[0].short_name) - 1] = '\0';
+    lb.entries[0].score = score;
+    lb.entries[0].score_id = 0;
+    for (uint8_t i = 0; i < HighScoreTableBase::HS_COUNT; i++) {
+        if (scores_.entryAt(i).score == score && scores_.entryAt(i).nodeNum == localNum) {
+            lb.entries[0].score_id = scores_.entryAt(i).scoreId;
+            break;
+        }
+    }
+    meshtastic_MeshPacket *p = host.gameAllocDataPacket();
+    p->to = NODENUM_BROADCAST;
+    p->channel = 0;
+    pb_ostream_t stream = pb_ostream_from_buffer(p->decoded.payload.bytes, sizeof(p->decoded.payload.bytes));
+    if (pb_encode(&stream, meshtastic_GameLeaderboard_fields, &lb)) {
+        p->decoded.payload.size = static_cast<pb_size_t>(stream.bytes_written);
+        service->sendToMesh(p);
+        LOG_INFO("Chirpy: broadcast score %lu", static_cast<unsigned long>(score));
+    } else {
+        LOG_WARN("Chirpy: pb_encode score failed");
+        packetPool.release(p);
+    }
+}
+
+#endif // CHIRPY_ANNOUNCE_HIGH_SCORE
+
+#endif // HAS_SCREEN && BASEUI_HAS_GAMES
