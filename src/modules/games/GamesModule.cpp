@@ -69,8 +69,12 @@ void GamesModule::enterGameOver()
 
 void GamesModule::promptForInitials()
 {
+#if GAME_DEMO_MODE
     screen->showAlphanumericPicker("New High Score!\nEnter initials", "AAA", 60000, HighScoreTableBase::INITIALS_LEN,
                                    [this](const std::string &initials) { this->recordHighScore(initials.c_str()); });
+#else
+    recordHighScore(owner.short_name);
+#endif
 }
 
 void GamesModule::recordHighScore(const char *initials)
