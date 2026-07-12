@@ -156,6 +156,13 @@ class Breakout : public Game
     BreakoutGame game;
     HighScoreTable<BreakoutEntry> scores_{"/prefs/breakout.dat", 0x424B5254u, 2, "Breakout"};
 
+    // Paddle acceleration state (non-Portduino path).
+    int16_t paddleVel = 0;                                  // signed pixels/tick applied each tick
+    uint32_t lastDirEventMs = 0;                            // millis() of last LEFT/RIGHT event
+    static constexpr int16_t PADDLE_VEL_STEP = 2;           // pixels added per same-dir event
+    static constexpr int16_t PADDLE_VEL_MAX = 6;            // max |velocity|
+    static constexpr uint32_t PADDLE_ACCEL_WINDOW_MS = 200; // events within this window accelerate
+
 #if BREAKOUT_ANNOUNCE_HIGH_SCORE
     static constexpr uint32_t BROADCAST_INITIAL_MS = 60000UL;
     static constexpr uint32_t BROADCAST_INTERVAL_MS = 12UL * 60 * 60 * 1000;

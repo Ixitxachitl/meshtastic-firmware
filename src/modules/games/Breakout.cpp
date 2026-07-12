@@ -167,6 +167,7 @@ bool BreakoutGame::step()
 #include "graphics/TFTPalette.h"
 #include "graphics/images.h"
 #include "main.h"
+#include "mesh/Throttle.h"
 #include "mesh/generated/meshtastic/game.pb.h"
 #include <pb_decode.h>
 #include <pb_encode.h>
@@ -216,14 +217,36 @@ int32_t Breakout::tickIntervalMs() const
 bool Breakout::tick()
 {
 #if ARCH_PORTDUINO && defined(__linux__)
-    // Poll the joystick's held direction directly so the paddle glides continuously instead of
-    // creeping along at the D-pad's slow auto-repeat rate.
     if (aLinuxJoystick) {
         const int held = aLinuxJoystick->heldXZone();
         if (held < 0)
             game.movePaddle(-PADDLE_POLL_STEP);
         else if (held > 0)
             game.movePaddle(PADDLE_POLL_STEP);
+    }
+#elif TB_LEFT != 255
+    // Device has discrete direction GPIO (INPUT_PULLUP, active-low) - poll pin state each tick
+    // for true held detection and smooth acceleration.
+    const bool heldLeft = !digitalRead(TB_LEFT);
+    const bool heldRight = !digitalRead(TB_RIGHT);
+    if (heldLeft && !heldRight) {
+        if (paddleVel > 0)
+            paddleVel = 0; // instant direction flip
+        paddleVel = (paddleVel - 1 < -PADDLE_VEL_MAX) ? -PADDLE_VEL_MAX : static_cast<int16_t>(paddleVel - 1);
+    } else if (heldRight && !heldLeft) {
+        if (paddleVel < 0)
+            paddleVel = 0;
+        paddleVel = (paddleVel + 1 > PADDLE_VEL_MAX) ? PADDLE_VEL_MAX : static_cast<int16_t>(paddleVel + 1);
+    } else {
+        paddleVel = (paddleVel > 0) ? paddleVel - 1 : (paddleVel < 0) ? paddleVel + 1 : 0;
+    }
+    if (paddleVel != 0)
+        game.movePaddle(paddleVel);
+#else
+    // Fallback: event-driven velocity set by handleInput(), decay each tick.
+    if (paddleVel != 0) {
+        game.movePaddle(paddleVel);
+        paddleVel += (paddleVel > 0) ? -1 : 1;
     }
 #endif
     return game.step();
@@ -232,18 +255,39 @@ bool Breakout::tick()
 void Breakout::handleInput(input_broker_event ev)
 {
 #if ARCH_PORTDUINO && defined(__linux__)
-    // When a joystick is present the paddle is polled continuously in tick(); ignore the discrete
-    // (and slow) repeat events so we don't double-move.
     if (aLinuxJoystick)
         return;
 #endif
+#if TB_LEFT != 255
+    // Paddle is polled every tick() via digitalRead(); ignore LEFT/RIGHT events to avoid
+    // double-moving on the interrupt edge.
+    if (ev == INPUT_BROKER_LEFT || ev == INPUT_BROKER_RIGHT)
+        return;
+#endif
+    const uint32_t now = millis();
     switch (ev) {
-    case INPUT_BROKER_LEFT:
-        game.moveLeft();
+    case INPUT_BROKER_LEFT: {
+        const bool sameDir = (paddleVel < 0);
+        const bool recent = Throttle::isWithinTimespanMs(lastDirEventMs, PADDLE_ACCEL_WINDOW_MS);
+        if (sameDir && recent)
+            paddleVel = (paddleVel - PADDLE_VEL_STEP < -PADDLE_VEL_MAX) ? -PADDLE_VEL_MAX
+                                                                        : static_cast<int16_t>(paddleVel - PADDLE_VEL_STEP);
+        else
+            paddleVel = -PADDLE_VEL_STEP;
+        lastDirEventMs = now;
         break;
-    case INPUT_BROKER_RIGHT:
-        game.moveRight();
+    }
+    case INPUT_BROKER_RIGHT: {
+        const bool sameDir = (paddleVel > 0);
+        const bool recent = Throttle::isWithinTimespanMs(lastDirEventMs, PADDLE_ACCEL_WINDOW_MS);
+        if (sameDir && recent)
+            paddleVel = (paddleVel + PADDLE_VEL_STEP > PADDLE_VEL_MAX) ? PADDLE_VEL_MAX
+                                                                       : static_cast<int16_t>(paddleVel + PADDLE_VEL_STEP);
+        else
+            paddleVel = PADDLE_VEL_STEP;
+        lastDirEventMs = now;
         break;
+    }
     default:
         break;
     }
