@@ -124,19 +124,10 @@ class ChirpyRunnerGame
 #include "GamesModule.h"
 #include "HighScoreTable.h"
 
-// High-score mesh announcement is a COMPILE-TIME option, default OFF.
-#ifndef CHIRPY_ANNOUNCE_HIGH_SCORE
-#define CHIRPY_ANNOUNCE_HIGH_SCORE 0
-#endif
-
-#ifndef GAME_DEMO_MODE
-#define GAME_DEMO_MODE 0
-#endif
-
 /**
  * Chirpy Runner as a hosted Game. Wraps the pure logic above and supplies the attract art, the
  * side-scroller renderer (Chirpy sprite + obstacles + ground), the jump input, and its own
- * high-score table. When CHIRPY_ANNOUNCE_HIGH_SCORE=1 it broadcasts scores using the GAME_APP
+ * high-score table. When GAMES_ANNOUNCE_HIGH_SCORE=1 it broadcasts scores using the GAME_APP
  * protobuf protocol (or a text message in GAME_DEMO_MODE).
  */
 class ChirpyRunner : public Game
@@ -162,10 +153,10 @@ class ChirpyRunner : public Game
 
     ProcessMessage handleReceived(const meshtastic_MeshPacket &mp) override;
 
-#if CHIRPY_ANNOUNCE_HIGH_SCORE
+#if GAMES_ANNOUNCE_HIGH_SCORE
     bool wantsPeriodicMesh() const override { return true; }
     int32_t meshTick(GamesModule &host) override;
-    void onNewHighScore(GamesModule &host, const char *initials, uint32_t score, bool isNewTop) override;
+    void onAnnounceScore(GamesModule &host, const char *initials, uint32_t score) override;
 #endif
 
   private:
@@ -182,7 +173,7 @@ class ChirpyRunner : public Game
     ChirpyRunnerGame game;
     HighScoreTable<ChirpyEntry> scores_{"/prefs/chirpy.dat", 0x43485250u, 2, "Chirpy"};
 
-#if CHIRPY_ANNOUNCE_HIGH_SCORE
+#if GAMES_ANNOUNCE_HIGH_SCORE
     static constexpr uint32_t BROADCAST_INITIAL_MS = 60000UL;
     static constexpr uint32_t BROADCAST_INTERVAL_MS = 12UL * 60 * 60 * 1000;
     uint32_t lastBroadcastMs = 0;

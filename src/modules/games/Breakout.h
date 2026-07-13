@@ -98,19 +98,10 @@ class BreakoutGame
 #include "GamesModule.h"
 #include "HighScoreTable.h"
 
-// High-score mesh announcement is a COMPILE-TIME option, default OFF.
-#ifndef BREAKOUT_ANNOUNCE_HIGH_SCORE
-#define BREAKOUT_ANNOUNCE_HIGH_SCORE 0
-#endif
-
-#ifndef GAME_DEMO_MODE
-#define GAME_DEMO_MODE 0
-#endif
-
 /**
  * Breakout as a hosted Game. Wraps the pure BreakoutGame logic above and supplies the attract art,
  * the playfield renderer, the paddle input, the level-based speed curve, and its own high-score
- * table. When BREAKOUT_ANNOUNCE_HIGH_SCORE=1 it broadcasts scores using the GAME_APP protobuf
+ * table. When GAMES_ANNOUNCE_HIGH_SCORE=1 it broadcasts scores using the GAME_APP protobuf
  * protocol (or a text message in GAME_DEMO_MODE).
  */
 class Breakout : public Game
@@ -136,10 +127,10 @@ class Breakout : public Game
 
     ProcessMessage handleReceived(const meshtastic_MeshPacket &mp) override;
 
-#if BREAKOUT_ANNOUNCE_HIGH_SCORE
+#if GAMES_ANNOUNCE_HIGH_SCORE
     bool wantsPeriodicMesh() const override { return true; }
     int32_t meshTick(GamesModule &host) override;
-    void onNewHighScore(GamesModule &host, const char *initials, uint32_t score, bool isNewTop) override;
+    void onAnnounceScore(GamesModule &host, const char *initials, uint32_t score) override;
 #endif
 
   private:
@@ -163,7 +154,7 @@ class Breakout : public Game
     static constexpr int16_t PADDLE_VEL_MAX = 6;            // max |velocity|
     static constexpr uint32_t PADDLE_ACCEL_WINDOW_MS = 200; // events within this window accelerate
 
-#if BREAKOUT_ANNOUNCE_HIGH_SCORE
+#if GAMES_ANNOUNCE_HIGH_SCORE
     static constexpr uint32_t BROADCAST_INITIAL_MS = 60000UL;
     static constexpr uint32_t BROADCAST_INTERVAL_MS = 12UL * 60 * 60 * 1000;
     uint32_t lastBroadcastMs = 0;

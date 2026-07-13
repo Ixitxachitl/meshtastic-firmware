@@ -6,6 +6,8 @@
 #include "MeshService.h"
 #include "NodeDB.h"
 #include "graphics/ScreenFonts.h"
+#include "graphics/TFTColorRegions.h"
+#include "graphics/TFTPalette.h"
 #include "graphics/images.h"
 #include "main.h"
 #include "mesh/generated/meshtastic/game.pb.h"
@@ -59,6 +61,15 @@ void Snake::drawAttract(OLEDDisplay *display, int16_t x, int16_t y)
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     display->drawString(cx, y, "S N A K E");
     drawXbmScaled(display, x + (w - snake_width * scale) / 2, syOff(15), snake_width, snake_height, snake, scale);
+#if GRAPHICS_TFT_COLORING_ENABLED
+    {
+        const uint16_t abg = graphics::getThemeBodyBg();
+        const int16_t logoX = x + (w - snake_width * scale) / 2;
+        const int16_t logoY = syOff(15);
+        graphics::registerTFTColorRegionDirect(logoX, logoY, snake_width * scale, snake_height * scale,
+                                               graphics::TFTPalette::Green, abg);
+    }
+#endif
     char hi[32];
     if (scores_.scoreAt(0) > 0 && scores_.nameAt(0)[0] != '\0')
         snprintf(hi, sizeof(hi), "High: %s %lu", scores_.nameAt(0), static_cast<unsigned long>(scores_.scoreAt(0)));
@@ -112,7 +123,7 @@ void Snake::drawPlaying(OLEDDisplay *display, int16_t x, int16_t y)
 
 ProcessMessage Snake::handleReceived(const meshtastic_MeshPacket &mp)
 {
-#if !SNAKE_ANNOUNCE_HIGH_SCORE
+#if !GAMES_ANNOUNCE_HIGH_SCORE
     (void)mp;
     return ProcessMessage::CONTINUE;
 #else
@@ -154,10 +165,10 @@ ProcessMessage Snake::handleReceived(const meshtastic_MeshPacket &mp)
 }
 
 // ---------------------------------------------------------------------------
-// Mesh announce (SNAKE_ANNOUNCE_HIGH_SCORE only)
+// Mesh announce (GAMES_ANNOUNCE_HIGH_SCORE only)
 // ---------------------------------------------------------------------------
 
-#if SNAKE_ANNOUNCE_HIGH_SCORE
+#if GAMES_ANNOUNCE_HIGH_SCORE
 
 int32_t Snake::nextBroadcastIntervalMs() const
 {
@@ -216,29 +227,11 @@ void Snake::broadcastAllScores(GamesModule &host)
     }
 }
 
-void Snake::onNewHighScore(GamesModule &host, const char *initials, uint32_t score, bool isNewTop)
+void Snake::onAnnounceScore(GamesModule &host, const char *initials, uint32_t score)
 {
     if (score == 0 || !service)
         return;
-#if GAME_DEMO_MODE
-    if (!isNewTop)
-        return;
-    char msg[64];
-    const char *n = (initials && initials[0]) ? initials : owner.short_name;
-    snprintf(msg, sizeof(msg), "%s set a new Snake high score: %lu", n, static_cast<unsigned long>(score));
-    meshtastic_MeshPacket *p = host.gameAllocDataPacket();
-    p->to = NODENUM_BROADCAST;
-    p->channel = channels.getPrimaryIndex();
-    p->decoded.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
-    p->want_ack = false;
-    const pb_size_t msgLen = static_cast<pb_size_t>(strnlen(msg, sizeof(msg) - 1));
-    memcpy(p->decoded.payload.bytes, msg, msgLen);
-    p->decoded.payload.size = msgLen;
-    service->sendToMesh(p);
-    LOG_INFO("Snake Demo: broadcast text '%s'", msg);
-#else
     announceHighScore(host, score, initials);
-#endif
 }
 
 void Snake::announceHighScore(GamesModule &host, uint32_t score, const char *name)
@@ -275,6 +268,6 @@ void Snake::announceHighScore(GamesModule &host, uint32_t score, const char *nam
     }
 }
 
-#endif // SNAKE_ANNOUNCE_HIGH_SCORE
+#endif // GAMES_ANNOUNCE_HIGH_SCORE
 
 #endif // HAS_SCREEN && BASEUI_HAS_GAMES

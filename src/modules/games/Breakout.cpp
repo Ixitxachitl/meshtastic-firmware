@@ -416,7 +416,7 @@ void Breakout::drawPlaying(OLEDDisplay *display, int16_t x, int16_t y)
 
 ProcessMessage Breakout::handleReceived(const meshtastic_MeshPacket &mp)
 {
-#if !BREAKOUT_ANNOUNCE_HIGH_SCORE
+#if !GAMES_ANNOUNCE_HIGH_SCORE
     (void)mp;
     return ProcessMessage::CONTINUE;
 #else
@@ -458,10 +458,10 @@ ProcessMessage Breakout::handleReceived(const meshtastic_MeshPacket &mp)
 }
 
 // ---------------------------------------------------------------------------
-// Mesh announce (BREAKOUT_ANNOUNCE_HIGH_SCORE only)
+// Mesh announce (GAMES_ANNOUNCE_HIGH_SCORE only)
 // ---------------------------------------------------------------------------
 
-#if BREAKOUT_ANNOUNCE_HIGH_SCORE
+#if GAMES_ANNOUNCE_HIGH_SCORE
 
 int32_t Breakout::nextBroadcastIntervalMs() const
 {
@@ -520,29 +520,11 @@ void Breakout::broadcastAllScores(GamesModule &host)
     }
 }
 
-void Breakout::onNewHighScore(GamesModule &host, const char *initials, uint32_t score, bool isNewTop)
+void Breakout::onAnnounceScore(GamesModule &host, const char *initials, uint32_t score)
 {
     if (score == 0 || !service)
         return;
-#if GAME_DEMO_MODE
-    if (!isNewTop)
-        return;
-    char msg[64];
-    const char *n = (initials && initials[0]) ? initials : owner.short_name;
-    snprintf(msg, sizeof(msg), "%s set a new Breakout high score: %lu", n, static_cast<unsigned long>(score));
-    meshtastic_MeshPacket *p = host.gameAllocDataPacket();
-    p->to = NODENUM_BROADCAST;
-    p->channel = channels.getPrimaryIndex();
-    p->decoded.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
-    p->want_ack = false;
-    const pb_size_t msgLen = static_cast<pb_size_t>(strnlen(msg, sizeof(msg) - 1));
-    memcpy(p->decoded.payload.bytes, msg, msgLen);
-    p->decoded.payload.size = msgLen;
-    service->sendToMesh(p);
-    LOG_INFO("Breakout Demo: broadcast text '%s'", msg);
-#else
     announceHighScore(host, score, initials);
-#endif
 }
 
 void Breakout::announceHighScore(GamesModule &host, uint32_t score, const char *name)
@@ -579,6 +561,6 @@ void Breakout::announceHighScore(GamesModule &host, uint32_t score, const char *
     }
 }
 
-#endif // BREAKOUT_ANNOUNCE_HIGH_SCORE
+#endif // GAMES_ANNOUNCE_HIGH_SCORE
 
 #endif // HAS_SCREEN && BASEUI_HAS_GAMES

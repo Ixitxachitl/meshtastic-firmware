@@ -60,6 +60,9 @@ class GamesModule : public SinglePortModule, public Observable<const UIFrameEven
 
     void promptForInitials();
     void recordHighScore(const char *initials);
+#if GAMES_ANNOUNCE_HIGH_SCORE
+    void announceHighScore(const char *initials, uint32_t score);
+#endif
 
     void drawCenteredLines(OLEDDisplay *display, int16_t x, int16_t y, const char *const *lines, uint8_t count);
     void drawHighScores(OLEDDisplay *display, int16_t x, int16_t y, HighScoreTableBase &scores);

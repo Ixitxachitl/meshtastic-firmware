@@ -9,22 +9,13 @@
 #include "GamesModule.h"
 #include "HighScoreTable.h"
 
-// High-score mesh announcement is a COMPILE-TIME option, default OFF.
-#ifndef TETRIS_ANNOUNCE_HIGH_SCORE
-#define TETRIS_ANNOUNCE_HIGH_SCORE 0
-#endif
-
-#ifndef GAME_DEMO_MODE
-#define GAME_DEMO_MODE 0
-#endif
-
 /**
  * Tetris as a hosted Game. Wraps the pure TetrisGame logic and supplies the attract art, the
  * portrait playfield renderer (with SCR/LVL left panel and NXT/HLD right panel), the
  * rotate/move/drop input, the level-based speed curve, a configurable lock-delay, a hold piece,
  * and its own high-score table.
  *
- * When TETRIS_ANNOUNCE_HIGH_SCORE=1 it broadcasts scores using the GAME_APP protobuf protocol
+ * When GAMES_ANNOUNCE_HIGH_SCORE=1 it broadcasts scores using the GAME_APP protobuf protocol
  * (or a text message in GAME_DEMO_MODE).
  */
 class Tetris : public Game
@@ -50,10 +41,10 @@ class Tetris : public Game
 
     ProcessMessage handleReceived(const meshtastic_MeshPacket &mp) override;
 
-#if TETRIS_ANNOUNCE_HIGH_SCORE
+#if GAMES_ANNOUNCE_HIGH_SCORE
     bool wantsPeriodicMesh() const override { return true; }
     int32_t meshTick(GamesModule &host) override;
-    void onNewHighScore(GamesModule &host, const char *initials, uint32_t score, bool isNewTop) override;
+    void onAnnounceScore(GamesModule &host, const char *initials, uint32_t score) override;
 #endif
 
   private:
@@ -79,7 +70,7 @@ class Tetris : public Game
     // on the next tick() rather than synchronously in the input handler.
     bool pendingLineClearChirp = false;
 
-#if TETRIS_ANNOUNCE_HIGH_SCORE
+#if GAMES_ANNOUNCE_HIGH_SCORE
     static constexpr uint32_t BROADCAST_INITIAL_MS = 60000UL;
     static constexpr uint32_t BROADCAST_INTERVAL_MS = 12UL * 60 * 60 * 1000;
     uint32_t lastBroadcastMs = 0;

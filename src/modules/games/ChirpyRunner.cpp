@@ -330,7 +330,7 @@ void ChirpyRunner::drawPlaying(OLEDDisplay *display, int16_t x, int16_t y)
 
 ProcessMessage ChirpyRunner::handleReceived(const meshtastic_MeshPacket &mp)
 {
-#if !CHIRPY_ANNOUNCE_HIGH_SCORE
+#if !GAMES_ANNOUNCE_HIGH_SCORE
     (void)mp;
     return ProcessMessage::CONTINUE;
 #else
@@ -372,10 +372,10 @@ ProcessMessage ChirpyRunner::handleReceived(const meshtastic_MeshPacket &mp)
 }
 
 // ---------------------------------------------------------------------------
-// Mesh announce (CHIRPY_ANNOUNCE_HIGH_SCORE only)
+// Mesh announce (GAMES_ANNOUNCE_HIGH_SCORE only)
 // ---------------------------------------------------------------------------
 
-#if CHIRPY_ANNOUNCE_HIGH_SCORE
+#if GAMES_ANNOUNCE_HIGH_SCORE
 
 int32_t ChirpyRunner::nextBroadcastIntervalMs() const
 {
@@ -434,29 +434,11 @@ void ChirpyRunner::broadcastAllScores(GamesModule &host)
     }
 }
 
-void ChirpyRunner::onNewHighScore(GamesModule &host, const char *initials, uint32_t score, bool isNewTop)
+void ChirpyRunner::onAnnounceScore(GamesModule &host, const char *initials, uint32_t score)
 {
     if (score == 0 || !service)
         return;
-#if GAME_DEMO_MODE
-    if (!isNewTop)
-        return;
-    char msg[64];
-    const char *n = (initials && initials[0]) ? initials : owner.short_name;
-    snprintf(msg, sizeof(msg), "%s set a new Chirpy Runner high score: %lu", n, static_cast<unsigned long>(score));
-    meshtastic_MeshPacket *p = host.gameAllocDataPacket();
-    p->to = NODENUM_BROADCAST;
-    p->channel = channels.getPrimaryIndex();
-    p->decoded.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
-    p->want_ack = false;
-    const pb_size_t msgLen = static_cast<pb_size_t>(strnlen(msg, sizeof(msg) - 1));
-    memcpy(p->decoded.payload.bytes, msg, msgLen);
-    p->decoded.payload.size = msgLen;
-    service->sendToMesh(p);
-    LOG_INFO("Chirpy Demo: broadcast text '%s'", msg);
-#else
     announceHighScore(host, score, initials);
-#endif
 }
 
 void ChirpyRunner::announceHighScore(GamesModule &host, uint32_t score, const char *name)
@@ -493,6 +475,6 @@ void ChirpyRunner::announceHighScore(GamesModule &host, uint32_t score, const ch
     }
 }
 
-#endif // CHIRPY_ANNOUNCE_HIGH_SCORE
+#endif // GAMES_ANNOUNCE_HIGH_SCORE
 
 #endif // HAS_SCREEN && BASEUI_HAS_GAMES

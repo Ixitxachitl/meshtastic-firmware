@@ -9,6 +9,14 @@
 #include "mesh/MeshModule.h"   // ProcessMessage, meshtastic_MeshPacket
 #include <cstdint>
 
+#ifndef GAMES_ANNOUNCE_HIGH_SCORE
+#define GAMES_ANNOUNCE_HIGH_SCORE 0
+#endif
+
+#ifndef GAME_DEMO_MODE
+#define GAME_DEMO_MODE 0
+#endif
+
 class OLEDDisplay;
 class OLEDDisplayUiState;
 class GamesModule;
@@ -50,8 +58,8 @@ class Game
     virtual bool wantsPeriodicMesh() const { return false; }
     // Perform any due periodic broadcast and return ms until the next one (-1 == nothing pending).
     virtual int32_t meshTick(GamesModule &host) { return -1; }
-    // Called after a local high score is recorded, so the game can broadcast it.
-    virtual void onNewHighScore(GamesModule &host, const char *initials, uint32_t score, bool isNewTop) {}
+    // Called (when GAMES_ANNOUNCE_HIGH_SCORE=1, non-DEMO mode) to broadcast the score via the wire protocol.
+    virtual void onAnnounceScore(GamesModule &host, const char *initials, uint32_t score) {}
 };
 
 #endif // HAS_SCREEN && BASEUI_HAS_GAMES
