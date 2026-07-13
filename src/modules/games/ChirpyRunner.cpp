@@ -51,7 +51,7 @@ void ChirpyRunnerGame::spawnObstacle()
         obst[i].w = OBST_W;
         // Three height tiers so timing varies (kept clearable with margin for a forgiving jump).
         const uint32_t tier = nextRandom() % 3u;
-        obst[i].h = tier == 0 ? 8 : (tier == 1 ? 11 : 15);
+        obst[i].h = BUILDING_HEIGHTS[tier];
         obst[i].colorIdx = static_cast<uint8_t>((spawnCount / 10u) % OBST_COLOR_COUNT);
         spawnCount++;
         return;
@@ -153,6 +153,7 @@ bool ChirpyRunnerGame::step()
 
 #if HAS_SCREEN && BASEUI_HAS_GAMES
 
+#include "GameUtils.h"
 #include "MeshService.h"
 #include "NodeDB.h"
 #include "graphics/Screen.h"
@@ -181,27 +182,34 @@ void ChirpyRunner::drawAttract(OLEDDisplay *display, int16_t x, int16_t y)
 {
     display->setColor(WHITE);
     const int16_t w = display->getWidth();
+    const int16_t dH = display->getHeight();
     const int16_t cx = x + w / 2;
+    const int16_t scale = dH / 64;
+    // Scale vertical offsets proportionally to the actual display height.
+    auto syOff = [&](int16_t gy) -> int16_t {
+        return static_cast<int16_t>(y + static_cast<int32_t>(gy) * dH / ChirpyRunnerGame::BOARD_H);
+    };
     display->setFont(FONT_SMALL);
     display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->drawString(cx, y, "CHIRPY RUNNER");
-    const int16_t logoX = x + (w - chirpy_run_width) / 2;
-    const int16_t logoY = y + 15;
-    display->drawXbm(logoX, logoY, chirpy_run_width, chirpy_run_height, chirpy_run);
+    display->drawString(cx, y, "CHIRPY DASH");
+    const int16_t logoX = x + (w - chirpy_run_width * scale) / 2;
+    const int16_t logoY = syOff(15);
+    drawXbmScaled(display, logoX, logoY, chirpy_run_width, chirpy_run_height, chirpy_run, scale);
 #if GRAPHICS_TFT_COLORING_ENABLED
     // Chirpy is green, with white eyes. The eyes are the lit pixels at rows 5-7, cols 4-7 of the
     // glyph; a white region registered after the green one wins there.
-    graphics::registerTFTColorRegionDirect(logoX, logoY, chirpy_run_width, chirpy_run_height,
+    graphics::registerTFTColorRegionDirect(logoX, logoY, chirpy_run_width * scale, chirpy_run_height * scale,
                                            graphics::TFTPalette::MeshtasticGreen, graphics::getThemeBodyBg());
-    graphics::registerTFTColorRegionDirect(logoX + 4, logoY + 5, 4, 3, graphics::TFTPalette::White, graphics::getThemeBodyBg());
+    graphics::registerTFTColorRegionDirect(logoX + 4 * scale, logoY + 5 * scale, 4 * scale, 3 * scale,
+                                           graphics::TFTPalette::White, graphics::getThemeBodyBg());
 #endif
     char hi[32];
     if (scores_.scoreAt(0) > 0 && scores_.nameAt(0)[0] != '\0')
         snprintf(hi, sizeof(hi), "High: %s %lu", scores_.nameAt(0), static_cast<unsigned long>(scores_.scoreAt(0)));
     else
         snprintf(hi, sizeof(hi), "High: %lu", static_cast<unsigned long>(scores_.scoreAt(0)));
-    display->drawString(cx, y + 34, hi);
-    display->drawString(cx, y + 48, "SEL=Play  Hold=Scores");
+    display->drawString(cx, syOff(34), hi);
+    display->drawString(cx, syOff(48), "SEL=Play  Hold=Scores");
 }
 
 #if GRAPHICS_TFT_COLORING_ENABLED
@@ -231,15 +239,37 @@ void ChirpyRunner::drawPlaying(OLEDDisplay *display, int16_t x, int16_t y)
     display->setColor(WHITE);
     display->setFont(FONT_SMALL);
 
+    const int16_t dW = display->getWidth();
+    const int16_t dH = display->getHeight();
+
+    // Project game-space coordinates to screen pixels using rational scale factors
+    // (scaleX = dW/BOARD_W, scaleY = dH/BOARD_H), kept in integer arithmetic.
+    auto sx = [&](int16_t gx) -> int16_t {
+        return static_cast<int16_t>(x + static_cast<int32_t>(gx) * dW / ChirpyRunnerGame::BOARD_W);
+    };
+    auto sy = [&](int16_t gy) -> int16_t {
+        return static_cast<int16_t>(y + static_cast<int32_t>(gy) * dH / ChirpyRunnerGame::BOARD_H);
+    };
+    // Scaled dimensions: minimum 1 to avoid zero-size rects.
+    auto sw = [&](int16_t gw) -> int16_t {
+        const int16_t r = static_cast<int16_t>(static_cast<int32_t>(gw) * dW / ChirpyRunnerGame::BOARD_W);
+        return r > 0 ? r : static_cast<int16_t>(1);
+    };
+    auto sh = [&](int16_t gh) -> int16_t {
+        const int16_t r = static_cast<int16_t>(static_cast<int32_t>(gh) * dH / ChirpyRunnerGame::BOARD_H);
+        return r > 0 ? r : static_cast<int16_t>(1);
+    };
+
     // Clouds drifting in the background (drawn first so everything else sits in front).
     for (uint8_t i = 0; i < ChirpyRunnerGame::cloudSlots(); i++) {
-        const int16_t cxp = x + game.cloudX(i);
-        const int16_t cyp = y + game.cloudY(i);
-        display->fillRect(cxp + 2, cyp, 4, 1);
-        display->fillRect(cxp + 1, cyp + 1, 6, 1);
-        display->fillRect(cxp, cyp + 2, 8, 1);
+        const int16_t cxp = sx(game.cloudX(i));
+        const int16_t cyp = sy(game.cloudY(i));
+        display->fillRect(cxp + sw(2), cyp, sw(4), sh(1));
+        display->fillRect(cxp + sw(1), cyp + sh(1), sw(6), sh(1));
+        display->fillRect(cxp, cyp + sh(2), sw(8), sh(1));
 #if GRAPHICS_TFT_COLORING_ENABLED
-        graphics::registerTFTColorRegionDirect(cxp, cyp, 8, 3, graphics::TFTPalette::LightGray, graphics::getThemeBodyBg());
+        graphics::registerTFTColorRegionDirect(cxp, cyp, sw(8), sh(3), graphics::TFTPalette::LightGray,
+                                               graphics::getThemeBodyBg());
 #endif
     }
 
@@ -250,7 +280,8 @@ void ChirpyRunner::drawPlaying(OLEDDisplay *display, int16_t x, int16_t y)
     display->drawString(x + 2, y, buf);
 
     // Ground line.
-    display->drawLine(x, y + ChirpyRunnerGame::GROUND_Y, x + display->getWidth() - 1, y + ChirpyRunnerGame::GROUND_Y);
+    const int16_t groundY = sy(ChirpyRunnerGame::GROUND_Y);
+    display->drawLine(x, groundY, x + dW - 1, groundY);
 
     // Obstacles drawn as little buildings: a solid tower with two columns of punched-out windows
     // (dark holes). On colour displays the walls cycle colour every 10 spawns and the windows glow
@@ -258,35 +289,38 @@ void ChirpyRunner::drawPlaying(OLEDDisplay *display, int16_t x, int16_t y)
     for (uint8_t i = 0; i < ChirpyRunnerGame::obstacleSlots(); i++) {
         if (!game.obstacleActive(i))
             continue;
-        const int16_t oh = game.obstacleH(i);
-        const int16_t ow = game.obstacleW(i);
-        const int16_t oxp = x + game.obstacleX(i);
-        const int16_t oyp = y + ChirpyRunnerGame::GROUND_Y - oh;
+        const int16_t soh = sh(game.obstacleH(i));
+        const int16_t sow = sw(game.obstacleW(i));
+        const int16_t oxp = sx(game.obstacleX(i));
+        const int16_t oyp = static_cast<int16_t>(groundY - soh);
 
         display->setColor(WHITE);
-        display->fillRect(oxp, oyp, ow, oh);
-        // Windows: 1px holes in the left and right columns, every other row, skipping the roof row
-        // and the ground-floor rows so the tower reads as a building.
+        display->fillRect(oxp, oyp, sow, soh);
+        // Windows: holes in the left and right columns, every other scaled row, skipping the roof
+        // and ground-floor rows so the tower reads as a building.
         display->setColor(BLACK);
-        for (int16_t wy = oyp + 2; wy <= oyp + oh - 3; wy += 2) {
-            display->fillRect(oxp + 1, wy, 1, 1);
-            display->fillRect(oxp + ow - 2, wy, 1, 1);
+        const int16_t wStep = sh(2);
+        for (int16_t wy = oyp + sh(2); wy <= oyp + soh - sh(3); wy += wStep) {
+            display->fillRect(oxp + sw(1), wy, sw(1), sh(1));
+            display->fillRect(oxp + sow - sw(2), wy, sw(1), sh(1));
         }
         display->setColor(WHITE);
 #if GRAPHICS_TFT_COLORING_ENABLED
-        graphics::registerTFTColorRegionDirect(oxp, oyp, ow, oh, obstacleColor(game.obstacleColorIndex(i)),
+        graphics::registerTFTColorRegionDirect(oxp, oyp, sow, soh, obstacleColor(game.obstacleColorIndex(i)),
                                                graphics::TFTPalette::White); // lit windows
 #endif
     }
 
-    // Chirpy.
-    const int16_t cxp = x + ChirpyRunnerGame::CHIRPY_X;
-    const int16_t cyp = y + game.chirpyY();
-    display->drawXbm(cxp, cyp, chirpy_run_width, chirpy_run_height, chirpy_run);
+    // Chirpy sprite scaled to match the playfield's screen/board ratio.
+    const int16_t spriteScale = dH / ChirpyRunnerGame::BOARD_H;
+    const int16_t cxp = sx(ChirpyRunnerGame::CHIRPY_X);
+    const int16_t cyp = sy(game.chirpyY());
+    drawXbmScaled(display, cxp, cyp, chirpy_run_width, chirpy_run_height, chirpy_run, spriteScale);
 #if GRAPHICS_TFT_COLORING_ENABLED
-    graphics::registerTFTColorRegionDirect(cxp, cyp, chirpy_run_width, chirpy_run_height, graphics::TFTPalette::MeshtasticGreen,
-                                           graphics::getThemeBodyBg());
-    graphics::registerTFTColorRegionDirect(cxp + 4, cyp + 5, 4, 3, graphics::TFTPalette::White, graphics::getThemeBodyBg());
+    graphics::registerTFTColorRegionDirect(cxp, cyp, chirpy_run_width * spriteScale, chirpy_run_height * spriteScale,
+                                           graphics::TFTPalette::MeshtasticGreen, graphics::getThemeBodyBg());
+    graphics::registerTFTColorRegionDirect(cxp + 4 * spriteScale, cyp + 5 * spriteScale, 4 * spriteScale, 3 * spriteScale,
+                                           graphics::TFTPalette::White, graphics::getThemeBodyBg());
 #endif
 }
 

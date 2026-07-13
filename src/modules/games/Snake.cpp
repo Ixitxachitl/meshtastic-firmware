@@ -2,6 +2,7 @@
 
 #if HAS_SCREEN && BASEUI_HAS_GAMES
 
+#include "GameUtils.h"
 #include "MeshService.h"
 #include "NodeDB.h"
 #include "graphics/ScreenFonts.h"
@@ -50,18 +51,21 @@ void Snake::drawAttract(OLEDDisplay *display, int16_t x, int16_t y)
 {
     display->setColor(WHITE);
     const int16_t w = display->getWidth();
+    const int16_t dH = display->getHeight();
     const int16_t cx = x + w / 2;
+    const int16_t scale = dH / 64;
+    auto syOff = [&](int16_t gy) -> int16_t { return static_cast<int16_t>(y + static_cast<int32_t>(gy) * dH / 64); };
     display->setFont(FONT_SMALL);
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     display->drawString(cx, y, "S N A K E");
-    display->drawXbm(x + (w - snake_width) / 2, y + 15, snake_width, snake_height, snake);
+    drawXbmScaled(display, x + (w - snake_width * scale) / 2, syOff(15), snake_width, snake_height, snake, scale);
     char hi[32];
     if (scores_.scoreAt(0) > 0 && scores_.nameAt(0)[0] != '\0')
         snprintf(hi, sizeof(hi), "High: %s %lu", scores_.nameAt(0), static_cast<unsigned long>(scores_.scoreAt(0)));
     else
         snprintf(hi, sizeof(hi), "High: %lu", static_cast<unsigned long>(scores_.scoreAt(0)));
-    display->drawString(cx, y + 34, hi);
-    display->drawString(cx, y + 48, "SEL=Play  Hold=Scores");
+    display->drawString(cx, syOff(34), hi);
+    display->drawString(cx, syOff(48), "SEL=Play  Hold=Scores");
 }
 
 void Snake::drawPlaying(OLEDDisplay *display, int16_t x, int16_t y)
@@ -70,27 +74,36 @@ void Snake::drawPlaying(OLEDDisplay *display, int16_t x, int16_t y)
     display->setColor(WHITE);
     display->setFont(FONT_SMALL);
 
+    const int16_t dW = display->getWidth();
+    const int16_t dH = display->getHeight();
+
+    // Scale cell size to fill the display: constrained by both width and height.
+    const int16_t cByW = static_cast<int16_t>(dW / SnakeGame::GRID_W);
+    const int16_t cByH = static_cast<int16_t>((dH - SNAKE_SCORE_H) / SnakeGame::GRID_H);
+    const int16_t cellPx = cByW < cByH ? cByW : cByH;
+
+    const int16_t boardW = static_cast<int16_t>(SnakeGame::GRID_W * cellPx);
+    const int16_t boardH = static_cast<int16_t>(SnakeGame::GRID_H * cellPx);
+    const int16_t ox = x + (dW - boardW) / 2;
+    const int16_t oy = y + SNAKE_SCORE_H + (dH - SNAKE_SCORE_H - boardH) / 2;
+
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     snprintf(buf, sizeof(buf), "Score %lu", static_cast<unsigned long>(game.score()));
     display->drawString(x + 2, y + 2, buf);
     if (scores_.scoreAt(0) > 0) {
         display->setTextAlignment(TEXT_ALIGN_RIGHT);
         snprintf(buf, sizeof(buf), "Hi %lu", static_cast<unsigned long>(scores_.scoreAt(0)));
-        display->drawString(x + display->getWidth() - 2, y + 2, buf);
+        display->drawString(x + dW - 2, y + 2, buf);
     }
-    display->drawLine(x, y + SNAKE_SCORE_H - 1, x + display->getWidth() - 1, y + SNAKE_SCORE_H - 1);
-
-    const int16_t boardW = SnakeGame::GRID_W * SNAKE_CELL_PX;
-    const int16_t boardH = SnakeGame::GRID_H * SNAKE_CELL_PX;
-    const int16_t ox = x + (display->getWidth() - boardW) / 2;
-    const int16_t oy = y + display->getHeight() - boardH;
+    display->drawLine(x, oy - 1, x + dW - 1, oy - 1);
 
     for (uint16_t i = 0; i < game.length(); i++) {
         SnakeGame::Cell c = game.bodyAt(i);
-        display->fillRect(ox + c.x * SNAKE_CELL_PX, oy + c.y * SNAKE_CELL_PX, SNAKE_CELL_PX, SNAKE_CELL_PX);
+        display->fillRect(ox + c.x * cellPx, oy + c.y * cellPx, cellPx, cellPx);
     }
     SnakeGame::Cell f = game.food();
-    display->fillRect(ox + f.x * SNAKE_CELL_PX + 1, oy + f.y * SNAKE_CELL_PX + 1, 2, 2);
+    const int16_t foodSz = cellPx > 2 ? static_cast<int16_t>(cellPx / 2) : static_cast<int16_t>(1);
+    display->fillRect(ox + f.x * cellPx + 1, oy + f.y * cellPx + 1, foodSz, foodSz);
 }
 
 // ---------------------------------------------------------------------------
