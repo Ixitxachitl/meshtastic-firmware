@@ -36,11 +36,9 @@ class Snake : public Game
 
     HighScoreTableBase &scores() override { return scores_; }
 
-    ProcessMessage handleReceived(const meshtastic_MeshPacket &mp) override;
+    uint32_t gameType() const override;
 
 #if GAMES_ANNOUNCE_HIGH_SCORE
-    bool wantsPeriodicMesh() const override { return true; }
-    int32_t meshTick(GamesModule &host) override;
     void onAnnounceScore(GamesModule &host, const char *initials, uint32_t score) override;
 #endif
 
@@ -59,12 +57,6 @@ class Snake : public Game
     HighScoreTable<SnakeEntry> scores_{"/prefs/snake.dat", 0x534E454Bu, 2, "Snake"};
 
 #if GAMES_ANNOUNCE_HIGH_SCORE
-    static constexpr uint32_t BROADCAST_INITIAL_MS = 60000UL;
-    static constexpr uint32_t BROADCAST_INTERVAL_MS = 12UL * 60 * 60 * 1000;
-    uint32_t lastBroadcastMs = 0;
-
-    int32_t nextBroadcastIntervalMs() const;
-    void broadcastAllScores(GamesModule &host);
     void announceHighScore(GamesModule &host, uint32_t score, const char *name);
 #endif
 };

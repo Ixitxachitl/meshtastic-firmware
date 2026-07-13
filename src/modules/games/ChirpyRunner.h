@@ -151,12 +151,11 @@ class ChirpyRunner : public Game
 
     HighScoreTableBase &scores() override { return scores_; }
 
-    ProcessMessage handleReceived(const meshtastic_MeshPacket &mp) override;
+    uint32_t gameType() const override;
 
 #if GAMES_ANNOUNCE_HIGH_SCORE
-    bool wantsPeriodicMesh() const override { return true; }
-    int32_t meshTick(GamesModule &host) override;
     void onAnnounceScore(GamesModule &host, const char *initials, uint32_t score) override;
+    uint32_t broadcastInitialMs() const override { return 120000UL; }
 #endif
 
   private:
@@ -174,12 +173,6 @@ class ChirpyRunner : public Game
     HighScoreTable<ChirpyEntry> scores_{"/prefs/chirpy.dat", 0x43485250u, 2, "Chirpy"};
 
 #if GAMES_ANNOUNCE_HIGH_SCORE
-    static constexpr uint32_t BROADCAST_INITIAL_MS = 60000UL;
-    static constexpr uint32_t BROADCAST_INTERVAL_MS = 12UL * 60 * 60 * 1000;
-    uint32_t lastBroadcastMs = 0;
-
-    int32_t nextBroadcastIntervalMs() const;
-    void broadcastAllScores(GamesModule &host);
     void announceHighScore(GamesModule &host, uint32_t score, const char *name);
 #endif
 };

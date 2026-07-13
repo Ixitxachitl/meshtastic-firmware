@@ -325,114 +325,12 @@ void ChirpyRunner::drawPlaying(OLEDDisplay *display, int16_t x, int16_t y)
 }
 
 // ---------------------------------------------------------------------------
-// Mesh receive
-// ---------------------------------------------------------------------------
-
-ProcessMessage ChirpyRunner::handleReceived(const meshtastic_MeshPacket &mp)
+uint32_t ChirpyRunner::gameType() const
 {
-#if !GAMES_ANNOUNCE_HIGH_SCORE
-    (void)mp;
-    return ProcessMessage::CONTINUE;
-#else
-    auto isIgnored = [](NodeNum num) -> bool {
-        if (!nodeDB || num == 0)
-            return false;
-        const meshtastic_NodeInfoLite *n = nodeDB->getMeshNode(num);
-        return n && nodeInfoLiteIsIgnored(n);
-    };
-    if (isIgnored(mp.from))
-        return ProcessMessage::CONTINUE;
-
-    meshtastic_GameLeaderboard lb = meshtastic_GameLeaderboard_init_default;
-    pb_istream_t stream = pb_istream_from_buffer(mp.decoded.payload.bytes, mp.decoded.payload.size);
-    if (!pb_decode(&stream, meshtastic_GameLeaderboard_fields, &lb))
-        return ProcessMessage::CONTINUE;
-    if (lb.game != meshtastic_GameType_GAME_CHIRPY_RUNNER || lb.entries_count == 0)
-        return ProcessMessage::CONTINUE;
-
-    bool changed = false;
-    for (pb_size_t i = 0; i < lb.entries_count; i++) {
-        auto &e = lb.entries[i];
-        if (e.score == 0)
-            continue;
-        e.short_name[sizeof(e.short_name) - 1] = '\0';
-        const NodeNum nodeNum = (e.node_num != 0) ? e.node_num : mp.from;
-        bool dummy = false;
-        const int rank = scores_.insert(e.score, e.short_name, nodeNum, dummy, e.score_id);
-        if (rank >= 0) {
-            changed = true;
-            LOG_INFO("Chirpy: remote score %lu from 0x%08x placed at rank %d", static_cast<unsigned long>(e.score), nodeNum,
-                     rank + 1);
-        }
-    }
-    if (changed)
-        scores_.save();
-    return ProcessMessage::CONTINUE;
-#endif
+    return meshtastic_GameType_GAME_CHIRPY_RUNNER;
 }
-
-// ---------------------------------------------------------------------------
-// Mesh announce (GAMES_ANNOUNCE_HIGH_SCORE only)
-// ---------------------------------------------------------------------------
 
 #if GAMES_ANNOUNCE_HIGH_SCORE
-
-int32_t ChirpyRunner::nextBroadcastIntervalMs() const
-{
-    const uint32_t now = millis();
-    if (lastBroadcastMs == 0)
-        return (now >= BROADCAST_INITIAL_MS) ? 0 : static_cast<int32_t>(BROADCAST_INITIAL_MS - now);
-    const uint32_t elapsed = now - lastBroadcastMs;
-    return (elapsed >= BROADCAST_INTERVAL_MS) ? 0 : static_cast<int32_t>(BROADCAST_INTERVAL_MS - elapsed);
-}
-
-int32_t ChirpyRunner::meshTick(GamesModule &host)
-{
-    const int32_t ms = nextBroadcastIntervalMs();
-    if (ms == 0) {
-        broadcastAllScores(host);
-        lastBroadcastMs = millis();
-        return static_cast<int32_t>(BROADCAST_INTERVAL_MS);
-    }
-    return ms;
-}
-
-void ChirpyRunner::broadcastAllScores(GamesModule &host)
-{
-#if GAME_DEMO_MODE
-    return;
-#endif
-    if (!service)
-        return;
-    meshtastic_GameLeaderboard lb = meshtastic_GameLeaderboard_init_default;
-    lb.game = meshtastic_GameType_GAME_CHIRPY_RUNNER;
-    lb.entries_count = 0;
-    for (uint8_t i = 0; i < HighScoreTableBase::HS_COUNT; i++) {
-        if (scores_.scoreAt(i) == 0)
-            break;
-        auto &e = lb.entries[lb.entries_count];
-        e.node_num = scores_.entryAt(i).nodeNum;
-        strncpy(e.short_name, scores_.entryAt(i).shortName, sizeof(e.short_name) - 1);
-        e.short_name[sizeof(e.short_name) - 1] = '\0';
-        e.score = scores_.entryAt(i).score;
-        e.score_id = scores_.entryAt(i).scoreId;
-        lb.entries_count++;
-    }
-    if (lb.entries_count == 0)
-        return;
-    meshtastic_MeshPacket *p = host.gameAllocDataPacket();
-    p->to = NODENUM_BROADCAST;
-    p->channel = 0;
-    pb_ostream_t stream = pb_ostream_from_buffer(p->decoded.payload.bytes, sizeof(p->decoded.payload.bytes));
-    if (pb_encode(&stream, meshtastic_GameLeaderboard_fields, &lb)) {
-        p->decoded.payload.size = static_cast<pb_size_t>(stream.bytes_written);
-        service->sendToMesh(p);
-        LOG_INFO("Chirpy: broadcast table (%u entries)", lb.entries_count);
-    } else {
-        LOG_WARN("Chirpy: pb_encode table failed");
-        packetPool.release(p);
-    }
-}
 
 void ChirpyRunner::onAnnounceScore(GamesModule &host, const char *initials, uint32_t score)
 {

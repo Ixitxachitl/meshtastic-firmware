@@ -32,6 +32,8 @@ class HighScoreTableBase
 
     virtual uint32_t scoreAt(uint8_t i) const = 0;
     virtual const char *nameAt(uint8_t i) const = 0;
+    virtual uint32_t nodeNumAt(uint8_t i) const = 0;
+    virtual uint32_t scoreIdAt(uint8_t i) const = 0;
 
     // True if `score` would place on the sorted-descending table (peek; no mutation).
     virtual bool qualifies(uint32_t score) const = 0;
@@ -75,6 +77,13 @@ template <typename Entry> class HighScoreTable : public HighScoreTableBase
     uint32_t scoreAt(uint8_t i) const override { return entries_[i].score; }
     const char *nameAt(uint8_t i) const override { return entries_[i].shortName; }
     const Entry &entryAt(uint8_t i) const { return entries_[i]; }
+    uint32_t nodeNumAt(uint8_t i) const override { return entries_[i].nodeNum; }
+    uint32_t scoreIdAt(uint8_t i) const override
+    {
+        if constexpr (HasScoreId<Entry>::value)
+            return entries_[i].scoreId;
+        return 0;
+    }
 
     bool qualifies(uint32_t score) const override
     {

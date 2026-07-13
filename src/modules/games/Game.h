@@ -53,13 +53,31 @@ class Game
     // --- High scores (the host runs the initials picker + save) ---
     virtual HighScoreTableBase &scores() = 0;
 
-    // --- Mesh (defaults are no-ops; only games with a wire protocol override these) ---
-    virtual ProcessMessage handleReceived(const meshtastic_MeshPacket &mp) { return ProcessMessage::CONTINUE; }
-    virtual bool wantsPeriodicMesh() const { return false; }
-    // Perform any due periodic broadcast and return ms until the next one (-1 == nothing pending).
-    virtual int32_t meshTick(GamesModule &host) { return -1; }
-    // Called (when GAMES_ANNOUNCE_HIGH_SCORE=1, non-DEMO mode) to broadcast the score via the wire protocol.
+    virtual uint32_t gameType() const = 0;
+
+    // --- Mesh ---
+    // Called (when GAMES_ANNOUNCE_HIGH_SCORE=1, non-DEMO mode) to broadcast a new score via the wire protocol.
     virtual void onAnnounceScore(GamesModule &host, const char *initials, uint32_t score) {}
+#if GAMES_ANNOUNCE_HIGH_SCORE
+    // Unified broadcast and receive implementations provided by Game base (Game.cpp).
+    virtual bool wantsPeriodicMesh() const final { return true; }
+    virtual int32_t meshTick(GamesModule &host) final;
+    virtual ProcessMessage handleReceived(const meshtastic_MeshPacket &mp) final;
+
+  protected:
+    // Initial delay before the first full-table broadcast (override to stagger games).
+    virtual uint32_t broadcastInitialMs() const { return 60000UL; }
+
+  private:
+    static constexpr uint32_t BROADCAST_INTERVAL_MS = 12UL * 60 * 60 * 1000;
+    uint32_t lastBroadcastMs_ = 0;
+    int32_t nextBroadcastIntervalMs() const;
+    void broadcastAllScores(GamesModule &host);
+#else
+    virtual bool wantsPeriodicMesh() const { return false; }
+    virtual int32_t meshTick(GamesModule &host) { return -1; }
+    virtual ProcessMessage handleReceived(const meshtastic_MeshPacket &mp) { return ProcessMessage::CONTINUE; }
+#endif
 };
 
 #endif // HAS_SCREEN && BASEUI_HAS_GAMES
