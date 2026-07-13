@@ -27,7 +27,7 @@ class BreakoutGame
     static constexpr uint8_t BRICK_ROWS = 5;
     static constexpr int16_t BRICK_W = BOARD_W / BRICK_COLS; // 16
     static constexpr int16_t BRICK_H = 4;
-    static constexpr int16_t BRICK_TOP = 12; // top of the first course; leaves room for the score row
+    static constexpr int16_t BRICK_TOP = 1; // top of the first course in game units (renderer offsets by scoreH px)
 
     // Paddle.
     static constexpr int16_t PADDLE_W = 24;
@@ -58,6 +58,10 @@ class BreakoutGame
     uint8_t level() const { return levelNum; }
     uint16_t bricksRemaining() const { return bricksLeft; }
 
+    void setTopWall(int16_t y) { topWallY = y; }
+    void setBrickTop(int16_t y) { brickTopY = y; }
+    int16_t getBrickTop() const { return brickTopY; }
+
     // --- Rendering accessors (all in board pixels) ---
     int16_t paddleX() const { return paddleLeft; }
     int16_t ballX() const { return static_cast<int16_t>(ballPxX / SUBPX); }
@@ -85,7 +89,9 @@ class BreakoutGame
     uint32_t points = 0;
     uint8_t livesLeft = 0;
     uint8_t levelNum = 1;
-    uint32_t rng = 1; // xorshift32 state (never 0)
+    uint32_t rng = 1;              // xorshift32 state (never 0)
+    int16_t topWallY = 0;          // top bounce boundary in game pixels; negative lets the ball enter the score bar
+    int16_t brickTopY = BRICK_TOP; // first brick row in game pixels; set per-display for consistent visual gap
     bool alive = false;
     bool ballTick = false; // ball advances on every other step() (see step())
 };
@@ -150,8 +156,10 @@ class Breakout : public Game
     int16_t paddleVel = 0;                                  // signed pixels/tick applied each tick
     uint32_t lastDirEventMs = 0;                            // millis() of last LEFT/RIGHT event
     static constexpr int16_t PADDLE_VEL_STEP = 2;           // pixels added per same-dir event
-    static constexpr int16_t PADDLE_VEL_MAX = 6;            // max |velocity|
+    static constexpr int16_t PADDLE_VEL_MAX = 6;            // max |velocity| for keyboard/joystick paths
+    static constexpr int16_t PADDLE_TB_VEL_MAX = 3;         // max |velocity| for trackball
     static constexpr uint32_t PADDLE_ACCEL_WINDOW_MS = 200; // events within this window accelerate
+    static constexpr uint32_t PADDLE_COAST_MS = 200;        // trackball: coast at full speed this long after last event
 
 #if GAMES_ANNOUNCE_HIGH_SCORE
     void announceHighScore(GamesModule &host, uint32_t score, const char *name);

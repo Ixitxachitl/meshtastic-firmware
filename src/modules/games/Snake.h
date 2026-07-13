@@ -56,6 +56,9 @@ class Snake : public Game
     SnakeGame game;
     HighScoreTable<SnakeEntry> scores_{"/prefs/snake.dat", 0x534E454Bu, 2, "Snake"};
 
+    // Configure game.w_/h_ to fill the given display, choosing cellPx so the grid tiles the screen.
+    void setupGrid(OLEDDisplay *display);
+
 #if GAMES_ANNOUNCE_HIGH_SCORE
     void announceHighScore(GamesModule &host, uint32_t score, const char *name);
 #endif

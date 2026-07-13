@@ -17,14 +17,21 @@
 class SnakeGame
 {
   public:
-    // Playfield dimensions in cells. Chosen so that at CELL_PX = 4 the board is 128x48, leaving
-    // a 16 px score bar at the top of a 128x64 OLED (see SnakeModule for the pixel layout).
+    // Playfield dimensions in cells - default chosen for OLED (128×64 with a 16 px score bar).
+    // Call configure(w, h) before reset() to use a different grid size (e.g. to fill a larger
+    // TFT display). MAX_CELLS sizes the static arrays; no heap allocation.
     static constexpr uint8_t GRID_W = 32;
     static constexpr uint8_t GRID_H = 12;
     static constexpr uint16_t CELL_COUNT = static_cast<uint16_t>(GRID_W) * GRID_H; // 384
+    static constexpr uint16_t MAX_CELLS = 48 * 24;                                 // 1152 - ceiling for any supported display
 
     // Initial snake length at the start of a game.
     static constexpr uint8_t START_LEN = 3;
+
+    /** Set the active grid size before calling reset(). Silently clamps to MAX_CELLS. */
+    void configure(uint8_t w, uint8_t h);
+    uint8_t gridW() const { return w_; }
+    uint8_t gridH() const { return h_; }
 
     enum Direction : uint8_t { DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT };
 
@@ -76,24 +83,28 @@ class SnakeGame
     void placeFoodAt(uint8_t x, uint8_t y) { foodCell = {x, y}; }
 
   private:
-    static constexpr uint16_t CAP = CELL_COUNT; // ring capacity == board size (len is tracked explicitly)
+    static constexpr uint16_t CAP = MAX_CELLS;
 
-    Cell body[CAP] = {0};
-    uint16_t headIdx = 0; // ring index of the head (front) cell
-    uint16_t tailIdx = 0; // ring index of the tail (oldest) cell
-    uint16_t len = 0;     // number of live body cells
+    uint8_t w_ = GRID_W; // active grid width  (set by configure())
+    uint8_t h_ = GRID_H; // active grid height (set by configure())
+    uint16_t cellCount() const { return static_cast<uint16_t>(w_) * h_; }
 
-    uint8_t occ[(CELL_COUNT + 7) / 8] = {0}; // occupancy bitmap, indexed by cellIndex()
+    Cell body[CAP] = {};
+    uint16_t headIdx = 0;
+    uint16_t tailIdx = 0;
+    uint16_t len = 0;
+
+    uint8_t occ[(MAX_CELLS + 7) / 8] = {}; // occupancy bitmap, indexed by cellIndex()
 
     Cell foodCell = {0, 0};
     Direction dir = DIR_RIGHT;
     Direction pendingDir = DIR_RIGHT;
     uint32_t points = 0;
-    uint32_t rng = 1; // xorshift32 state (never 0)
+    uint32_t rng = 1;
     bool alive = false;
     bool won = false;
 
-    static uint16_t cellIndex(uint8_t x, uint8_t y) { return static_cast<uint16_t>(y) * GRID_W + x; }
+    uint16_t cellIndex(uint8_t x, uint8_t y) const { return static_cast<uint16_t>(y) * w_ + x; }
     bool getOcc(uint16_t idx) const { return (occ[idx >> 3] >> (idx & 7)) & 1u; }
     void setOcc(uint16_t idx) { occ[idx >> 3] |= static_cast<uint8_t>(1u << (idx & 7)); }
     void clearOcc(uint16_t idx) { occ[idx >> 3] &= static_cast<uint8_t>(~(1u << (idx & 7))); }

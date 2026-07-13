@@ -62,7 +62,7 @@ class Game
     // Unified broadcast and receive implementations provided by Game base (Game.cpp).
     virtual bool wantsPeriodicMesh() const final { return true; }
     virtual int32_t meshTick(GamesModule &host) final;
-    virtual ProcessMessage handleReceived(const meshtastic_MeshPacket &mp) final;
+    virtual ProcessMessage handleReceived(const meshtastic_MeshPacket &mp, GamesModule &host) final;
 
   protected:
     // Initial delay before the first full-table broadcast (override to stagger games).
@@ -76,7 +76,7 @@ class Game
 #else
     virtual bool wantsPeriodicMesh() const { return false; }
     virtual int32_t meshTick(GamesModule &host) { return -1; }
-    virtual ProcessMessage handleReceived(const meshtastic_MeshPacket &mp) { return ProcessMessage::CONTINUE; }
+    virtual ProcessMessage handleReceived(const meshtastic_MeshPacket &mp, GamesModule &host) { return ProcessMessage::CONTINUE; }
 #endif
 };
 

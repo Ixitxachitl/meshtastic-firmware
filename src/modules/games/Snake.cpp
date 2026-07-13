@@ -14,8 +14,7 @@
 #include <pb_decode.h>
 #include <pb_encode.h>
 
-static constexpr int16_t SNAKE_CELL_PX = 4;
-static constexpr int16_t SNAKE_SCORE_H = 16;
+static constexpr int16_t SNAKE_SCORE_H = 19;
 
 Snake::Snake()
 {
@@ -49,8 +48,21 @@ void Snake::handleInput(input_broker_event ev)
     }
 }
 
+void Snake::setupGrid(OLEDDisplay *display)
+{
+    const int16_t dW = display->getWidth();
+    const int16_t dH = display->getHeight();
+    // Choose a cell size that scales with the display height, minimum 4 px.
+    const int16_t cellPx = dH / 20 > 3 ? static_cast<int16_t>(dH / 20) : 4;
+    const int16_t scoreH = dH / 4 < SNAKE_SCORE_H ? static_cast<int16_t>(dH / 4) : SNAKE_SCORE_H;
+    const uint8_t gW = static_cast<uint8_t>(dW / cellPx);
+    const uint8_t gH = static_cast<uint8_t>((dH - scoreH) / cellPx);
+    game.configure(gW > 0 ? gW : 1, gH > 0 ? gH : 1);
+}
+
 void Snake::drawAttract(OLEDDisplay *display, int16_t x, int16_t y)
 {
+    setupGrid(display); // prime grid dims so start(seed) -> reset() uses the right board size
     display->setColor(WHITE);
     const int16_t w = display->getWidth();
     const int16_t dH = display->getHeight();
@@ -88,15 +100,13 @@ void Snake::drawPlaying(OLEDDisplay *display, int16_t x, int16_t y)
     const int16_t dW = display->getWidth();
     const int16_t dH = display->getHeight();
 
-    // Scale cell size to fill the display: constrained by both width and height.
-    const int16_t cByW = static_cast<int16_t>(dW / SnakeGame::GRID_W);
-    const int16_t cByH = static_cast<int16_t>((dH - SNAKE_SCORE_H) / SnakeGame::GRID_H);
-    const int16_t cellPx = cByW < cByH ? cByW : cByH;
-
-    const int16_t boardW = static_cast<int16_t>(SnakeGame::GRID_W * cellPx);
-    const int16_t boardH = static_cast<int16_t>(SnakeGame::GRID_H * cellPx);
+    // Score bar shrinks on small OLED displays so the play area fills the screen.
+    const int16_t scoreH = dH / 4 < SNAKE_SCORE_H ? static_cast<int16_t>(dH / 4) : SNAKE_SCORE_H;
+    // Cell size is derived from the configured grid (set by setupGrid in drawAttract).
+    const int16_t cellPx = static_cast<int16_t>(dW / game.gridW());
+    const int16_t boardW = static_cast<int16_t>(game.gridW() * cellPx);
     const int16_t ox = x + (dW - boardW) / 2;
-    const int16_t oy = y + SNAKE_SCORE_H + (dH - SNAKE_SCORE_H - boardH) / 2;
+    const int16_t oy = y + scoreH;
 
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     snprintf(buf, sizeof(buf), "Score %lu", static_cast<unsigned long>(game.score()));
@@ -106,15 +116,18 @@ void Snake::drawPlaying(OLEDDisplay *display, int16_t x, int16_t y)
         snprintf(buf, sizeof(buf), "Hi %lu", static_cast<unsigned long>(scores_.scoreAt(0)));
         display->drawString(x + dW - 2, y + 2, buf);
     }
-    display->drawLine(x, oy - 1, x + dW - 1, oy - 1);
+    display->drawLine(x, y + scoreH - 1, x + dW - 1, y + scoreH - 1);
 
     for (uint16_t i = 0; i < game.length(); i++) {
         SnakeGame::Cell c = game.bodyAt(i);
         display->fillRect(ox + c.x * cellPx, oy + c.y * cellPx, cellPx, cellPx);
     }
     SnakeGame::Cell f = game.food();
-    const int16_t foodSz = cellPx > 2 ? static_cast<int16_t>(cellPx / 2) : static_cast<int16_t>(1);
-    display->fillRect(ox + f.x * cellPx + 1, oy + f.y * cellPx + 1, foodSz, foodSz);
+    // On larger displays each cell is big enough to show a clearly round food item;
+    // add 1px in each direction relative to the old formula for a more visible apple.
+    const int16_t foodSz = cellPx > 2 ? static_cast<int16_t>(cellPx / 2 + 1) : static_cast<int16_t>(1);
+    const int16_t foodOff = static_cast<int16_t>((cellPx - foodSz) / 2);
+    display->fillRect(ox + f.x * cellPx + foodOff, oy + f.y * cellPx + foodOff, foodSz, foodSz);
 }
 
 uint32_t Snake::gameType() const

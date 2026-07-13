@@ -362,7 +362,7 @@ void GamesModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState * /*state*/
 ProcessMessage GamesModule::handleReceived(const meshtastic_MeshPacket &mp)
 {
     for (Game *g : games) {
-        const ProcessMessage r = g->handleReceived(mp);
+        const ProcessMessage r = g->handleReceived(mp, *this);
         if (r != ProcessMessage::CONTINUE)
             return r;
     }

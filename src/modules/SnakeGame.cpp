@@ -1,5 +1,18 @@
 #include "SnakeGame.h"
 
+void SnakeGame::configure(uint8_t w, uint8_t h)
+{
+    if (static_cast<uint16_t>(w) * h > MAX_CELLS) {
+        // Scale down proportionally until it fits.
+        while (static_cast<uint16_t>(w) * h > MAX_CELLS) {
+            w--;
+            h--;
+        }
+    }
+    w_ = w > 0 ? w : 1;
+    h_ = h > 0 ? h : 1;
+}
+
 void SnakeGame::reset(uint32_t seed)
 {
     memset(occ, 0, sizeof(occ));
@@ -11,8 +24,8 @@ void SnakeGame::reset(uint32_t seed)
 
     // Spawn a START_LEN snake horizontally in the middle of the board, heading right, with the
     // head at the centre and the body trailing to its left.
-    const uint8_t cx = GRID_W / 2;
-    const uint8_t cy = GRID_H / 2;
+    const uint8_t cx = w_ / 2;
+    const uint8_t cy = h_ / 2;
     dir = DIR_RIGHT;
     pendingDir = DIR_RIGHT;
     tailIdx = 0;
@@ -53,17 +66,15 @@ uint32_t SnakeGame::nextRandom()
 
 bool SnakeGame::placeFood()
 {
-    const uint16_t free = static_cast<uint16_t>(CELL_COUNT - len);
+    const uint16_t free = static_cast<uint16_t>(cellCount() - len);
     if (free == 0)
-        return false; // board full -> caller treats as a win
+        return false;
 
-    // Pick the k-th free cell (k uniform in [0, free)) via a single linear scan. Deterministic,
-    // always valid, and cheap for a 384-cell board -- no rejection sampling / near-full special case.
     uint16_t k = static_cast<uint16_t>(nextRandom() % free);
-    for (uint16_t idx = 0; idx < CELL_COUNT; idx++) {
+    for (uint16_t idx = 0; idx < cellCount(); idx++) {
         if (!getOcc(idx)) {
             if (k == 0) {
-                foodCell = {static_cast<uint8_t>(idx % GRID_W), static_cast<uint8_t>(idx / GRID_W)};
+                foodCell = {static_cast<uint8_t>(idx % w_), static_cast<uint8_t>(idx / w_)};
                 return true;
             }
             k--;
@@ -98,7 +109,7 @@ bool SnakeGame::step()
     }
 
     // Wall collision (signed math catches the 0-- underflow too).
-    if (nx < 0 || nx >= GRID_W || ny < 0 || ny >= GRID_H) {
+    if (nx < 0 || nx >= w_ || ny < 0 || ny >= h_) {
         alive = false;
         return false;
     }

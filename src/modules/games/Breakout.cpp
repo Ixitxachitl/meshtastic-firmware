@@ -100,16 +100,16 @@ bool BreakoutGame::step()
         px = BOARD_W - 1;
         ballVx = -ballVx;
     }
-    // Top wall.
-    if (py <= 0) {
-        ballPxY = 0;
-        py = 0;
+    // Top wall (topWallY may be negative so the ball can travel through the score bar overlay).
+    if (py <= topWallY) {
+        ballPxY = static_cast<int32_t>(topWallY) * SUBPX;
+        py = topWallY;
         ballVy = -ballVy;
     }
 
     // Bricks: at most one brick per step (single, blocky reflection off the bottom/top face).
-    if (py >= BRICK_TOP && py < BRICK_TOP + BRICK_ROWS * BRICK_H) {
-        const int r = (py - BRICK_TOP) / BRICK_H;
+    if (py >= brickTopY && py < brickTopY + BRICK_ROWS * BRICK_H) {
+        const int r = (py - brickTopY) / BRICK_H;
         const int c = px / BRICK_W;
         if (r >= 0 && r < BRICK_ROWS && c >= 0 && c < BRICK_COLS && bricks[r][c]) {
             bricks[r][c] = 0;
@@ -229,6 +229,17 @@ bool Breakout::tick()
             game.movePaddle(PADDLE_POLL_STEP);
     }
 #elif TB_LEFT != 255
+#if defined(HAS_TRACKBALL) && defined(TB_THRESHOLD)
+    // Optical trackball (TB_THRESHOLD set): velocity driven by handleInput() events.
+    if (paddleVel != 0) {
+        game.movePaddle(paddleVel);
+        if ((paddleVel > 0 && game.paddleX() >= BreakoutGame::BOARD_W - BreakoutGame::PADDLE_W) ||
+            (paddleVel < 0 && game.paddleX() <= 0))
+            paddleVel = 0; // wall contact kills coast
+        else if (!Throttle::isWithinTimespanMs(lastDirEventMs, PADDLE_COAST_MS))
+            paddleVel += (paddleVel > 0) ? -1 : 1;
+    }
+#else
     // Device has discrete direction GPIO (INPUT_PULLUP, active-low) - poll pin state each tick
     // for true held detection and smooth acceleration.
     const bool heldLeft = !digitalRead(TB_LEFT);
@@ -246,6 +257,7 @@ bool Breakout::tick()
     }
     if (paddleVel != 0)
         game.movePaddle(paddleVel);
+#endif
 #elif defined(M5STACK_CARDPUTER_ADV)
     // Cardputer: poll the TCA8418 held-key state each tick for smooth continuous paddle movement.
     if (cardKbI2cImpl) {
@@ -281,9 +293,21 @@ void Breakout::handleInput(input_broker_event ev)
     if (aLinuxJoystick)
         return;
 #endif
-#if TB_LEFT != 255 || defined(M5STACK_CARDPUTER_ADV)
+#if defined(HAS_TRACKBALL) && defined(TB_THRESHOLD)
+    // Optical trackball (T-Deck): snap to full speed on each roll event.
+    if (ev == INPUT_BROKER_LEFT) {
+        paddleVel = -PADDLE_TB_VEL_MAX;
+        lastDirEventMs = millis();
+        return;
+    } else if (ev == INPUT_BROKER_RIGHT) {
+        paddleVel = PADDLE_TB_VEL_MAX;
+        lastDirEventMs = millis();
+        return;
+    }
+#endif
+#if !defined(TB_THRESHOLD) && (TB_LEFT != 255 || defined(M5STACK_CARDPUTER_ADV))
     // Paddle is polled every tick() (GPIO or held-key query); ignore LEFT/RIGHT events to avoid
-    // double-moving on the key-release edge.
+    // double-moving on the key-release edge.  HAS_TRACKBALL devices use the velocity path below.
     if (ev == INPUT_BROKER_LEFT || ev == INPUT_BROKER_RIGHT)
         return;
 #endif
@@ -360,53 +384,68 @@ void Breakout::drawPlaying(OLEDDisplay *display, int16_t x, int16_t y)
 
     const int16_t dW = display->getWidth();
     const int16_t dH = display->getHeight();
+    // On small displays (OLED) reserve no vertical space for the score bar - score overlays the
+    // game and the full height is used.  On larger displays a fixed 16-px bar avoids squish.
+    const int16_t SCORE_BAR_H = dH < 100 ? static_cast<int16_t>(0) : static_cast<int16_t>(16);
+    const int16_t gameH = static_cast<int16_t>(dH - SCORE_BAR_H);
+    // Ball bounces off the physical top of the screen (passes through any score overlay).
+    game.setTopWall(SCORE_BAR_H > 0 ? static_cast<int16_t>(-static_cast<int32_t>(SCORE_BAR_H) * BreakoutGame::BOARD_H / gameH)
+                                    : static_cast<int16_t>(0));
+    // Bricks: ~3-px gap below score bar on large displays; clear the 13-px font on OLED overlay.
+    {
+        const int16_t gap = SCORE_BAR_H > 0 ? static_cast<int16_t>(3) : static_cast<int16_t>(14);
+        const int16_t bt = static_cast<int16_t>(gap * BreakoutGame::BOARD_H / gameH);
+        game.setBrickTop(bt > BreakoutGame::BRICK_TOP ? bt : BreakoutGame::BRICK_TOP);
+    }
 
     // Project game-space coordinates (BOARD_W x BOARD_H) to screen pixels.
     auto sx = [&](int16_t gx) -> int16_t {
         return static_cast<int16_t>(x + static_cast<int32_t>(gx) * dW / BreakoutGame::BOARD_W);
     };
     auto sy = [&](int16_t gy) -> int16_t {
-        return static_cast<int16_t>(y + static_cast<int32_t>(gy) * dH / BreakoutGame::BOARD_H);
+        return static_cast<int16_t>(y + SCORE_BAR_H + static_cast<int32_t>(gy) * gameH / BreakoutGame::BOARD_H);
     };
     auto sw = [&](int16_t gw) -> int16_t {
         const int16_t r = static_cast<int16_t>(static_cast<int32_t>(gw) * dW / BreakoutGame::BOARD_W);
         return r > 0 ? r : static_cast<int16_t>(1);
     };
     auto sh = [&](int16_t gh) -> int16_t {
-        const int16_t r = static_cast<int16_t>(static_cast<int32_t>(gh) * dH / BreakoutGame::BOARD_H);
+        const int16_t r = static_cast<int16_t>(static_cast<int32_t>(gh) * gameH / BreakoutGame::BOARD_H);
         return r > 0 ? r : static_cast<int16_t>(1);
     };
 
-    // Score row (top-left), remaining lives as small squares (top-right).
+    // Score row (top-left), remaining lives as small squares (top-right) inside the score bar.
     char buf[16];
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     snprintf(buf, sizeof(buf), "Sc %lu", static_cast<unsigned long>(game.score()));
     display->drawString(x + 2, y, buf);
     for (uint8_t i = 0; i < game.lives(); i++)
-        display->fillRect(x + dW - sw(3) - i * sw(4), sy(2), sw(2), sh(2));
+        display->fillRect(x + dW - sw(3) - i * sw(4), y + 2, sw(2), sh(2));
 
     // Bricks.
     for (uint8_t r = 0; r < BreakoutGame::BRICK_ROWS; r++)
         for (uint8_t c = 0; c < BreakoutGame::BRICK_COLS; c++)
             if (game.brickAt(r, c))
-                display->fillRect(sx(c * BreakoutGame::BRICK_W), sy(BreakoutGame::BRICK_TOP + r * BreakoutGame::BRICK_H),
+                display->fillRect(sx(c * BreakoutGame::BRICK_W), sy(game.getBrickTop() + r * BreakoutGame::BRICK_H),
                                   sw(BreakoutGame::BRICK_W - 1), sh(BreakoutGame::BRICK_H - 1));
 
     // Paddle.
     display->fillRect(sx(game.paddleX()), sy(BreakoutGame::PADDLE_Y), sw(BreakoutGame::PADDLE_W), sh(BreakoutGame::PADDLE_H));
 
-    // Ball.
-    display->fillRect(sx(game.ballX()), sy(game.ballY()), sw(2), sh(2));
+    // Ball: square, sized to the shorter screen-space dimension of 2 game pixels.
+    const int16_t _bmn = sw(2) < sh(2) ? sw(2) : sh(2);
+    const int16_t ballPx = _bmn < 2 ? static_cast<int16_t>(2) : _bmn;
+    display->fillRect(sx(game.ballX()), sy(game.ballY()), ballPx, ballPx);
 
 #if GRAPHICS_TFT_COLORING_ENABLED
     // Colour the wall by row, plus a blue paddle and white ball.
     const uint16_t bg = graphics::getThemeBodyBg();
     for (uint8_t r = 0; r < BreakoutGame::BRICK_ROWS; r++)
-        graphics::registerTFTColorRegionDirect(x, sy(BreakoutGame::BRICK_TOP + r * BreakoutGame::BRICK_H), dW,
+        graphics::registerTFTColorRegionDirect(x, sy(game.getBrickTop() + r * BreakoutGame::BRICK_H), dW,
                                                sh(BreakoutGame::BRICK_H - 1), brickRowColor(r), bg);
     graphics::registerTFTColorRegionDirect(sx(game.paddleX()), sy(BreakoutGame::PADDLE_Y), sw(BreakoutGame::PADDLE_W),
                                            sh(BreakoutGame::PADDLE_H), graphics::TFTPalette::Blue, bg);
-    graphics::registerTFTColorRegionDirect(sx(game.ballX()), sy(game.ballY()), sw(2), sh(2), graphics::TFTPalette::White, bg);
+    graphics::registerTFTColorRegionDirect(sx(game.ballX()), sy(game.ballY()), ballPx, ballPx, graphics::TFTPalette::White, bg);
 #endif
 }
 

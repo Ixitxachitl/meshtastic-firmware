@@ -266,7 +266,7 @@ void ChirpyRunner::drawPlaying(OLEDDisplay *display, int16_t x, int16_t y)
         const int16_t cyp = sy(game.cloudY(i));
         display->fillRect(cxp + sw(2), cyp, sw(4), sh(1));
         display->fillRect(cxp + sw(1), cyp + sh(1), sw(6), sh(1));
-        display->fillRect(cxp, cyp + sh(2), sw(8), sh(1));
+        display->fillRect(cxp, cyp + sh(1) + sh(1), sw(8), sh(1));
 #if GRAPHICS_TFT_COLORING_ENABLED
         graphics::registerTFTColorRegionDirect(cxp, cyp, sw(8), sh(3), graphics::TFTPalette::LightGray,
                                                graphics::getThemeBodyBg());
@@ -311,10 +311,14 @@ void ChirpyRunner::drawPlaying(OLEDDisplay *display, int16_t x, int16_t y)
 #endif
     }
 
-    // Chirpy sprite scaled to match the playfield's screen/board ratio.
+    // Chirpy sprite scaled to match the playfield's vertical ratio.
+    // Anchor the sprite BOTTOM to the character's screen-space bottom: this corrects the
+    // 1-2 px float caused by integer truncation in spriteScale on displays where
+    // dH / BOARD_H is not exact (e.g. T-Deck 240 / 64 = 3.75 truncates to 3).
     const int16_t spriteScale = dH / ChirpyRunnerGame::BOARD_H;
     const int16_t cxp = sx(ChirpyRunnerGame::CHIRPY_X);
-    const int16_t cyp = sy(game.chirpyY());
+    const int16_t spriteH_px = static_cast<int16_t>(chirpy_run_height * spriteScale);
+    const int16_t cyp = static_cast<int16_t>(sy(static_cast<int16_t>(game.chirpyY() + ChirpyRunnerGame::CHIRPY_H)) - spriteH_px);
     drawXbmScaled(display, cxp, cyp, chirpy_run_width, chirpy_run_height, chirpy_run, spriteScale);
 #if GRAPHICS_TFT_COLORING_ENABLED
     graphics::registerTFTColorRegionDirect(cxp, cyp, chirpy_run_width * spriteScale, chirpy_run_height * spriteScale,

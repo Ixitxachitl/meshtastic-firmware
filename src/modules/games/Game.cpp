@@ -68,7 +68,7 @@ void Game::broadcastAllScores(GamesModule &host)
     }
 }
 
-ProcessMessage Game::handleReceived(const meshtastic_MeshPacket &mp)
+ProcessMessage Game::handleReceived(const meshtastic_MeshPacket &mp, GamesModule &host)
 {
     auto isIgnored = [](NodeNum num) -> bool {
         if (!nodeDB || num == 0)
@@ -87,6 +87,7 @@ ProcessMessage Game::handleReceived(const meshtastic_MeshPacket &mp)
         return ProcessMessage::CONTINUE;
 
     bool changed = false;
+    bool theyHadOutrankedEntry = false; // at least one of their entries is beaten by our table
     for (pb_size_t i = 0; i < lb.entries_count; i++) {
         auto &e = lb.entries[i];
         if (e.score == 0)
@@ -99,10 +100,18 @@ ProcessMessage Game::handleReceived(const meshtastic_MeshPacket &mp)
             changed = true;
             LOG_INFO("Games: %s remote score %lu from 0x%08x placed at rank %d", name(), static_cast<unsigned long>(e.score),
                      nodeNum, rank + 1);
+        } else if (!scores().qualifies(e.score)) {
+            theyHadOutrankedEntry = true;
         }
     }
     if (changed)
         scores().save();
+
+    // Broadcast our table back if we absorbed new entries or our table entirely outranks theirs.
+    if (changed || theyHadOutrankedEntry) {
+        broadcastAllScores(host); // no-op in GAME_DEMO_MODE
+        lastBroadcastMs_ = millis();
+    }
     return ProcessMessage::CONTINUE;
 }
 
