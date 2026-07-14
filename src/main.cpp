@@ -836,7 +836,7 @@ void setup()
     router = new ReliableRouter();
 
     // only play start melody when role is not tracker or sensor
-    // audioThread is not created yet — melody queues via queueRttl() and
+    // audioThread is not created yet - melody queues via queueRttl() and
     // flushes in loop() once the I2S DMA has warmed up (pumpTicks >= 20).
     if (config.power.is_power_saving == true &&
         IS_ONE_OF(config.device.role, meshtastic_Config_DeviceConfig_Role_TRACKER,
