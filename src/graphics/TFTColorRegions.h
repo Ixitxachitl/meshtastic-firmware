@@ -17,7 +17,10 @@ struct TFTColorRegion {
     bool enabled = false;
 };
 
-static constexpr size_t MAX_TFT_COLOR_REGIONS = 48;
+// Sized to hold a full Tetris board (10×16=160 locked cells) + active piece +
+// NXT + HLD previews + header/UI regions, with a sentinel slot. 200 gives ~28
+// slots of headroom over the worst-case Tetris frame (172 regions).
+static constexpr size_t MAX_TFT_COLOR_REGIONS = 200;
 extern TFTColorRegion colorRegions[MAX_TFT_COLOR_REGIONS];
 
 enum class TFTColorRole : uint8_t {
