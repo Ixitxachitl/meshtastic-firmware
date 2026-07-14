@@ -7,6 +7,12 @@
 #include "freertos/event_groups.h"
 #include "freertos/timers.h"
 
+// Newer ESP-IDF headers define xEventGroupSetBitsFromISR as a macro; undef it
+// so we can provide the actual function definition below.
+#ifdef xEventGroupSetBitsFromISR
+#undef xEventGroupSetBitsFromISR
+#endif
+
 extern "C" BaseType_t xEventGroupSetBitsFromISR(EventGroupHandle_t xEventGroup, const EventBits_t uxBitsToSet,
                                                 BaseType_t *pxHigherPriorityTaskWoken)
 {
