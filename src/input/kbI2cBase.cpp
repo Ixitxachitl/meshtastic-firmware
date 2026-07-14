@@ -297,6 +297,10 @@ int32_t KbI2cBase::runOnce()
                 e.inputEvent = INPUT_BROKER_SELECT;
                 e.kbchar = 0x00;
                 break;
+            case TCA8418KeyboardBase::SELECT_LONG:
+                e.inputEvent = INPUT_BROKER_SELECT_LONG;
+                e.kbchar = 0x00;
+                break;
             case TCA8418KeyboardBase::ESC:
                 e.inputEvent = INPUT_BROKER_CANCEL;
                 e.kbchar = 0x00;
@@ -546,6 +550,11 @@ int32_t KbI2cBase::runOnce()
         LOG_WARN("Unknown kb_model 0x%02x", kb_model);
     }
     return 300;
+}
+
+bool KbI2cBase::isNavKeyHeld(bool &left, bool &right) const
+{
+    return TCAKeyboard.isNavKeyHeld(left, right);
 }
 
 void KbI2cBase::toggleBacklight(bool on)

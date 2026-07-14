@@ -9,6 +9,9 @@
 #if !MESHTASTIC_EXCLUDE_STATUS
 #include "modules/StatusMessageModule.h"
 #endif
+#if BASEUI_HAS_GAMES
+#include "modules/games/GamesModule.h"
+#endif
 #include "UIRenderer.h"
 #include "airtime.h"
 #include "gps/GeoCoord.h"
@@ -844,6 +847,7 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
             return -6.0f;
         case PRESET(MEDIUM_SLOW):
         case PRESET(MEDIUM_FAST):
+        case PRESET(MEDIUM_TURBO):
             return -5.5f;
         case PRESET(SHORT_SLOW):
         case PRESET(SHORT_FAST):
@@ -1816,6 +1820,12 @@ constexpr uint32_t ICON_DISPLAY_DURATION_MS = 2000;
 // cppcheck-suppress constParameterPointer; signature must match OverlayCallback typedef from OLEDDisplayUi library
 void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *state)
 {
+#if BASEUI_HAS_GAMES
+    // Hide the navigation bar while a game owns the screen.
+    if (gamesModule && gamesModule->interceptingKeyboardInput())
+        return;
+#endif
+
     uint8_t frameToHighlight = state->currentFrame;
     if (state->frameState == IN_TRANSITION && state->transitionFrameTarget < screen->indicatorIcons.size()) {
         frameToHighlight = state->transitionFrameTarget;

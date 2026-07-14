@@ -26,6 +26,9 @@ enum notificationTypeEnum {
     // LOCKED frame. Without this, a first-pair on a locked device cannot
     // complete because the PIN never renders.
     pairing_pin,
+    // Arcade-style initials entry: like number_picker/hex_picker, but each position cycles
+    // through A-Z and 0-9. The assembled string is returned via a text (std::string) callback.
+    alphanumeric_picker,
 };
 
 struct BannerOverlayOptions {
@@ -43,7 +46,7 @@ struct BannerOverlayOptions {
 bool shouldWakeOnReceivedMessage();
 
 #if !HAS_SCREEN
-#include "power.h"
+#include "Power.h"
 namespace graphics
 {
 // Noop class for boards without screen.
@@ -107,6 +110,7 @@ class Screen
 #include "EInkDisplay2.h"
 #include "EInkDynamicDisplay.h"
 #include "PointStruct.h"
+#include "Power.h"
 #include "TFTDisplay.h"
 #include "TypedQueue.h"
 #include "commands.h"
@@ -116,7 +120,6 @@ class Screen
 #include "input/InputBroker.h"
 #include "mesh/MeshModule.h"
 #include "modules/AdminModule.h"
-#include "power.h"
 #include <string>
 #include <vector>
 
@@ -286,6 +289,11 @@ class Screen : public concurrency::OSThread
 
     bool isScreenOn() { return screenOn; }
 
+    bool isOnGamesFrame()
+    {
+        return ui && framesetInfo.positions.games != 255 && ui->getUiState()->currentFrame == framesetInfo.positions.games;
+    }
+
     // Stores the last 4 of our hardware ID, to make finding the device for pairing easier
     // FIXME: Needs refactoring and getMacAddr needs to be moved to a utility class
     char ourId[5];
@@ -345,6 +353,11 @@ class Screen : public concurrency::OSThread
 
     void showNodePicker(const char *message, uint32_t durationMs, std::function<void(uint32_t)> bannerCallback);
     void showNumberPicker(const char *message, uint32_t durationMs, uint8_t digits, std::function<void(uint32_t)> bannerCallback);
+    // Arcade-style initials entry. `length` positions each cycle A-Z/0-9 (UP/DOWN), LEFT/RIGHT
+    // moves the cursor, SELECT advances; the assembled string is delivered to `bannerCallback`.
+    // `initialText` pre-seeds the positions (uppercased & filtered), defaulting to 'A'.
+    void showAlphanumericPicker(const char *message, const char *initialText, uint32_t durationMs, uint8_t length,
+                                std::function<void(const std::string &)> bannerCallback);
     void showTextInput(const char *header, const char *initialText, uint32_t durationMs,
                        std::function<void(const std::string &)> textCallback);
 
@@ -734,6 +747,7 @@ class Screen : public concurrency::OSThread
             uint8_t system = 255;
             uint8_t gps = 255;
             uint8_t home = 255;
+            uint8_t games = 255;
             uint8_t textMessage = 255;
             uint8_t nodelist_nodes = 255;
             uint8_t nodelist_location = 255;

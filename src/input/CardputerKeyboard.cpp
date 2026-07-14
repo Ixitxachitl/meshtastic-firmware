@@ -83,7 +83,7 @@ static unsigned char CardputerTapMap[_TCA8418_NUM_KEYS][3] = {{'`', '~', Key::ES
 
 CardputerKeyboard::CardputerKeyboard()
     : TCA8418KeyboardBase(_TCA8418_ROWS, _TCA8418_COLS), modifierFlag(0), last_modifier_time(0), last_key(-1), next_key(-1),
-      last_tap(0L), char_idx(0), tap_interval(0)
+      last_tap(0L), press_start_ms(0), char_idx(0), tap_interval(0)
 {
     reset();
 }
@@ -152,6 +152,7 @@ void CardputerKeyboard::pressed(uint8_t key)
     }
 
     last_key = next_key;
+    press_start_ms = now;
     last_tap = now;
 }
 
@@ -177,7 +178,11 @@ void CardputerKeyboard::released()
         }
     }
 
-    queueEvent(CardputerTapMap[last_key][modifierFlag % CardputerTapMod[last_key]]);
+    const unsigned char mapped = CardputerTapMap[last_key][modifierFlag % CardputerTapMod[last_key]];
+    if (mapped == Key::SELECT && (now - press_start_ms) >= 500)
+        queueEvent(Key::SELECT_LONG);
+    else
+        queueEvent(mapped);
     if (isModifierKey(last_key) == false)
         modifierFlag = 0;
 }
@@ -194,6 +199,13 @@ void CardputerKeyboard::updateModifierFlag(uint8_t key)
 bool CardputerKeyboard::isModifierKey(uint8_t key)
 {
     return (key == modifierShiftKey || key == modifierFnKey);
+}
+
+bool CardputerKeyboard::isNavKeyHeld(bool &left, bool &right) const
+{
+    left = (state == Held && last_key == 43);  // ',' / '<' / LEFT
+    right = (state == Held && last_key == 51); // '/' / '?' / RIGHT
+    return left || right;
 }
 
 #endif
