@@ -135,8 +135,31 @@ template <typename Entry> class HighScoreTable : public HighScoreTableBase
         e.epoch = getValidTime(RTCQualityDevice, false);
 
         if constexpr (HasScoreId<Entry>::value) {
-            const uint32_t sid = (scoreId != 0) ? scoreId : static_cast<uint32_t>(random());
-            e.scoreId = (sid != 0) ? sid : 1u;
+            if (scoreId != 0) {
+                e.scoreId = scoreId;
+            } else {
+                // Generate a scoreId that doesn't collide with any existing entry for this node.
+                // A collision is astronomically unlikely (1 in 2^32 per attempt), but if the PRNG
+                // is poorly seeded at boot two consecutive calls can return the same value. A
+                // duplicate (nodeNum, scoreId) pair in the local table causes remote nodes to
+                // discard the lower-ranked score as a false-positive session duplicate.
+                uint32_t sid;
+                do {
+                    sid = static_cast<uint32_t>(random());
+                    if (sid == 0)
+                        sid = 1u;
+                    bool collision = false;
+                    for (int j = 0; j < HS_COUNT; j++) {
+                        if (entries_[j].score != 0 && entries_[j].nodeNum == nodeNum && entries_[j].scoreId == sid) {
+                            collision = true;
+                            break;
+                        }
+                    }
+                    if (!collision)
+                        break;
+                } while (true);
+                e.scoreId = sid;
+            }
         }
 
         isNewTop = (pos == 0);
