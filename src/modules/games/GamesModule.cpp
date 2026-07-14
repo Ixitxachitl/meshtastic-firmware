@@ -103,6 +103,8 @@ void GamesModule::announceHighScore(const char *initials, uint32_t score)
 {
     if (!active || !service)
         return;
+    if (!initials || initials[0] == '\0')
+        return;
 #if GAME_DEMO_MODE
     meshtastic_MeshPacket *p = gameAllocDataPacket();
     p->to = NODENUM_BROADCAST;
@@ -110,8 +112,8 @@ void GamesModule::announceHighScore(const char *initials, uint32_t score)
     p->decoded.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
     p->want_ack = false;
     p->decoded.payload.size = static_cast<pb_size_t>(snprintf(
-        reinterpret_cast<char *>(p->decoded.payload.bytes), sizeof(p->decoded.payload.bytes), "%s set a new %s high score: %lu",
-        (initials && initials[0]) ? initials : owner.short_name, active->name(), static_cast<unsigned long>(score)));
+        reinterpret_cast<char *>(p->decoded.payload.bytes), sizeof(p->decoded.payload.bytes),
+        GAMES_HIGH_SCORE_STRING, active->name(), initials, static_cast<unsigned long>(score));
     service->sendToMesh(p);
     LOG_INFO("Games: announced new %s high score %lu", active->name(), static_cast<unsigned long>(score));
 #else
