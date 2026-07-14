@@ -87,7 +87,6 @@ ProcessMessage Game::handleReceived(const meshtastic_MeshPacket &mp, GamesModule
         return ProcessMessage::CONTINUE;
 
     bool changed = false;
-    bool theyHadOutrankedEntry = false; // at least one of their entries is beaten by our table
     for (pb_size_t i = 0; i < lb.entries_count; i++) {
         auto &e = lb.entries[i];
         if (e.score == 0)
@@ -100,15 +99,17 @@ ProcessMessage Game::handleReceived(const meshtastic_MeshPacket &mp, GamesModule
             changed = true;
             LOG_INFO("Games: %s remote score %lu from 0x%08x placed at rank %d", name(), static_cast<unsigned long>(e.score),
                      nodeNum, rank + 1);
-        } else if (!scores().qualifies(e.score)) {
-            theyHadOutrankedEntry = true;
         }
     }
     if (changed)
         scores().save();
 
-    // Broadcast our table back if we absorbed new entries or our table entirely outranks theirs.
-    if (changed || theyHadOutrankedEntry) {
+    // Only broadcast our table back when we actually absorbed new entries. Replying whenever
+    // their scores don't beat ours (the old "theyHadOutrankedEntry" path) caused a feedback
+    // storm: two nodes with stable, non-overlapping tables would ping each other on every
+    // received packet, bypassing the 12-hour BROADCAST_INTERVAL_MS entirely. The periodic
+    // broadcast is sufficient to eventually propagate a superior local table.
+    if (changed) {
         broadcastAllScores(host); // no-op in GAME_DEMO_MODE
         lastBroadcastMs_ = millis();
     }
