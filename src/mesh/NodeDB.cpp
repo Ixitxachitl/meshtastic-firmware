@@ -22,10 +22,12 @@
 #include "TypeConversions.h"
 #include "error.h"
 #include "main.h"
+#include "memory/MemAudit.h"
 #include "mesh-pb-constants.h"
 #include "mesh/generated/meshtastic/deviceonly_legacy.pb.h"
 #include "meshUtils.h"
 #include "modules/NeighborInfoModule.h"
+#include "target_specific.h"
 #if HAS_VARIABLE_HOPS
 #include "modules/HopScalingModule.h"
 #endif
@@ -49,11 +51,7 @@
 #include "SPILock.h"
 #include "modules/StoreForwardModule.h"
 #include <Preferences.h>
-#include <esp_efuse.h>
-#include <esp_efuse_table.h>
 #include <nvs_flash.h>
-#include <soc/efuse_reg.h>
-#include <soc/soc.h>
 #endif
 
 #ifdef ARCH_PORTDUINO
@@ -371,8 +369,7 @@ void NodeDB::disarmNodeDatabaseDecodeTargets()
  */
 uint32_t radioGeneration;
 
-// FIXME - move this somewhere else
-extern void getMacAddr(uint8_t *dmac);
+// getMacAddr() and getDeviceId() are the per-architecture hooks declared in target_specific.h.
 
 /**
  *
@@ -409,53 +406,13 @@ NodeDB::NodeDB()
     uint32_t channelFileCRC = crc32Buffer(&channelFile, sizeof(channelFile));
 
     int saveWhat = 0;
-    // Get device unique id
-#if defined(CONFIG_IDF_TARGET_ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32C6)
-    uint32_t unique_id[4];
-    // ESP32 factory burns a unique id in efuse for S2+ series and evidently C3+ series
-    // This is used for HMACs in the esp-rainmaker AIOT platform and seems to be a good choice for us
-    esp_err_t err = esp_efuse_read_field_blob(ESP_EFUSE_OPTIONAL_UNIQUE_ID, unique_id, sizeof(unique_id) * 8);
-    if (err == ESP_OK) {
-        memcpy(myNodeInfo.device_id.bytes, unique_id, sizeof(unique_id));
-        myNodeInfo.device_id.size = 16;
-    } else {
-        LOG_WARN("Failed to read unique id from efuse");
+    // Re-read the device id from silicon each boot via the per-arch getDeviceId(); clear the
+    // disk-loaded value first so a failed/empty derivation leaves it unset rather than stale.
+    myNodeInfo.device_id.size = 0;
+    memset(myNodeInfo.device_id.bytes, 0, sizeof(myNodeInfo.device_id.bytes));
+    if (getDeviceId(myNodeInfo.device_id.bytes)) {
+        myNodeInfo.device_id.size = sizeof(myNodeInfo.device_id.bytes);
     }
-#elif defined(ARCH_NRF54L15)
-    // nRF54L15: DEVICEID is under FICR->INFO sub-struct (not top-level as on nRF52)
-    uint64_t device_id_start = ((uint64_t)NRF_FICR->INFO.DEVICEID[1] << 32) | NRF_FICR->INFO.DEVICEID[0];
-    uint64_t device_id_end = ((uint64_t)NRF_FICR->DEVICEADDR[1] << 32) | NRF_FICR->DEVICEADDR[0];
-    memcpy(myNodeInfo.device_id.bytes, &device_id_start, sizeof(device_id_start));
-    memcpy(myNodeInfo.device_id.bytes + sizeof(device_id_start), &device_id_end, sizeof(device_id_end));
-    myNodeInfo.device_id.size = 16;
-#elif defined(ARCH_NRF52)
-    // Nordic applies a FIPS compliant Random ID to each chip at the factory
-    // We concatenate the device address to the Random ID to create a unique ID for now
-    // This will likely utilize a crypto module in the future
-    uint64_t device_id_start = ((uint64_t)NRF_FICR->DEVICEID[1] << 32) | NRF_FICR->DEVICEID[0];
-    uint64_t device_id_end = ((uint64_t)NRF_FICR->DEVICEADDR[1] << 32) | NRF_FICR->DEVICEADDR[0];
-    memcpy(myNodeInfo.device_id.bytes, &device_id_start, sizeof(device_id_start));
-    memcpy(myNodeInfo.device_id.bytes + sizeof(device_id_start), &device_id_end, sizeof(device_id_end));
-    myNodeInfo.device_id.size = 16;
-    // Uncomment below to print the device id
-#elif ARCH_PORTDUINO
-    if (portduino_config.has_device_id) {
-        memcpy(myNodeInfo.device_id.bytes, portduino_config.device_id, 16);
-        myNodeInfo.device_id.size = 16;
-    }
-#else
-    // FIXME - implement for other platforms
-#endif
-
-    // if (myNodeInfo.device_id.size == 16) {
-    //     std::string deviceIdHex;
-    //     for (size_t i = 0; i < myNodeInfo.device_id.size; ++i) {
-    //         char buf[3];
-    //         snprintf(buf, sizeof(buf), "%02X", myNodeInfo.device_id.bytes[i]);
-    //         deviceIdHex += buf;
-    //     }
-    //     LOG_DEBUG("Device ID (HEX): %s", deviceIdHex.c_str());
-    // }
 
     // likewise - we always want the app requirements to come from the running appload
     myNodeInfo.min_app_version = 30200; // format is Mmmss (where M is 1+the numeric major number. i.e. 30200 means 2.2.00
@@ -1183,6 +1140,36 @@ static void installTrafficManagementDefaults(meshtastic_LocalModuleConfig &mc)
 #endif
 }
 
+// --- 2.8 position/telemetry opt-in migration helpers -------------------------------------------------
+// Pure field mutators (no I/O), so the native test suite can exercise them directly. The version gate
+// and saveToDisk live in loadFromDisk() below.
+
+void optInDisablePositionSharing(meshtastic_ChannelFile &cf)
+{
+    for (pb_size_t i = 0; i < cf.channels_count; i++) {
+        // Only flip PUBLIC / default-PSK channels. A channel with a real private key is a deliberate
+        // trusted-group setup where the "leak location to strangers" concern doesn't apply, so its
+        // configured precision (including full precision) is preserved.
+        if (!channelFileUsesPublicKey(cf, (ChannelIndex)i))
+            continue;
+        cf.channels[i].settings.has_module_settings = true;
+        cf.channels[i].settings.module_settings.position_precision = 0;
+    }
+}
+
+void optInDisableTelemetryBroadcast(meshtastic_LocalModuleConfig &mc)
+{
+    // Every mesh-broadcast telemetry enable flag (each gates its module's sendTelemetry() to the mesh).
+    mc.telemetry.device_telemetry_enabled = false;
+    mc.telemetry.environment_measurement_enabled = false;
+    mc.telemetry.air_quality_enabled = false;
+    mc.telemetry.power_measurement_enabled = false;
+    mc.telemetry.health_measurement_enabled = false;
+    // Position leak via the public MQTT map. Leave map_reporting_enabled alone (anonymous presence is
+    // still allowed) and strip only the location component.
+    mc.mqtt.map_report_settings.should_report_location = false;
+}
+
 void NodeDB::installDefaultModuleConfig()
 {
     LOG_INFO("Install default ModuleConfig");
@@ -1796,6 +1783,25 @@ bool NodeDB::enforceSatelliteCaps()
 #endif
 
     (void)trim; // all four maps may be compiled out
+
+    // Approximate satellite heap usage: each std::map entry is one rb-tree node,
+    // value_type plus ~44 B of node overhead (parent/left/right pointers, color,
+    // allocator rounding on 32-bit targets - an estimate, not exact bookkeeping).
+    size_t satBytes = 0;
+#if !MESHTASTIC_EXCLUDE_POSITIONDB
+    satBytes += nodePositions.size() * (sizeof(decltype(nodePositions)::value_type) + 44);
+#endif
+#if !MESHTASTIC_EXCLUDE_TELEMETRYDB
+    satBytes += nodeTelemetry.size() * (sizeof(decltype(nodeTelemetry)::value_type) + 44);
+#endif
+#if !MESHTASTIC_EXCLUDE_ENVIRONMENTDB
+    satBytes += nodeEnvironment.size() * (sizeof(decltype(nodeEnvironment)::value_type) + 44);
+#endif
+#if !MESHTASTIC_EXCLUDE_STATUSDB
+    satBytes += nodeStatus.size() * (sizeof(decltype(nodeStatus)::value_type) + 44);
+#endif
+    memaudit::set("satmaps", satBytes);
+
     return trimmedAny;
 }
 
@@ -2080,6 +2086,7 @@ void NodeDB::nodeDBSelfCare()
     // Normalise the backing store to the hot cap so getOrCreateMeshNode always
     // has spare slots to append into (it indexes meshNodes->at(numMeshNodes++)).
     meshNodes->resize(MAX_NUM_NODES);
+    memaudit::set("nodedb", MAX_NUM_NODES * sizeof(meshtastic_NodeInfoLite));
 
     const bool satsTrimmed = enforceSatelliteCaps();
 
@@ -2528,6 +2535,24 @@ void NodeDB::loadFromDisk()
         if (moduleConfig.paxcounter.paxcounter_update_interval == 900)
             moduleConfig.paxcounter.paxcounter_update_interval = 0;
 
+        saveToDisk(SEGMENT_MODULECONFIG);
+    }
+
+    // 2.8 - privacy: one-time flip of position sharing and device telemetry to OPT-IN for nodes upgrading
+    // from a build that shipped them on-by-default. Gated on a dedicated watermark (POSITION_TELEMETRY_OPTIN_VER)
+    // so it runs exactly once and does NOT re-clobber a user who later re-enables sharing (ordinary saves never
+    // re-stamp .version, so a re-enabled node stays at the watermark and skips this block on the next boot).
+    // Position is disabled only on public/default-PSK channels; private-PSK channels are preserved.
+    if (channelFile.version < POSITION_TELEMETRY_OPTIN_VER) {
+        LOG_INFO("Opt-in migration: disabling position broadcast on public channels");
+        optInDisablePositionSharing(channelFile);
+        channelFile.version = POSITION_TELEMETRY_OPTIN_VER;
+        saveToDisk(SEGMENT_CHANNELS);
+    }
+    if (moduleConfig.version < POSITION_TELEMETRY_OPTIN_VER) {
+        LOG_INFO("Opt-in migration: forcing device telemetry broadcast to opt-in");
+        optInDisableTelemetryBroadcast(moduleConfig);
+        moduleConfig.version = POSITION_TELEMETRY_OPTIN_VER;
         saveToDisk(SEGMENT_MODULECONFIG);
     }
 #if ARCH_PORTDUINO
@@ -3013,14 +3038,12 @@ HopStartStatus classifyHopStart(const meshtastic_MeshPacket &p)
         return HopStartStatus::INVALID;
 
     if (p.hop_start == 0) {
-        // hop_start == hop_limit == 0: intentional zero-hop broadcast (e.g. beacon). Valid by definition -
-        // the packet was never meant to travel any hops, so no hop_start ambiguity applies.
-        if (p.hop_limit == 0)
-            return HopStartStatus::VALID;
-        // Firmware prior to 2.3.0 (585805c) lacked a hop_start field. Firmware version 2.5.0 (bf34329) introduced a
-        // bitfield that is always present. Use the presence of the bitfield to determine if the origin's firmware
-        // version is guaranteed to have hop_start populated. Note that this can only be done for decoded packets as
-        // the bitfield is encrypted under the channel encryption key.
+        // hop_start == 0 is either a modern zero-hop broadcast (e.g. beacon) or pre-2.3.0 firmware (585805c)
+        // that never populated hop_start. Firmware 2.5.0 (bf34329) introduced a bitfield that is always
+        // present; use it to tell the two apart. The bitfield is encrypted under the channel key, so this can
+        // only be resolved for decoded packets - until then the status stays MISSING_OR_UNKNOWN. Callers
+        // acting before decode must therefore not treat UNKNOWN as a drop (the bitfield isn't readable yet);
+        // the verdict is re-checked post-decode in Router::handleReceived.
         if (p.which_payload_variant == meshtastic_MeshPacket_decoded_tag && p.decoded.has_bitfield)
             return HopStartStatus::VALID;
         return HopStartStatus::MISSING_OR_UNKNOWN;
@@ -3279,10 +3302,12 @@ bool NodeDB::updateUser(uint32_t nodeId, meshtastic_User &p, uint8_t channelInde
                     "to regenerate your public keys.";
                 LOG_WARN(warning, safeName);
                 meshtastic_ClientNotification *cn = clientNotificationPool.allocZeroed();
-                cn->level = meshtastic_LogRecord_Level_WARNING;
-                cn->time = getValidTime(RTCQualityFromNet);
-                snprintf(cn->message, sizeof(cn->message), warning, safeName);
-                service->sendClientNotification(cn);
+                if (cn) {
+                    cn->level = meshtastic_LogRecord_Level_WARNING;
+                    cn->time = getValidTime(RTCQualityFromNet);
+                    snprintf(cn->message, sizeof(cn->message), warning, safeName);
+                    service->sendClientNotification(cn);
+                }
             }
             return false;
         }
