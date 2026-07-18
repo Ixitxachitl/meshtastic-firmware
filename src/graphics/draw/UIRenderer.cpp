@@ -24,8 +24,8 @@
 #include "main.h"
 #include "target_specific.h"
 #include <OLEDDisplay.h>
-#include <RTC.h>
 #include <cstring>
+#include <gps/RTC.h>
 
 // External variables
 extern graphics::Screen *screen;
@@ -1821,7 +1821,8 @@ constexpr uint32_t ICON_DISPLAY_DURATION_MS = 2000;
 void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *state)
 {
 #if BASEUI_HAS_GAMES
-    // Hide the navigation bar while a game owns the screen.
+    // Hide the navigation bar while a game owns the screen (the attract screen doesn't intercept,
+    // so the nav bar stays visible there).
     if (gamesModule && gamesModule->interceptingKeyboardInput())
         return;
 #endif

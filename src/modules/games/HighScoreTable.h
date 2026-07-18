@@ -10,7 +10,7 @@
 #include "SafeFile.h"
 #include "concurrency/LockGuard.h"
 #include "gps/RTC.h"
-#include "mesh/NodeDB.h"
+#include "mesh/NodeDB.h" // owner (short-name fallback)
 #include <ErriezCRC32.h>
 #include <cstddef>
 #include <cstdint>
@@ -48,14 +48,10 @@ class HighScoreTableBase
     virtual bool loaded() const = 0;
 };
 
-// ---------------------------------------------------------------------------
-// HasScoreId trait: detects whether Entry has a `scoreId` field.
-// ---------------------------------------------------------------------------
 template <typename T, typename = void> struct HasScoreId : std::false_type {
 };
 template <typename T> struct HasScoreId<T, std::void_t<decltype(std::declval<T &>().scoreId)>> : std::true_type {
 };
-
 /**
  * Templated top-N table shared by every game. The algorithm (qualify / insert / load / save / CRC)
  * is identical across games; only the on-disk record layout differs, so `Entry` is a template
@@ -102,8 +98,6 @@ template <typename Entry> class HighScoreTable : public HighScoreTableBase
         if (score == 0)
             return -1;
 
-        // Dedup: if Entry has a scoreId field and the caller provided a non-zero scoreId,
-        // skip any entry already carrying that (nodeNum, scoreId) pair.
         if constexpr (HasScoreId<Entry>::value) {
             if (scoreId != 0) {
                 for (int i = 0; i < HS_COUNT; i++) {
@@ -112,7 +106,6 @@ template <typename Entry> class HighScoreTable : public HighScoreTableBase
                 }
             }
         }
-
         int pos = -1;
         for (int i = 0; i < HS_COUNT; i++) {
             if (score > entries_[i].score) {
@@ -121,7 +114,7 @@ template <typename Entry> class HighScoreTable : public HighScoreTableBase
             }
         }
         if (pos < 0)
-            return -1;
+            return -1; // not good enough to place
 
         for (int i = HS_COUNT - 1; i > pos; i--)
             entries_[i] = entries_[i - 1];
@@ -216,12 +209,14 @@ template <typename Entry> class HighScoreTable : public HighScoreTableBase
     }
 
   private:
+    // On-disk layout. The 8-byte header (magic + version + 3 reserved) matches both the original
+    // Snake and Tetris files byte-for-byte, so their save files still load unchanged.
     struct File {
         uint32_t magic;
         uint8_t version;
         uint8_t reserved[3];
         Entry entries[HighScoreTableBase::HS_COUNT];
-        uint32_t crc;
+        uint32_t crc; // crc32 over every preceding byte
     } __attribute__((packed));
 
     Entry entries_[HS_COUNT] = {};

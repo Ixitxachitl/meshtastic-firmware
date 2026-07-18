@@ -18,13 +18,15 @@ GamesModule *gamesModule;
 
 GamesModule::GamesModule() : SinglePortModule("games", meshtastic_PortNum_GAME_APP), concurrency::OSThread("Games")
 {
+    // Register the hosted games. Order sets the attract-screen cycle order (Snake is shown first).
     games.push_back(new Snake());
     games.push_back(new Tetris());
     games.push_back(new ChirpyRunner());
     games.push_back(new Breakout());
     inputObserver.observe(inputBroker);
 
-    // Stay alive at boot only if a game needs periodic mesh broadcasts; otherwise idle until play.
+    // Keep the tick thread alive at boot only if a game broadcasts periodically; otherwise idle
+    // until the player launches a game. The first idle tick reschedules to the real cadence.
     bool periodic = false;
     for (Game *g : games)
         periodic = periodic || g->wantsPeriodicMesh();
@@ -42,6 +44,8 @@ void GamesModule::launchGame()
 {
     if (games.empty())
         return;
+    // The games frame is already current (the player is on the attract screen), so just begin play
+    // with the selected game -- no focus change or frameset regeneration needed.
     active = games[selected];
     startPlaying();
 }
@@ -62,6 +66,8 @@ void GamesModule::enterGameOver()
     lastWasNewTop = false;
     uiState = GAMES_GAMEOVER;
 
+    // Arcade-style: if the score placed, prompt for initials, then record it in the picker's
+    // callback. Otherwise just show the game-over screen.
     if (active && active->scores().qualifies(lastScore))
         promptForInitials();
 
@@ -70,12 +76,8 @@ void GamesModule::enterGameOver()
 
 void GamesModule::promptForInitials()
 {
-#if GAME_DEMO_MODE
     screen->showAlphanumericPicker("New High Score!\nEnter initials", "AAA", 60000, HighScoreTableBase::INITIALS_LEN,
                                    [this](const std::string &initials) { this->recordHighScore(initials.c_str()); });
-#else
-    recordHighScore(owner.short_name);
-#endif
 }
 
 void GamesModule::recordHighScore(const char *initials)
@@ -86,13 +88,9 @@ void GamesModule::recordHighScore(const char *initials)
     lastRank = active->scores().insert(lastScore, initials, nodeDB ? nodeDB->getNodeNum() : 0, isNewTop);
     lastWasNewTop = isNewTop;
     if (lastRank >= 0)
-        active->scores().save();
+        active->scores().save(); // table changed -- the only time we write flash
 #if GAMES_ANNOUNCE_HIGH_SCORE
-#if GAME_DEMO_MODE
     if (isNewTop && lastScore > 0)
-#else
-    if (lastRank >= 0 && lastScore > 0)
-#endif
         announceHighScore(initials, lastScore);
 #endif
     requestRedraw();
@@ -126,6 +124,9 @@ void GamesModule::exitToIdle()
 {
     uiState = GAMES_IDLE;
     active = nullptr;
+    // The games frame is always present, so we just return it to the attract screen and redraw --
+    // no frameset change. interceptingKeyboardInput() now returns false, so the D-pad navigates
+    // between frames again. Keep ticking only if a game still needs its periodic broadcast.
     bool periodic = false;
     for (Game *g : games)
         periodic = periodic || g->wantsPeriodicMesh();
@@ -146,7 +147,7 @@ void GamesModule::requestRedraw()
 void GamesModule::kickTick()
 {
     enabled = true;
-    setIntervalFromNow(250);
+    setIntervalFromNow(250); // brief beat so the player sees the board before it moves
 }
 
 int32_t GamesModule::runOnce()
@@ -157,6 +158,7 @@ int32_t GamesModule::runOnce()
             return disable();
         }
 
+        // Keep the display awake through long runs that generate no key presses.
         const uint32_t now = millis();
         if (now - lastAwakeKickMs > 1500) {
             powerFSM.trigger(EVENT_PRESS);
@@ -167,7 +169,7 @@ int32_t GamesModule::runOnce()
         return active->tickIntervalMs();
     }
 
-    // Idle: service any game that broadcasts periodically.
+    // Idle: service any game that broadcasts periodically; sleep until the soonest one is due.
     int32_t next = -1;
     for (Game *g : games) {
         const int32_t due = g->meshTick(*this);
@@ -183,27 +185,28 @@ int32_t GamesModule::runOnce()
 
 int GamesModule::handleInputEvent(const InputEvent *event)
 {
-    if (screen && screen->isOverlayBannerShowing())
+    // Ignore all input unless the games frame is the one actually on screen -- otherwise the attract
+    // screen's UP/DOWN would hijack normal frame navigation from wherever the player happens to be.
+    if (!screen || !screen->isGamesFrameShown())
         return 0;
+    if (screen->isOverlayBannerShowing())
+        return 0; // a menu banner is up; don't steal its input
 
     const input_broker_event ev = event->inputEvent;
     const bool isBack = (ev == INPUT_BROKER_CANCEL || ev == INPUT_BROKER_BACK);
 
     switch (uiState) {
     case GAMES_IDLE:
-        // Only consume UP/DOWN when the games frame is actually visible, so we don't steal
-        // D-pad navigation while the user is scrolling through other frames.
+        // Attract screen: UP/DOWN cycle which game is shown; SELECT (handled by Screen) launches it;
+        // long-press SELECT opens that game's high-score table. Everything else passes through so
+        // the D-pad still navigates between frames.
         if (!games.empty() && (ev == INPUT_BROKER_DOWN || ev == INPUT_BROKER_UP)) {
-            if (!screen || !screen->isOnGamesFrame())
-                return 0;
             const uint8_t n = static_cast<uint8_t>(games.size());
             selected = (ev == INPUT_BROKER_DOWN) ? (selected + 1) % n : (selected + n - 1) % n;
             requestRedraw();
             return 1;
         }
         if (ev == INPUT_BROKER_SELECT_LONG && !games.empty()) {
-            if (!screen || !screen->isOnGamesFrame())
-                return 0;
             active = games[selected];
             uiState = GAMES_HISCORES;
             requestRedraw();
@@ -213,7 +216,7 @@ int GamesModule::handleInputEvent(const InputEvent *event)
 
     case GAMES_PLAYING:
         if (isBack) {
-            uiState = GAMES_PAUSED;
+            uiState = GAMES_PAUSED; // BACK to pause; from there choose resume or quit
             disable();
             requestRedraw();
         } else if (active) {
@@ -228,7 +231,7 @@ int GamesModule::handleInputEvent(const InputEvent *event)
 
     case GAMES_PAUSED:
         if (isBack) {
-            exitToIdle();
+            exitToIdle(); // quit from pause
         } else if (ev == INPUT_BROKER_SELECT || ev == INPUT_BROKER_UP || ev == INPUT_BROKER_DOWN || ev == INPUT_BROKER_LEFT ||
                    ev == INPUT_BROKER_RIGHT) {
             uiState = GAMES_PLAYING;

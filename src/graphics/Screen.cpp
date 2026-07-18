@@ -356,7 +356,7 @@ void Screen::showNodePicker(const char *message, uint32_t durationMs, std::funct
 }
 
 // Called to trigger a banner with custom message and duration
-void Screen::showNumberPicker(const char *message, uint32_t durationMs, uint8_t digits,
+void Screen::showNumberPicker(const char *message, uint32_t durationMs, uint8_t digits, bool useBase16,
                               std::function<void(uint32_t)> bannerCallback)
 {
 #ifdef USE_EINK
@@ -369,7 +369,10 @@ void Screen::showNumberPicker(const char *message, uint32_t durationMs, uint8_t 
     NotificationRenderer::alertBannerCallback = bannerCallback;
     NotificationRenderer::pauseBanner = false;
     NotificationRenderer::curSelected = 0;
-    NotificationRenderer::current_notification_type = notificationTypeEnum::number_picker;
+    if (useBase16)
+        NotificationRenderer::current_notification_type = notificationTypeEnum::hex_picker;
+    else
+        NotificationRenderer::current_notification_type = notificationTypeEnum::number_picker;
     NotificationRenderer::numDigits = digits;
     NotificationRenderer::currentNumber = 0;
 
@@ -463,7 +466,7 @@ static void drawModuleFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int
 // The games frame is a dedicated, always-present frame (unlike generic module frames it is placed
 // at a fixed position right after home), so it draws through its own trampoline rather than the
 // moduleFrames lockstep used by drawModuleFrame.
-static void drawSnakeFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
+static void drawGamesFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     if (gamesModule)
         gamesModule->drawFrame(display, state, x, y);
@@ -1378,7 +1381,7 @@ void Screen::setFrames(FrameFocus focus)
     // Games frame: always present (even with no game running), positioned directly after home.
     if (gamesModule) {
         fsi.positions.games = numframes;
-        normalFrames[numframes++] = drawSnakeFrame;
+        normalFrames[numframes++] = drawGamesFrame;
         indicatorIcons.push_back(joystick_small);
     }
 #endif
@@ -2238,7 +2241,7 @@ int Screen::handleInputEvent(const InputEvent *event)
 #if BASEUI_HAS_GAMES
                 } else if (gamesModule && framesetInfo.positions.games != 255 &&
                            this->ui->getUiState()->currentFrame == framesetInfo.positions.games) {
-                    gamesModule->launchGame();
+                    gamesModule->launchGame(); // launch the game shown on the attract screen
 #endif
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.system) {
                     menuHandler::systemBaseMenu();
@@ -2305,6 +2308,11 @@ int Screen::handleAdminMessage(AdminModule_ObserverData *arg)
 bool Screen::isOverlayBannerShowing()
 {
     return NotificationRenderer::isOverlayBannerShowing();
+}
+
+bool Screen::isGamesFrameShown()
+{
+    return framesetInfo.positions.games != 255 && ui && ui->getUiState()->currentFrame == framesetInfo.positions.games;
 }
 
 } // namespace graphics
