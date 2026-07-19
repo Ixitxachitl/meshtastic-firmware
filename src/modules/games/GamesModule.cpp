@@ -66,10 +66,14 @@ void GamesModule::enterGameOver()
     lastWasNewTop = false;
     uiState = GAMES_GAMEOVER;
 
-    // Arcade-style: if the score placed, prompt for initials, then record it in the picker's
-    // callback. Otherwise just show the game-over screen.
-    if (active && active->scores().qualifies(lastScore))
+    // Demo mode keeps the arcade initials flow; normal builds attribute scores to our short name.
+    if (active && active->scores().qualifies(lastScore)) {
+#if GAME_DEMO_MODE
         promptForInitials();
+#else
+        recordHighScore(owner.short_name);
+#endif
+    }
 
     requestRedraw();
 }
