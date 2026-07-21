@@ -16,6 +16,7 @@ class TCA8418KeyboardBase
         BSP = 0x08,
         TAB = 0x09,
         SELECT = 0x0d,
+        SELECT_LONG = 0x0e,
         ESC = 0x1b,
         REBOOT = 0x90,
         LEFT = 0xb4,
@@ -51,6 +52,14 @@ class TCA8418KeyboardBase
     // Key events available
     virtual bool hasEvent(void) const;
     virtual char dequeueEvent(void);
+    // Returns true and sets left/right if a navigation key is currently held down.
+    // Default is false; overridden by keyboards that track held state.
+    virtual bool isNavKeyHeld(bool &left, bool &right) const
+    {
+        left = false;
+        right = false;
+        return false;
+    }
 
   protected:
     enum KeyState { Init, Idle, Held, Busy };

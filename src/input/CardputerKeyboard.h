@@ -6,6 +6,7 @@ class CardputerKeyboard : public TCA8418KeyboardBase
     CardputerKeyboard();
     void reset(void);
     void trigger(void) override;
+    bool isNavKeyHeld(bool &left, bool &right) const override;
     virtual ~CardputerKeyboard() {}
 
   protected:
@@ -21,6 +22,7 @@ class CardputerKeyboard : public TCA8418KeyboardBase
     int8_t last_key;
     int8_t next_key;
     uint32_t last_tap;
+    uint32_t press_start_ms;
     uint8_t char_idx;
     int32_t tap_interval;
 };
