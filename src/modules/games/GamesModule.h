@@ -47,6 +47,9 @@ class GamesModule : public SinglePortModule, public Observable<const UIFrameEven
     void launchGame();
 
     // Drawn through the games-frame trampoline, and queried by Screen's input gating / nav-bar.
+    // Drawn through the games-frame trampoline, and queried by Screen's input gating / nav-bar, so
+    // these are public. While a game is active we own the D-pad; on the attract screen the D-pad
+    // cycles games (UP/DOWN) and otherwise navigates between frames as usual.
     void drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
     virtual bool interceptingKeyboardInput() override { return uiState != GAMES_IDLE; }
 
@@ -54,9 +57,9 @@ class GamesModule : public SinglePortModule, public Observable<const UIFrameEven
     meshtastic_MeshPacket *gameAllocDataPacket() { return allocDataPacket(); }
 
   protected:
-    virtual int32_t runOnce() override;
+    virtual int32_t runOnce() override; // game tick + idle mesh scheduling
     virtual Observable<const UIFrameEvent *> *getUIFrameObservable() override { return this; }
-    virtual bool wantUIFrame() override { return false; }
+    virtual bool wantUIFrame() override { return false; } // shares the games frame; no own slot
     virtual ProcessMessage handleReceived(const meshtastic_MeshPacket &mp) override;
 
   private:
@@ -64,6 +67,7 @@ class GamesModule : public SinglePortModule, public Observable<const UIFrameEven
     CallbackObserver<GamesModule, const InputEvent *> inputObserver =
         CallbackObserver<GamesModule, const InputEvent *>(this, &GamesModule::handleInputEvent);
 
+    // === State transitions ===
     void startPlaying();
     void enterGameOver();
     void exitToIdle();
@@ -76,6 +80,7 @@ class GamesModule : public SinglePortModule, public Observable<const UIFrameEven
     void announceHighScore(const char *initials, uint32_t score);
 #endif
 
+    // === Shared rendering ===
     void drawCenteredLines(OLEDDisplay *display, int16_t x, int16_t y, const char *const *lines, uint8_t count);
     void drawHighScores(OLEDDisplay *display, int16_t x, int16_t y, HighScoreTableBase &scores);
 
@@ -87,6 +92,13 @@ class GamesModule : public SinglePortModule, public Observable<const UIFrameEven
     int lastRank = -1;
     bool lastWasNewTop = false;
     uint32_t lastAwakeKickMs = 0;
+
+    // attract-screen cursor (index into games)
+    // game currently playing / whose scores are shown; null when idle
+    // score of the just-finished game (for the GAME OVER screen)
+    // rank achieved last game (-1 == didn't place)
+    // last game set a new all-time #1
+    // throttles the power-FSM wake nudge during long runs
 };
 
 extern GamesModule *gamesModule;

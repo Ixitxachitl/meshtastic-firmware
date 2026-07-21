@@ -228,7 +228,7 @@ bool Breakout::tick()
         else if (held > 0)
             game.movePaddle(PADDLE_POLL_STEP);
     }
-#elif TB_LEFT != 255
+#elif defined(HAS_TRACKBALL)
 #if defined(HAS_TRACKBALL) && defined(TB_THRESHOLD)
     // Optical trackball (TB_THRESHOLD set): velocity driven by handleInput() events.
     if (paddleVel != 0) {
@@ -305,7 +305,7 @@ void Breakout::handleInput(input_broker_event ev)
         return;
     }
 #endif
-#if !defined(TB_THRESHOLD) && (TB_LEFT != 255 || defined(M5STACK_CARDPUTER_ADV))
+#if (!defined(TB_THRESHOLD) && defined(HAS_TRACKBALL)) || defined(M5STACK_CARDPUTER_ADV)
     // Paddle is polled every tick() (GPIO or held-key query); ignore LEFT/RIGHT events to avoid
     // double-moving on the key-release edge.  HAS_TRACKBALL devices use the velocity path below.
     if (ev == INPUT_BROKER_LEFT || ev == INPUT_BROKER_RIGHT)

@@ -356,7 +356,7 @@ void Screen::showNodePicker(const char *message, uint32_t durationMs, std::funct
 }
 
 // Called to trigger a banner with custom message and duration
-void Screen::showNumberPicker(const char *message, uint32_t durationMs, uint8_t digits,
+void Screen::showNumberPicker(const char *message, uint32_t durationMs, uint8_t digits, bool useBase16,
                               std::function<void(uint32_t)> bannerCallback)
 {
 #ifdef USE_EINK
@@ -369,7 +369,10 @@ void Screen::showNumberPicker(const char *message, uint32_t durationMs, uint8_t 
     NotificationRenderer::alertBannerCallback = bannerCallback;
     NotificationRenderer::pauseBanner = false;
     NotificationRenderer::curSelected = 0;
-    NotificationRenderer::current_notification_type = notificationTypeEnum::number_picker;
+    if (useBase16)
+        NotificationRenderer::current_notification_type = notificationTypeEnum::hex_picker;
+    else
+        NotificationRenderer::current_notification_type = notificationTypeEnum::number_picker;
     NotificationRenderer::numDigits = digits;
     NotificationRenderer::currentNumber = 0;
 
@@ -463,7 +466,7 @@ static void drawModuleFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int
 // The games frame is a dedicated, always-present frame (unlike generic module frames it is placed
 // at a fixed position right after home), so it draws through its own trampoline rather than the
 // moduleFrames lockstep used by drawModuleFrame.
-static void drawSnakeFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
+static void drawGamesFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     if (gamesModule)
         gamesModule->drawFrame(display, state, x, y);
@@ -1378,7 +1381,7 @@ void Screen::setFrames(FrameFocus focus)
     // Games frame: always present (even with no game running), positioned directly after home.
     if (gamesModule) {
         fsi.positions.games = numframes;
-        normalFrames[numframes++] = drawSnakeFrame;
+        normalFrames[numframes++] = drawGamesFrame;
         indicatorIcons.push_back(joystick_small);
     }
 #endif
@@ -1843,40 +1846,6 @@ void Screen::handleStartFirmwareUpdateScreen()
     setFrameImmediateDraw(frames);
 }
 
-void Screen::blink()
-{
-#ifdef MESHTASTIC_LOCKDOWN
-    // L4: defensive guard. blink() paints arbitrary geometry, not node
-    // data, so it doesn't actually leak today. But it bypasses the normal
-    // ui->update() path that the lockdown short-circuit gates, so any
-    // future change that puts content into blink would silently leak past
-    // redaction. Refuse to draw when the redaction latch is set.
-    if (meshtastic_security::shouldRedactDisplay())
-        return;
-#endif
-    setFastFramerate();
-    uint8_t count = 10;
-    dispdev->setBrightness(254);
-    while (count > 0) {
-        dispdev->fillRect(0, 0, dispdev->getWidth(), dispdev->getHeight());
-#if GRAPHICS_TFT_COLORING_ENABLED
-        prepareFrameColorRegions();
-#endif
-        dispdev->display();
-        delay(50);
-        dispdev->clear();
-#if GRAPHICS_TFT_COLORING_ENABLED
-        prepareFrameColorRegions();
-#endif
-        dispdev->display();
-        delay(50);
-        count = count - 1;
-    }
-    // The dispdev->setBrightness does not work for t-deck display, it seems to run the setBrightness function in
-    // OLEDDisplay.
-    dispdev->setBrightness(brightness);
-}
-
 void Screen::increaseBrightness()
 {
     brightness = ((brightness + 62) > 254) ? brightness : (brightness + 62);
@@ -2107,7 +2076,7 @@ int Screen::handleInputEvent(const InputEvent *event)
     if (ui->getUiState()->currentFrame == framesetInfo.positions.textMessage) {
 
         if (event->inputEvent == INPUT_BROKER_UP) {
-            if (messageStore.getMessages().empty()) {
+            if (!messageStore.hasVisibleMessages()) {
                 cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST);
             } else {
                 graphics::MessageRenderer::scrollUp();
@@ -2117,7 +2086,7 @@ int Screen::handleInputEvent(const InputEvent *event)
         }
 
         if (event->inputEvent == INPUT_BROKER_DOWN) {
-            if (messageStore.getMessages().empty()) {
+            if (!messageStore.hasVisibleMessages()) {
                 cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST);
             } else {
                 graphics::MessageRenderer::scrollDown();
@@ -2166,9 +2135,9 @@ int Screen::handleInputEvent(const InputEvent *event)
         if (!inputIntercepted) {
 #if defined(INPUTDRIVER_ENCODER_TYPE) && INPUTDRIVER_ENCODER_TYPE == 2
             bool handledEncoderScroll = false;
-            const bool isTextMessageFrame = (framesetInfo.positions.textMessage != 255 &&
-                                             this->ui->getUiState()->currentFrame == framesetInfo.positions.textMessage &&
-                                             !messageStore.getMessages().empty());
+            const bool isTextMessageFrame =
+                (framesetInfo.positions.textMessage != 255 &&
+                 this->ui->getUiState()->currentFrame == framesetInfo.positions.textMessage && messageStore.hasVisibleMessages());
             if (isTextMessageFrame) {
                 if (event->inputEvent == INPUT_BROKER_UP_LONG) {
                     graphics::MessageRenderer::nudgeScroll(-1);
@@ -2238,7 +2207,7 @@ int Screen::handleInputEvent(const InputEvent *event)
 #if BASEUI_HAS_GAMES
                 } else if (gamesModule && framesetInfo.positions.games != 255 &&
                            this->ui->getUiState()->currentFrame == framesetInfo.positions.games) {
-                    gamesModule->launchGame();
+                    gamesModule->launchGame(); // launch the game shown on the attract screen
 #endif
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.system) {
                     menuHandler::systemBaseMenu();
@@ -2251,7 +2220,7 @@ int Screen::handleInputEvent(const InputEvent *event)
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.lora) {
                     menuHandler::loraMenu();
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.textMessage) {
-                    if (!messageStore.getMessages().empty()) {
+                    if (messageStore.hasVisibleMessages()) {
                         menuHandler::messageResponseMenu();
                     } else {
                         if (currentResolution == ScreenResolution::UltraLow) {
@@ -2305,6 +2274,11 @@ int Screen::handleAdminMessage(AdminModule_ObserverData *arg)
 bool Screen::isOverlayBannerShowing()
 {
     return NotificationRenderer::isOverlayBannerShowing();
+}
+
+bool Screen::isGamesFrameShown()
+{
+    return framesetInfo.positions.games != 255 && ui && ui->getUiState()->currentFrame == framesetInfo.positions.games;
 }
 
 } // namespace graphics
