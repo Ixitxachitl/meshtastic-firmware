@@ -67,11 +67,16 @@ struct monitor_t {
 //----------------------------------------------------------------------------
 
 struct Touch_sdl : public ITouch {
+  Panel_sdl *panel = nullptr;
+
+  Touch_sdl() = default;
+  explicit Touch_sdl(Panel_sdl *panel_) : panel(panel_) {}
+
     bool init(void) override { return true; }
     void wakeup(void) override {}
     void sleep(void) override {}
     bool isEnable(void) override { return true; };
-    uint_fast8_t getTouchRaw(touch_point_t *tp, uint_fast8_t count) override { return 0; }
+  uint_fast8_t getTouchRaw(touch_point_t *tp, uint_fast8_t count) override;
 };
 
 //----------------------------------------------------------------------------
@@ -163,4 +168,11 @@ struct Panel_sdl : public Panel_FrameBufferBase {
 //----------------------------------------------------------------------------
 } // namespace v1
 } // namespace lgfx
+
+#if defined(SDL_h_)
+inline uint_fast8_t lgfx::v1::Touch_sdl::getTouchRaw(touch_point_t *tp, uint_fast8_t count)
+{
+  return panel ? panel->getTouchRaw(tp, count) : 0;
+}
+#endif
 #endif

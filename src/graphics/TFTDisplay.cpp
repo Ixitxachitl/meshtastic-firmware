@@ -911,6 +911,13 @@ class LGFX : public lgfx::LGFX_Device
             _panel_instance->setTouch(_touch_instance);
         }
 #if defined(SDL_h_)
+        else if (portduino_config.displayPanel == x11) {
+            // No hardware touch module: feed the SDL window's mouse events through a
+            // Touch_sdl so BaseUI's TouchScreenImpl (which calls tft->getTouch()) works,
+            // mirroring what the device-ui LGFXConfig driver does.
+            _touch_instance = new lgfx::Touch_sdl((lgfx::Panel_sdl *)_panel_instance);
+            _panel_instance->setTouch(_touch_instance);
+        }
         if (portduino_config.displayPanel == x11) {
             lgfx::Panel_sdl *sdl_panel_ = (lgfx::Panel_sdl *)_panel_instance;
             sdl_panel_->setup();
@@ -1204,10 +1211,14 @@ TFTDisplay::TFTDisplay(uint8_t address, int sda, int scl, OLEDDISPLAY_GEOMETRY g
     backlightEnable = p;
 
 #if ARCH_PORTDUINO
+    // setGeometry(g, width, height): the BaseUI framebuffer must match the panel's
+    // displayable geometry. When rotated the panel swaps width/height (see the LGFX
+    // panel config below), so swap here too. Passing the same dimension twice built a
+    // square buffer that under-filled non-square panels (e.g. 240x240 on a 320x240 window).
     if (portduino_config.displayRotate) {
-        setGeometry(GEOMETRY_RAWMODE, portduino_config.displayWidth, portduino_config.displayWidth);
+        setGeometry(GEOMETRY_RAWMODE, portduino_config.displayHeight, portduino_config.displayWidth);
     } else {
-        setGeometry(GEOMETRY_RAWMODE, portduino_config.displayHeight, portduino_config.displayHeight);
+        setGeometry(GEOMETRY_RAWMODE, portduino_config.displayWidth, portduino_config.displayHeight);
     }
 
 #elif defined(SCREEN_ROTATE)
@@ -1445,6 +1456,37 @@ void TFTDisplay::sdlLoop()
             InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_SHUTDOWN, .kbchar = 0, .touchX = 0, .touchY = 0};
             inputBroker->injectInputEvent(&event);
         }
+        // Enter/Select is timed: a quick tap emits SELECT, holding past the threshold emits
+        // SELECT_LONG (matching the physical user button, e.g. hold to open the games menu).
+        static uint32_t enterPressedAt = 0;
+        static bool enterLongSent = false;
+        constexpr uint32_t kEnterLongPressMs = 500;
+        if (!sdl_panel_->gpio_in(SDL_SCANCODE_KP_ENTER)) {
+            lastPressed = SDL_SCANCODE_KP_ENTER; // suppress directional keys while Enter is held
+            if (enterPressedAt == 0) {
+                enterPressedAt = millis();
+                enterLongSent = false;
+            } else if (!enterLongSent && (millis() - enterPressedAt) >= kEnterLongPressMs) {
+                enterLongSent = true;
+                InputEvent event = {
+                    .inputEvent = (input_broker_event)INPUT_BROKER_SELECT_LONG, .kbchar = 0, .touchX = 0, .touchY = 0};
+                inputBroker->injectInputEvent(&event);
+            }
+            return;
+        } else if (enterPressedAt != 0) {
+            // Released: emit the short SELECT only if we didn't already fire the long press.
+            bool wasLong = enterLongSent;
+            enterPressedAt = 0;
+            enterLongSent = false;
+            lastPressed = 0;
+            if (!wasLong) {
+                InputEvent event = {
+                    .inputEvent = (input_broker_event)INPUT_BROKER_SELECT, .kbchar = 0, .touchX = 0, .touchY = 0};
+                inputBroker->injectInputEvent(&event);
+            }
+            return;
+        }
+
         // debounce
         if (lastPressed != 0 && !sdl_panel_->gpio_in(lastPressed))
             return;
@@ -1463,10 +1505,6 @@ void TFTDisplay::sdlLoop()
         } else if (!sdl_panel_->gpio_in(39)) {
             lastPressed = 39;
             InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_LEFT, .kbchar = 0, .touchX = 0, .touchY = 0};
-            inputBroker->injectInputEvent(&event);
-        } else if (!sdl_panel_->gpio_in(SDL_SCANCODE_KP_ENTER)) {
-            lastPressed = SDL_SCANCODE_KP_ENTER;
-            InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_SELECT, .kbchar = 0, .touchX = 0, .touchY = 0};
             inputBroker->injectInputEvent(&event);
         } else {
             lastPressed = 0;

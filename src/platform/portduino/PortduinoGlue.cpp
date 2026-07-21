@@ -298,6 +298,16 @@ void portduinoSetup()
         if (!yamlOnly)
             std::cout << "No 'config.yaml' found..." << std::endl;
         portduino_config.lora_module = use_simradio;
+#ifdef PORTDUINO_DEFAULT_TFT_GUI
+        portduino_config.displayPanel = x11;
+        if (portduino_config.displayWidth == 0)
+            portduino_config.displayWidth = 320;
+        if (portduino_config.displayHeight == 0)
+            portduino_config.displayHeight = 240;
+        portduino_config.displayOffsetRotate = 0;
+        if (!yamlOnly)
+            std::cout << "Using built-in native TFT defaults (sim radio + 320x240 window)" << std::endl;
+#endif
     }
 
     if (portduino_config.config_directory != "") {
@@ -630,6 +640,10 @@ void portduinoSetup()
             max_GPIO = i.pin;
         }
     }
+
+#ifdef PORTDUINO_DEFAULT_TFT_GUI
+    max_GPIO = std::max(max_GPIO, 40);
+#endif
 
     gpioInit(max_GPIO + 1); // Done here so we can inform Portduino how many GPIOs we need.
 

@@ -48,9 +48,12 @@ TouchScreenImpl1::TouchScreenImpl1(uint16_t width, uint16_t height, bool (*getTo
 void TouchScreenImpl1::init()
 {
 #if ARCH_PORTDUINO
-    if (portduino_config.touchscreenModule) {
+    // The x11/SDL sim window has no hardware touchscreenModule but delivers touch via
+    // Panel_sdl (mouse) through tft->getTouch(), so enable polling for it as well.
+    if (portduino_config.touchscreenModule || portduino_config.displayPanel == x11) {
         TouchScreenBase::init(true);
-        inputBroker->registerSource(this);
+        if (inputBroker)
+            inputBroker->registerSource(this);
         attachTouchInterrupt();
     } else {
         TouchScreenBase::init(false);

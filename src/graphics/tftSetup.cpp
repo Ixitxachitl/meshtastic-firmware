@@ -11,6 +11,7 @@
 
 #ifdef ARCH_PORTDUINO
 #include "PortduinoGlue.h"
+#include "graphics/Panel_sdl.hpp"
 #include <thread>
 #endif
 
@@ -34,6 +35,13 @@ void tft_task_handler(void *param = nullptr)
         spiLock->lock();
         deviceScreen->task_handler();
         spiLock->unlock();
+#ifdef ARCH_PORTDUINO
+#if defined(SDL_h_)
+        if (portduino_config.displayPanel == x11) {
+            lgfx::Panel_sdl::loop();
+        }
+#endif
+#endif
         deviceScreen->sleep();
     }
 }

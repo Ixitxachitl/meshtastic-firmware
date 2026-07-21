@@ -2,6 +2,10 @@
 #include "NodeDB.h"
 #include "configuration.h"
 
+#if defined(USE_SDL_AUDIO)
+#include "platform/portduino/SdlAudio.h"
+#endif
+
 #if !defined(ARCH_ESP32) && !defined(ARCH_RP2040) && !defined(ARCH_PORTDUINO)
 #include "Tone.h"
 #endif
@@ -106,6 +110,12 @@ void playTones(const ToneDuration *tone_durations, int size)
         // Buzzer is disabled or not set to system tones
         return;
     }
+#if defined(USE_SDL_AUDIO)
+    // Native (PC) builds have no buzzer GPIO; render the melody through host audio instead.
+    for (int i = 0; i < size; i++)
+        portduino_audio::tone((uint16_t)tone_durations[i].frequency_khz, (uint16_t)tone_durations[i].duration_ms);
+    return;
+#endif
 #ifdef HAS_I2S
     if (moduleConfig.external_notification.use_i2s_as_buzzer && audioThread) {
         playTonesRTTTL(tone_durations, size);

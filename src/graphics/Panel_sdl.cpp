@@ -22,6 +22,8 @@ Porting for SDL:
 
 #if defined(SDL_h_)
 
+#include <lvgl.h>
+
 // #include "../common.hpp"
 // #include "../../misc/common_function.hpp"
 // #include "../../Bus.hpp"
@@ -57,6 +59,10 @@ static inline void heap_free(void *buf)
 }
 
 static std::list<monitor_t *> _list_monitor;
+static lv_indev_t *_keyboard_indev = nullptr;
+static lv_group_t *_keyboard_group = nullptr;
+static uint32_t _keyboard_key = 0;
+static bool _keyboard_pressed = false;
 
 static monitor_t *const getMonitorByWindowID(uint32_t windowID)
 {
@@ -70,6 +76,60 @@ static monitor_t *const getMonitorByWindowID(uint32_t windowID)
 //----------------------------------------------------------------------------
 
 static std::vector<Panel_sdl::KeyCodeMapping_t> _key_code_map;
+
+static uint32_t lvglKeyFromSdlKey(const SDL_KeyboardEvent &key)
+{
+    switch (key.keysym.sym) {
+    case SDLK_UP:
+        return LV_KEY_UP;
+    case SDLK_DOWN:
+        return LV_KEY_DOWN;
+    case SDLK_RIGHT:
+        return LV_KEY_RIGHT;
+    case SDLK_LEFT:
+        return LV_KEY_LEFT;
+    case SDLK_RETURN:
+    case SDLK_KP_ENTER:
+    case SDLK_SPACE:
+        return LV_KEY_ENTER;
+    case SDLK_ESCAPE:
+        return LV_KEY_ESC;
+    case SDLK_BACKSPACE:
+        return LV_KEY_BACKSPACE;
+    case SDLK_TAB:
+        return (key.keysym.mod & KMOD_SHIFT) ? LV_KEY_PREV : LV_KEY_NEXT;
+    case SDLK_HOME:
+        return LV_KEY_HOME;
+    case SDLK_END:
+        return LV_KEY_END;
+    default:
+        return 0;
+    }
+}
+
+static void keyboard_read(lv_indev_t *indev, lv_indev_data_t *data)
+{
+    data->key = _keyboard_key;
+    data->state = _keyboard_pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+}
+
+static void ensureKeyboardIndev()
+{
+    if (_keyboard_indev) {
+        return;
+    }
+
+    _keyboard_group = lv_group_get_default();
+    if (!_keyboard_group) {
+        _keyboard_group = lv_group_create();
+        lv_group_set_default(_keyboard_group);
+    }
+
+    _keyboard_indev = lv_indev_create();
+    lv_indev_set_type(_keyboard_indev, LV_INDEV_TYPE_KEYPAD);
+    lv_indev_set_read_cb(_keyboard_indev, keyboard_read);
+    lv_indev_set_group(_keyboard_indev, _keyboard_group);
+}
 
 void Panel_sdl::addKeyCodeMapping(SDL_KeyCode keyCode, uint8_t gpio)
 {
@@ -97,6 +157,18 @@ void Panel_sdl::_event_proc(void)
         if ((event.type == SDL_KEYDOWN) || (event.type == SDL_KEYUP)) {
             auto mon = getMonitorByWindowID(event.button.windowID);
             int gpio = -1;
+
+            // LVGL keypad routing is only valid in device-ui (COLOR) mode, where lv_init()
+            // has run. In BaseUI mode tftSetup()/lv_init() is never called, so touching any
+            // lv_* API here would dereference uninitialized LVGL state and crash. BaseUI keyboard
+            // navigation instead flows through the gpio->InputBroker path in TFTDisplay::sdlLoop().
+            if (lv_is_initialized()) {
+                if (auto lvKey = lvglKeyFromSdlKey(event.key)) {
+                    ensureKeyboardIndev();
+                    _keyboard_key = lvKey;
+                    _keyboard_pressed = event.type == SDL_KEYDOWN;
+                }
+            }
 
             /// Check key mapping
             gpio = getKeyCodeMapping((SDL_KeyCode)event.key.keysym.sym);
@@ -151,22 +223,41 @@ void Panel_sdl::_event_proc(void)
             auto mon = getMonitorByWindowID(event.button.windowID);
             if (mon != nullptr) {
                 {
-                    int x, y, w, h;
-                    SDL_GetWindowSize(mon->window, &w, &h);
-                    SDL_GetMouseState(&x, &y);
-                    float sf = sinf(mon->frame_angle * M_PI / 180);
-                    float cf = cosf(mon->frame_angle * M_PI / 180);
-                    x -= w / 2.0f;
-                    y -= h / 2.0f;
-                    float nx = y * sf + x * cf;
-                    float ny = y * cf - x * sf;
-                    if (mon->frame_rotation & 1) {
-                        std::swap(w, h);
+                    int x = 0;
+                    int y = 0;
+                    if (event.type == SDL_MOUSEMOTION) {
+                        x = event.motion.x;
+                        y = event.motion.y;
+                    } else {
+                        x = event.button.x;
+                        y = event.button.y;
                     }
-                    x = (nx * mon->frame_width / w) + (mon->frame_width >> 1);
-                    y = (ny * mon->frame_height / h) + (mon->frame_height >> 1);
-                    mon->touch_x = x - mon->frame_inner_x;
-                    mon->touch_y = y - mon->frame_inner_y;
+
+                    if ((mon->frame_angle % 360) == 0) {
+                        mon->touch_x = (int)((x / mon->scaling_x) - mon->frame_inner_x);
+                        mon->touch_y = (int)((y / mon->scaling_y) - mon->frame_inner_y);
+                    } else {
+                        int w, h;
+                        SDL_GetWindowSize(mon->window, &w, &h);
+                        float sf = sinf(mon->frame_angle * M_PI / 180);
+                        float cf = cosf(mon->frame_angle * M_PI / 180);
+                        float fx = x - w / 2.0f;
+                        float fy = y - h / 2.0f;
+                        float nx = fy * sf + fx * cf;
+                        float ny = fy * cf - fx * sf;
+                        if (mon->frame_rotation & 1) {
+                            std::swap(w, h);
+                        }
+                        x = (int)((nx * mon->frame_width / w) + (mon->frame_width >> 1));
+                        y = (int)((ny * mon->frame_height / h) + (mon->frame_height >> 1));
+                        mon->touch_x = x - mon->frame_inner_x;
+                        mon->touch_y = y - mon->frame_inner_y;
+                    }
+
+                    const int maxTouchX = std::max<int>(0, mon->frame_width - mon->frame_inner_x - 1);
+                    const int maxTouchY = std::max<int>(0, mon->frame_height - mon->frame_inner_y - 1);
+                    mon->touch_x = std::max<int>(0, std::min<int>(maxTouchX, mon->touch_x));
+                    mon->touch_y = std::max<int>(0, std::min<int>(maxTouchY, mon->touch_y));
                 }
                 if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
                     mon->touched = true;

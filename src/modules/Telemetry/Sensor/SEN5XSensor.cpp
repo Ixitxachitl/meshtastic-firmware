@@ -685,14 +685,14 @@ bool SEN5XSensor::readValues()
     int16_t int_noxIndex = static_cast<int16_t>((dataBuffer[14] << 8) | dataBuffer[15]);
 
     // Convert values based on Sensirion Arduino lib
-    sen5xmeasurement.pM1p0 = !isnan(uint_pM1p0) ? uint_pM1p0 / 10 : UINT16_MAX;
-    sen5xmeasurement.pM2p5 = !isnan(uint_pM2p5) ? uint_pM2p5 / 10 : UINT16_MAX;
-    sen5xmeasurement.pM4p0 = !isnan(uint_pM4p0) ? uint_pM4p0 / 10 : UINT16_MAX;
-    sen5xmeasurement.pM10p0 = !isnan(uint_pM10p0) ? uint_pM10p0 / 10 : UINT16_MAX;
-    sen5xmeasurement.humidity = !isnan(int_humidity) ? int_humidity / 100.0f : FLT_MAX;
-    sen5xmeasurement.temperature = !isnan(int_temperature) ? int_temperature / 200.0f : FLT_MAX;
-    sen5xmeasurement.vocIndex = !isnan(int_vocIndex) ? int_vocIndex / 10.0f : FLT_MAX;
-    sen5xmeasurement.noxIndex = !isnan(int_noxIndex) ? int_noxIndex / 10.0f : FLT_MAX;
+    sen5xmeasurement.pM1p0 = uint_pM1p0 / 10;
+    sen5xmeasurement.pM2p5 = uint_pM2p5 / 10;
+    sen5xmeasurement.pM4p0 = uint_pM4p0 / 10;
+    sen5xmeasurement.pM10p0 = uint_pM10p0 / 10;
+    sen5xmeasurement.humidity = int_humidity / 100.0f;
+    sen5xmeasurement.temperature = int_temperature / 200.0f;
+    sen5xmeasurement.vocIndex = int_vocIndex / 10.0f;
+    sen5xmeasurement.noxIndex = int_noxIndex / 10.0f;
 
     LOG_DEBUG("%s: Got readings: pM1p0=%u, pM2p5=%u, pM4p0=%u, pM10p0=%u", sensorName, sen5xmeasurement.pM1p0,
               sen5xmeasurement.pM2p5, sen5xmeasurement.pM4p0, sen5xmeasurement.pM10p0);
@@ -740,12 +740,12 @@ bool SEN5XSensor::readPNValues(bool cumulative)
 
     // Convert values based on Sensirion Arduino lib
     // Multiply by 100 for converting from #/cm3 to #/0.1l for PN values
-    sen5xmeasurement.pN0p5 = !isnan(uint_pN0p5) ? uint_pN0p5 / 10 * 100 : UINT32_MAX;
-    sen5xmeasurement.pN1p0 = !isnan(uint_pN1p0) ? uint_pN1p0 / 10 * 100 : UINT32_MAX;
-    sen5xmeasurement.pN2p5 = !isnan(uint_pN2p5) ? uint_pN2p5 / 10 * 100 : UINT32_MAX;
-    sen5xmeasurement.pN4p0 = !isnan(uint_pN4p0) ? uint_pN4p0 / 10 * 100 : UINT32_MAX;
-    sen5xmeasurement.pN10p0 = !isnan(uint_pN10p0) ? uint_pN10p0 / 10 * 100 : UINT32_MAX;
-    sen5xmeasurement.tSize = !isnan(uint_tSize) ? uint_tSize / 1000.0f : FLT_MAX;
+    sen5xmeasurement.pN0p5 = uint_pN0p5 / 10 * 100;
+    sen5xmeasurement.pN1p0 = uint_pN1p0 / 10 * 100;
+    sen5xmeasurement.pN2p5 = uint_pN2p5 / 10 * 100;
+    sen5xmeasurement.pN4p0 = uint_pN4p0 / 10 * 100;
+    sen5xmeasurement.pN10p0 = uint_pN10p0 / 10 * 100;
+    sen5xmeasurement.tSize = uint_tSize / 1000.0f;
 
     // Remove accumuluative values:
     // https://github.com/fablabbcn/smartcitizen-kit-2x/issues/85
