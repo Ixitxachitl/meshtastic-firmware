@@ -109,6 +109,8 @@ void GamesModule::announceHighScore(const char *initials, uint32_t score)
         return;
 #if GAME_DEMO_MODE
     meshtastic_MeshPacket *p = gameAllocDataPacket();
+    if (!p)
+        return;
     p->to = NODENUM_BROADCAST;
     p->channel = 0;
     p->decoded.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
