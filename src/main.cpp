@@ -1048,6 +1048,15 @@ void setup()
     service = new MeshService();
     service->init();
 
+#if HAS_TFT && ARCH_PORTDUINO
+    // A desktop SDL window always has access to the host's physical keyboard (see
+    // TFTDisplay::sdlLoop()), unlike portduino's default HAS_TRACKBALL assumption below. Set this
+    // before osk_found/setupModules() so CannedMessageModule doesn't fall back to the
+    // trackball-style on-screen keyboard for freetext entry.
+    if (portduino_config.displayPanel == x11)
+        kb_found = true;
+#endif
+
     // Set osk_found for trackball/encoder devices BEFORE setupModules so CannedMessageModule can detect it
 #if defined(HAS_TRACKBALL) || (defined(INPUTDRIVER_ENCODER_TYPE) && INPUTDRIVER_ENCODER_TYPE == 2)
 #ifndef HAS_PHYSICAL_KEYBOARD

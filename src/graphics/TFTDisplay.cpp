@@ -922,6 +922,8 @@ class LGFX : public lgfx::LGFX_Device
             lgfx::Panel_sdl *sdl_panel_ = (lgfx::Panel_sdl *)_panel_instance;
             sdl_panel_->setup();
             sdl_panel_->addKeyCodeMapping(SDLK_RETURN, SDL_SCANCODE_KP_ENTER);
+            // kb_found is set earlier in main.cpp (before CannedMessageModule is constructed) so
+            // it's already true here.
         }
 #endif
         setPanel(_panel_instance); // Sets the panel to use.
@@ -1453,9 +1455,19 @@ void TFTDisplay::sdlLoop()
         lgfx::Panel_sdl *sdl_panel_ = (lgfx::Panel_sdl *)tft->_panel_instance;
         if (sdl_panel_->loop() && !shuttingDown) {
             LOG_WARN("Window Closed!");
+            shuttingDown = true;
             InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_SHUTDOWN, .kbchar = 0, .touchX = 0, .touchY = 0};
             inputBroker->injectInputEvent(&event);
         }
+
+        // Drain characters/backspace/escape/tab typed on the physical keyboard, queued by the
+        // SDL event thread in Panel_sdl. Arrow keys and Enter are handled below via gpio state.
+        lgfx::Panel_sdl::QueuedKeyEvent queuedKey;
+        while (lgfx::Panel_sdl::dequeueKeyEvent(&queuedKey)) {
+            InputEvent event = {.inputEvent = queuedKey.inputEvent, .kbchar = queuedKey.kbchar, .touchX = 0, .touchY = 0};
+            inputBroker->injectInputEvent(&event);
+        }
+
         // Enter/Select is timed: a quick tap emits SELECT, holding past the threshold emits
         // SELECT_LONG (matching the physical user button, e.g. hold to open the games menu).
         static uint32_t enterPressedAt = 0;

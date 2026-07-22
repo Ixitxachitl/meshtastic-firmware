@@ -64,6 +64,35 @@ static lv_group_t *_keyboard_group = nullptr;
 static uint32_t _keyboard_key = 0;
 static bool _keyboard_pressed = false;
 
+static SDL_mutex *_key_queue_mutex = nullptr;
+static std::vector<Panel_sdl::QueuedKeyEvent> _key_queue;
+static constexpr size_t kMaxQueuedKeyEvents = 64;
+
+void Panel_sdl::queueKeyEvent(input_broker_event inputEvent, unsigned char kbchar)
+{
+    if (!_key_queue_mutex)
+        return;
+    SDL_LockMutex(_key_queue_mutex);
+    if (_key_queue.size() < kMaxQueuedKeyEvents)
+        _key_queue.push_back({inputEvent, kbchar});
+    SDL_UnlockMutex(_key_queue_mutex);
+}
+
+bool Panel_sdl::dequeueKeyEvent(QueuedKeyEvent *outEvent)
+{
+    if (!_key_queue_mutex)
+        return false;
+    bool got = false;
+    SDL_LockMutex(_key_queue_mutex);
+    if (!_key_queue.empty()) {
+        *outEvent = _key_queue.front();
+        _key_queue.erase(_key_queue.begin());
+        got = true;
+    }
+    SDL_UnlockMutex(_key_queue_mutex);
+    return got;
+}
+
 static monitor_t *const getMonitorByWindowID(uint32_t windowID)
 {
     for (auto &m : _list_monitor) {
@@ -168,6 +197,23 @@ void Panel_sdl::_event_proc(void)
                     _keyboard_key = lvKey;
                     _keyboard_pressed = event.type == SDL_KEYDOWN;
                 }
+            } else if (event.type == SDL_KEYDOWN) {
+                // BaseUI mode: control keys not covered by the gpio key-code map (arrows/enter
+                // already flow through that path below). Printable characters arrive separately
+                // via SDL_TEXTINPUT so shift/layout is resolved for us.
+                switch (event.key.keysym.sym) {
+                case SDLK_BACKSPACE:
+                    Panel_sdl::queueKeyEvent(INPUT_BROKER_BACK);
+                    break;
+                case SDLK_ESCAPE:
+                    Panel_sdl::queueKeyEvent(INPUT_BROKER_CANCEL);
+                    break;
+                case SDLK_TAB:
+                    Panel_sdl::queueKeyEvent(INPUT_BROKER_ANYKEY, INPUT_BROKER_MSG_TAB);
+                    break;
+                default:
+                    break;
+                }
             }
 
             /// Check key mapping
@@ -218,6 +264,15 @@ void Panel_sdl::_event_proc(void)
                 Panel_sdl::gpio_lo(gpio);
             } else {
                 Panel_sdl::gpio_hi(gpio);
+            }
+        } else if (event.type == SDL_TEXTINPUT) {
+            if (!lv_is_initialized()) {
+                for (const char *p = event.text.text; *p; ++p) {
+                    unsigned char c = (unsigned char)*p;
+                    if (c >= 32 && c <= 126) {
+                        Panel_sdl::queueKeyEvent(INPUT_BROKER_ANYKEY, c);
+                    }
+                }
             }
         } else if (event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_MOUSEBUTTONUP || event.type == SDL_MOUSEMOTION) {
             auto mon = getMonitorByWindowID(event.button.windowID);
@@ -348,6 +403,7 @@ int Panel_sdl::setup(void)
 
     _update_in_semaphore = SDL_CreateSemaphore(0);
     _update_out_semaphore = SDL_CreateSemaphore(0);
+    _key_queue_mutex = SDL_CreateMutex();
     for (size_t pin = 0; pin < EMULATED_GPIO_MAX; ++pin) {
         gpio_hi(pin);
     }
@@ -384,6 +440,9 @@ int Panel_sdl::close(void)
     SDL_StopTextInput();
     SDL_DestroySemaphore(_update_in_semaphore);
     SDL_DestroySemaphore(_update_out_semaphore);
+    SDL_DestroyMutex(_key_queue_mutex);
+    _key_queue_mutex = nullptr;
+    _key_queue.clear();
     SDL_Quit();
     return 0;
 }

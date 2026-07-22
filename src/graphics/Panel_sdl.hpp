@@ -31,6 +31,7 @@ Porting for SDL:
 #endif
 
 #if defined(SDL_h_)
+#include "input/InputBroker.h"
 #include "lgfx/v1/Touch.hpp"
 #include "lgfx/v1/misc/range.hpp"
 #include "lgfx/v1/panel/Panel_FrameBufferBase.hpp"
@@ -130,6 +131,18 @@ struct Panel_sdl : public Panel_FrameBufferBase {
     };
     static void addKeyCodeMapping(SDL_KeyCode keyCode, uint8_t gpio);
     static int getKeyCodeMapping(SDL_KeyCode keyCode);
+
+    // BaseUI (non-LVGL) character/control keys typed on a physical keyboard, queued by the
+    // SDL event thread and drained by the firmware thread in TFTDisplay::sdlLoop(). Arrow keys
+    // and Enter already flow through the gpio->InputBroker path via addKeyCodeMapping(), so this
+    // covers everything else needed for CannedMessageModule's freetext editor: printable
+    // characters, backspace, escape (cancel), and tab (switch destination).
+    struct QueuedKeyEvent {
+        input_broker_event inputEvent = INPUT_BROKER_NONE;
+        unsigned char kbchar = 0;
+    };
+    static void queueKeyEvent(input_broker_event inputEvent, unsigned char kbchar = 0);
+    static bool dequeueKeyEvent(QueuedKeyEvent *outEvent);
 
   protected:
     const char *_window_title = "LGFX Simulator";
