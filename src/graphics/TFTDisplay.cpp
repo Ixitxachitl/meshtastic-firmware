@@ -914,8 +914,17 @@ class LGFX : public lgfx::LGFX_Device
         else if (portduino_config.displayPanel == x11) {
             // No hardware touch module: feed the SDL window's mouse events through a
             // Touch_sdl so BaseUI's TouchScreenImpl (which calls tft->getTouch()) works,
-            // mirroring what the device-ui LGFXConfig driver does.
+            // mirroring what the device-ui LGFXConfig driver does. Touch_sdl already reports
+            // raw coordinates in final panel-pixel space (see Panel_sdl's own touch_x/y clamp
+            // against panel_width/panel_height), so calibrate 1:1 - otherwise LGFX's ITouch
+            // default calibration range (0..3600) squashes every click into a small corner.
             _touch_instance = new lgfx::Touch_sdl((lgfx::Panel_sdl *)_panel_instance);
+            auto touch_cfg = _touch_instance->config();
+            touch_cfg.x_min = 0;
+            touch_cfg.x_max = cfg.panel_width - 1;
+            touch_cfg.y_min = 0;
+            touch_cfg.y_max = cfg.panel_height - 1;
+            _touch_instance->config(touch_cfg);
             _panel_instance->setTouch(_touch_instance);
         }
         if (portduino_config.displayPanel == x11) {
