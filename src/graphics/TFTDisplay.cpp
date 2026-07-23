@@ -1534,6 +1534,20 @@ void TFTDisplay::sdlLoop()
 #endif
 }
 
+int TFTDisplay::heldXZone()
+{
+#if defined(SDL_h_)
+    if (portduino_config.displayPanel != x11)
+        return 0;
+    // Same GPIO numbers/active-low convention as the debounced path in sdlLoop() above.
+    if (!lgfx::Panel_sdl::gpio_in(39)) // LEFT
+        return -1;
+    if (!lgfx::Panel_sdl::gpio_in(37)) // RIGHT
+        return 1;
+#endif
+    return 0;
+}
+
 // Send a command to the display (low level function)
 void TFTDisplay::sendCommand(uint8_t com)
 {
