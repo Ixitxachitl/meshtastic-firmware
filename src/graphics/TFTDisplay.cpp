@@ -933,6 +933,11 @@ class LGFX : public lgfx::LGFX_Device
             sdl_panel_->addKeyCodeMapping(SDLK_RETURN, SDL_SCANCODE_KP_ENTER);
             // kb_found is set earlier in main.cpp (before CannedMessageModule is constructed) so
             // it's already true here.
+
+            // Whole-number window-scale multiplier for the simulator window, e.g. `Zoom: 2`
+            // in config.yaml's Display block. Must be set before init() creates the window.
+            if (portduino_config.displayZoom > 1)
+                sdl_panel_->setScaling(portduino_config.displayZoom, portduino_config.displayZoom);
         }
 #endif
         setPanel(_panel_instance); // Sets the panel to use.

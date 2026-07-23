@@ -134,6 +134,9 @@ extern struct portduino_config_struct {
     screen_modules displayPanel = no_screen;
     int displayWidth = 0;
     int displayHeight = 0;
+    // Integer window-scale multiplier for the SDL-backed simulator window (Panel_sdl::setScaling
+    // only accepts whole numbers); real SPI/parallel panels ignore this.
+    int displayZoom = 1;
     bool displayRGBOrder = false;
     bool displayBacklightInvert = false;
     bool displayRotate = false;

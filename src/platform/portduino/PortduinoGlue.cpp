@@ -12,8 +12,10 @@
 #include "meshUtils.h"
 #include <ErriezCRC32.h>
 #include <Utility.h>
+#include <algorithm>
 #include <assert.h>
 #include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -21,6 +23,7 @@
 #include <memory>
 #include <set>
 #include <stdexcept>
+#include <strings.h>
 #include <unistd.h>
 #ifndef _WIN32
 // Only the PORTDUINO_LINUX_HARDWARE block below calls ioctl() (HCIGETDEVINFO,
@@ -58,6 +61,14 @@ bool portduinoWindowsPrimaryMac(uint8_t *dmac);
 
 portduino_config_struct portduino_config;
 portduino_status_struct portduino_status;
+
+// See declaration comment in graphics/LGFX/LGFXConfig.h for why this isn't just
+// `portduino_config.displayZoom` read directly from a PortduinoGlue.h include there.
+int getPortduinoDisplayZoom()
+{
+    return portduino_config.displayZoom;
+}
+
 std::ofstream traceFile;
 std::ofstream JSONFile;
 Ch341Hal *ch341Hal = nullptr;
@@ -1058,12 +1069,19 @@ bool loadConfig(const char *configPath)
         }
         if (yamlConfig["Display"]) {
 
+            const std::string panelName = yamlConfig["Display"]["Panel"].as<std::string>("");
             for (const auto &screen_name : portduino_config.screen_names) {
-                if (yamlConfig["Display"]["Panel"].as<std::string>("") == screen_name.second)
+                if (panelName == screen_name.second)
                     portduino_config.displayPanel = screen_name.first;
             }
+            // "SDL" is an alias for the same generic simulator-window panel as "X11": on
+            // platforms without USE_X11 (e.g. Windows) that path already renders through
+            // SDL2 via LGFXConfig's useSimWindow/Panel_sdl, never touching real X11 libs.
+            if (strcasecmp(panelName.c_str(), "SDL") == 0)
+                portduino_config.displayPanel = x11;
             portduino_config.displayHeight = yamlConfig["Display"]["Height"].as<int>(0);
             portduino_config.displayWidth = yamlConfig["Display"]["Width"].as<int>(0);
+            portduino_config.displayZoom = std::max(1, (int)std::lround(yamlConfig["Display"]["Zoom"].as<float>(1.0f)));
 
             readGPIOFromYaml(yamlConfig["Display"]["DC"], portduino_config.displayDC, -1);
             readGPIOFromYaml(yamlConfig["Display"]["CS"], portduino_config.displayCS, -1);

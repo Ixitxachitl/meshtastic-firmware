@@ -8,6 +8,11 @@
 #ifdef ARCH_PORTDUINO
 #include "Light_PWM.h"
 #include "graphics/Panel_sdl.hpp"
+// Declared (not included from PortduinoGlue.h) on purpose: PortduinoGlue.h drags in
+// RadioLib.h transitively, which isn't resolvable from the vendored meshtastic-device-ui
+// library's own build scope (its .cpp files include this header too). Defined in
+// PortduinoGlue.cpp, which already has full access to portduino_config.
+int getPortduinoDisplayZoom();
 #endif
 
 class LGFXConfig : public lgfx::LGFX_Device
@@ -260,6 +265,11 @@ class LGFXConfig : public lgfx::LGFX_Device
             auto *sdl_panel = static_cast<lgfx::Panel_sdl *>(_panel_instance);
             sdl_panel->setup();
             sdl_panel->addKeyCodeMapping(SDLK_RETURN, SDL_SCANCODE_KP_ENTER);
+            // Whole-number window-scale multiplier for the simulator window, e.g. `Zoom: 2`
+            // in config.yaml's Display block. Must be set before init() creates the window.
+            int zoom = getPortduinoDisplayZoom();
+            if (zoom > 1)
+                sdl_panel->setScaling(zoom, zoom);
         }
 #endif
 #endif
