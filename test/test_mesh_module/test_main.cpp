@@ -262,10 +262,6 @@ void tearDown(void)
     mockService = nullptr;
     service = nullptr;
 
-    // sendLocal() now defers isToUs() packets to fromRadioQueue instead of handling them
-    // in-line; drain any left over by a test that didn't (e.g. one that only cares about the
-    // synchronous phone delivery in sendToMesh) so they're released instead of leaking.
-    mockRouter->runOnce();
     delete mockRouter;
     mockRouter = nullptr;
     router = nullptr;
@@ -521,12 +517,6 @@ static void test_phoneRequest_replyReachesPhone()
     request.decoded.want_response = true;
 
     service->sendToMesh(packetPool.allocCopy(request), RX_SRC_USER);
-
-    // sendLocal() defers isToUs() packets to fromRadioQueue instead of calling handleReceived()
-    // in-line (avoids re-entering callModules() from within itself); drain it like the real
-    // Router thread would on its next tick. The nested reply this dispatches also re-queues
-    // itself, so the same drain handles both.
-    mockRouter->runOnce();
 
     TEST_ASSERT_EQUAL_UINT32(1, replyOwner->allocReplyCalls);
 
