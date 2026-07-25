@@ -144,6 +144,13 @@ struct Panel_sdl : public Panel_FrameBufferBase {
     static void queueKeyEvent(input_broker_event inputEvent, unsigned char kbchar = 0);
     static bool dequeueKeyEvent(QueuedKeyEvent *outEvent);
 
+    // Must be called once, after lv_init() has run but before device-ui builds any screens
+    // (see tftSetup.cpp), so the default group used for keyboard navigation/typing exists
+    // in time for LVGL to auto-add widgets to it as they're created. No-op if LVGL hasn't
+    // been initialized (e.g. BaseUI-only builds, where lv_init() is never called) or if
+    // already set up.
+    static void initKeyboardIndev(void);
+
   protected:
     const char *_window_title = "LGFX Simulator";
     SDL_mutex *_sdl_mutex = nullptr;

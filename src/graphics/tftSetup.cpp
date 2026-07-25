@@ -130,6 +130,14 @@ void tftSetup(void)
         deviceScreen = &DeviceScreen::create(&displayConfig);
         PacketAPI::create(PacketServer::init());
         deviceScreen->init(new PacketClient);
+#if defined(SDL_h_)
+        // Must happen here: lv_init() has just run (inside deviceScreen->init()) but
+        // init_screens()/ui_init() hasn't yet -- that's deferred to the tft_task_handler
+        // thread below, once uiConfig arrives over the loopback PacketClient. See
+        // Panel_sdl::initKeyboardIndev() for why the timing matters.
+        if (portduino_config.displayPanel == x11)
+            lgfx::Panel_sdl::initKeyboardIndev();
+#endif
     } else {
         LOG_INFO("Running without TFT display!");
     }
