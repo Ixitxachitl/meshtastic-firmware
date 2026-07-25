@@ -6,6 +6,7 @@
 #include "mesh/generated/meshtastic/config.pb.h"
 #include <OLEDDisplay.h>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -847,6 +848,6 @@ class Screen : public concurrency::OSThread
 // Extern declarations for function symbols used in UIRenderer
 extern std::vector<std::string> functionSymbol;
 extern std::string functionSymbolString;
-extern graphics::Screen *screen;
+extern std::unique_ptr<graphics::Screen> screen;
 
 #endif
