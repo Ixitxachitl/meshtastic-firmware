@@ -12,6 +12,7 @@
 #ifdef ARCH_PORTDUINO
 #include "PortduinoGlue.h"
 #include "graphics/Panel_sdl.hpp"
+#include "input/InputBroker.h"
 #include <thread>
 #endif
 
@@ -38,7 +39,16 @@ void tft_task_handler(void *param = nullptr)
 #ifdef ARCH_PORTDUINO
 #if defined(SDL_h_)
         if (portduino_config.displayPanel == sdl) {
-            lgfx::Panel_sdl::loop();
+            static bool shuttingDown = false;
+            // TFTDisplay::sdlLoop() (the classic display path) checks this same return value to
+            // detect the window's close button; this device-ui/COLOR path was discarding it, so
+            // closing the window here never shut the process down.
+            if (lgfx::Panel_sdl::loop() && !shuttingDown) {
+                LOG_WARN("Window Closed!");
+                shuttingDown = true;
+                InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_SHUTDOWN, .kbchar = 0, .touchX = 0, .touchY = 0};
+                inputBroker->injectInputEvent(&event);
+            }
         }
 #endif
 #endif
