@@ -45,6 +45,10 @@
 // Defined in WindowsMacAddr.cpp, which keeps <iphlpapi.h> out of this TU: it
 // pulls in RPC/OLE headers that collide with the Arduino API.
 bool portduinoWindowsPrimaryMac(uint8_t *dmac);
+
+// Defined in WindowsConsole.cpp, same NOUSER-collision reasons as portduinoWindowsPrimaryMac().
+bool portduinoWindowsConsoleAttachToParent();
+void portduinoWindowsConsoleAllocIfNeeded();
 #endif
 
 #ifdef __APPLE__
@@ -142,6 +146,7 @@ static void checkSpidevBufsiz()
     switch (portduino_config.displayPanel) {
     case no_screen:
     case x11:
+    case sdl:
     case fb:
     case hub75:
         return; // not driven over spidev
@@ -298,6 +303,15 @@ void portduinoSetup()
     std::string gpioChipName = "gpiochip";
     portduino_config.displayPanel = no_screen;
 
+#if defined(_WIN32) && HAS_SCREEN
+    // This build links with the Windows subsystem (no auto-created console at all - see
+    // windows_link_flags.py), so reattach to the launching terminal's console when there is one
+    // (dev workflow: running meshtasticd.exe from an existing shell). If there's no parent console
+    // (double-clicked from Explorer), this is a no-op and the process stays windowless/silent
+    // unless General.ShowConsole asks for a console below.
+    portduinoWindowsConsoleAttachToParent();
+#endif
+
     // Force stdout to be line buffered
     setvbuf(stdout, stdoutBuffer, _IOLBF, sizeof(stdoutBuffer));
 
@@ -319,6 +333,18 @@ void portduinoSetup()
 
     if (portduino_config.force_simradio == true) {
         portduino_config.lora_module = use_simradio;
+#ifdef PORTDUINO_DEFAULT_TFT_GUI
+        // -s skips the config.yaml search entirely (below), so without this the "no config
+        // found" branch's TFT defaults never run and -s opens no window at all.
+        portduino_config.displayPanel = sdl;
+        if (portduino_config.displayWidth == 0)
+            portduino_config.displayWidth = 320;
+        if (portduino_config.displayHeight == 0)
+            portduino_config.displayHeight = 240;
+        portduino_config.displayOffsetRotate = 0;
+        if (!yamlOnly)
+            std::cout << "Using built-in native TFT defaults (sim radio + 320x240 window)" << std::endl;
+#endif
     } else if (configPath != nullptr) {
         if (loadConfig(configPath)) {
             if (!yamlOnly)
@@ -348,7 +374,7 @@ void portduinoSetup()
             std::cout << "No 'config.yaml' found..." << std::endl;
         portduino_config.lora_module = use_simradio;
 #ifdef PORTDUINO_DEFAULT_TFT_GUI
-        portduino_config.displayPanel = x11;
+        portduino_config.displayPanel = sdl;
         if (portduino_config.displayWidth == 0)
             portduino_config.displayWidth = 320;
         if (portduino_config.displayHeight == 0)
@@ -371,6 +397,13 @@ void portduinoSetup()
             }
         }
     }
+
+#if defined(_WIN32) && HAS_SCREEN
+    // All config.yaml/config.d files are loaded by this point, so General.ShowConsole (if set) is
+    // known. No-op if portduinoWindowsConsoleAttachToParent() above already attached one.
+    if (portduino_config.show_console)
+        portduinoWindowsConsoleAllocIfNeeded();
+#endif
 
 #ifndef ARCH_PORTDUINO_WASM
     if (yamlOnly) {
@@ -1074,11 +1107,6 @@ bool loadConfig(const char *configPath)
                 if (panelName == screen_name.second)
                     portduino_config.displayPanel = screen_name.first;
             }
-            // "SDL" is an alias for the same generic simulator-window panel as "X11": on
-            // platforms without USE_X11 (e.g. Windows) that path already renders through
-            // SDL2 via LGFXConfig's useSimWindow/Panel_sdl, never touching real X11 libs.
-            if (strcasecmp(panelName.c_str(), "SDL") == 0)
-                portduino_config.displayPanel = x11;
             portduino_config.displayHeight = yamlConfig["Display"]["Height"].as<int>(0);
             portduino_config.displayWidth = yamlConfig["Display"]["Width"].as<int>(0);
             portduino_config.displayZoom = std::max(1, (int)std::lround(yamlConfig["Display"]["Zoom"].as<float>(1.0f)));
@@ -1248,6 +1276,7 @@ bool loadConfig(const char *configPath)
         if (yamlConfig["General"]) {
             portduino_config.MaxNodes = (yamlConfig["General"]["MaxNodes"]).as<int>(200);
             portduino_config.maxtophone = (yamlConfig["General"]["MaxMessageQueue"]).as<int>(100);
+            portduino_config.show_console = (yamlConfig["General"]["ShowConsole"]).as<bool>(false);
             portduino_config.config_directory = (yamlConfig["General"]["ConfigDirectory"]).as<std::string>("");
             portduino_config.available_directory =
                 (yamlConfig["General"]["AvailableDirectory"]).as<std::string>("/etc/meshtasticd/available.d/");

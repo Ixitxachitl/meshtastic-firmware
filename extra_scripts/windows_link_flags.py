@@ -100,3 +100,25 @@ if env["PIOENV"].startswith("native-windows"):
     # Let the UCRT64 toolchain pick its default runtime/import libraries.
     # Forcing a fully static CRT on Windows conflicts with Portduino's itoa shim
     # and drags in the wrong wide-char CRT symbol flavor for libstdc++.
+
+    # Embed meshtastic.ico (the Android app's launcher icon) as the .exe's file/taskbar
+    # icon. Built eagerly here - same pattern as _ensure_local_argp() above - so the
+    # object file already exists by the time SCons links the program.
+    windres_dir = os.path.join(project_dir, "src", "platform", "portduino", "windows")
+    rc_path = os.path.join(windres_dir, "meshtastic.rc")
+    build_dir = env.subst("$BUILD_DIR")
+    res_obj = os.path.join(build_dir, "meshtastic_rc.o")
+    if os.path.isfile(rc_path):
+        os.makedirs(build_dir, exist_ok=True)
+        windres = os.path.join(ucrt_bin, "windres.exe")
+        subprocess.check_call([windres, "-I", windres_dir, rc_path, "-O", "coff", "-o", res_obj])
+        env.Append(LINKFLAGS=[res_obj])
+
+    if env["PIOENV"] == "native-windows-tft":
+        # GUI subsystem: no console window is auto-created at all (double-clicking meshtasticd.exe
+        # from Explorer opens only the SDL window, nothing to hide/minimize after the fact).
+        # PortduinoGlue.cpp's portduinoWindowsConsoleAttachToParent() reattaches to the launching
+        # terminal's console when there is one, so the dev workflow (running from a shell) is
+        # unaffected. Not applied to plain native-windows: that build is a headless daemon with no
+        # window at all, so its console must never be suppressed.
+        env.Append(LINKFLAGS=["-mwindows"])

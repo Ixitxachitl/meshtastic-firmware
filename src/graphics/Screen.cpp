@@ -962,7 +962,7 @@ void Screen::setup()
     if (config.display.displaymode != meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
         // The x11/SDL sim window has no hardware touchscreenModule, but Panel_sdl feeds
         // mouse events through tft->getTouch() (wired via Touch_sdl), so enable touch there too.
-        if (portduino_config.touchscreenModule || portduino_config.displayPanel == x11) {
+        if (portduino_config.touchscreenModule || portduino_config.displayPanel == x11 || portduino_config.displayPanel == sdl) {
             touchScreenImpl1 =
                 new TouchScreenImpl1(dispdev->getWidth(), dispdev->getHeight(), static_cast<TFTDisplay *>(dispdev)->getTouch);
             touchScreenImpl1->init();

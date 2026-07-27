@@ -1,0 +1,3 @@
+// Windows resource script: embeds the Meshtastic Android app's launcher icon
+// (playstore asset, converted to .ico) as meshtasticd.exe's file icon.
+IDI_APP_ICON ICON "meshtastic.ico"

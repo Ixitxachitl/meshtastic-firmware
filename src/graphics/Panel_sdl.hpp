@@ -152,7 +152,7 @@ struct Panel_sdl : public Panel_FrameBufferBase {
     static void initKeyboardIndev(void);
 
   protected:
-    const char *_window_title = "LGFX Simulator";
+    const char *_window_title = "Meshtastic";
     SDL_mutex *_sdl_mutex = nullptr;
 
     void sdl_create(monitor_t *m);

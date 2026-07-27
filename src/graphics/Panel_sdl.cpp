@@ -35,6 +35,11 @@ Porting for SDL:
 #define M_PI 3.14159265358979323846
 #endif
 
+#ifdef _WIN32
+// Meshtastic Android app launcher icon (32x32 RGBA), used as the SDL window/taskbar icon.
+#include "platform/portduino/windows/meshtastic_icon32.h"
+#endif
+
 namespace lgfx
 {
 inline namespace v1
@@ -880,6 +885,15 @@ void Panel_sdl::sdl_create(monitor_t *m)
     {
         m->window = SDL_CreateWindow(_window_title, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, window_width, window_height,
                                      flag); /*last param. SDL_WINDOW_BORDERLESS to hide borders*/
+#ifdef _WIN32
+        SDL_Surface *icon = SDL_CreateRGBSurfaceWithFormatFrom((void *)meshtastic_icon32_rgba, meshtastic_icon32_width,
+                                                                meshtastic_icon32_height, 32, meshtastic_icon32_width * 4,
+                                                                SDL_PIXELFORMAT_RGBA32);
+        if (icon) {
+            SDL_SetWindowIcon(m->window, icon);
+            SDL_FreeSurface(icon);
+        }
+#endif
     }
     m->renderer = SDL_CreateRenderer(m->window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     m->texture =

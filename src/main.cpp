@@ -1053,7 +1053,7 @@ void setup()
     // TFTDisplay::sdlLoop()), unlike portduino's default HAS_TRACKBALL assumption below. Set this
     // before osk_found/setupModules() so CannedMessageModule doesn't fall back to the
     // trackball-style on-screen keyboard for freetext entry.
-    if (portduino_config.displayPanel == x11)
+    if (portduino_config.displayPanel == x11 || portduino_config.displayPanel == sdl)
         kb_found = true;
 #endif
 
@@ -1487,7 +1487,7 @@ void loop()
         }
     }
 #if HAS_TFT
-    if (screen && portduino_config.displayPanel == x11 &&
+    if (screen && (portduino_config.displayPanel == x11 || portduino_config.displayPanel == sdl) &&
         config.display.displaymode != meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
         auto dispdev = screen->getDisplayDevice();
         if (dispdev)

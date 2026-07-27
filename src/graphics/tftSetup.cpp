@@ -37,7 +37,7 @@ void tft_task_handler(void *param = nullptr)
         spiLock->unlock();
 #ifdef ARCH_PORTDUINO
 #if defined(SDL_h_)
-        if (portduino_config.displayPanel == x11) {
+        if (portduino_config.displayPanel == sdl) {
             lgfx::Panel_sdl::loop();
         }
 #endif
@@ -55,8 +55,11 @@ void tftSetup(void)
 #else
     if (portduino_config.displayPanel != no_screen) {
         DisplayDriverConfig displayConfig;
+        // Indexed positionally by screen_modules (PortduinoGlue.h) - HUB75 and SDL must stay at
+        // the end, matching where those two enum members were appended, so this stays in sync.
         static char *panels[] = {"NOSCREEN", "X11",     "FB",      "ST7789",  "ST7735",  "ST7735S",
-                                 "ST7796",   "ILI9341", "ILI9342", "ILI9486", "ILI9488", "HX8357D"};
+                                 "ST7796",   "ILI9341", "ILI9342", "ILI9486", "ILI9488", "HX8357D",
+                                 "HUB75",    "SDL"};
         static char *touch[] = {"NOTOUCH", "XPT2046", "STMPE610", "GT911", "FT5x06"};
 #if defined(USE_X11)
         if (portduino_config.displayPanel == x11) {
@@ -135,7 +138,7 @@ void tftSetup(void)
         // init_screens()/ui_init() hasn't yet -- that's deferred to the tft_task_handler
         // thread below, once uiConfig arrives over the loopback PacketClient. See
         // Panel_sdl::initKeyboardIndev() for why the timing matters.
-        if (portduino_config.displayPanel == x11)
+        if (portduino_config.displayPanel == sdl)
             lgfx::Panel_sdl::initKeyboardIndev();
 #endif
     } else {

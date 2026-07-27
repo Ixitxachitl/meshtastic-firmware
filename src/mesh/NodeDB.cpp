@@ -863,6 +863,13 @@ void NodeDB::installDefaultConfig(bool preserveKey = false)
 #if HAS_TFT // For the devices that support MUI, default to that
     config.display.displaymode = meshtastic_Config_DisplayConfig_DisplayMode_COLOR;
 #endif
+#if defined(PORTDUINO_DEFAULT_TFT_GUI)
+    // BaseUI/device-ui has no Windows/SDL backend (see tftSetup.cpp's sdl case), so defaulting to
+    // COLOR here - like every other HAS_TFT device above - would leave this build with no display
+    // at all. Fall back to the classic Screen.cpp/TFTDisplay.cpp/Panel_sdl path instead, which does
+    // support it.
+    config.display.displaymode = meshtastic_Config_DisplayConfig_DisplayMode_DEFAULT;
+#endif
 
 #if defined(TFT_WIDTH) && defined(TFT_HEIGHT) && (TFT_WIDTH >= 200 || TFT_HEIGHT >= 200)
     config.display.enable_message_bubbles = true;
