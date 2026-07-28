@@ -174,6 +174,8 @@ bool BreakoutGame::step()
 #include <pb_encode.h>
 #if ARCH_PORTDUINO && defined(__linux__)
 #include "input/LinuxJoystick.h"
+#elif HAS_TFT && ARCH_PORTDUINO
+#include "graphics/TFTDisplay.h"
 #endif
 #if defined(M5STACK_CARDPUTER_ADV)
 #include "input/cardKbI2cImpl.h"
@@ -228,6 +230,19 @@ bool Breakout::tick()
         else if (held > 0)
             game.movePaddle(PADDLE_POLL_STEP);
     }
+#elif HAS_TFT && ARCH_PORTDUINO
+    // Desktop SDL window (e.g. native-windows-tft) always has the host's physical keyboard (see
+    // main.cpp's kb_found comment) -- poll the arrow keys directly each tick for continuous
+    // "hold to move" input, same as the Linux joystick path above. TB_LEFT/TB_RIGHT below are not
+    // real GPIO on this build (portduino's generic RPi-trackball default), so that branch is
+    // skipped in favour of this one.
+    {
+        const int held = TFTDisplay::heldXZone();
+        if (held < 0)
+            game.movePaddle(-PADDLE_POLL_STEP);
+        else if (held > 0)
+            game.movePaddle(PADDLE_POLL_STEP);
+    }
 #elif defined(HAS_TRACKBALL)
 #if defined(HAS_TRACKBALL) && defined(TB_THRESHOLD)
     // Optical trackball (TB_THRESHOLD set): velocity driven by handleInput() events.
@@ -241,22 +256,31 @@ bool Breakout::tick()
     }
 #else
     // Device has discrete direction GPIO (INPUT_PULLUP, active-low) - poll pin state each tick
-    // for true held detection and smooth acceleration.
-    const bool heldLeft = !digitalRead(TB_LEFT);
-    const bool heldRight = !digitalRead(TB_RIGHT);
-    if (heldLeft && !heldRight) {
-        if (paddleVel > 0)
-            paddleVel = 0; // instant direction flip
-        paddleVel = (paddleVel - 1 < -PADDLE_VEL_MAX) ? -PADDLE_VEL_MAX : static_cast<int16_t>(paddleVel - 1);
-    } else if (heldRight && !heldLeft) {
-        if (paddleVel < 0)
-            paddleVel = 0;
-        paddleVel = (paddleVel + 1 > PADDLE_VEL_MAX) ? PADDLE_VEL_MAX : static_cast<int16_t>(paddleVel + 1);
-    } else {
-        paddleVel = (paddleVel > 0) ? paddleVel - 1 : (paddleVel < 0) ? paddleVel + 1 : 0;
-    }
-    if (paddleVel != 0)
+    // for true held detection and smooth acceleration. TB_LEFT/TB_RIGHT read 255 (unbound) on
+    // portduino builds with no trackball wired in yaml (e.g. native-windows-tft, which inherits
+    // HAS_TRACKBALL=1 from architecture.h's generic RPi-GPIO support) -- digitalRead() on an
+    // unbound pin indexes past the simulated GPIO table, so fall back to the event-driven decay
+    // path instead of touching it.
+    if (TB_LEFT != 255 && TB_RIGHT != 255) {
+        const bool heldLeft = !digitalRead(TB_LEFT);
+        const bool heldRight = !digitalRead(TB_RIGHT);
+        if (heldLeft && !heldRight) {
+            if (paddleVel > 0)
+                paddleVel = 0; // instant direction flip
+            paddleVel = (paddleVel - 1 < -PADDLE_VEL_MAX) ? -PADDLE_VEL_MAX : static_cast<int16_t>(paddleVel - 1);
+        } else if (heldRight && !heldLeft) {
+            if (paddleVel < 0)
+                paddleVel = 0;
+            paddleVel = (paddleVel + 1 > PADDLE_VEL_MAX) ? PADDLE_VEL_MAX : static_cast<int16_t>(paddleVel + 1);
+        } else {
+            paddleVel = (paddleVel > 0) ? paddleVel - 1 : (paddleVel < 0) ? paddleVel + 1 : 0;
+        }
+        if (paddleVel != 0)
+            game.movePaddle(paddleVel);
+    } else if (paddleVel != 0) {
         game.movePaddle(paddleVel);
+        paddleVel += (paddleVel > 0) ? -1 : 1;
+    }
 #endif
 #elif defined(M5STACK_CARDPUTER_ADV)
     // Cardputer: poll the TCA8418 held-key state each tick for smooth continuous paddle movement.
@@ -305,9 +329,20 @@ void Breakout::handleInput(input_broker_event ev)
         return;
     }
 #endif
-#if (!defined(TB_THRESHOLD) && defined(HAS_TRACKBALL)) || defined(M5STACK_CARDPUTER_ADV)
-    // Paddle is polled every tick() (GPIO or held-key query); ignore LEFT/RIGHT events to avoid
-    // double-moving on the key-release edge.  HAS_TRACKBALL devices use the velocity path below.
+#if HAS_TFT && ARCH_PORTDUINO
+    // tick() polls TFTDisplay::heldXZone() directly each frame for continuous hold-to-move input
+    // (see tick()) -- ignore the discrete events here to avoid double-moving.
+    if (ev == INPUT_BROKER_LEFT || ev == INPUT_BROKER_RIGHT)
+        return;
+#elif !defined(TB_THRESHOLD) && defined(HAS_TRACKBALL)
+    // Paddle is polled every tick() via GPIO, but only when real pins are bound (see tick()) --
+    // ignore LEFT/RIGHT here in that case to avoid double-moving on the key-release edge. When
+    // unbound (TB_LEFT/TB_RIGHT == 255) tick() uses the event-driven path instead, so let these
+    // events fall through to set paddleVel below.
+    if ((ev == INPUT_BROKER_LEFT || ev == INPUT_BROKER_RIGHT) && TB_LEFT != 255 && TB_RIGHT != 255)
+        return;
+#elif defined(M5STACK_CARDPUTER_ADV)
+    // Cardputer polls held-key state every tick(); ignore LEFT/RIGHT to avoid double-moving.
     if (ev == INPUT_BROKER_LEFT || ev == INPUT_BROKER_RIGHT)
         return;
 #endif

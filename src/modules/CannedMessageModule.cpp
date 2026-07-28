@@ -166,7 +166,10 @@ int CannedMessageModule::splitConfiguredMessages()
     // Add a "Free Text" entry at the top if using a touch screen virtual keyboard
     tempMessages[tempCount++] = "[-- Free Text --]";
 #else
-    if (osk_found && screen) {
+    // A detected physical keyboard takes priority over the trackball/rotary on-screen keyboard:
+    // those devices reach freetext through the kb_found-gated menu entries instead (same as
+    // T-Deck), which land directly in the plain physical-keyboard text box.
+    if (osk_found && !kb_found && screen) {
         tempMessages[tempCount++] = "[-- Free Text --]";
     }
 #endif
@@ -719,7 +722,7 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
         }
 #else
         if (strcmp(current, "[-- Free Text --]") == 0) {
-            if (osk_found && screen) {
+            if (osk_found && !kb_found && screen) {
                 char headerBuffer[64];
                 if (this->dest == NODENUM_BROADCAST) {
                     snprintf(headerBuffer, sizeof(headerBuffer), "To: #%s", channels.getName(this->channel));
@@ -766,6 +769,10 @@ bool CannedMessageModule::handleMessageSelectorInput(const InputEvent *event, bo
 
                 return true;
             }
+            // Physical keyboard available: skip the trackball-style on-screen keyboard and go
+            // straight to the plain freetext text box, same as the dedicated menu entries.
+            LaunchFreetextWithDestination(dest, channel);
+            return true;
         }
 #endif
 

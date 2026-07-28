@@ -24,6 +24,10 @@
 #include "mesh/generated/meshtastic/rtttl.pb.h"
 #include <Arduino.h>
 
+#if defined(USE_SDL_AUDIO)
+#include "platform/portduino/SdlAudio.h"
+#endif
+
 #if defined(HAS_RGB_LED)
 #include "AmbientLightingThread.h"
 uint8_t red = 0;
@@ -158,6 +162,17 @@ int32_t ExternalNotificationModule::runOnce()
             delay = EXT_NOTIFICATION_FAST_THREAD_MS;
         }
 
+#if defined(USE_SDL_AUDIO)
+        // Native (PC) builds have no PWM/i2s buzzer; play the ringtone through host audio.
+        if (canBuzz() && buzzerShouldAlert) {
+            if (!portduino_audio::isPlaying() && isNagging && (nagCycleCutoff >= millis())) {
+                portduino_audio::beginRtttl(rtttlConfig.ringtone);
+            }
+            // we need fast updates to keep re-arming the ringtone while nagging
+            delay = EXT_NOTIFICATION_FAST_THREAD_MS;
+        }
+#endif
+
         return delay;
     }
 }
@@ -261,6 +276,9 @@ void ExternalNotificationModule::stopNow()
     LOG_INFO("Turning off external notification: ");
     LOG_INFO("Stop RTTTL playback");
     rtttl::stop();
+#if defined(USE_SDL_AUDIO)
+    portduino_audio::stop();
+#endif
 #ifdef HAS_I2S
     LOG_INFO("Stop audioThread playback");
     audioThread->stop();

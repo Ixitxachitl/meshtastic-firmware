@@ -28,6 +28,12 @@ class TFTDisplay : public OLEDDisplay
     virtual void display(bool fromBlank);
     void sdlLoop();
 
+    // Poll the physical LEFT/RIGHT arrow keys directly (SDL desktop window only), for callers that
+    // want continuous "hold to move" input instead of sdlLoop()'s single debounced event per press.
+    // Mirrors LinuxJoystick::heldXZone(): -1 = left held, +1 = right held, 0 = neither/not
+    // applicable (e.g. no SDL window, or not the active display panel).
+    static int heldXZone();
+
     // Turn the display upside down
     virtual void flipScreenVertically();
 

@@ -22,6 +22,8 @@ Porting for SDL:
 
 #if defined(SDL_h_)
 
+#include <lvgl.h>
+
 // #include "../common.hpp"
 // #include "../../misc/common_function.hpp"
 // #include "../../Bus.hpp"
@@ -31,6 +33,11 @@ Porting for SDL:
 #include <vector>
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
+#endif
+
+#ifdef _WIN32
+// Meshtastic Android app launcher icon (32x32 RGBA), used as the SDL window/taskbar icon.
+#include "platform/portduino/windows/meshtastic_icon32.h"
 #endif
 
 namespace lgfx
@@ -57,6 +64,81 @@ static inline void heap_free(void *buf)
 }
 
 static std::list<monitor_t *> _list_monitor;
+static lv_indev_t *_keyboard_indev = nullptr;
+static lv_group_t *_keyboard_group = nullptr;
+static uint32_t _keyboard_key = 0;
+static bool _keyboard_pressed = false;
+
+// device-ui (LVGL) printable text typed on the physical keyboard, arriving as SDL_TEXTINPUT
+// events. Queued as decoded Unicode code points and drained one press+release pair per LVGL
+// indev read so lv_textarea's default LV_EVENT_KEY handling inserts each character in order,
+// even when several arrive in the same SDL_TEXTINPUT event (fast typing, paste, IME commit).
+static constexpr size_t kMaxQueuedTextChars = 64;
+static std::vector<uint32_t> _text_char_queue;
+static bool _text_char_pressed = false;
+
+static void queueTextChar(uint32_t codepoint)
+{
+    if (_text_char_queue.size() < kMaxQueuedTextChars)
+        _text_char_queue.push_back(codepoint);
+}
+
+// Decodes one UTF-8 code point from a NUL-terminated string; returns the byte length consumed.
+// SDL delivers SDL_TEXTINPUT text as UTF-8, but LVGL's keypad indev wants a raw code point in
+// data->key (lv_textarea_add_char() re-encodes it), not raw UTF-8 bytes.
+static size_t utf8DecodeOne(const char *s, uint32_t *out)
+{
+    unsigned char c0 = (unsigned char)s[0];
+    if (c0 < 0x80) {
+        *out = c0;
+        return 1;
+    }
+    if ((c0 & 0xE0) == 0xC0 && s[1]) {
+        *out = ((c0 & 0x1F) << 6) | ((unsigned char)s[1] & 0x3F);
+        return 2;
+    }
+    if ((c0 & 0xF0) == 0xE0 && s[1] && s[2]) {
+        *out = ((c0 & 0x0F) << 12) | (((unsigned char)s[1] & 0x3F) << 6) | ((unsigned char)s[2] & 0x3F);
+        return 3;
+    }
+    if ((c0 & 0xF8) == 0xF0 && s[1] && s[2] && s[3]) {
+        *out = ((c0 & 0x07) << 18) | (((unsigned char)s[1] & 0x3F) << 12) | (((unsigned char)s[2] & 0x3F) << 6) |
+               ((unsigned char)s[3] & 0x3F);
+        return 4;
+    }
+    // Malformed lead byte: consume it as-is rather than getting stuck.
+    *out = c0;
+    return 1;
+}
+
+static SDL_mutex *_key_queue_mutex = nullptr;
+static std::vector<Panel_sdl::QueuedKeyEvent> _key_queue;
+static constexpr size_t kMaxQueuedKeyEvents = 64;
+
+void Panel_sdl::queueKeyEvent(input_broker_event inputEvent, unsigned char kbchar)
+{
+    if (!_key_queue_mutex)
+        return;
+    SDL_LockMutex(_key_queue_mutex);
+    if (_key_queue.size() < kMaxQueuedKeyEvents)
+        _key_queue.push_back({inputEvent, kbchar});
+    SDL_UnlockMutex(_key_queue_mutex);
+}
+
+bool Panel_sdl::dequeueKeyEvent(QueuedKeyEvent *outEvent)
+{
+    if (!_key_queue_mutex)
+        return false;
+    bool got = false;
+    SDL_LockMutex(_key_queue_mutex);
+    if (!_key_queue.empty()) {
+        *outEvent = _key_queue.front();
+        _key_queue.erase(_key_queue.begin());
+        got = true;
+    }
+    SDL_UnlockMutex(_key_queue_mutex);
+    return got;
+}
 
 static monitor_t *const getMonitorByWindowID(uint32_t windowID)
 {
@@ -70,6 +152,171 @@ static monitor_t *const getMonitorByWindowID(uint32_t windowID)
 //----------------------------------------------------------------------------
 
 static std::vector<Panel_sdl::KeyCodeMapping_t> _key_code_map;
+
+static uint32_t lvglKeyFromSdlKey(const SDL_KeyboardEvent &key)
+{
+    switch (key.keysym.sym) {
+    case SDLK_ESCAPE:
+        return LV_KEY_ESC;
+    case SDLK_BACKSPACE:
+        return LV_KEY_BACKSPACE;
+    case SDLK_TAB:
+        return (key.keysym.mod & KMOD_SHIFT) ? LV_KEY_PREV : LV_KEY_NEXT;
+    case SDLK_HOME:
+        return LV_KEY_HOME;
+    case SDLK_END:
+        return LV_KEY_END;
+    default:
+        return 0;
+    }
+}
+
+static void keyboard_read(lv_indev_t *indev, lv_indev_data_t *data)
+{
+    if (!_text_char_queue.empty()) {
+        data->key = _text_char_queue.front();
+        if (!_text_char_pressed) {
+            data->state = LV_INDEV_STATE_PRESSED;
+            _text_char_pressed = true;
+        } else {
+            data->state = LV_INDEV_STATE_RELEASED;
+            _text_char_pressed = false;
+            _text_char_queue.erase(_text_char_queue.begin());
+        }
+        // Keep LVGL calling us back immediately so a burst of queued characters (or the
+        // release half of the pair just sent) is drained within this indev read cycle
+        // instead of trickling out one per frame.
+        data->continue_reading = true;
+        return;
+    }
+    data->key = _keyboard_key;
+    data->state = _keyboard_pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+}
+
+static void ensureKeyboardIndev()
+{
+    if (_keyboard_indev) {
+        return;
+    }
+
+    _keyboard_group = lv_group_get_default();
+    if (!_keyboard_group) {
+        _keyboard_group = lv_group_create();
+        lv_group_set_default(_keyboard_group);
+    }
+
+    _keyboard_indev = lv_indev_create();
+    lv_indev_set_type(_keyboard_indev, LV_INDEV_TYPE_KEYPAD);
+    lv_indev_set_read_cb(_keyboard_indev, keyboard_read);
+    lv_indev_set_group(_keyboard_indev, _keyboard_group);
+}
+
+// Arrow keys + Enter are routed through a second, ENCODER-type indev rather than the KEYPAD
+// one above, to match what device-ui's own EncoderInputDriver.cpp does for a physical
+// trackball/joystick (T-Deck, CrowPanel, etc: INPUTDRIVER_ENCODER_TYPE == 3). This isn't
+// stylistic -- LVGL's KEYPAD indev processing unconditionally calls
+// lv_group_set_editing(g, false) ("Editing is not used by KEYPAD"), so a KEYPAD-routed Enter
+// can never enter a slider/dropdown/roller's edit mode; only ENCODER-type Enter presses get
+// LVGL's built-in short-press-toggles-edit-mode / long-press-toggles-edit-mode behavior (see
+// indev_encoder_proc() in lv_indev.c). Reusing that exact mechanism, with the exact same
+// action mapping the trackball driver uses, means arrow-key nav behaves identically to the
+// real hardware control instead of a keyboard-specific approximation:
+//   Up/Down    -> enc_diff -1/+1 (focus-move in navigate mode, LEFT/RIGHT edit in edit mode)
+//   Left/Right -> raw LV_KEY_DOWN/LV_KEY_UP sent straight to the focused widget (this is how
+//                 EncoderInputDriver lets e.g. a slider react to the trackball's other axis
+//                 regardless of edit mode)
+//   Enter      -> LV_KEY_ENTER, held/released for as long as the physical key is, so LVGL's
+//                 own long-press timing decides short-click vs. enter/exit-edit-mode
+static lv_indev_t *_nav_indev = nullptr;
+static bool _nav_enter_physically_held = false;
+// LVGL's encoder release handling (indev_encoder_proc() in lv_indev.c) only fires the
+// click/edit-toggle logic when the RELEASE read still reports data->key == LV_KEY_ENTER --
+// it keys off the value, not just the PRESSED->RELEASED transition. Reporting key=0 on
+// release (the natural "nothing is happening" idle state) silently no-ops the release
+// entirely: the trackball driver's own encoder_read() works around exactly this via its
+// `prevkey` variable, replayed once on release before going idle. Same trick here.
+static bool _nav_enter_release_pending = false;
+static int32_t _nav_pending_enc_diff = 0;
+static uint32_t _nav_raw_key = 0;
+static bool _nav_raw_key_release_pending = false;
+
+static void nav_encoder_read(lv_indev_t *indev, lv_indev_data_t *data)
+{
+    data->key = 0;
+    data->enc_diff = 0;
+    data->state = LV_INDEV_STATE_RELEASED;
+
+    // Mirrors EncoderInputDriver: enc_diff is only meaningful while nothing else is pressed
+    // (LVGL itself zeroes enc_diff on any non-released state -- see indev_encoder_proc()), so
+    // give Enter priority and let rotation steps wait their turn.
+    if (_nav_enter_physically_held) {
+        data->key = LV_KEY_ENTER;
+        data->state = LV_INDEV_STATE_PRESSED;
+        return;
+    }
+    if (_nav_enter_release_pending) {
+        data->key = LV_KEY_ENTER;
+        data->state = LV_INDEV_STATE_RELEASED;
+        _nav_enter_release_pending = false;
+        data->continue_reading = true;
+        return;
+    }
+
+    if (_nav_raw_key) {
+        data->key = _nav_raw_key;
+        if (!_nav_raw_key_release_pending) {
+            data->state = LV_INDEV_STATE_PRESSED;
+            _nav_raw_key_release_pending = true;
+        } else {
+            data->state = LV_INDEV_STATE_RELEASED;
+            _nav_raw_key = 0;
+            _nav_raw_key_release_pending = false;
+        }
+        data->continue_reading = true;
+        return;
+    }
+
+    if (_nav_pending_enc_diff != 0) {
+        int32_t step = (_nav_pending_enc_diff > 0) ? 1 : -1;
+        data->enc_diff = step;
+        _nav_pending_enc_diff -= step;
+        data->continue_reading = (_nav_pending_enc_diff != 0);
+    }
+}
+
+static void ensureNavIndev()
+{
+    if (_nav_indev) {
+        return;
+    }
+
+    // Same default group as the keypad indev -- both drive focus/typing on the same widgets.
+    _keyboard_group = lv_group_get_default();
+    if (!_keyboard_group) {
+        _keyboard_group = lv_group_create();
+        lv_group_set_default(_keyboard_group);
+    }
+
+    _nav_indev = lv_indev_create();
+    lv_indev_set_type(_nav_indev, LV_INDEV_TYPE_ENCODER);
+    lv_indev_set_read_cb(_nav_indev, nav_encoder_read);
+    lv_indev_set_group(_nav_indev, _keyboard_group);
+}
+
+// Public entry point so device-ui setup (tftSetup.cpp) can force the group/indevs to exist
+// before any screens are built. Creating them lazily from _event_proc(), on the first SDL
+// keyboard event, is too late in practice: LVGL only auto-adds a newly created widget to
+// *the current default group at the moment lv_obj_class_create_obj() runs* (see
+// lv_obj_class.c). init_screens()/ui_init() constructs every device-ui widget well before a
+// user has necessarily touched the keyboard, so a group created afterward starts out -- and
+// stays -- empty, and both navigation and typed text silently go nowhere.
+void Panel_sdl::initKeyboardIndev(void)
+{
+    if (!lv_is_initialized())
+        return;
+    ensureKeyboardIndev();
+    ensureNavIndev();
+}
 
 void Panel_sdl::addKeyCodeMapping(SDL_KeyCode keyCode, uint8_t gpio)
 {
@@ -97,6 +344,83 @@ void Panel_sdl::_event_proc(void)
         if ((event.type == SDL_KEYDOWN) || (event.type == SDL_KEYUP)) {
             auto mon = getMonitorByWindowID(event.button.windowID);
             int gpio = -1;
+
+            // LVGL keypad routing is only valid in device-ui (COLOR) mode, where lv_init()
+            // has run. In BaseUI mode tftSetup()/lv_init() is never called, so touching any
+            // lv_* API here would dereference uninitialized LVGL state and crash. BaseUI keyboard
+            // navigation instead flows through the gpio->InputBroker path in TFTDisplay::sdlLoop().
+            if (lv_is_initialized()) {
+                // Arrow keys and Enter go through the ENCODER indev (nav_encoder_read()),
+                // using the exact same action mapping as device-ui's trackball driver
+                // (EncoderInputDriver.cpp, INPUTDRIVER_ENCODER_TYPE == 3) so keyboard nav
+                // behaves like the real hardware control -- see the comment above
+                // ensureNavIndev() for why that requires a separate indev from KEYPAD.
+                // Repeat key-down events (OS key-repeat while held) are fine to re-trigger:
+                // that's the keyboard equivalent of continuing to roll the trackball.
+                switch (event.key.keysym.sym) {
+                case SDLK_UP:
+                    if (event.type == SDL_KEYDOWN) {
+                        ensureNavIndev();
+                        _nav_pending_enc_diff -= 1;
+                    }
+                    break;
+                case SDLK_DOWN:
+                    if (event.type == SDL_KEYDOWN) {
+                        ensureNavIndev();
+                        _nav_pending_enc_diff += 1;
+                    }
+                    break;
+                case SDLK_LEFT:
+                    if (event.type == SDL_KEYDOWN) {
+                        ensureNavIndev();
+                        _nav_raw_key = LV_KEY_DOWN;
+                        _nav_raw_key_release_pending = false;
+                    }
+                    break;
+                case SDLK_RIGHT:
+                    if (event.type == SDL_KEYDOWN) {
+                        ensureNavIndev();
+                        _nav_raw_key = LV_KEY_UP;
+                        _nav_raw_key_release_pending = false;
+                    }
+                    break;
+                case SDLK_RETURN:
+                case SDLK_KP_ENTER:
+                case SDLK_SPACE:
+                    ensureNavIndev();
+                    if (event.type == SDL_KEYDOWN) {
+                        _nav_enter_physically_held = true;
+                    } else {
+                        _nav_enter_physically_held = false;
+                        _nav_enter_release_pending = true;
+                    }
+                    break;
+                default:
+                    if (auto lvKey = lvglKeyFromSdlKey(event.key)) {
+                        ensureKeyboardIndev();
+                        _keyboard_key = lvKey;
+                        _keyboard_pressed = event.type == SDL_KEYDOWN;
+                    }
+                    break;
+                }
+            } else if (event.type == SDL_KEYDOWN) {
+                // BaseUI mode: control keys not covered by the gpio key-code map (arrows/enter
+                // already flow through that path below). Printable characters arrive separately
+                // via SDL_TEXTINPUT so shift/layout is resolved for us.
+                switch (event.key.keysym.sym) {
+                case SDLK_BACKSPACE:
+                    Panel_sdl::queueKeyEvent(INPUT_BROKER_BACK);
+                    break;
+                case SDLK_ESCAPE:
+                    Panel_sdl::queueKeyEvent(INPUT_BROKER_CANCEL);
+                    break;
+                case SDLK_TAB:
+                    Panel_sdl::queueKeyEvent(INPUT_BROKER_ANYKEY, INPUT_BROKER_MSG_TAB);
+                    break;
+                default:
+                    break;
+                }
+            }
 
             /// Check key mapping
             gpio = getKeyCodeMapping((SDL_KeyCode)event.key.keysym.sym);
@@ -147,26 +471,65 @@ void Panel_sdl::_event_proc(void)
             } else {
                 Panel_sdl::gpio_hi(gpio);
             }
+        } else if (event.type == SDL_TEXTINPUT) {
+            if (!lv_is_initialized()) {
+                for (const char *p = event.text.text; *p; ++p) {
+                    unsigned char c = (unsigned char)*p;
+                    if (c >= 32 && c <= 126) {
+                        Panel_sdl::queueKeyEvent(INPUT_BROKER_ANYKEY, c);
+                    }
+                }
+            } else {
+                // device-ui mode: feed the typed text to whichever widget the keypad indev's
+                // group has focused (e.g. a textarea opened via the on-screen keyboard).
+                // lv_textarea's default LV_EVENT_KEY handling inserts any printable code point
+                // delivered this way, so no per-widget wiring is needed beyond routing it here.
+                ensureKeyboardIndev();
+                for (const char *p = event.text.text; *p;) {
+                    uint32_t codepoint;
+                    p += utf8DecodeOne(p, &codepoint);
+                    queueTextChar(codepoint);
+                }
+            }
         } else if (event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_MOUSEBUTTONUP || event.type == SDL_MOUSEMOTION) {
             auto mon = getMonitorByWindowID(event.button.windowID);
             if (mon != nullptr) {
                 {
-                    int x, y, w, h;
-                    SDL_GetWindowSize(mon->window, &w, &h);
-                    SDL_GetMouseState(&x, &y);
-                    float sf = sinf(mon->frame_angle * M_PI / 180);
-                    float cf = cosf(mon->frame_angle * M_PI / 180);
-                    x -= w / 2.0f;
-                    y -= h / 2.0f;
-                    float nx = y * sf + x * cf;
-                    float ny = y * cf - x * sf;
-                    if (mon->frame_rotation & 1) {
-                        std::swap(w, h);
+                    int x = 0;
+                    int y = 0;
+                    if (event.type == SDL_MOUSEMOTION) {
+                        x = event.motion.x;
+                        y = event.motion.y;
+                    } else {
+                        x = event.button.x;
+                        y = event.button.y;
                     }
-                    x = (nx * mon->frame_width / w) + (mon->frame_width >> 1);
-                    y = (ny * mon->frame_height / h) + (mon->frame_height >> 1);
-                    mon->touch_x = x - mon->frame_inner_x;
-                    mon->touch_y = y - mon->frame_inner_y;
+
+                    if ((mon->frame_angle % 360) == 0) {
+                        mon->touch_x = (int)((x / mon->scaling_x) - mon->frame_inner_x);
+                        mon->touch_y = (int)((y / mon->scaling_y) - mon->frame_inner_y);
+                    } else {
+                        int w, h;
+                        SDL_GetWindowSize(mon->window, &w, &h);
+                        float sf = sinf(mon->frame_angle * M_PI / 180);
+                        float cf = cosf(mon->frame_angle * M_PI / 180);
+                        float fx = x - w / 2.0f;
+                        float fy = y - h / 2.0f;
+                        float nx = fy * sf + fx * cf;
+                        float ny = fy * cf - fx * sf;
+                        if (mon->frame_rotation & 1) {
+                            std::swap(w, h);
+                        }
+                        x = (int)((nx * mon->frame_width / w) + (mon->frame_width >> 1));
+                        y = (int)((ny * mon->frame_height / h) + (mon->frame_height >> 1));
+                        mon->touch_x = x - mon->frame_inner_x;
+                        mon->touch_y = y - mon->frame_inner_y;
+                    }
+
+                    const int maxTouchX = std::max<int>(0, mon->frame_width - mon->frame_inner_x - 1);
+                    const int maxTouchY = std::max<int>(0, mon->frame_height - mon->frame_inner_y - 1);
+                    mon->touch_x = std::max<int>(0, std::min<int>(maxTouchX, mon->touch_x));
+                    mon->touch_y = std::max<int>(0, std::min<int>(maxTouchY, mon->touch_y));
                 }
                 if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
                     mon->touched = true;
@@ -257,6 +620,7 @@ int Panel_sdl::setup(void)
 
     _update_in_semaphore = SDL_CreateSemaphore(0);
     _update_out_semaphore = SDL_CreateSemaphore(0);
+    _key_queue_mutex = SDL_CreateMutex();
     for (size_t pin = 0; pin < EMULATED_GPIO_MAX; ++pin) {
         gpio_hi(pin);
     }
@@ -293,6 +657,9 @@ int Panel_sdl::close(void)
     SDL_StopTextInput();
     SDL_DestroySemaphore(_update_in_semaphore);
     SDL_DestroySemaphore(_update_out_semaphore);
+    SDL_DestroyMutex(_key_queue_mutex);
+    _key_queue_mutex = nullptr;
+    _key_queue.clear();
     SDL_Quit();
     return 0;
 }
@@ -518,6 +885,15 @@ void Panel_sdl::sdl_create(monitor_t *m)
     {
         m->window = SDL_CreateWindow(_window_title, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, window_width, window_height,
                                      flag); /*last param. SDL_WINDOW_BORDERLESS to hide borders*/
+#ifdef _WIN32
+        SDL_Surface *icon = SDL_CreateRGBSurfaceWithFormatFrom((void *)meshtastic_icon32_rgba, meshtastic_icon32_width,
+                                                                meshtastic_icon32_height, 32, meshtastic_icon32_width * 4,
+                                                                SDL_PIXELFORMAT_RGBA32);
+        if (icon) {
+            SDL_SetWindowIcon(m->window, icon);
+            SDL_FreeSurface(icon);
+        }
+#endif
     }
     m->renderer = SDL_CreateRenderer(m->window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     m->texture =

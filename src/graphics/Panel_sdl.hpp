@@ -31,6 +31,7 @@ Porting for SDL:
 #endif
 
 #if defined(SDL_h_)
+#include "input/InputBroker.h"
 #include "lgfx/v1/Touch.hpp"
 #include "lgfx/v1/misc/range.hpp"
 #include "lgfx/v1/panel/Panel_FrameBufferBase.hpp"
@@ -67,11 +68,16 @@ struct monitor_t {
 //----------------------------------------------------------------------------
 
 struct Touch_sdl : public ITouch {
+  Panel_sdl *panel = nullptr;
+
+  Touch_sdl() = default;
+  explicit Touch_sdl(Panel_sdl *panel_) : panel(panel_) {}
+
     bool init(void) override { return true; }
     void wakeup(void) override {}
     void sleep(void) override {}
     bool isEnable(void) override { return true; };
-    uint_fast8_t getTouchRaw(touch_point_t *tp, uint_fast8_t count) override { return 0; }
+  uint_fast8_t getTouchRaw(touch_point_t *tp, uint_fast8_t count) override;
 };
 
 //----------------------------------------------------------------------------
@@ -126,8 +132,27 @@ struct Panel_sdl : public Panel_FrameBufferBase {
     static void addKeyCodeMapping(SDL_KeyCode keyCode, uint8_t gpio);
     static int getKeyCodeMapping(SDL_KeyCode keyCode);
 
+    // BaseUI (non-LVGL) character/control keys typed on a physical keyboard, queued by the
+    // SDL event thread and drained by the firmware thread in TFTDisplay::sdlLoop(). Arrow keys
+    // and Enter already flow through the gpio->InputBroker path via addKeyCodeMapping(), so this
+    // covers everything else needed for CannedMessageModule's freetext editor: printable
+    // characters, backspace, escape (cancel), and tab (switch destination).
+    struct QueuedKeyEvent {
+        input_broker_event inputEvent = INPUT_BROKER_NONE;
+        unsigned char kbchar = 0;
+    };
+    static void queueKeyEvent(input_broker_event inputEvent, unsigned char kbchar = 0);
+    static bool dequeueKeyEvent(QueuedKeyEvent *outEvent);
+
+    // Must be called once, after lv_init() has run but before device-ui builds any screens
+    // (see tftSetup.cpp), so the default group used for keyboard navigation/typing exists
+    // in time for LVGL to auto-add widgets to it as they're created. No-op if LVGL hasn't
+    // been initialized (e.g. BaseUI-only builds, where lv_init() is never called) or if
+    // already set up.
+    static void initKeyboardIndev(void);
+
   protected:
-    const char *_window_title = "LGFX Simulator";
+    const char *_window_title = "Meshtastic";
     SDL_mutex *_sdl_mutex = nullptr;
 
     void sdl_create(monitor_t *m);
@@ -163,4 +188,11 @@ struct Panel_sdl : public Panel_FrameBufferBase {
 //----------------------------------------------------------------------------
 } // namespace v1
 } // namespace lgfx
+
+#if defined(SDL_h_)
+inline uint_fast8_t lgfx::v1::Touch_sdl::getTouchRaw(touch_point_t *tp, uint_fast8_t count)
+{
+  return panel ? panel->getTouchRaw(tp, count) : 0;
+}
+#endif
 #endif

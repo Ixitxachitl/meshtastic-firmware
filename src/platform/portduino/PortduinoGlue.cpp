@@ -12,8 +12,10 @@
 #include "meshUtils.h"
 #include <ErriezCRC32.h>
 #include <Utility.h>
+#include <algorithm>
 #include <assert.h>
 #include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -21,6 +23,7 @@
 #include <memory>
 #include <set>
 #include <stdexcept>
+#include <strings.h>
 #include <unistd.h>
 #ifndef _WIN32
 // Only the PORTDUINO_LINUX_HARDWARE block below calls ioctl() (HCIGETDEVINFO,
@@ -42,6 +45,10 @@
 // Defined in WindowsMacAddr.cpp, which keeps <iphlpapi.h> out of this TU: it
 // pulls in RPC/OLE headers that collide with the Arduino API.
 bool portduinoWindowsPrimaryMac(uint8_t *dmac);
+
+// Defined in WindowsConsole.cpp, same NOUSER-collision reasons as portduinoWindowsPrimaryMac().
+bool portduinoWindowsConsoleAttachToParent();
+void portduinoWindowsConsoleAllocIfNeeded();
 #endif
 
 #ifdef __APPLE__
@@ -58,6 +65,14 @@ bool portduinoWindowsPrimaryMac(uint8_t *dmac);
 
 portduino_config_struct portduino_config;
 portduino_status_struct portduino_status;
+
+// See declaration comment in graphics/LGFX/LGFXConfig.h for why this isn't just
+// `portduino_config.displayZoom` read directly from a PortduinoGlue.h include there.
+int getPortduinoDisplayZoom()
+{
+    return portduino_config.displayZoom;
+}
+
 std::ofstream traceFile;
 std::ofstream JSONFile;
 Ch341Hal *ch341Hal = nullptr;
@@ -131,6 +146,7 @@ static void checkSpidevBufsiz()
     switch (portduino_config.displayPanel) {
     case no_screen:
     case x11:
+    case sdl:
     case fb:
     case hub75:
         return; // not driven over spidev
@@ -287,6 +303,15 @@ void portduinoSetup()
     std::string gpioChipName = "gpiochip";
     portduino_config.displayPanel = no_screen;
 
+#if defined(_WIN32) && HAS_SCREEN
+    // This build links with the Windows subsystem (no auto-created console at all - see
+    // windows_link_flags.py), so reattach to the launching terminal's console when there is one
+    // (dev workflow: running meshtasticd.exe from an existing shell). If there's no parent console
+    // (double-clicked from Explorer), this is a no-op and the process stays windowless/silent
+    // unless General.ShowConsole asks for a console below.
+    portduinoWindowsConsoleAttachToParent();
+#endif
+
     // Force stdout to be line buffered
     setvbuf(stdout, stdoutBuffer, _IOLBF, sizeof(stdoutBuffer));
 
@@ -308,6 +333,18 @@ void portduinoSetup()
 
     if (portduino_config.force_simradio == true) {
         portduino_config.lora_module = use_simradio;
+#ifdef PORTDUINO_DEFAULT_TFT_GUI
+        // -s skips the config.yaml search entirely (below), so without this the "no config
+        // found" branch's TFT defaults never run and -s opens no window at all.
+        portduino_config.displayPanel = sdl;
+        if (portduino_config.displayWidth == 0)
+            portduino_config.displayWidth = 320;
+        if (portduino_config.displayHeight == 0)
+            portduino_config.displayHeight = 240;
+        portduino_config.displayOffsetRotate = 0;
+        if (!yamlOnly)
+            std::cout << "Using built-in native TFT defaults (sim radio + 320x240 window)" << std::endl;
+#endif
     } else if (configPath != nullptr) {
         if (loadConfig(configPath)) {
             if (!yamlOnly)
@@ -336,6 +373,16 @@ void portduinoSetup()
         if (!yamlOnly)
             std::cout << "No 'config.yaml' found..." << std::endl;
         portduino_config.lora_module = use_simradio;
+#ifdef PORTDUINO_DEFAULT_TFT_GUI
+        portduino_config.displayPanel = sdl;
+        if (portduino_config.displayWidth == 0)
+            portduino_config.displayWidth = 320;
+        if (portduino_config.displayHeight == 0)
+            portduino_config.displayHeight = 240;
+        portduino_config.displayOffsetRotate = 0;
+        if (!yamlOnly)
+            std::cout << "Using built-in native TFT defaults (sim radio + 320x240 window)" << std::endl;
+#endif
     }
 
     if (portduino_config.config_directory != "") {
@@ -350,6 +397,13 @@ void portduinoSetup()
             }
         }
     }
+
+#if defined(_WIN32) && HAS_SCREEN
+    // All config.yaml/config.d files are loaded by this point, so General.ShowConsole (if set) is
+    // known. No-op if portduinoWindowsConsoleAttachToParent() above already attached one.
+    if (portduino_config.show_console)
+        portduinoWindowsConsoleAllocIfNeeded();
+#endif
 
 #ifndef ARCH_PORTDUINO_WASM
     if (yamlOnly) {
@@ -673,6 +727,10 @@ void portduinoSetup()
             max_GPIO = i.pin;
         }
     }
+
+#ifdef PORTDUINO_DEFAULT_TFT_GUI
+    max_GPIO = std::max(max_GPIO, 40);
+#endif
 
     gpioInit(max_GPIO + 1); // Done here so we can inform Portduino how many GPIOs we need.
 
@@ -1044,12 +1102,14 @@ bool loadConfig(const char *configPath)
         }
         if (yamlConfig["Display"]) {
 
+            const std::string panelName = yamlConfig["Display"]["Panel"].as<std::string>("");
             for (const auto &screen_name : portduino_config.screen_names) {
-                if (yamlConfig["Display"]["Panel"].as<std::string>("") == screen_name.second)
+                if (panelName == screen_name.second)
                     portduino_config.displayPanel = screen_name.first;
             }
             portduino_config.displayHeight = yamlConfig["Display"]["Height"].as<int>(0);
             portduino_config.displayWidth = yamlConfig["Display"]["Width"].as<int>(0);
+            portduino_config.displayZoom = std::max(1, (int)std::lround(yamlConfig["Display"]["Zoom"].as<float>(1.0f)));
 
             readGPIOFromYaml(yamlConfig["Display"]["DC"], portduino_config.displayDC, -1);
             readGPIOFromYaml(yamlConfig["Display"]["CS"], portduino_config.displayCS, -1);
@@ -1216,6 +1276,7 @@ bool loadConfig(const char *configPath)
         if (yamlConfig["General"]) {
             portduino_config.MaxNodes = (yamlConfig["General"]["MaxNodes"]).as<int>(200);
             portduino_config.maxtophone = (yamlConfig["General"]["MaxMessageQueue"]).as<int>(100);
+            portduino_config.show_console = (yamlConfig["General"]["ShowConsole"]).as<bool>(false);
             portduino_config.config_directory = (yamlConfig["General"]["ConfigDirectory"]).as<std::string>("");
             portduino_config.available_directory =
                 (yamlConfig["General"]["AvailableDirectory"]).as<std::string>("/etc/meshtasticd/available.d/");

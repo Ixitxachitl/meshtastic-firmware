@@ -846,7 +846,7 @@ class LGFX : public lgfx::LGFX_Device
             _panel_instance = new lgfx::Panel_HX8357D;
 #if defined(SDL_h_)
 
-        else if (portduino_config.displayPanel == x11)
+        else if (portduino_config.displayPanel == sdl)
             _panel_instance = new lgfx::Panel_sdl;
 #endif
         else {
@@ -861,7 +861,7 @@ class LGFX : public lgfx::LGFX_Device
         buscfg.pin_dc = portduino_config.displayDC.pin; // Set SPI DC pin number (-1 = disable)
 
         _bus_instance.config(buscfg); // applies the set value to the bus.
-        if (portduino_config.displayPanel != x11)
+        if (portduino_config.displayPanel != x11 && portduino_config.displayPanel != sdl)
             _panel_instance->setBus(&_bus_instance); // set the bus on the panel.
 
         auto cfg = _panel_instance->config(); // Gets a structure for display panel settings.
@@ -911,10 +911,33 @@ class LGFX : public lgfx::LGFX_Device
             _panel_instance->setTouch(_touch_instance);
         }
 #if defined(SDL_h_)
-        if (portduino_config.displayPanel == x11) {
+        else if (portduino_config.displayPanel == sdl) {
+            // No hardware touch module: feed the SDL window's mouse events through a
+            // Touch_sdl so BaseUI's TouchScreenImpl (which calls tft->getTouch()) works,
+            // mirroring what the device-ui LGFXConfig driver does. Touch_sdl already reports
+            // raw coordinates in final panel-pixel space (see Panel_sdl's own touch_x/y clamp
+            // against panel_width/panel_height), so calibrate 1:1 - otherwise LGFX's ITouch
+            // default calibration range (0..3600) squashes every click into a small corner.
+            _touch_instance = new lgfx::Touch_sdl((lgfx::Panel_sdl *)_panel_instance);
+            auto touch_cfg = _touch_instance->config();
+            touch_cfg.x_min = 0;
+            touch_cfg.x_max = cfg.panel_width - 1;
+            touch_cfg.y_min = 0;
+            touch_cfg.y_max = cfg.panel_height - 1;
+            _touch_instance->config(touch_cfg);
+            _panel_instance->setTouch(_touch_instance);
+        }
+        if (portduino_config.displayPanel == sdl) {
             lgfx::Panel_sdl *sdl_panel_ = (lgfx::Panel_sdl *)_panel_instance;
             sdl_panel_->setup();
             sdl_panel_->addKeyCodeMapping(SDLK_RETURN, SDL_SCANCODE_KP_ENTER);
+            // kb_found is set earlier in main.cpp (before CannedMessageModule is constructed) so
+            // it's already true here.
+
+            // Whole-number window-scale multiplier for the simulator window, e.g. `Zoom: 2`
+            // in config.yaml's Display block. Must be set before init() creates the window.
+            if (portduino_config.displayZoom > 1)
+                sdl_panel_->setScaling(portduino_config.displayZoom, portduino_config.displayZoom);
         }
 #endif
         setPanel(_panel_instance); // Sets the panel to use.
@@ -1204,10 +1227,14 @@ TFTDisplay::TFTDisplay(uint8_t address, int sda, int scl, OLEDDISPLAY_GEOMETRY g
     backlightEnable = p;
 
 #if ARCH_PORTDUINO
+    // setGeometry(g, width, height): the BaseUI framebuffer must match the panel's
+    // displayable geometry. When rotated the panel swaps width/height (see the LGFX
+    // panel config below), so swap here too. Passing the same dimension twice built a
+    // square buffer that under-filled non-square panels (e.g. 240x240 on a 320x240 window).
     if (portduino_config.displayRotate) {
-        setGeometry(GEOMETRY_RAWMODE, portduino_config.displayWidth, portduino_config.displayWidth);
+        setGeometry(GEOMETRY_RAWMODE, portduino_config.displayHeight, portduino_config.displayWidth);
     } else {
-        setGeometry(GEOMETRY_RAWMODE, portduino_config.displayHeight, portduino_config.displayHeight);
+        setGeometry(GEOMETRY_RAWMODE, portduino_config.displayWidth, portduino_config.displayHeight);
     }
 
 #elif defined(SCREEN_ROTATE)
@@ -1438,41 +1465,117 @@ void TFTDisplay::sdlLoop()
 #if defined(SDL_h_)
     static int lastPressed = 0;
     static int shuttingDown = false;
-    if (portduino_config.displayPanel == x11) {
+    if (portduino_config.displayPanel == sdl) {
         lgfx::Panel_sdl *sdl_panel_ = (lgfx::Panel_sdl *)tft->_panel_instance;
         if (sdl_panel_->loop() && !shuttingDown) {
             LOG_WARN("Window Closed!");
+            shuttingDown = true;
             InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_SHUTDOWN, .kbchar = 0, .touchX = 0, .touchY = 0};
             inputBroker->injectInputEvent(&event);
         }
-        // debounce
-        if (lastPressed != 0 && !sdl_panel_->gpio_in(lastPressed))
+
+        // Drain characters/backspace/escape/tab typed on the physical keyboard, queued by the
+        // SDL event thread in Panel_sdl. Arrow keys and Enter are handled below via gpio state.
+        lgfx::Panel_sdl::QueuedKeyEvent queuedKey;
+        while (lgfx::Panel_sdl::dequeueKeyEvent(&queuedKey)) {
+            InputEvent event = {.inputEvent = queuedKey.inputEvent, .kbchar = queuedKey.kbchar, .touchX = 0, .touchY = 0};
+            inputBroker->injectInputEvent(&event);
+        }
+
+        // Enter/Select is timed: a quick tap emits SELECT, holding past the threshold emits
+        // SELECT_LONG (matching the physical user button, e.g. hold to open the games menu).
+        static uint32_t enterPressedAt = 0;
+        static bool enterLongSent = false;
+        constexpr uint32_t kEnterLongPressMs = 500;
+        if (!sdl_panel_->gpio_in(SDL_SCANCODE_KP_ENTER)) {
+            lastPressed = SDL_SCANCODE_KP_ENTER; // suppress directional keys while Enter is held
+            if (enterPressedAt == 0) {
+                enterPressedAt = millis();
+                enterLongSent = false;
+            } else if (!enterLongSent && (millis() - enterPressedAt) >= kEnterLongPressMs) {
+                enterLongSent = true;
+                InputEvent event = {
+                    .inputEvent = (input_broker_event)INPUT_BROKER_SELECT_LONG, .kbchar = 0, .touchX = 0, .touchY = 0};
+                inputBroker->injectInputEvent(&event);
+            }
             return;
-        if (!sdl_panel_->gpio_in(37)) {
-            lastPressed = 37;
-            InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_RIGHT, .kbchar = 0, .touchX = 0, .touchY = 0};
-            inputBroker->injectInputEvent(&event);
-        } else if (!sdl_panel_->gpio_in(36)) {
-            lastPressed = 36;
-            InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_UP, .kbchar = 0, .touchX = 0, .touchY = 0};
-            inputBroker->injectInputEvent(&event);
-        } else if (!sdl_panel_->gpio_in(38)) {
-            lastPressed = 38;
-            InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_DOWN, .kbchar = 0, .touchX = 0, .touchY = 0};
-            inputBroker->injectInputEvent(&event);
-        } else if (!sdl_panel_->gpio_in(39)) {
-            lastPressed = 39;
-            InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_LEFT, .kbchar = 0, .touchX = 0, .touchY = 0};
-            inputBroker->injectInputEvent(&event);
-        } else if (!sdl_panel_->gpio_in(SDL_SCANCODE_KP_ENTER)) {
-            lastPressed = SDL_SCANCODE_KP_ENTER;
-            InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_SELECT, .kbchar = 0, .touchX = 0, .touchY = 0};
-            inputBroker->injectInputEvent(&event);
-        } else {
+        } else if (enterPressedAt != 0) {
+            // Released: emit the short SELECT only if we didn't already fire the long press.
+            bool wasLong = enterLongSent;
+            enterPressedAt = 0;
+            enterLongSent = false;
             lastPressed = 0;
+            if (!wasLong) {
+                InputEvent event = {
+                    .inputEvent = (input_broker_event)INPUT_BROKER_SELECT, .kbchar = 0, .touchX = 0, .touchY = 0};
+                inputBroker->injectInputEvent(&event);
+            }
+            return;
+        }
+
+        // Directional keys: fire once on press, then auto-repeat while held - same 500ms initial
+        // delay / 300ms repeat cadence as TrackballInterruptBase::runOnce()'s real-hardware
+        // directionDetected path, so keyboard nav on this simulator feels like a real trackball.
+        static uint32_t directionPressedAt = 0;
+        static uint32_t lastDirectionRepeatAt = 0;
+        constexpr uint32_t kDirectionRepeatDelayMs = 500;
+        constexpr uint32_t kDirectionRepeatIntervalMs = 300;
+
+        int heldGpio = 0;
+        input_broker_event heldEvent = INPUT_BROKER_NONE;
+        if (!sdl_panel_->gpio_in(37)) {
+            heldGpio = 37;
+            heldEvent = (input_broker_event)INPUT_BROKER_RIGHT;
+        } else if (!sdl_panel_->gpio_in(36)) {
+            heldGpio = 36;
+            heldEvent = (input_broker_event)INPUT_BROKER_UP;
+        } else if (!sdl_panel_->gpio_in(38)) {
+            heldGpio = 38;
+            heldEvent = (input_broker_event)INPUT_BROKER_DOWN;
+        } else if (!sdl_panel_->gpio_in(39)) {
+            heldGpio = 39;
+            heldEvent = (input_broker_event)INPUT_BROKER_LEFT;
+        }
+
+        if (heldGpio == 0) {
+            lastPressed = 0;
+            directionPressedAt = 0;
+            return;
+        }
+
+        if (lastPressed != heldGpio) {
+            // New press (or switched direction without releasing first).
+            lastPressed = heldGpio;
+            directionPressedAt = millis();
+            lastDirectionRepeatAt = 0;
+            InputEvent event = {.inputEvent = heldEvent, .kbchar = 0, .touchX = 0, .touchY = 0};
+            inputBroker->injectInputEvent(&event);
+            return;
+        }
+
+        uint32_t heldDuration = millis() - directionPressedAt;
+        if (heldDuration >= kDirectionRepeatDelayMs &&
+            (lastDirectionRepeatAt == 0 || millis() - lastDirectionRepeatAt >= kDirectionRepeatIntervalMs)) {
+            lastDirectionRepeatAt = millis();
+            InputEvent event = {.inputEvent = heldEvent, .kbchar = 0, .touchX = 0, .touchY = 0};
+            inputBroker->injectInputEvent(&event);
         }
     }
 #endif
+}
+
+int TFTDisplay::heldXZone()
+{
+#if defined(SDL_h_)
+    if (portduino_config.displayPanel != sdl)
+        return 0;
+    // Same GPIO numbers/active-low convention as the debounced path in sdlLoop() above.
+    if (!lgfx::Panel_sdl::gpio_in(39)) // LEFT
+        return -1;
+    if (!lgfx::Panel_sdl::gpio_in(37)) // RIGHT
+        return 1;
+#endif
+    return 0;
 }
 
 // Send a command to the display (low level function)
