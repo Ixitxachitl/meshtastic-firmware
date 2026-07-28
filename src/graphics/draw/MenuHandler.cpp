@@ -2947,9 +2947,9 @@ void menuHandler::mapBaseMenu()
 
     static const MapMenuOption baseOptions[] = {
         {"Back", OptionsAction::Back},
-        {"Pan Mode", OptionsAction::Select, static_cast<int>(MapAction::PanMode)},
+        {"Pan", OptionsAction::Select, static_cast<int>(MapAction::PanMode)},
+        {"Zoom", OptionsAction::Select, static_cast<int>(MapAction::ZoomLevel)},
         {"Follow Me", OptionsAction::Select, static_cast<int>(MapAction::FollowMe)},
-        {"Zoom Level", OptionsAction::Select, static_cast<int>(MapAction::ZoomLevel)},
     };
     constexpr size_t baseCount = sizeof(baseOptions) / sizeof(baseOptions[0]);
     static std::array<const char *, baseCount> baseLabels{};

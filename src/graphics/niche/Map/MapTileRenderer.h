@@ -52,6 +52,20 @@ class TileSource
     // Decodes tile `tileIndex` into `outBuf` (exactly kTileBufferBytes: kTileSizePx square,
     // 1bpp, column-major). Returns false if the tile couldn't be read/decoded.
     virtual bool decodeTile(int tileIndex, uint8_t *outBuf) = 0;
+
+    // True if indexOf() below is a real O(1)/direct lookup rather than the inherited default.
+    // A worldwide bake at deep zoom is millions of tiles - iterating tileCount() to find which
+    // ones overlap the viewport (the only option for the compiled-in sparse/InkHUD case, where
+    // datasets are at most a few hundred tiles) would be far too slow, and forcing every source to
+    // hold a full per-tile index in RAM to make that iteration fast doesn't scale either (that's
+    // exactly what crashed the Wio/T-Deck: 1.4M tiles x ~16 bytes each). Sources backed by a dense,
+    // contiguous-zoom-range blob (see bin/generate_map_tiles.py) can instead compute a tile's file
+    // position algebraically with no per-tile RAM at all - see MapTileSourceFile/MapTileSourceSD.
+    virtual bool supportsDirectLookup() { return false; }
+    // Returns the tile index for (zoom, tx, ty), or -1 if not present in this source. Only
+    // meaningful when supportsDirectLookup() is true; the default here is never called in that
+    // case since drawTileBackground falls back to brute-force iteration instead.
+    virtual int indexOf(int /*zoom*/, int /*tx*/, int /*ty*/) { return -1; }
 };
 
 // Registers the active tile source. Pass nullptr to revert to the compiled-in MapTile.h data.
