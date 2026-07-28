@@ -2,6 +2,8 @@
 
 #include "NodeDB.h"
 #include "gps/GeoCoord.h"
+#include "graphics/SharedUIDisplay.h"
+#include "graphics/images.h"
 #include "graphics/niche/Map/MapTileRenderer.h"
 
 #if defined(ARCH_PORTDUINO) || defined(ARCH_ESP32)
@@ -170,7 +172,7 @@ void panByScreenFraction(float dxFraction, float dyFraction)
     const float degPerPxLng = 360.0f / worldPxAtZoom;
     const float degPerPxLat = degPerPxLng * cosf(s_centerLat * DEG_TO_RAD);
 
-    constexpr float kPanFractionOfView = 0.3f;
+    constexpr float kPanFractionOfView = 0.15f;
     const float stepPx = min(s_lastViewWidth, s_lastViewHeight) * kPanFractionOfView;
 
     s_centerLat += dyFraction * stepPx * degPerPxLat;
@@ -340,8 +342,21 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     // where BLACK means ink) - everything below needs to actually show up on real hardware.
     display->setColor(WHITE);
 
-    const int16_t viewWidth = display->getWidth();
-    const int16_t viewHeight = display->getHeight();
+    int16_t viewWidth = display->getWidth();
+    int16_t viewHeight = display->getHeight();
+
+    // Shared battery/time header, same as every other BaseUI screen - reserve its height and
+    // shift the map viewport down so tiles/markers/overlays never draw underneath it.
+    // Matches drawCommonHeader's own internal footprint exactly (SharedUIDisplay.cpp: headerHeight
+    // = highlightHeight + 2, highlightHeight = FONT_HEIGHT_SMALL - 1, so FONT_HEIGHT_SMALL + 1) -
+    // NodeListRenderer's COMMON_HEADER_HEIGHT (FONT_HEIGHT_SMALL - 1) is 2px short of that, which
+    // left the map drawing over the header's bottom edge and XOR-inverting it.
+    const int16_t kHeaderHeight = FONT_HEIGHT_SMALL + 1;
+    drawCommonHeader(display, x, y, "Map");
+    display->setColor(WHITE); // drawCommonHeader leaves its own color state active
+    y += kHeaderHeight;
+    viewHeight -= kHeaderHeight;
+
     s_lastViewWidth = viewWidth;
     s_lastViewHeight = viewHeight;
 
@@ -391,7 +406,7 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     // Known node markers (self is drawn separately, last, so it's always on top). First pass just
     // counts how many will land on-screen, so short-name labels only show up when there are few
     // enough nodes in view to not turn into clutter.
-    constexpr int kLabelClutterThreshold = 6;
+    constexpr int kLabelClutterThreshold = 20;
     const NodeNum ourNodeNum = nodeDB->getNodeNum();
     int onScreenCount = 0;
     for (uint32_t i = 0; i < nodeDB->getNumMeshNodes(); i++) {
@@ -464,12 +479,16 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
             drawnCount++;
         }
 
-        display->fillRect(mx - 1, my - 1, 3, 3);
+        display->drawXbm(mx - 4, my - 4, 8, 8, icon_map_node);
 
         if (showLabels && node->short_name[0] != '\0') {
-            display->setFont(FONT_SMALL);
+            // FONT_SMALL_LOCAL rather than FONT_SMALL deliberately: on TFT/HAS_SPI_TFT builds
+            // FONT_SMALL is redirected to the 19px-tall medium font (bigger screen, so BaseUI
+            // normally wants bigger text) - far too large for a map label sitting next to a
+            // marker, where many names need to fit close together without overlapping.
+            display->setFont(FONT_SMALL_LOCAL);
             display->setTextAlignment(TEXT_ALIGN_LEFT);
-            display->drawString(mx + 3, my - FONT_HEIGHT_SMALL / 2, node->short_name);
+            display->drawString(mx + 5, my - _fontHeight(FONT_SMALL_LOCAL) / 2, node->short_name);
         }
     }
 

@@ -230,18 +230,14 @@ void NicheGraphics::MapTiles::drawTileBackground(float latCenter, float lngCente
     // either direction, and rendered at whichever shifted copy (if any) actually falls in view.
     const float worldWidthAtTileZoom = (float)(1 << tileZoom) * kWorldUnitsPerTile;
 
-    for (int i = 0; i < tileCount; i++) {
-        const int tzoom = s_activeSource ? s_activeSource->tileZoomAt(i) : tileZoomAt(i);
-        if (tzoom != tileZoom)
-            continue;
-
-        const int tx = s_activeSource ? s_activeSource->tileTxAt(i) : tileTxAt(i);
-        const int ty = s_activeSource ? s_activeSource->tileTyAt(i) : tileTyAt(i);
+    // Decodes tile `i` (at unwrapped position tx,ty) at most once, then blits every screen-space
+    // copy of it that falls in the (possibly antimeridian-wrapped) viewport.
+    auto blitTile = [&](int i, int tx, int ty) {
         const float baseMinWx = tx * kWorldUnitsPerTile;
         const float tileMinWy = ty * kWorldUnitsPerTile;
         const float tileMaxWy = tileMinWy + kWorldUnitsPerTile;
         if (tileMaxWy < minWy || tileMinWy > maxWy)
-            continue; // No vertical wrap - skip entirely if this row is out of view.
+            return; // No vertical wrap - skip entirely if this row is out of view.
 
         const uint8_t *tile = nullptr;
 
@@ -295,5 +291,51 @@ void NicheGraphics::MapTiles::drawTileBackground(float latCenter, float lngCente
                 }
             }
         }
+    };
+
+    if (s_activeSource && s_activeSource->supportsDirectLookup()) {
+        // A worldwide deep-zoom bake is millions of tiles - iterating tileCount() below to find
+        // which ones overlap the viewport would be far too slow (this is what made a z0-10 bake
+        // effectively hang the T-Deck even after fixing the RAM crash). Compute directly which
+        // (small) handful of tx/ty tiles the viewport actually needs instead.
+        const int side = 1 << tileZoom;
+        for (int wrap = -1; wrap <= 1; wrap++) {
+            const float shift = wrap * worldWidthAtTileZoom;
+            int txLo = (int)floorf((minWx - shift) / kWorldUnitsPerTile);
+            int txHi = (int)floorf((maxWx - shift) / kWorldUnitsPerTile);
+            if (txLo < 0)
+                txLo = 0;
+            if (txHi > side - 1)
+                txHi = side - 1;
+            if (txLo > txHi)
+                continue;
+
+            int tyLo = (int)floorf(minWy / kWorldUnitsPerTile);
+            int tyHi = (int)floorf(maxWy / kWorldUnitsPerTile);
+            if (tyLo < 0)
+                tyLo = 0;
+            if (tyHi > side - 1)
+                tyHi = side - 1;
+
+            for (int ty = tyLo; ty <= tyHi; ty++) {
+                for (int tx = txLo; tx <= txHi; tx++) {
+                    const int i = s_activeSource->indexOf(tileZoom, tx, ty);
+                    if (i < 0)
+                        continue;
+                    blitTile(i, tx, ty);
+                }
+            }
+        }
+        return;
+    }
+
+    for (int i = 0; i < tileCount; i++) {
+        const int tzoom = s_activeSource ? s_activeSource->tileZoomAt(i) : tileZoomAt(i);
+        if (tzoom != tileZoom)
+            continue;
+
+        const int tx = s_activeSource ? s_activeSource->tileTxAt(i) : tileTxAt(i);
+        const int ty = s_activeSource ? s_activeSource->tileTyAt(i) : tileTyAt(i);
+        blitTile(i, tx, ty);
     }
 }
