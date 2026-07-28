@@ -508,13 +508,19 @@ float GeoCoord::rangeMetersToRadians(double range_meters)
 std::shared_ptr<GeoCoord> GeoCoord::pointAtDistance(double bearing, double range_meters)
 {
     double range_radians = rangeMetersToRadians(range_meters);
-    double lat1 = this->getLatitude() * 1e-7;
-    double lon1 = this->getLongitude() * 1e-7;
+    // lat1/lon1 must be radians for the trig below; getLatitude()/getLongitude() are degrees*1e7.
+    double lat1 = GeoCoord::toRadians(this->getLatitude() * 1e-7);
+    double lon1 = GeoCoord::toRadians(this->getLongitude() * 1e-7);
     double lat = asin(sin(lat1) * cos(range_radians) + cos(lat1) * sin(range_radians) * cos(bearing));
     double dlon = atan2(sin(bearing) * sin(range_radians) * cos(lat1), cos(range_radians) - sin(lat1) * sin(lat));
-    double lon = fmod(lon1 - dlon + PI, 2 * PI) - PI;
+    // The reference formula (Aviation Formulary) treats longitude as positive-*west* and
+    // subtracts dlon; this codebase uses standard positive-east longitude throughout (see
+    // GeoCoord::bearing, latitude_i/longitude_i), so dlon must be added instead, or east/west
+    // come out mirrored.
+    double lon = fmod(lon1 + dlon + PI, 2 * PI) - PI;
 
-    return std::make_shared<GeoCoord>(double(lat), double(lon), this->getAltitude());
+    // lat/lon above are radians; the GeoCoord(double, double, int32_t) constructor expects degrees.
+    return std::make_shared<GeoCoord>(GeoCoord::toDegrees(lat), GeoCoord::toDegrees(lon), this->getAltitude());
 }
 
 /**
