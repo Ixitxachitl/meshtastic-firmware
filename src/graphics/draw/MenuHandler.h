@@ -57,7 +57,9 @@ class menuHandler
         MessageBubblesMenu,
         ThemeMenu,
         HamModeConfirm,
-        LicensedToNormalConfirm
+        LicensedToNormalConfirm,
+        MapBaseMenu,
+        MapFollowMeMenu
     };
     static screenMenus menuQueue;
     static uint32_t pickedNodeNum; // node selected by NodePicker for ManageNodeMenu
@@ -116,6 +118,8 @@ class menuHandler
     static void textMessageMenu();
     static void hamModeConfirmMenu();
     static void licensedToNormalConfirmMenu();
+    static void mapBaseMenu();
+    static void mapFollowMeMenu();
 
   private:
     static void saveUIConfig();
@@ -151,6 +155,8 @@ using NodeNameOption = MenuOption<bool>;
 using PositionMenuOption = MenuOption<int>;
 using ManageNodeOption = MenuOption<int>;
 using ClockFaceOption = MenuOption<bool>;
+using MapMenuOption = MenuOption<int>;
+using MapToggleOption = MenuOption<bool>;
 
 } // namespace graphics
 #endif

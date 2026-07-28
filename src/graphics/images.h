@@ -113,6 +113,9 @@ const unsigned char icon_compass[] PROGMEM = {
     0x3C  // Row 7: ..####..
 };
 
+// 🗺️ Map Screen
+const unsigned char icon_map[] PROGMEM = {0x07, 0x07, 0x1D, 0x15, 0xFC, 0xB4, 0xE0, 0x20};
+
 const uint8_t icon_radio[] PROGMEM = {
     0x0F, // Row 0: ####....
     0x10, // Row 1: ....#...

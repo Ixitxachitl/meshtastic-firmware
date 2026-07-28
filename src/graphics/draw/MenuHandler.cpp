@@ -13,6 +13,7 @@
 #include "graphics/Screen.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/TFTColorRegions.h"
+#include "graphics/draw/MapRenderer.h"
 #include "graphics/draw/MessageRenderer.h"
 #include "graphics/draw/UIRenderer.h"
 #include "input/RotaryEncoderInterruptImpl1.h"
@@ -2919,8 +2920,85 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
     case LicensedToNormalConfirm:
         licensedToNormalConfirmMenu();
         break;
+    case MapBaseMenu:
+        mapBaseMenu();
+        break;
+    case MapFollowMeMenu:
+        mapFollowMeMenu();
+        break;
     }
     menuQueue = MenuNone;
+}
+
+void menuHandler::mapBaseMenu()
+{
+    enum class MapAction { PanMode, FollowMe, ZoomLevel };
+
+    static const MapMenuOption baseOptions[] = {
+        {"Back", OptionsAction::Back},
+        {"Pan Mode", OptionsAction::Select, static_cast<int>(MapAction::PanMode)},
+        {"Follow Me", OptionsAction::Select, static_cast<int>(MapAction::FollowMe)},
+        {"Zoom Level", OptionsAction::Select, static_cast<int>(MapAction::ZoomLevel)},
+    };
+    constexpr size_t baseCount = sizeof(baseOptions) / sizeof(baseOptions[0]);
+    static std::array<const char *, baseCount> baseLabels{};
+
+    auto bannerOptions =
+        createStaticBannerOptions("Map", baseOptions, baseLabels, [](const MapMenuOption &option, int) -> void {
+            if (option.action == OptionsAction::Back || !option.hasValue)
+                return;
+
+            switch (static_cast<MapAction>(option.value)) {
+            case MapAction::PanMode:
+                // Entered directly, held until Back is pressed on the Map frame itself (see
+                // Screen::handleInputEvent) - not a picker like Follow Me.
+                graphics::MapRenderer::setPanModeEnabled(true);
+                break;
+            case MapAction::FollowMe:
+                menuQueue = MapFollowMeMenu;
+                screen->runNow();
+                break;
+            case MapAction::ZoomLevel:
+                // Entered directly; up/down adjust zoom and a ruler is drawn until Back is
+                // pressed (see Screen::handleInputEvent) - not a discrete-level picker.
+                graphics::MapRenderer::setZoomModeEnabled(true);
+                break;
+            }
+        });
+
+    screen->showOverlayBanner(bannerOptions);
+}
+
+void menuHandler::mapFollowMeMenu()
+{
+    static const MapToggleOption options[] = {
+        {"Back", OptionsAction::Back},
+        {"Enabled", OptionsAction::Select, true},
+        {"Disabled", OptionsAction::Select, false},
+    };
+    constexpr size_t count = sizeof(options) / sizeof(options[0]);
+    static std::array<const char *, count> labels{};
+
+    auto bannerOptions =
+        createStaticBannerOptions("Follow Me", options, labels, [](const MapToggleOption &option, int) -> void {
+            if (option.action == OptionsAction::Back) {
+                menuQueue = MapBaseMenu;
+                screen->runNow();
+                return;
+            }
+            if (!option.hasValue)
+                return;
+            graphics::MapRenderer::setFollowMeEnabled(option.value);
+        });
+
+    for (size_t i = 0; i < count; ++i) {
+        if (options[i].hasValue && options[i].value == graphics::MapRenderer::isFollowMeEnabled()) {
+            bannerOptions.InitialSelected = i;
+            break;
+        }
+    }
+
+    screen->showOverlayBanner(bannerOptions);
 }
 
 void menuHandler::saveUIConfig()
