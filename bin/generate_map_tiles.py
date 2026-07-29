@@ -98,9 +98,11 @@ def _draw_geometry_lines(
     draw: "ImageDraw.ImageDraw", geometry: dict, extent: int, line_width: int
 ) -> None:
     """Draws a GeoJSON LineString/MultiLineString (as decoded by mapbox_vector_tile) scaled from
-    the tile's local extent (e.g. 4096) down to TILE_SIZE. Polygons/points are handled by callers
-    that care about them (boundary/transportation are line data; place is points) - anything else
-    passed here is silently skipped rather than guessed at."""
+    the tile's local extent (e.g. 4096) down to TILE_SIZE, in white - the canvas is black land (see
+    rasterize_vector_tile), so roads/borders need to be the opposite color to stay visible. Polygons/
+    points are handled by callers that care about them (boundary/transportation are line data; place
+    is points) - anything else passed here is silently skipped rather than guessed at.
+    """
     scale = TILE_SIZE / extent
     gtype = geometry.get("type")
     coords = geometry.get("coordinates")
@@ -108,7 +110,7 @@ def _draw_geometry_lines(
     def draw_line(points: list) -> None:
         scaled = [(px * scale, py * scale) for px, py in points]
         if len(scaled) >= 2:
-            draw.line(scaled, fill=0, width=line_width)
+            draw.line(scaled, fill=255, width=line_width)
 
     if gtype == "LineString":
         draw_line(coords)
@@ -120,11 +122,12 @@ def _draw_geometry_lines(
 def _draw_geometry_fill(
     draw: "ImageDraw.ImageDraw", geometry: dict, extent: int
 ) -> None:
-    """Draws a GeoJSON Polygon/MultiPolygon (as decoded by mapbox_vector_tile) solid black, scaled
-    from the tile's local extent down to TILE_SIZE - used only for the water fill (see
-    rasterize_vector_tile). Each ring past the first in a Polygon is a hole (e.g. an island in a
-    lake); PIL has no native hole-aware polygon fill, so holes are punched back to white after the
-    exterior ring is filled black."""
+    """Draws a GeoJSON Polygon/MultiPolygon (as decoded by mapbox_vector_tile) solid white, scaled
+    from the tile's local extent down to TILE_SIZE - used only for the water cutout (see
+    rasterize_vector_tile): the canvas defaults to black (land), and water is punched out white.
+    Each ring past the first in a Polygon is a hole (e.g. an island in a lake); PIL has no native
+    hole-aware polygon fill, so holes are punched back to black (land) after the exterior ring is
+    filled white."""
     scale = TILE_SIZE / extent
     gtype = geometry.get("type")
     coords = geometry.get("coordinates")
@@ -134,11 +137,11 @@ def _draw_geometry_fill(
             return
         exterior = [(px * scale, py * scale) for px, py in rings[0]]
         if len(exterior) >= 3:
-            draw.polygon(exterior, fill=0)
+            draw.polygon(exterior, fill=255)
         for hole in rings[1:]:
             scaled_hole = [(px * scale, py * scale) for px, py in hole]
             if len(scaled_hole) >= 3:
-                draw.polygon(scaled_hole, fill=255)
+                draw.polygon(scaled_hole, fill=0)
 
     if gtype == "Polygon":
         draw_polygon(coords)
@@ -175,27 +178,29 @@ def rasterize_vector_tile(
     line_width: int = 1,
     water_fill: bool = True,
 ) -> Image.Image:
-    """Renders a minimal basemap tile (water fill, roads, admin borders, place-name labels - no
-    landcover/building fills, no POIs) from a MapTiler vector tile (OpenMapTiles schema). The
-    filters mirror MapTiler's toner-v2 style.json (see PLACE_LABEL_RULES and the 'Road network'/
-    'Country border'/'Other border'/'Disputed border'/'Water' layers it defines) so this reproduces
-    what toner-v2 actually draws, minus its landcover/building fills - toner-v2 itself leaves land
-    as blank background (white) and only fills water (black), which is why roads/borders/labels
-    (also black) stay legible: they're never drawn over a same-color fill except where a feature
-    legitimately crosses water (e.g. a bridge), same as toner-v2 itself. Vector tiles use tile-local
-    integer coordinates (0..extent, y-down) instead of pixels, so each layer is scaled to TILE_SIZE
-    here before drawing with PIL.
+    """Renders a minimal basemap tile (solid land fill, water cutout, roads, admin borders,
+    place-name labels - no landcover/building fills, no POIs) from a MapTiler vector tile
+    (OpenMapTiles schema). Land is solid black by default (the whole canvas, since OpenMapTiles has
+    no standalone "land" polygon - land is just whatever isn't water); water polygons punch that
+    back to white (see 'Water' layer filters: brunnel != tunnel, intermittent != 1); roads/borders/
+    labels are drawn in white so they stay visible against the black land (this is the inverse of
+    toner-v2's own colors - toner-v2 leaves land white and fills only water black - but matches what
+    was actually asked for here: solid land, not solid water). The class/zoom/rank/admin-level
+    filters for roads/borders/labels still mirror toner-v2's style.json (see PLACE_LABEL_RULES and
+    the 'Road network'/'Country border'/'Other border'/'Disputed border' layers it defines). Vector
+    tiles use tile-local integer coordinates (0..extent, y-down) instead of pixels, so each layer is
+    scaled to TILE_SIZE here before drawing with PIL.
 
     Road name / route-shield labels (transportation_name layer, which follow curved road geometry)
     aren't rendered - that needs text-on-path placement, a meaningfully bigger feature than the
     point labels done here for place names. Only place-point labels are drawn."""
     layers = mapbox_vector_tile.decode(raw_pbf, y_coord_down=True)
-    img = Image.new("L", (TILE_SIZE, TILE_SIZE), 255)
+    img = Image.new("L", (TILE_SIZE, TILE_SIZE), 0)
     draw = ImageDraw.Draw(img)
     font = ImageFont.load_default()
 
-    # "Water": brunnel != tunnel, intermittent != 1, polygons only - drawn first (as a background
-    # fill) so roads/borders/labels below are drawn on top of it, matching toner's own paint order.
+    # "Water": brunnel != tunnel, intermittent != 1, polygons only - drawn first (as a cutout from
+    # the black land canvas) so roads/borders/labels below are drawn on top of it.
     water = layers.get("water")
     if water_fill and water:
         extent = water["extent"]
@@ -264,8 +269,8 @@ def rasterize_vector_tile(
                 continue
             px, py = geometry["coordinates"]
             px, py = px * scale, py * scale
-            draw.ellipse([px - 1, py - 1, px + 1, py + 1], fill=0)
-            draw.text((px + 3, py - 3), name, fill=0, font=font)
+            draw.ellipse([px - 1, py - 1, px + 1, py + 1], fill=255)
+            draw.text((px + 3, py - 3), name, fill=255, font=font)
 
     return img
 
@@ -618,15 +623,16 @@ def main() -> int:
     ap.add_argument(
         "--vector",
         action="store_true",
-        help="Fetch MapTiler vector tiles (.pbf, OpenMapTiles schema) and rasterize only water "
-        "fill/roads/borders/place-labels (--no-water-fill/--road-classes/--road-minzoom/"
-        "--boundary-max-admin-level/--label-classes), instead of fetching a pre-rendered raster "
-        "style. The defaults reproduce MapTiler's toner-v2 style.json's own filters (fetched "
-        "2026-07-29) for those layers - see PLACE_LABEL_RULES and rasterize_vector_tile() in this "
-        "file for the transcribed rules, and re-derive them if MapTiler changes that style. "
-        "Landcover and building fills are never drawn regardless (this rasterizer doesn't "
-        "implement them) - only water gets a fill, same as toner-v2 itself. --style/--threshold/"
-        "--invert are ignored in this mode.",
+        help="Fetch MapTiler vector tiles (.pbf, OpenMapTiles schema) and rasterize a solid-black-"
+        "land basemap with roads/borders/place-labels drawn in white on top, plus a white water "
+        "cutout (--no-water-fill/--road-classes/--road-minzoom/--boundary-max-admin-level/"
+        "--label-classes), instead of fetching a pre-rendered raster style. Land is filled black "
+        "because there's no standalone 'land' polygon in OpenMapTiles - it's just the whole canvas "
+        "minus water. The road/border/label class/zoom/rank filters mirror MapTiler's toner-v2 "
+        "style.json (fetched 2026-07-29; see PLACE_LABEL_RULES and rasterize_vector_tile() in this "
+        "file for the transcribed rules) - note toner-v2 itself uses the opposite fill (white land, "
+        "black water); this deliberately inverts that. Landcover/building fills are never drawn "
+        "(not implemented). --style/--threshold/--invert are ignored in this mode.",
     )
     ap.add_argument(
         "--vector-tileset",
@@ -683,9 +689,10 @@ def main() -> int:
     ap.add_argument(
         "--no-water-fill",
         action="store_true",
-        help="Skip the solid black water fill (default: filled, matching toner-v2's own 'Water' "
-        "layer - brunnel != tunnel, intermittent != 1, at every zoom). Pass this for a purely "
-        "line/label map with no area fills at all. Only used with --vector.",
+        help="Skip cutting water out of the solid black land canvas (default: cut out white, using "
+        "toner-v2's own 'Water' layer filter - brunnel != tunnel, intermittent != 1, at every "
+        "zoom). Passing this leaves the entire tile solid black land-color, water included, with "
+        "just white roads/borders/labels on top. Only used with --vector.",
     )
     args = ap.parse_args()
 
