@@ -27,6 +27,12 @@
 #define HAS_SDCARD
 #define SDCARD_USE_SPI1
 #define SDCARD_CS SPI_CS
+// Unset, this silently falls back to a very conservative 4MHz default (see FSCommon.cpp /
+// MapTileSourceSD.cpp) - at 4MHz a single worst-case 32KB map tile read takes ~65ms of raw SPI
+// transfer alone, which is very noticeable once a few tiles need fetching after panning/zooming.
+// T-Deck's SD_SPI_FREQUENCY (75MHz) is too fast for this board's SD wiring - card failed to read
+// at all. 25MHz is confirmed working; raise it further only with the actual card/wiring in hand.
+#define SD_SPI_FREQUENCY 25000000U
 
 // LoRa Radio - SX1262 with 1W PA
 #define USE_SX1262

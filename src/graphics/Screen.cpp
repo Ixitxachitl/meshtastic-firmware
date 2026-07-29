@@ -1439,12 +1439,15 @@ void Screen::setFrames(FrameFocus focus)
     }
 #endif
     // Map doesn't need local GPS - it can show other nodes' positions regardless (e.g. T-Deck,
-    // which has no onboard GPS).
+    // which has no onboard GPS). Restricted to TFT-class color displays and E-Ink: the map needs
+    // more pixels than monochrome OLED screens can usefully spare.
+#if GRAPHICS_TFT_COLORING_ENABLED || defined(USE_EINK)
     if (!hiddenFrames.map) {
         fsi.positions.map = numframes;
         normalFrames[numframes++] = graphics::MapRenderer::drawMapFrame;
         indicatorIcons.push_back(icon_map);
     }
+#endif
     if (RadioLibInterface::instance && !hiddenFrames.lora) {
         fsi.positions.lora = numframes;
         normalFrames[numframes++] = graphics::DebugRenderer::drawLoRaFocused;
@@ -2291,7 +2294,8 @@ int Screen::handleInputEvent(const InputEvent *event)
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.gps && gps) {
                     menuHandler::positionBaseMenu();
 #endif
-                } else if (framesetInfo.positions.map != 255 && this->ui->getUiState()->currentFrame == framesetInfo.positions.map) {
+                } else if (framesetInfo.positions.map != 255 &&
+                           this->ui->getUiState()->currentFrame == framesetInfo.positions.map) {
                     menuHandler::mapBaseMenu();
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.clock) {
                     menuHandler::clockMenu();

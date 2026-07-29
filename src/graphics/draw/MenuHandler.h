@@ -59,7 +59,9 @@ class menuHandler
         HamModeConfirm,
         LicensedToNormalConfirm,
         MapBaseMenu,
-        MapFollowMeMenu
+        MapFollowMeMenu,
+        MapZoomLevelMenu,
+        MapPanMenu
     };
     static screenMenus menuQueue;
     static uint32_t pickedNodeNum; // node selected by NodePicker for ManageNodeMenu
@@ -120,6 +122,8 @@ class menuHandler
     static void licensedToNormalConfirmMenu();
     static void mapBaseMenu();
     static void mapFollowMeMenu();
+    static void mapZoomLevelMenu();
+    static void mapPanMenu();
 
   private:
     static void saveUIConfig();

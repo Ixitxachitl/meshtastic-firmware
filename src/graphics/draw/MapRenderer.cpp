@@ -2,13 +2,12 @@
 
 #include "NodeDB.h"
 #include "gps/GeoCoord.h"
+#include "graphics/SharedUIDisplay.h"
+#include "graphics/images.h"
 #include "graphics/niche/Map/MapTileRenderer.h"
 
 #if defined(ARCH_PORTDUINO) || defined(ARCH_ESP32)
 #include "graphics/niche/Map/MapTileSourceFile.h"
-#endif
-#if defined(HAS_QSPI_MAP_TILES)
-#include "graphics/niche/Map/MapTileSourceQSPI.h"
 #endif
 #if defined(HAS_SDCARD)
 #include "graphics/niche/Map/MapTileSourceSD.h"
@@ -170,7 +169,7 @@ void panByScreenFraction(float dxFraction, float dyFraction)
     const float degPerPxLng = 360.0f / worldPxAtZoom;
     const float degPerPxLat = degPerPxLng * cosf(s_centerLat * DEG_TO_RAD);
 
-    constexpr float kPanFractionOfView = 0.3f;
+    constexpr float kPanFractionOfView = 0.15f;
     const float stepPx = min(s_lastViewWidth, s_lastViewHeight) * kPanFractionOfView;
 
     s_centerLat += dyFraction * stepPx * degPerPxLat;
@@ -185,9 +184,8 @@ void panByScreenFraction(float dxFraction, float dyFraction)
 
 #if defined(HAS_SDCARD)
 // Real SD card (e.g. T-Deck): large, reliable, and provisioned by just copying MAP.BIN onto the
-// card with any computer - no bootloader/drag-and-drop complications like the Wio Tracker L1's
-// QSPI chip (see MapTileSourceQSPI.h). Preferred over the plain FSCom file source below when a
-// card is actually present.
+// card with any computer. Preferred over the plain FSCom file source below when a card is
+// actually present.
 bool ensureSDTileSourceInitialized()
 {
     static bool attempted = false;
@@ -206,11 +204,9 @@ bool ensureSDTileSourceInitialized()
 
 #if defined(ARCH_PORTDUINO) || defined(ARCH_ESP32)
 // On platforms with a filesystem that has room to spare (ESP32's LittleFS, or portduino's host
-// filesystem passthrough), the basemap is just a normal file - no QSPI/FAT complexity needed
-// (see MapTileSourceQSPI.h for the Wio Tracker L1's very different situation). Attempted once,
-// lazily, on first draw; if MAP.BIN isn't present this quietly leaves MapTiles with zero tiles
-// (the existing "no basemap baked in" fallback), which is the expected state until someone
-// provisions a file there.
+// filesystem passthrough), the basemap is just a normal file. Attempted once, lazily, on first
+// draw; if MAP.BIN isn't present this quietly leaves MapTiles with zero tiles (the existing "no
+// basemap baked in" fallback), which is the expected state until someone provisions a file there.
 void ensureFileTileSourceInitialized()
 {
 #if defined(HAS_SDCARD)
@@ -223,21 +219,6 @@ void ensureFileTileSourceInitialized()
         return;
     attempted = true;
     if (source.begin("/MAP.BIN"))
-        NicheGraphics::MapTiles::setTileSource(&source);
-}
-#endif
-
-#if defined(HAS_QSPI_MAP_TILES)
-// Wio Tracker L1 (and similar): the basemap lives on the external QSPI chip's existing FAT
-// filesystem - see MapTileSourceQSPI.h for why this is a file read rather than raw flash access.
-void ensureQSPITileSourceInitialized()
-{
-    static bool attempted = false;
-    static NicheGraphics::MapTiles::QSPIFatTileSource source;
-    if (attempted)
-        return;
-    attempted = true;
-    if (source.begin("MAP.BIN"))
         NicheGraphics::MapTiles::setTileSource(&source);
 }
 #endif
@@ -331,17 +312,27 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
 #if defined(ARCH_PORTDUINO) || defined(ARCH_ESP32)
     ensureFileTileSourceInitialized();
 #endif
-#if defined(HAS_QSPI_MAP_TILES)
-    ensureQSPITileSourceInitialized();
-#endif
 
     display->clear();
     // WHITE is the lit/visible pixel color on OLEDDisplay (unlike InkHUD's e-ink convention,
     // where BLACK means ink) - everything below needs to actually show up on real hardware.
     display->setColor(WHITE);
 
-    const int16_t viewWidth = display->getWidth();
-    const int16_t viewHeight = display->getHeight();
+    int16_t viewWidth = display->getWidth();
+    int16_t viewHeight = display->getHeight();
+
+    // Shared battery/time header, same as every other BaseUI screen - reserve its height and
+    // shift the map viewport down so tiles/markers/overlays never draw underneath it.
+    // Matches drawCommonHeader's own internal footprint exactly (SharedUIDisplay.cpp: headerHeight
+    // = highlightHeight + 2, highlightHeight = FONT_HEIGHT_SMALL - 1, so FONT_HEIGHT_SMALL + 1) -
+    // NodeListRenderer's COMMON_HEADER_HEIGHT (FONT_HEIGHT_SMALL - 1) is 2px short of that, which
+    // left the map drawing over the header's bottom edge and XOR-inverting it.
+    const int16_t kHeaderHeight = FONT_HEIGHT_SMALL + 1;
+    drawCommonHeader(display, x, y, "Map");
+    display->setColor(WHITE); // drawCommonHeader leaves its own color state active
+    y += kHeaderHeight;
+    viewHeight -= kHeaderHeight;
+
     s_lastViewWidth = viewWidth;
     s_lastViewHeight = viewHeight;
 
@@ -388,29 +379,8 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         },
         &plotCtx);
 
-    // Known node markers (self is drawn separately, last, so it's always on top). First pass just
-    // counts how many will land on-screen, so short-name labels only show up when there are few
-    // enough nodes in view to not turn into clutter.
-    constexpr int kLabelClutterThreshold = 6;
+    // Known node markers (self is drawn separately, last, so it's always on top).
     const NodeNum ourNodeNum = nodeDB->getNodeNum();
-    int onScreenCount = 0;
-    for (uint32_t i = 0; i < nodeDB->getNumMeshNodes(); i++) {
-        meshtastic_NodeInfoLite *node = nodeDB->getMeshNodeByIndex(i);
-        if (!nodeDB->hasValidPosition(node) || node->num == ourNodeNum)
-            continue;
-        meshtastic_PositionLite pos;
-        if (!nodeDB->copyNodePosition(node->num, pos))
-            continue;
-        float lat = pos.latitude_i * 1e-7f;
-        float lng = pos.longitude_i * 1e-7f;
-        float distance = GeoCoord::latLongToMeter(centerLat, centerLng, lat, lng);
-        float bearing = GeoCoord::bearing(centerLat, centerLng, lat, lng);
-        int16_t mx = (int16_t)(viewWidth / 2 + sinf(bearing) * distance * metersToPx);
-        int16_t my = (int16_t)(viewHeight / 2 - cosf(bearing) * distance * metersToPx);
-        if (mx >= -2 && mx <= viewWidth + 1 && my >= -2 && my <= viewHeight + 1)
-            onScreenCount++;
-    }
-    const bool showLabels = onScreenCount > 0 && onScreenCount <= kLabelClutterThreshold;
 
     // Everything below is drawn INVERSE (XOR against whatever's already there - tile or blank),
     // not a fixed color: markers, labels, the crosshair, and both text overlays need to stay
@@ -428,6 +398,24 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     int16_t drawnMx[kMaxDedupeTracked];
     int16_t drawnMy[kMaxDedupeTracked];
     int drawnCount = 0;
+
+    // Short-name labels are skipped only when they'd actually overlap a label already placed -
+    // no fixed cap on how many can show at once, so zooming out keeps names visible as long as
+    // there's room for them.
+    constexpr int kMaxLabelsTracked = 64;
+    int16_t labelX[kMaxLabelsTracked];
+    int16_t labelY[kMaxLabelsTracked];
+    int16_t labelW[kMaxLabelsTracked];
+    int16_t labelH[kMaxLabelsTracked];
+    int labelCount = 0;
+
+    // FONT_SMALL_LOCAL rather than FONT_SMALL deliberately: on TFT/HAS_SPI_TFT builds FONT_SMALL is
+    // redirected to the 19px-tall medium font (bigger screen, so BaseUI normally wants bigger text)
+    // - far too large for a map label sitting next to a marker, where many names need to fit close
+    // together without overlapping.
+    display->setFont(FONT_SMALL_LOCAL);
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    const int16_t labelHeight = _fontHeight(FONT_SMALL_LOCAL);
 
     for (uint32_t i = 0; i < nodeDB->getNumMeshNodes(); i++) {
         meshtastic_NodeInfoLite *node = nodeDB->getMeshNodeByIndex(i);
@@ -464,12 +452,32 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
             drawnCount++;
         }
 
-        display->fillRect(mx - 1, my - 1, 3, 3);
+        display->drawXbm(mx - 4, my - 4, 8, 8, icon_map_node);
 
-        if (showLabels && node->short_name[0] != '\0') {
-            display->setFont(FONT_SMALL);
-            display->setTextAlignment(TEXT_ALIGN_LEFT);
-            display->drawString(mx + 3, my - FONT_HEIGHT_SMALL / 2, node->short_name);
+        if (node->short_name[0] != '\0') {
+            int16_t lx = mx + 5;
+            int16_t ly = my - labelHeight / 2;
+            int16_t lw = (int16_t)display->getStringWidth(node->short_name);
+
+            bool overlaps = false;
+            for (int li = 0; li < labelCount; li++) {
+                if (lx < labelX[li] + labelW[li] && lx + lw > labelX[li] && ly < labelY[li] + labelH[li] &&
+                    ly + labelHeight > labelY[li]) {
+                    overlaps = true;
+                    break;
+                }
+            }
+
+            if (!overlaps) {
+                display->drawString(lx, ly, node->short_name);
+                if (labelCount < kMaxLabelsTracked) {
+                    labelX[labelCount] = lx;
+                    labelY[labelCount] = ly;
+                    labelW[labelCount] = lw;
+                    labelH[labelCount] = labelHeight;
+                    labelCount++;
+                }
+            }
         }
     }
 

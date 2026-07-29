@@ -2937,6 +2937,12 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
     case MapFollowMeMenu:
         mapFollowMeMenu();
         break;
+    case MapZoomLevelMenu:
+        mapZoomLevelMenu();
+        break;
+    case MapPanMenu:
+        mapPanMenu();
+        break;
     }
     menuQueue = MenuNone;
 }
@@ -2947,35 +2953,48 @@ void menuHandler::mapBaseMenu()
 
     static const MapMenuOption baseOptions[] = {
         {"Back", OptionsAction::Back},
-        {"Pan Mode", OptionsAction::Select, static_cast<int>(MapAction::PanMode)},
+        {"Pan", OptionsAction::Select, static_cast<int>(MapAction::PanMode)},
+        {"Zoom", OptionsAction::Select, static_cast<int>(MapAction::ZoomLevel)},
         {"Follow Me", OptionsAction::Select, static_cast<int>(MapAction::FollowMe)},
-        {"Zoom Level", OptionsAction::Select, static_cast<int>(MapAction::ZoomLevel)},
     };
     constexpr size_t baseCount = sizeof(baseOptions) / sizeof(baseOptions[0]);
     static std::array<const char *, baseCount> baseLabels{};
 
-    auto bannerOptions =
-        createStaticBannerOptions("Map", baseOptions, baseLabels, [](const MapMenuOption &option, int) -> void {
-            if (option.action == OptionsAction::Back || !option.hasValue)
-                return;
+    auto bannerOptions = createStaticBannerOptions("Map", baseOptions, baseLabels, [](const MapMenuOption &option, int) -> void {
+        if (option.action == OptionsAction::Back || !option.hasValue)
+            return;
 
-            switch (static_cast<MapAction>(option.value)) {
-            case MapAction::PanMode:
-                // Entered directly, held until Back is pressed on the Map frame itself (see
-                // Screen::handleInputEvent) - not a picker like Follow Me.
-                graphics::MapRenderer::setPanModeEnabled(true);
-                break;
-            case MapAction::FollowMe:
-                menuQueue = MapFollowMeMenu;
-                screen->runNow();
-                break;
-            case MapAction::ZoomLevel:
-                // Entered directly; up/down adjust zoom and a ruler is drawn until Back is
-                // pressed (see Screen::handleInputEvent) - not a discrete-level picker.
-                graphics::MapRenderer::setZoomModeEnabled(true);
-                break;
-            }
-        });
+        switch (static_cast<MapAction>(option.value)) {
+        case MapAction::PanMode:
+#if HAS_DIRECTIONAL_INPUT
+            // Entered directly, held until Back is pressed on the Map frame itself (see
+            // Screen::handleInputEvent) - not a picker like Follow Me.
+            graphics::MapRenderer::setPanModeEnabled(true);
+#else
+            // No joystick/keyboard to hold a direction on (e.g. T-Beam 1W) - offer each
+            // direction as its own menu option instead (see mapPanMenu()).
+            menuQueue = MapPanMenu;
+            screen->runNow();
+#endif
+            break;
+        case MapAction::FollowMe:
+            menuQueue = MapFollowMeMenu;
+            screen->runNow();
+            break;
+        case MapAction::ZoomLevel:
+#if HAS_DIRECTIONAL_INPUT
+            // Entered directly; up/down adjust zoom and a ruler is drawn until Back is
+            // pressed (see Screen::handleInputEvent) - not a discrete-level picker.
+            graphics::MapRenderer::setZoomModeEnabled(true);
+#else
+            // No up/down to hold on a two-button device - pick a level directly instead (see
+            // mapZoomLevelMenu()).
+            menuQueue = MapZoomLevelMenu;
+            screen->runNow();
+#endif
+            break;
+        }
+    });
 
     screen->showOverlayBanner(bannerOptions);
 }
@@ -3008,6 +3027,105 @@ void menuHandler::mapFollowMeMenu()
             break;
         }
     }
+
+    screen->showOverlayBanner(bannerOptions);
+}
+
+void menuHandler::mapZoomLevelMenu()
+{
+    // One literal entry per level rather than generating labels at runtime, matching every other
+    // menu in this file - kept in sync with MapRenderer's actual [kMinZoom, kMaxZoom] range by the
+    // static_assert below, so a future change to those bounds fails loudly here instead of quietly
+    // drifting out of sync with the Zoom Level menu it's meant to fully cover.
+    static_assert(graphics::MapRenderer::kMinZoom == 0 && graphics::MapRenderer::kMaxZoom == 18,
+                  "zoomOptions below must be regenerated to match MapRenderer::kMinZoom/kMaxZoom");
+    static const MapMenuOption zoomOptions[] = {
+        {"Back", OptionsAction::Back},      {"Z0", OptionsAction::Select, 0},   {"Z1", OptionsAction::Select, 1},
+        {"Z2", OptionsAction::Select, 2},   {"Z3", OptionsAction::Select, 3},   {"Z4", OptionsAction::Select, 4},
+        {"Z5", OptionsAction::Select, 5},   {"Z6", OptionsAction::Select, 6},   {"Z7", OptionsAction::Select, 7},
+        {"Z8", OptionsAction::Select, 8},   {"Z9", OptionsAction::Select, 9},   {"Z10", OptionsAction::Select, 10},
+        {"Z11", OptionsAction::Select, 11}, {"Z12", OptionsAction::Select, 12}, {"Z13", OptionsAction::Select, 13},
+        {"Z14", OptionsAction::Select, 14}, {"Z15", OptionsAction::Select, 15}, {"Z16", OptionsAction::Select, 16},
+        {"Z17", OptionsAction::Select, 17}, {"Z18", OptionsAction::Select, 18},
+    };
+    constexpr size_t zoomCount = sizeof(zoomOptions) / sizeof(zoomOptions[0]);
+    static std::array<const char *, zoomCount> zoomLabels{};
+
+    auto bannerOptions =
+        createStaticBannerOptions("Zoom Level", zoomOptions, zoomLabels, [](const MapMenuOption &option, int) -> void {
+            if (option.action == OptionsAction::Back) {
+                menuQueue = MapBaseMenu;
+                screen->runNow();
+                return;
+            }
+            if (!option.hasValue)
+                return;
+            graphics::MapRenderer::setZoom(option.value);
+        });
+
+    const int cur = graphics::MapRenderer::zoom();
+    for (size_t i = 0; i < zoomCount; ++i) {
+        if (zoomOptions[i].hasValue && zoomOptions[i].value == cur) {
+            bannerOptions.InitialSelected = i;
+            break;
+        }
+    }
+
+    screen->showOverlayBanner(bannerOptions);
+}
+
+void menuHandler::mapPanMenu()
+{
+    enum class PanDirection { Up, Down, Left, Right };
+
+    static const MapMenuOption panOptions[] = {
+        {"Back", OptionsAction::Back},
+        {"Pan Up", OptionsAction::Select, static_cast<int>(PanDirection::Up)},
+        {"Pan Down", OptionsAction::Select, static_cast<int>(PanDirection::Down)},
+        {"Pan Left", OptionsAction::Select, static_cast<int>(PanDirection::Left)},
+        {"Pan Right", OptionsAction::Select, static_cast<int>(PanDirection::Right)},
+    };
+    constexpr size_t panCount = sizeof(panOptions) / sizeof(panOptions[0]);
+    static std::array<const char *, panCount> panLabels{};
+
+    // Remembers the last direction picked (as an index into panOptions) so reopening the menu
+    // below highlights it again - repeated panning in the same direction is then just "press
+    // SELECT again", not "reselect the direction from the top every time".
+    static size_t lastSelected = 0;
+
+    auto bannerOptions =
+        createStaticBannerOptions("Pan", panOptions, panLabels, [](const MapMenuOption &option, int selected) -> void {
+            if (option.action == OptionsAction::Back) {
+                menuQueue = MapBaseMenu;
+                screen->runNow();
+                return;
+            }
+            if (!option.hasValue)
+                return;
+
+            switch (static_cast<PanDirection>(option.value)) {
+            case PanDirection::Up:
+                graphics::MapRenderer::panUp();
+                break;
+            case PanDirection::Down:
+                graphics::MapRenderer::panDown();
+                break;
+            case PanDirection::Left:
+                graphics::MapRenderer::panLeft();
+                break;
+            case PanDirection::Right:
+                graphics::MapRenderer::panRight();
+                break;
+            }
+
+            lastSelected = (size_t)selected;
+            // No joystick to hold a direction on - reopen so another tap keeps panning without
+            // re-navigating from the Map's base menu for every single step.
+            menuQueue = MapPanMenu;
+            screen->runNow();
+        });
+
+    bannerOptions.InitialSelected = (int8_t)lastSelected;
 
     screen->showOverlayBanner(bannerOptions);
 }
