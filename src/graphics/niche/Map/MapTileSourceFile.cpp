@@ -33,22 +33,25 @@ bool FileTileSource::begin(const char *path)
     zHi_ = -1;
     count_ = 0;
     payloadStart_ = 0;
+    if (file_)
+        file_.close();
 
-    File file = FSCom.open(path, FILE_O_READ);
-    if (!file) {
+    // Opened once and kept open for decodeTile() to reuse (see file_'s doc comment) - only closed
+    // again below on a failure path, where nothing will call decodeTile() anyway.
+    file_ = FSCom.open(path, FILE_O_READ);
+    if (!file_) {
         LOG_WARN("Map tile file '%s' not found", path);
         return false;
     }
 
     uint8_t header[kTileBlobHeaderSize];
-    if (file.read(header, sizeof(header)) != sizeof(header) || readTileBlobU32LE(header) != kTileBlobMagic) {
+    if (file_.read(header, sizeof(header)) != sizeof(header) || readTileBlobU32LE(header) != kTileBlobMagic) {
         LOG_WARN("Map tile file '%s' missing/bad header", path);
-        file.close();
+        file_.close();
         return false;
     }
     const uint32_t count = readTileBlobU32LE(header + 4);
     if (count == 0) {
-        file.close();
         LOG_INFO("Map tile file '%s': empty", path);
         return true;
     }
@@ -57,9 +60,9 @@ bool FileTileSource::begin(const char *path)
     // emits every (zoom, tx, ty) for a requested zoom range, densely, in ascending (zoom, ty, tx)
     // order, so the whole index's shape is fully determined by just the first and last entries.
     TileBlobEntry first{};
-    if (!readEntryAt(file, 0, first)) {
+    if (!readEntryAt(file_, 0, first)) {
         LOG_WARN("Map tile file '%s' truncated index", path);
-        file.close();
+        file_.close();
         return false;
     }
     const int zLo = first.zoom;
@@ -67,7 +70,7 @@ bool FileTileSource::begin(const char *path)
     int zHi = 0;
     if (!solveTileBlobZoomRange(count, zLo, zHi)) {
         LOG_WARN("Map tile file '%s': %u tiles isn't a dense zoom range starting at z%d", path, count, zLo);
-        file.close();
+        file_.close();
         return false;
     }
 
@@ -76,14 +79,13 @@ bool FileTileSource::begin(const char *path)
     // silently-wrong tile lookups rather than a clean "not supported" failure.
     TileBlobEntry last{};
     const int lastSide = 1 << zHi;
-    if (!readEntryAt(file, count - 1, last) || last.zoom != zHi || last.tx != lastSide - 1 || last.ty != lastSide - 1) {
+    if (!readEntryAt(file_, count - 1, last) || last.zoom != zHi || last.tx != lastSide - 1 || last.ty != lastSide - 1) {
         LOG_WARN("Map tile file '%s': index layout doesn't match the expected dense z%d-%d range", path, zLo, zHi);
-        file.close();
+        file_.close();
         return false;
     }
 
     payloadStart_ = kTileBlobHeaderSize + count * kTileBlobEntrySize;
-    file.close();
 
     zLo_ = zLo;
     zHi_ = zHi;
@@ -115,31 +117,22 @@ int FileTileSource::tileTyAt(int tileIndex)
 
 bool FileTileSource::decodeTile(int tileIndex, uint8_t *outBuf)
 {
-    File file = FSCom.open(path_, FILE_O_READ);
-    if (!file)
+    if (!file_)
         return false;
 
     TileBlobEntry e{};
-    if (!readEntryAt(file, (uint32_t)tileIndex, e)) {
-        file.close();
+    if (!readEntryAt(file_, (uint32_t)tileIndex, e))
         return false;
-    }
 
-    if (e.kind != kTileKindLZ4) {
-        file.close();
+    if (e.kind != kTileKindLZ4)
         return decodeTilePayload(e.kind, nullptr, 0, outBuf);
-    }
 
-    if (e.size == 0 || e.size > kTileBufferBytes) {
-        file.close();
+    if (e.size == 0 || e.size > kTileBufferBytes)
         return false;
-    }
 
     uint8_t *compressed = tileCompressedScratchBuffer();
-    file.seek(payloadStart_ + e.offset);
-    bool readOk = file.read(compressed, e.size) == e.size;
-    file.close();
-    if (!readOk)
+    file_.seek(payloadStart_ + e.offset);
+    if (file_.read(compressed, e.size) != e.size)
         return false;
 
     return decodeTilePayload(e.kind, compressed, e.size, outBuf);

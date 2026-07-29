@@ -61,6 +61,11 @@ class SDCardTileSource : public TileSource
 
   private:
     SdFs sd_;
+    // Kept open for the lifetime of a successful begin() rather than reopened per decodeTile()
+    // call - SD file opens walk the FAT to resolve the path and are the dominant per-tile cost
+    // (far more than the read itself or the LZ4 decompression), so reopening by path on every
+    // single tile of every single frame redraw was the main cause of sluggish map rendering.
+    FsFile file_;
     bool sdBegun_ = false;
     int zLo_ = 0;
     int zHi_ = -1; // -1 => no tiles / not begun.

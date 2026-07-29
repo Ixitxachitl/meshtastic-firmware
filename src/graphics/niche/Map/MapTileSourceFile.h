@@ -28,6 +28,7 @@ instead of a RAM lookup - negligible next to the cost of the tile payload read i
 */
 
 #include "./MapTileRenderer.h"
+#include "FSCommon.h" // File
 
 namespace NicheGraphics::MapTiles
 {
@@ -54,6 +55,10 @@ class FileTileSource : public TileSource
     int indexOf(int zoom, int tx, int ty) override;
 
   private:
+    // Kept open for the lifetime of a successful begin() rather than reopened per decodeTile()
+    // call - see MapTileSourceSD.h's file_ for why (same reasoning; less severe on flash-backed
+    // filesystems than on real SD cards, but still avoidable per-tile-per-frame overhead).
+    File file_;
     int zLo_ = 0;
     int zHi_ = -1; // -1 => no tiles / not begun.
     uint32_t count_ = 0;

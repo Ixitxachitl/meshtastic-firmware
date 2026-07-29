@@ -22,6 +22,19 @@ constexpr uint8_t MAP_TILE_LAYOUT_GRID = 1;
 // Tiles are 1 bit/pixel, column-major: [bx=0..kTileSizePx/8-1][y=0..kTileSizePx-1], 8 px/byte.
 uint8_t s_tileCacheBuffer[NicheGraphics::MapTiles::kTileBufferBytes];
 
+// Which (source, tileIndex) is currently sitting in s_tileCacheBuffer, so blitTile can skip a
+// redundant decode (SD read + LZ4 decompress) when the exact same tile is needed again. A single
+// slot is enough for the common case that matters most: most Map-capable screens are far smaller
+// than one 512px tile, so a whole redraw - and, critically, most individual pan/zoom steps, which
+// usually don't even leave the current tile - needs only one tile. Without this, every such
+// redraw/step was re-reading and re-decompressing the exact same bytes from SD for no reason,
+// which is what actually made panning/zooming feel sluggish even after fixing the per-call file
+// reopen and bumping the SD SPI clock. nullptr is a valid source key (the compiled-in MapTile.h
+// path), distinct from "nothing cached" (kNoCachedTile).
+constexpr int kNoCachedTile = -1;
+NicheGraphics::MapTiles::TileSource *s_cachedTileSource = nullptr;
+int s_cachedTileIndex = kNoCachedTile;
+
 // Shared compressed-payload scratch buffer - see tileCompressedScratchBuffer() in the header.
 uint8_t s_tileCompressedScratchBuffer[NicheGraphics::MapTiles::kTileBufferBytes];
 
@@ -144,6 +157,7 @@ int tileCountCompiledIn()
 void NicheGraphics::MapTiles::setTileSource(TileSource *source)
 {
     s_activeSource = source;
+    s_cachedTileIndex = kNoCachedTile; // The old cached tile's data no longer applies.
 }
 
 bool NicheGraphics::MapTiles::decodeTilePayload(uint8_t kind, const uint8_t *compressed, int compressedSize, uint8_t *outBuf)
@@ -255,13 +269,17 @@ void NicheGraphics::MapTiles::drawTileBackground(float latCenter, float lngCente
                 continue;
 
             if (!tile) { // Decode at most once per tile, regardless of how many copies are in view.
-                if (s_activeSource) {
+                if (s_cachedTileSource == s_activeSource && s_cachedTileIndex == i) {
+                    tile = s_tileCacheBuffer; // Already sitting there from a previous call - reuse it.
+                } else if (s_activeSource) {
                     tile = s_activeSource->decodeTile(i, s_tileCacheBuffer) ? s_tileCacheBuffer : nullptr;
                 } else {
                     tile = decodeSparseTile(i);
                 }
                 if (!tile)
                     break;
+                s_cachedTileSource = s_activeSource;
+                s_cachedTileIndex = i;
             }
 
             const int sxStart = (int)((tileMinWx - gpxX) / tileWorldPx + viewWidth * 0.5f);

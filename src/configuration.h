@@ -444,6 +444,19 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #ifndef HAS_TOUCHSCREEN
 #define HAS_TOUCHSCREEN 0
 #endif
+// True if the device has hardware that can generate real directional (UP/DOWN/LEFT/RIGHT) input -
+// a keyboard, a built-in rotary encoder, a touchscreen, or a trackball - as opposed to only
+// BUTTON_PIN/ALT_BUTTON_PIN single/two-button navigation (e.g. T-Beam 1W). UIs that normally rely
+// on holding a direction (e.g. the Map's pan/zoom) should offer a two-button-friendly alternative
+// (a list of discrete options, navigable the same way every other menu already is) when this is 0.
+#ifndef HAS_DIRECTIONAL_INPUT
+#if defined(INPUTBROKER_MATRIX_TYPE) || defined(INPUTBROKER_SERIAL_TYPE) || defined(T_LORA_PAGER) ||                             \
+    defined(INPUTDRIVER_ENCODER_TYPE) || HAS_TRACKBALL || HAS_TOUCHSCREEN
+#define HAS_DIRECTIONAL_INPUT 1
+#else
+#define HAS_DIRECTIONAL_INPUT 0
+#endif
+#endif
 #ifndef HAS_TELEMETRY
 #define HAS_TELEMETRY 0
 #endif
