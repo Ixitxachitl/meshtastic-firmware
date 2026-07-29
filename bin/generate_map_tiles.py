@@ -117,6 +117,36 @@ def _draw_geometry_lines(
             draw_line(line)
 
 
+def _draw_geometry_fill(
+    draw: "ImageDraw.ImageDraw", geometry: dict, extent: int
+) -> None:
+    """Draws a GeoJSON Polygon/MultiPolygon (as decoded by mapbox_vector_tile) solid black, scaled
+    from the tile's local extent down to TILE_SIZE - used only for the water fill (see
+    rasterize_vector_tile). Each ring past the first in a Polygon is a hole (e.g. an island in a
+    lake); PIL has no native hole-aware polygon fill, so holes are punched back to white after the
+    exterior ring is filled black."""
+    scale = TILE_SIZE / extent
+    gtype = geometry.get("type")
+    coords = geometry.get("coordinates")
+
+    def draw_polygon(rings: list) -> None:
+        if not rings:
+            return
+        exterior = [(px * scale, py * scale) for px, py in rings[0]]
+        if len(exterior) >= 3:
+            draw.polygon(exterior, fill=0)
+        for hole in rings[1:]:
+            scaled_hole = [(px * scale, py * scale) for px, py in hole]
+            if len(scaled_hole) >= 3:
+                draw.polygon(scaled_hole, fill=255)
+
+    if gtype == "Polygon":
+        draw_polygon(coords)
+    elif gtype == "MultiPolygon":
+        for polygon in coords:
+            draw_polygon(polygon)
+
+
 # Zoom/rank windows for the 'place' layer, transcribed from MapTiler's toner-v2 style.json
 # (https://api.maptiler.com/maps/toner-v2/style.json - fetched 2026-07-29; re-derive if MapTiler
 # changes that style) so vector-mode labels appear/disappear at the same zooms toner's own
@@ -143,15 +173,18 @@ def rasterize_vector_tile(
     boundary_max_admin_level: int,
     label_classes: set[str],
     line_width: int = 1,
+    water_fill: bool = True,
 ) -> Image.Image:
-    """Renders a minimal line-art basemap tile (roads, admin borders, place-name labels only - no
-    landcover/water/building fills, no POIs) from a MapTiler vector tile (OpenMapTiles schema).
-    The class/zoom/rank filters mirror MapTiler's toner-v2 style.json (see PLACE_LABEL_RULES and
-    the 'Road network'/'Country border'/'Other border'/'Disputed border' layers it defines) so this
-    reproduces what toner-v2 actually draws, minus its background/fill layers (landcover, water,
-    buildings) which this rasterizer never draws in the first place since it only ever draws lines
-    and points. Vector tiles use tile-local integer coordinates (0..extent, y-down) instead of
-    pixels, so each layer is scaled to TILE_SIZE here before drawing with PIL.
+    """Renders a minimal basemap tile (water fill, roads, admin borders, place-name labels - no
+    landcover/building fills, no POIs) from a MapTiler vector tile (OpenMapTiles schema). The
+    filters mirror MapTiler's toner-v2 style.json (see PLACE_LABEL_RULES and the 'Road network'/
+    'Country border'/'Other border'/'Disputed border'/'Water' layers it defines) so this reproduces
+    what toner-v2 actually draws, minus its landcover/building fills - toner-v2 itself leaves land
+    as blank background (white) and only fills water (black), which is why roads/borders/labels
+    (also black) stay legible: they're never drawn over a same-color fill except where a feature
+    legitimately crosses water (e.g. a bridge), same as toner-v2 itself. Vector tiles use tile-local
+    integer coordinates (0..extent, y-down) instead of pixels, so each layer is scaled to TILE_SIZE
+    here before drawing with PIL.
 
     Road name / route-shield labels (transportation_name layer, which follow curved road geometry)
     aren't rendered - that needs text-on-path placement, a meaningfully bigger feature than the
@@ -160,6 +193,19 @@ def rasterize_vector_tile(
     img = Image.new("L", (TILE_SIZE, TILE_SIZE), 255)
     draw = ImageDraw.Draw(img)
     font = ImageFont.load_default()
+
+    # "Water": brunnel != tunnel, intermittent != 1, polygons only - drawn first (as a background
+    # fill) so roads/borders/labels below are drawn on top of it, matching toner's own paint order.
+    water = layers.get("water")
+    if water_fill and water:
+        extent = water["extent"]
+        for feature in water["features"]:
+            props = feature["properties"]
+            if props.get("brunnel") == "tunnel" or props.get("intermittent") == 1:
+                continue
+            geometry = feature["geometry"]
+            if geometry.get("type") in ("Polygon", "MultiPolygon"):
+                _draw_geometry_fill(draw, geometry, extent)
 
     # "Road network": class in road_classes, but toner draws no roads at all below zoom 6.
     transportation = layers.get("transportation")
@@ -572,15 +618,15 @@ def main() -> int:
     ap.add_argument(
         "--vector",
         action="store_true",
-        help="Fetch MapTiler vector tiles (.pbf, OpenMapTiles schema) and rasterize only roads/"
-        "borders/place-labels (--road-classes/--road-minzoom/--boundary-max-admin-level/"
-        "--label-classes), instead of fetching a pre-rendered raster style. The defaults for "
-        "those reproduce MapTiler's toner-v2 style.json's own filters (fetched 2026-07-29) for "
-        "those three layers - see PLACE_LABEL_RULES and rasterize_vector_tile() in this file for "
-        "the transcribed rules, and re-derive them if MapTiler changes that style. Background/"
-        "fill layers (landcover, water, buildings) are never drawn regardless, since this "
-        "rasterizer only ever draws lines and points. --style/--threshold/--invert are ignored in "
-        "this mode.",
+        help="Fetch MapTiler vector tiles (.pbf, OpenMapTiles schema) and rasterize only water "
+        "fill/roads/borders/place-labels (--no-water-fill/--road-classes/--road-minzoom/"
+        "--boundary-max-admin-level/--label-classes), instead of fetching a pre-rendered raster "
+        "style. The defaults reproduce MapTiler's toner-v2 style.json's own filters (fetched "
+        "2026-07-29) for those layers - see PLACE_LABEL_RULES and rasterize_vector_tile() in this "
+        "file for the transcribed rules, and re-derive them if MapTiler changes that style. "
+        "Landcover and building fills are never drawn regardless (this rasterizer doesn't "
+        "implement them) - only water gets a fill, same as toner-v2 itself. --style/--threshold/"
+        "--invert are ignored in this mode.",
     )
     ap.add_argument(
         "--vector-tileset",
@@ -634,6 +680,13 @@ def main() -> int:
         "you're reusing a --raw-cache (just point --cache at a new path, since --cache is keyed on "
         "this too). Only used with --vector.",
     )
+    ap.add_argument(
+        "--no-water-fill",
+        action="store_true",
+        help="Skip the solid black water fill (default: filled, matching toner-v2's own 'Water' "
+        "layer - brunnel != tunnel, intermittent != 1, at every zoom). Pass this for a purely "
+        "line/label map with no area fills at all. Only used with --vector.",
+    )
     args = ap.parse_args()
 
     global TILE_SIZE
@@ -665,6 +718,7 @@ def main() -> int:
             "boundary_max_admin_level": args.boundary_max_admin_level,
             "label_classes": sorted(label_classes),
             "line_width": args.line_width,
+            "water_fill": not args.no_water_fill,
             "tile_size": args.tile_size,
         }
 
@@ -681,6 +735,7 @@ def main() -> int:
                 args.boundary_max_admin_level,
                 label_classes,
                 args.line_width,
+                not args.no_water_fill,
             )
 
         bake_threshold, bake_invert = 128, False
