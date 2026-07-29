@@ -95,7 +95,7 @@ def decode_tile_image(raw: bytes) -> Image.Image:
 
 
 def _draw_geometry_lines(
-    draw: "ImageDraw.ImageDraw", geometry: dict, extent: int
+    draw: "ImageDraw.ImageDraw", geometry: dict, extent: int, line_width: int
 ) -> None:
     """Draws a GeoJSON LineString/MultiLineString (as decoded by mapbox_vector_tile) scaled from
     the tile's local extent (e.g. 4096) down to TILE_SIZE. Polygons/points are handled by callers
@@ -108,7 +108,7 @@ def _draw_geometry_lines(
     def draw_line(points: list) -> None:
         scaled = [(px * scale, py * scale) for px, py in points]
         if len(scaled) >= 2:
-            draw.line(scaled, fill=0, width=1)
+            draw.line(scaled, fill=0, width=line_width)
 
     if gtype == "LineString":
         draw_line(coords)
@@ -117,18 +117,41 @@ def _draw_geometry_lines(
             draw_line(line)
 
 
+# Zoom/rank windows for the 'place' layer, transcribed from MapTiler's toner-v2 style.json
+# (https://api.maptiler.com/maps/toner-v2/style.json - fetched 2026-07-29; re-derive if MapTiler
+# changes that style) so vector-mode labels appear/disappear at the same zooms toner's own
+# "Place/Village/Town/State/City/Country/Continent labels" layers do. maxzoom=None means no upper
+# bound (matches the style leaving maxzoom unset). One layer from that style isn't reproduced here:
+# the catch-all "Place labels" layer (suburb/neighbourhood/hamlet/isolated_dwelling/island/quarter,
+# matched by *excluding* the classes below) - it's the most cluttering tier and skipped by design
+# for a minimal basemap; its classes are simply absent from PLACE_LABEL_RULES.
+PLACE_LABEL_RULES: list[dict] = [
+    {"classes": {"continent"}, "minzoom": 0, "maxzoom": 2, "max_rank": None},
+    {"classes": {"country"}, "minzoom": 2, "maxzoom": 10, "max_rank": None},
+    {"classes": {"state", "province"}, "minzoom": 4, "maxzoom": 10, "max_rank": 6},
+    {"classes": {"city"}, "minzoom": 5, "maxzoom": 16, "max_rank": None},
+    {"classes": {"town"}, "minzoom": 10, "maxzoom": 16, "max_rank": None},
+    {"classes": {"village"}, "minzoom": 12, "maxzoom": None, "max_rank": None},
+]
+
+
 def rasterize_vector_tile(
     raw_pbf: bytes,
+    zoom: int,
     road_classes: set[str],
+    road_minzoom: int,
     boundary_max_admin_level: int,
     label_classes: set[str],
-    label_max_rank: int,
+    line_width: int = 1,
 ) -> Image.Image:
     """Renders a minimal line-art basemap tile (roads, admin borders, place-name labels only - no
-    landcover/water/building fills, no POIs) from a MapTiler vector tile (OpenMapTiles schema),
-    matching the black-on-white 1-bit look the raster path produces via toner-v2. Vector tiles use
-    tile-local integer coordinates (0..extent, y-down) instead of pixels, so each layer is scaled
-    to TILE_SIZE here before drawing with PIL.
+    landcover/water/building fills, no POIs) from a MapTiler vector tile (OpenMapTiles schema).
+    The class/zoom/rank filters mirror MapTiler's toner-v2 style.json (see PLACE_LABEL_RULES and
+    the 'Road network'/'Country border'/'Other border'/'Disputed border' layers it defines) so this
+    reproduces what toner-v2 actually draws, minus its background/fill layers (landcover, water,
+    buildings) which this rasterizer never draws in the first place since it only ever draws lines
+    and points. Vector tiles use tile-local integer coordinates (0..extent, y-down) instead of
+    pixels, so each layer is scaled to TILE_SIZE here before drawing with PIL.
 
     Road name / route-shield labels (transportation_name layer, which follow curved road geometry)
     aren't rendered - that needs text-on-path placement, a meaningfully bigger feature than the
@@ -138,20 +161,34 @@ def rasterize_vector_tile(
     draw = ImageDraw.Draw(img)
     font = ImageFont.load_default()
 
+    # "Road network": class in road_classes, but toner draws no roads at all below zoom 6.
     transportation = layers.get("transportation")
-    if transportation:
+    if transportation and zoom >= road_minzoom:
         extent = transportation["extent"]
         for feature in transportation["features"]:
             if feature["properties"].get("class") in road_classes:
-                _draw_geometry_lines(draw, feature["geometry"], extent)
+                _draw_geometry_lines(draw, feature["geometry"], extent, line_width)
 
+    # "Country border" (admin_level 2, non-maritime, non-disputed) + "Disputed border" (admin_level
+    # 2, non-maritime, disputed) both appear from zoom 2; "Other border" (admin_level 3..N,
+    # non-maritime) appears from zoom 3. Maritime boundaries are excluded at every tier, matching
+    # toner's `maritime == 0` filter on both layers.
     boundary = layers.get("boundary")
     if boundary:
         extent = boundary["extent"]
         for feature in boundary["features"]:
-            admin_level = feature["properties"].get("admin_level", 99)
-            if admin_level <= boundary_max_admin_level:
-                _draw_geometry_lines(draw, feature["geometry"], extent)
+            props = feature["properties"]
+            if props.get("maritime", 0):
+                continue
+            admin_level = props.get("admin_level", 99)
+            if admin_level == 2:
+                min_z = 2
+            elif 3 <= admin_level <= boundary_max_admin_level:
+                min_z = 3
+            else:
+                continue
+            if zoom >= min_z:
+                _draw_geometry_lines(draw, feature["geometry"], extent, line_width)
 
     place = layers.get("place")
     if place:
@@ -159,11 +196,20 @@ def rasterize_vector_tile(
         scale = TILE_SIZE / extent
         for feature in place["features"]:
             props = feature["properties"]
-            if props.get("class") not in label_classes:
+            cls = props.get("class")
+            if cls not in label_classes:
                 continue
-            rank = props.get("rank")
-            if rank is not None and rank > label_max_rank:
+            rule = next((r for r in PLACE_LABEL_RULES if cls in r["classes"]), None)
+            if rule is None:
+                continue  # class not in our (deliberately trimmed) set of recognized place tiers
+            if not (rule["minzoom"] <= zoom < (rule["maxzoom"] or float("inf"))):
                 continue
+            if rule["max_rank"] is not None:
+                rank = props.get("rank")
+                if rank is None or rank > rule["max_rank"]:
+                    continue
+            if cls == "country" and props.get("iso_a2") == "VA":
+                continue  # toner explicitly excludes Vatican City's country label
             geometry = feature["geometry"]
             if geometry.get("type") != "Point":
                 continue
@@ -223,7 +269,7 @@ def bake_tile(
     session: requests.Session,
     raw_tiles: dict[tuple[int, int, int], bytes],
     fetch_raw: Callable[[requests.Session, int, int, int], bytes],
-    render_image: Callable[[bytes], Image.Image],
+    render_image: Callable[[bytes, int], Image.Image],
     z: int,
     x: int,
     y: int,
@@ -231,9 +277,10 @@ def bake_tile(
     invert: bool,
 ) -> tuple[BakedTile, bytes, int, bool]:
     """Source-agnostic bake: fetch_raw downloads the tile's raw bytes (PNG for raster, .pbf for
-    vector - see raster_tile_url/vector_tile_url), render_image turns those bytes into a grayscale
-    Image ready for threshold_tile (raster: decode_tile_image; vector: rasterize_vector_tile,
-    which already draws pure black/white so threshold/invert are effectively 128/False for it).
+    vector - see raster_tile_url/vector_tile_url), render_image(raw_bytes, zoom) turns those bytes
+    into a grayscale Image ready for threshold_tile (raster: decode_tile_image, which ignores
+    zoom; vector: rasterize_vector_tile, which needs it for toner's per-layer zoom cutoffs, and
+    already draws pure black/white so threshold/invert are effectively 128/False for it).
     Returns (baked_tile, raw_image_bytes, download_bytes, fetched_now); raw_image_bytes/fetched_now
     let the caller persist newly-downloaded raw bytes to --raw-cache without writing back bytes
     that were already served from that cache."""
@@ -243,7 +290,7 @@ def bake_tile(
     else:
         raw_bytes = fetch_raw(session, z, x, y)
         download_bytes, fetched_now = len(raw_bytes), True
-    img = render_image(raw_bytes)
+    img = render_image(raw_bytes, z)
     packed = threshold_tile(img, threshold, invert)
     if packed == b"":
         return (
@@ -525,48 +572,67 @@ def main() -> int:
     ap.add_argument(
         "--vector",
         action="store_true",
-        help="Fetch MapTiler vector tiles (.pbf, OpenMapTiles schema) and rasterize only the "
-        "layers selected by --road-classes/--boundary-max-admin-level/--label-classes, instead of "
-        "fetching a pre-rendered raster style. Produces a sparser, smaller-to-fetch tile set "
-        "(no landcover/water fills, buildings, or POIs) at the cost of rendering roads/borders/"
-        "labels yourself. --style/--threshold/--invert are ignored in this mode.",
+        help="Fetch MapTiler vector tiles (.pbf, OpenMapTiles schema) and rasterize only roads/"
+        "borders/place-labels (--road-classes/--road-minzoom/--boundary-max-admin-level/"
+        "--label-classes), instead of fetching a pre-rendered raster style. The defaults for "
+        "those reproduce MapTiler's toner-v2 style.json's own filters (fetched 2026-07-29) for "
+        "those three layers - see PLACE_LABEL_RULES and rasterize_vector_tile() in this file for "
+        "the transcribed rules, and re-derive them if MapTiler changes that style. Background/"
+        "fill layers (landcover, water, buildings) are never drawn regardless, since this "
+        "rasterizer only ever draws lines and points. --style/--threshold/--invert are ignored in "
+        "this mode.",
     )
     ap.add_argument(
         "--vector-tileset",
         default="v3",
-        help="MapTiler vector tileset id (default: v3, their OpenMapTiles-schema planet dataset). "
-        "Only used with --vector.",
+        help="MapTiler vector tileset id (default: v3, their OpenMapTiles-schema planet dataset - "
+        "also what toner-v2's style.json uses as its source). Only used with --vector.",
     )
     ap.add_argument(
         "--road-classes",
-        default="motorway,trunk,primary,secondary",
+        default="motorway,trunk,primary,secondary,tertiary,minor,service,pier",
         help="Comma-separated 'transportation' layer class values to draw as roads (default: "
-        "'motorway,trunk,primary,secondary' - major roads only, for a minimal/uncluttered look; "
-        "add 'tertiary,minor,service,track' etc. for more detail). Only used with --vector.",
+        "toner-v2's own class list). Trim this for a sparser look, e.g. "
+        "'motorway,trunk,primary,secondary' for major roads only. Only used with --vector.",
+    )
+    ap.add_argument(
+        "--road-minzoom",
+        type=int,
+        default=6,
+        help="Don't draw any roads below this zoom (default: 6, matching toner-v2 - it draws no "
+        "roads at all below that). Only used with --vector.",
     )
     ap.add_argument(
         "--boundary-max-admin-level",
         type=int,
-        default=2,
-        help="Draw 'boundary' layer features with admin_level <= this (default: 2, country "
-        "borders only; OpenMapTiles uses 4 for states/provinces, higher for finer subdivisions). "
-        "Only used with --vector.",
+        default=10,
+        help="Draw 'boundary' layer features with admin_level <= this (default: 10, matching "
+        "toner-v2's 'Other border' layer). admin_level 2 (country borders, appear from zoom 2) is "
+        "always included as long as this is >= 2; admin_level 3..N (finer subdivisions, e.g. "
+        "states/provinces at 4) appear from zoom 3. Maritime boundaries are always excluded, "
+        "matching toner-v2. Set to 2 for country borders only. Only used with --vector.",
     )
     ap.add_argument(
         "--label-classes",
-        default="country,city",
-        help="Comma-separated 'place' layer class values to draw as text labels (default: "
-        "'country,city'; other OpenMapTiles place classes include town, village, hamlet). Only "
-        "road name labels aren't supported - drawing text along curved road geometry needs "
-        "text-on-path placement, not implemented here. Only used with --vector.",
+        default="continent,country,state,province,city,town,village",
+        help="Comma-separated 'place' layer class values to draw as text labels (default: every "
+        "class toner-v2 itself labels, each with its own zoom window transcribed from that style - "
+        "see PLACE_LABEL_RULES). Trim this for fewer labels, e.g. 'country,city'. Not included: "
+        "toner-v2's catch-all label layer for suburb/neighbourhood/hamlet/isolated_dwelling/island/"
+        "quarter (its filter is a negation - 'not any of the classes above' - so there's no single "
+        "class name to opt into it here; it's the most cluttering tier and was left out by design "
+        "for a minimal basemap). Road name labels aren't supported either - drawing text along "
+        "curved road geometry needs text-on-path placement, not implemented here. Only used with "
+        "--vector.",
     )
     ap.add_argument(
-        "--label-max-rank",
+        "--line-width",
         type=int,
-        default=5,
-        help="Only draw place labels with an OpenMapTiles 'rank' property <= this (lower rank = "
-        "more prominent; features with no rank are always drawn). Default 5. Only used with "
-        "--vector.",
+        default=1,
+        help="Stroke width in device pixels for road/border lines (default: 1). Purely a render-"
+        "time choice - like --threshold for raster mode, changing it doesn't need a re-fetch if "
+        "you're reusing a --raw-cache (just point --cache at a new path, since --cache is keyed on "
+        "this too). Only used with --vector.",
     )
     args = ap.parse_args()
 
@@ -595,9 +661,10 @@ def main() -> int:
             "vector": True,
             "vector_tileset": args.vector_tileset,
             "road_classes": sorted(road_classes),
+            "road_minzoom": args.road_minzoom,
             "boundary_max_admin_level": args.boundary_max_admin_level,
             "label_classes": sorted(label_classes),
-            "label_max_rank": args.label_max_rank,
+            "line_width": args.line_width,
             "tile_size": args.tile_size,
         }
 
@@ -605,13 +672,15 @@ def main() -> int:
             url = vector_tile_url(args.vector_tileset, args.api_key, z, x, y)
             return fetch_url_bytes(session, url, z, x, y)
 
-        def render_image(raw_bytes):
+        def render_image(raw_bytes, z):
             return rasterize_vector_tile(
                 raw_bytes,
+                z,
                 road_classes,
+                args.road_minzoom,
                 args.boundary_max_admin_level,
                 label_classes,
-                args.label_max_rank,
+                args.line_width,
             )
 
         bake_threshold, bake_invert = 128, False
@@ -629,7 +698,9 @@ def main() -> int:
             url = raster_tile_url(args.style, args.api_key, z, x, y)
             return fetch_url_bytes(session, url, z, x, y)
 
-        render_image = decode_tile_image
+        def render_image(raw_bytes, z):
+            return decode_tile_image(raw_bytes)
+
         bake_threshold, bake_invert = args.threshold, args.invert
         source_desc = f"style={args.style}"
 
