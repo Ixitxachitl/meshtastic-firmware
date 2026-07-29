@@ -379,29 +379,8 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         },
         &plotCtx);
 
-    // Known node markers (self is drawn separately, last, so it's always on top). First pass just
-    // counts how many will land on-screen, so short-name labels only show up when there are few
-    // enough nodes in view to not turn into clutter.
-    constexpr int kLabelClutterThreshold = 20;
+    // Known node markers (self is drawn separately, last, so it's always on top).
     const NodeNum ourNodeNum = nodeDB->getNodeNum();
-    int onScreenCount = 0;
-    for (uint32_t i = 0; i < nodeDB->getNumMeshNodes(); i++) {
-        meshtastic_NodeInfoLite *node = nodeDB->getMeshNodeByIndex(i);
-        if (!nodeDB->hasValidPosition(node) || node->num == ourNodeNum)
-            continue;
-        meshtastic_PositionLite pos;
-        if (!nodeDB->copyNodePosition(node->num, pos))
-            continue;
-        float lat = pos.latitude_i * 1e-7f;
-        float lng = pos.longitude_i * 1e-7f;
-        float distance = GeoCoord::latLongToMeter(centerLat, centerLng, lat, lng);
-        float bearing = GeoCoord::bearing(centerLat, centerLng, lat, lng);
-        int16_t mx = (int16_t)(viewWidth / 2 + sinf(bearing) * distance * metersToPx);
-        int16_t my = (int16_t)(viewHeight / 2 - cosf(bearing) * distance * metersToPx);
-        if (mx >= -2 && mx <= viewWidth + 1 && my >= -2 && my <= viewHeight + 1)
-            onScreenCount++;
-    }
-    const bool showLabels = onScreenCount > 0 && onScreenCount <= kLabelClutterThreshold;
 
     // Everything below is drawn INVERSE (XOR against whatever's already there - tile or blank),
     // not a fixed color: markers, labels, the crosshair, and both text overlays need to stay
@@ -419,6 +398,24 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     int16_t drawnMx[kMaxDedupeTracked];
     int16_t drawnMy[kMaxDedupeTracked];
     int drawnCount = 0;
+
+    // Short-name labels are skipped only when they'd actually overlap a label already placed -
+    // no fixed cap on how many can show at once, so zooming out keeps names visible as long as
+    // there's room for them.
+    constexpr int kMaxLabelsTracked = 64;
+    int16_t labelX[kMaxLabelsTracked];
+    int16_t labelY[kMaxLabelsTracked];
+    int16_t labelW[kMaxLabelsTracked];
+    int16_t labelH[kMaxLabelsTracked];
+    int labelCount = 0;
+
+    // FONT_SMALL_LOCAL rather than FONT_SMALL deliberately: on TFT/HAS_SPI_TFT builds FONT_SMALL is
+    // redirected to the 19px-tall medium font (bigger screen, so BaseUI normally wants bigger text)
+    // - far too large for a map label sitting next to a marker, where many names need to fit close
+    // together without overlapping.
+    display->setFont(FONT_SMALL_LOCAL);
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    const int16_t labelHeight = _fontHeight(FONT_SMALL_LOCAL);
 
     for (uint32_t i = 0; i < nodeDB->getNumMeshNodes(); i++) {
         meshtastic_NodeInfoLite *node = nodeDB->getMeshNodeByIndex(i);
@@ -457,14 +454,30 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
 
         display->drawXbm(mx - 4, my - 4, 8, 8, icon_map_node);
 
-        if (showLabels && node->short_name[0] != '\0') {
-            // FONT_SMALL_LOCAL rather than FONT_SMALL deliberately: on TFT/HAS_SPI_TFT builds
-            // FONT_SMALL is redirected to the 19px-tall medium font (bigger screen, so BaseUI
-            // normally wants bigger text) - far too large for a map label sitting next to a
-            // marker, where many names need to fit close together without overlapping.
-            display->setFont(FONT_SMALL_LOCAL);
-            display->setTextAlignment(TEXT_ALIGN_LEFT);
-            display->drawString(mx + 5, my - _fontHeight(FONT_SMALL_LOCAL) / 2, node->short_name);
+        if (node->short_name[0] != '\0') {
+            int16_t lx = mx + 5;
+            int16_t ly = my - labelHeight / 2;
+            int16_t lw = (int16_t)display->getStringWidth(node->short_name);
+
+            bool overlaps = false;
+            for (int li = 0; li < labelCount; li++) {
+                if (lx < labelX[li] + labelW[li] && lx + lw > labelX[li] && ly < labelY[li] + labelH[li] &&
+                    ly + labelHeight > labelY[li]) {
+                    overlaps = true;
+                    break;
+                }
+            }
+
+            if (!overlaps) {
+                display->drawString(lx, ly, node->short_name);
+                if (labelCount < kMaxLabelsTracked) {
+                    labelX[labelCount] = lx;
+                    labelY[labelCount] = ly;
+                    labelW[labelCount] = lw;
+                    labelH[labelCount] = labelHeight;
+                    labelCount++;
+                }
+            }
         }
     }
 
