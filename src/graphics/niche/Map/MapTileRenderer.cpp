@@ -22,14 +22,13 @@ constexpr uint8_t MAP_TILE_LAYOUT_GRID = 1;
 // Tiles are 1 bit/pixel, column-major: [bx=0..kTileSizePx/8-1][y=0..kTileSizePx-1], 8 px/byte.
 uint8_t s_tileCacheBuffer[NicheGraphics::MapTiles::kTileBufferBytes];
 
-// One baked tile always covers the same geographic span regardless of storage resolution: the
+// A baked tile always covers the same geographic span regardless of storage resolution: the
 // standard Web Mercator convention is 256 world-units per tile at any zoom (that's what defines
-// the zoom levels themselves), independent of how many actual pixels we chose to store per tile.
-// A 512px tile (MapTiler's native/retina resolution, avoiding a downsample-then-threshold quality
-// loss - see MAP_TILE_SIZE_PX) packs 2x the stored pixels into that same 256-unit span. So world
-// coordinates within a tile stay in the standard 0-255 range throughout this file; only the very
-// last step - turning a world-relative coordinate into an actual stored-pixel index for the
-// buffer - needs this scale factor.
+// the zoom levels themselves) - a wholly different, fixed concept from kTileSizePx (512, MapTiler's
+// native/retina resolution - see MapTileRenderer.h), which packs 2x the stored pixels into that
+// same 256-unit span. So world coordinates within a tile stay in the standard 0-255 range
+// throughout this file; only the very last step - turning a world-relative coordinate into an
+// actual stored-pixel index for the buffer - needs this scale factor.
 constexpr float kWorldUnitsPerTile = 256.0f;
 constexpr float kStoredPxPerWorldUnit = NicheGraphics::MapTiles::kTileSizePx / kWorldUnitsPerTile;
 

@@ -7,9 +7,9 @@ File API (open/seek/read). Suitable wherever the filesystem has room to spare fo
 worldwide basemap: ESP32 (LittleFS on internal flash, typically several MB) and native/portduino
 (PortduinoFS, backed directly by the host OS filesystem - no size constraint at all).
 
-Not used on nRF52: FSCom there is InternalFS, a ~28KB partition nowhere near big enough - see
-MapTileSourceQSPI.h for that platform's approach instead (reading the same blob format from a
-file on the external QSPI chip's FAT filesystem).
+Not used on nRF52: FSCom there is InternalFS, a ~28KB partition nowhere near big enough for a real
+basemap, and the Wio Tracker L1 (the only nRF52 Map target so far) has neither an SD slot nor
+enough external flash to make a worldwide bake viable by any other means either.
 
 Reads the blob format written by bin/generate_map_tiles.py:
     u32 magic 'MTLB', u32 tile_count

@@ -15,30 +15,24 @@ TFTDisplay) have different drawing APIs.
 
 #include <stdint.h>
 
-// Tile edge length in pixels - a compile-time choice per build, not a runtime option: a given
-// firmware image only ever uses one tile size. Defaults to 256 (the flash/RAM-constrained
-// choice - e.g. Wio Tracker L1's QSPI budget). Builds with storage to spare and no resolution
-// constraint (e.g. an SD card, or native/portduino) can override to 512 (MapTiler's native
-// fetch resolution - avoids the downsample-then-threshold quality loss of shrinking to 256)
-// via -D MAP_TILE_SIZE_PX=512.
-#ifndef MAP_TILE_SIZE_PX
-#define MAP_TILE_SIZE_PX 256
-#endif
-
 namespace NicheGraphics::MapTiles
 {
 
 using PlotFn = void (*)(void *ctx, int16_t x, int16_t y);
 
-constexpr int kTileSizePx = MAP_TILE_SIZE_PX;
+// Tile edge length in pixels - MapTiler's native fetch resolution (see bin/generate_map_tiles.py),
+// avoiding the downsample-then-threshold quality loss of shrinking to something smaller. Every
+// current Map-capable target (SD card, native/portduino) has storage to spare for this; there's no
+// more flash/RAM-constrained target needing a smaller tile size since the Wio Tracker L1's map
+// support was dropped (no SD slot and not enough external flash to make a worldwide bake viable).
+constexpr int kTileSizePx = 512;
 constexpr int kTileBufferBytes = kTileSizePx * kTileSizePx / 8; // 1bpp
 
 // Pluggable source of baked tile data. The default (no source registered) reads the
 // compiled-in MapTile.h arrays, which is all InkHUD needs (small, hand-provided datasets
 // that fit in internal flash). Platforms with room for a real worldwide basemap - too big to
-// compile in - register their own source instead: e.g. a QSPI+FAT file reader on the Wio
-// Tracker L1, or a plain FSCom file reader on ESP32/native (see MapTileSourceFile.h) where the
-// filesystem has ample room.
+// compile in - register their own source instead: e.g. a plain FSCom file reader on ESP32/
+// native (see MapTileSourceFile.h) or a real SD card (see MapTileSourceSD.h).
 class TileSource
 {
   public:
@@ -81,7 +75,7 @@ constexpr uint8_t kTileKindBlack = 2; // no payload - tile is entirely set (0xFF
 // Decodes one tile's payload into outBuf (kTileSizePx square, 1bpp, column-major - exactly
 // kTileBufferBytes). `compressed`/`compressedSize` are ignored for kTileKindWhite/kTileKindBlack.
 // Returns false if LZ4 decompression fails or doesn't produce exactly kTileBufferBytes. Exposed
-// so TileSource implementations backed by external storage (QSPI, filesystem, SD) can reuse the
+// so TileSource implementations backed by external storage (filesystem, SD) can reuse the
 // same LZ4 raw-block decoder as the compiled-in path, rather than duplicating it.
 bool decodeTilePayload(uint8_t kind, const uint8_t *compressed, int compressedSize, uint8_t *outBuf);
 
