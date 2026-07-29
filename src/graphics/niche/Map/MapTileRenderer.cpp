@@ -276,8 +276,14 @@ void NicheGraphics::MapTiles::drawTileBackground(float latCenter, float lngCente
                 } else {
                     tile = decodeSparseTile(i);
                 }
-                if (!tile)
+                if (!tile) {
+                    // A failed decode may have partially overwritten s_tileCacheBuffer (e.g. LZ4
+                    // erroring out mid-decompress) without this tile becoming the cached one -
+                    // invalidate rather than risk a later cache "hit" serving that garbage back
+                    // out under the previous (different) tile's index.
+                    s_cachedTileIndex = kNoCachedTile;
                     break;
+                }
                 s_cachedTileSource = s_activeSource;
                 s_cachedTileIndex = i;
             }
