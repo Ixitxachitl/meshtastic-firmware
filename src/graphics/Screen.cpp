@@ -2291,7 +2291,8 @@ int Screen::handleInputEvent(const InputEvent *event)
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.gps && gps) {
                     menuHandler::positionBaseMenu();
 #endif
-                } else if (framesetInfo.positions.map != 255 && this->ui->getUiState()->currentFrame == framesetInfo.positions.map) {
+                } else if (framesetInfo.positions.map != 255 &&
+                           this->ui->getUiState()->currentFrame == framesetInfo.positions.map) {
                     menuHandler::mapBaseMenu();
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.clock) {
                     menuHandler::clockMenu();

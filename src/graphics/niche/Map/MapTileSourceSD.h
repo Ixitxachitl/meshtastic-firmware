@@ -23,6 +23,13 @@ what crashed a worldwide z0-10 bake (1.4M tiles) on the T-Deck: the old version 
 
 */
 
+// configuration.h (via variant.h) is what actually defines HAS_SDCARD - it's not a compiler -D
+// flag, so it must be included before the guard below can see it, or this whole header (and any
+// .cpp that includes it first, before anything else pulls in configuration.h) silently
+// preprocesses away to nothing (link errors, no compile error) - see MapTileSourceFile.cpp's
+// FSCommon.h include for the same trap with ARCH_ESP32/ARCH_PORTDUINO.
+#include "configuration.h"
+
 #if defined(HAS_SDCARD)
 
 #include "./MapTileRenderer.h"
@@ -53,9 +60,12 @@ class SDCardTileSource : public TileSource
     int indexOf(int zoom, int tx, int ty) override;
 
   private:
-    uint32_t baseIndexForZoom(int zoom) const;
-
     SdFs sd_;
+    // Kept open for the lifetime of a successful begin() rather than reopened per decodeTile()
+    // call - SD file opens walk the FAT to resolve the path and are the dominant per-tile cost
+    // (far more than the read itself or the LZ4 decompression), so reopening by path on every
+    // single tile of every single frame redraw was the main cause of sluggish map rendering.
+    FsFile file_;
     bool sdBegun_ = false;
     int zLo_ = 0;
     int zHi_ = -1; // -1 => no tiles / not begun.
