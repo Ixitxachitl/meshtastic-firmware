@@ -2,20 +2,29 @@
 
 /*
 
-Shared parsing helpers for the tile-index blob format written by bin/generate_map_tiles.py, used
-by both MapTileSourceFile (FSCom filesystem) and MapTileSourceSD (real SD card via SdFat) so the
-two readers - which differ only in which file API they read through - can't drift out of sync with
+Shared parsing helpers for the tile-index blob format written by bin/generate_map_tiles.py (or the
+browser-based baker at https://github.com/.../binary-map-downloader), used by both
+MapTileSourceFile (FSCom filesystem) and MapTileSourceSD (real SD card via SdFat) so the two
+readers - which differ only in which file API they read through - can't drift out of sync with
 each other on the actual on-disk format or the index math built on top of it.
 
 Format:
-    u32 magic 'MTLB', u32 tile_count
+    u32 magic 'MTL2', u32 tile_count
+    u8  zoom_range_count (N)
+    N * { u8 zoom, u16 xMin, u16 yMin, u16 width, u16 height }
     tile_count * { u8 zoom, u16 tx, u16 ty, u8 kind, u32 offset, u16 size }
     followed by concatenated payload bytes (offset is relative to the start of this region).
 
-Holds NO per-tile index in RAM: bin/generate_map_tiles.py always emits every (zoom, tx, ty) for a
-requested zoom range, densely, in ascending (zoom, ty, tx) order, so the whole index's shape is
-fully determined by just the first and last entries, and any tile's position in it is computable
-algebraically (see tileBlobIndexOf() etc. below) instead of needing a per-tile RAM index.
+Holds NO per-tile index in RAM: within one zoom, tiles are always emitted for exactly the
+rectangle [xMin, xMin+width) x [yMin, yMin+height), densely, in ascending (ty, tx) order (zooms
+themselves ascending too) - so a tile's position is computable from just the small zoom-range
+table (at most kTileBlobMaxZoomRanges entries) instead of a per-tile RAM index. This used to
+require each zoom's rectangle to be the *entire* 2^zoom grid (a "dense zoom range starting at
+z0"), which made a region baked for just part of the world at a given zoom either impossible or
+(if padded with free tiles to keep the old dense-count check happy) require a full 2^zoom-square
+index regardless - astronomically large past ~z10. The explicit per-zoom rectangle removes that
+restriction while keeping lookups just as cheap (linear-scan a table of at most ~25 entries, then
+O(1) arithmetic within the matched rectangle).
 
 */
 
@@ -25,9 +34,16 @@ algebraically (see tileBlobIndexOf() etc. below) instead of needing a per-tile R
 namespace NicheGraphics::MapTiles
 {
 
-constexpr uint32_t kTileBlobMagic = 0x424C544D; // 'MTLB' little-endian
-constexpr size_t kTileBlobHeaderSize = 8;       // u32 magic, u32 tile_count
-constexpr size_t kTileBlobEntrySize = 12;       // u8 zoom, u16 tx, u16 ty, u8 kind, u32 offset, u16 size
+constexpr uint32_t kTileBlobMagic = 0x324C544D;         // 'MTL2' little-endian
+constexpr size_t kTileBlobHeaderSize = 8;               // u32 magic, u32 tile_count
+constexpr size_t kTileBlobZoomRangeEntrySize = 9;       // u8 zoom, u16 xMin, u16 yMin, u16 width, u16 height
+constexpr size_t kTileBlobEntrySize = 12;               // u8 zoom, u16 tx, u16 ty, u8 kind, u32 offset, u16 size
+
+// A real basemap bake never goes anywhere near this deep; this exists purely so a corrupt/hostile
+// zoom byte can't be used as a shift count >= 32 (undefined behaviour) or blow past a plausible
+// table size.
+constexpr int kTileBlobMaxPlausibleZoom = 24;
+constexpr int kTileBlobMaxZoomRanges = kTileBlobMaxPlausibleZoom + 1; // at most one entry per zoom, z0..z24
 
 struct TileBlobEntry {
     uint8_t zoom;
@@ -36,6 +52,11 @@ struct TileBlobEntry {
     uint8_t kind;
     uint32_t offset;
     uint16_t size;
+};
+
+struct TileBlobZoomRange {
+    uint8_t zoom;
+    uint16_t xMin, yMin, width, height;
 };
 
 inline uint16_t readTileBlobU16LE(const uint8_t *p)
@@ -59,74 +80,113 @@ inline void decodeTileBlobEntry(const uint8_t *buf, TileBlobEntry &out)
     out.size = readTileBlobU16LE(buf + 10);
 }
 
-// A real basemap bake never goes anywhere near this deep; this exists purely so the shift below
-// can't be handed a corrupt/hostile tile_count and shift by >= 64 bits (undefined behaviour).
-constexpr int kTileBlobMaxPlausibleZoom = 24;
-
-// Solves for the highest zoom present (zHiOut) given `zLo` (the first index entry's zoom) and the
-// total `count` of entries, from the dense-range tile-count identity:
-//   count == sum_{z=zLo}^{zHi} 4^z == (4^(zHi+1) - 4^zLo) / 3
-// Returns false if `count` doesn't correspond to any dense range starting at zLo (a corrupt or
-// sparse blob), or if the implied zoom would be implausibly deep (corrupt/hostile blob).
-inline bool solveTileBlobZoomRange(uint32_t count, int zLo, int &zHiOut)
+// Decodes one kTileBlobZoomRangeEntrySize-byte record read from the file into `out`.
+inline void decodeTileBlobZoomRange(const uint8_t *buf, TileBlobZoomRange &out)
 {
-    if (zLo < 0 || zLo > kTileBlobMaxPlausibleZoom)
+    out.zoom = buf[0];
+    out.xMin = readTileBlobU16LE(buf + 1);
+    out.yMin = readTileBlobU16LE(buf + 3);
+    out.width = readTileBlobU16LE(buf + 5);
+    out.height = readTileBlobU16LE(buf + 7);
+}
+
+// Validates a decoded zoom-range table against the file's total tile_count: zooms must be
+// strictly ascending (no duplicates), each rectangle must fit inside its zoom's actual 2^zoom
+// grid, and the rectangles' areas must sum to exactly totalTileCount. Returns false for a
+// corrupt/hostile/truncated table rather than risking a silently-wrong tile lookup.
+inline bool validateTileBlobZoomRanges(const TileBlobZoomRange *ranges, int count, uint32_t totalTileCount)
+{
+    if (count <= 0 || count > kTileBlobMaxZoomRanges)
         return false;
-    int zHi = zLo;
-    uint64_t cumulative = 1ULL << (2 * zLo);
-    while (cumulative < count) {
-        if (zHi >= kTileBlobMaxPlausibleZoom)
+    uint64_t sum = 0;
+    int prevZoom = -1;
+    for (int i = 0; i < count; i++) {
+        const TileBlobZoomRange &r = ranges[i];
+        if (r.zoom <= prevZoom || r.zoom > kTileBlobMaxPlausibleZoom)
             return false;
-        zHi++;
-        cumulative += 1ULL << (2 * zHi);
+        if (r.width == 0 || r.height == 0)
+            return false;
+        const uint32_t side = 1u << r.zoom;
+        if (r.xMin >= side || r.yMin >= side || (uint32_t)r.xMin + r.width > side || (uint32_t)r.yMin + r.height > side)
+            return false;
+        sum += (uint64_t)r.width * r.height;
+        prevZoom = r.zoom;
     }
-    if (cumulative != count)
-        return false;
-    zHiOut = zHi;
-    return true;
+    return sum == totalTileCount;
 }
 
-// Cumulative tile count for all zooms below `zoom` (i.e. this zoom's base index) within a dense,
-// contiguous [zLo, zHi] zoom range: sum_{z=zLo}^{zoom-1} 4^z.
-inline uint32_t tileBlobBaseIndexForZoom(int zoom, int zLo)
+// Base tile-index (offset into the tile-entry table) for the range at `rangeIndex` - the sum of
+// every earlier range's tile count.
+inline uint32_t tileBlobBaseIndexForRangeIndex(const TileBlobZoomRange *ranges, int rangeIndex)
 {
-    return (uint32_t)(((1ULL << (2 * zoom)) - (1ULL << (2 * zLo))) / 3);
+    uint32_t base = 0;
+    for (int i = 0; i < rangeIndex; i++)
+        base += (uint32_t)ranges[i].width * ranges[i].height;
+    return base;
 }
 
-// Returns the tile index for (zoom, tx, ty) within a dense [zLo, zHi] zoom range of `count` total
-// tiles, or -1 if not present.
-inline int tileBlobIndexOf(int zoom, int tx, int ty, int zLo, int zHi, uint32_t count)
+inline int tileBlobFindRangeIndex(const TileBlobZoomRange *ranges, int count, int zoom)
 {
-    if (zoom < zLo || zoom > zHi)
-        return -1;
-    const int side = 1 << zoom;
-    if (tx < 0 || tx >= side || ty < 0 || ty >= side)
-        return -1;
-    const uint32_t i = tileBlobBaseIndexForZoom(zoom, zLo) + (uint32_t)ty * side + tx;
-    return i < count ? (int)i : -1;
-}
-
-inline int tileBlobZoomAt(int tileIndex, int zLo, int zHi)
-{
-    for (int z = zLo; z <= zHi; z++) {
-        if ((uint32_t)tileIndex < tileBlobBaseIndexForZoom(z + 1, zLo))
-            return z;
+    for (int i = 0; i < count; i++) {
+        if (ranges[i].zoom == zoom)
+            return i;
     }
-    return zHi;
+    return -1;
 }
 
-inline int tileBlobTxAt(int tileIndex, int zLo, int zHi)
+// Returns the tile index for (zoom, tx, ty), or -1 if not present in this blob's ranges.
+inline int tileBlobIndexOf(const TileBlobZoomRange *ranges, int count, uint32_t totalCount, int zoom, int tx, int ty)
 {
-    const int zoom = tileBlobZoomAt(tileIndex, zLo, zHi);
-    const uint32_t local = (uint32_t)tileIndex - tileBlobBaseIndexForZoom(zoom, zLo);
-    return (int)(local % (1u << zoom));
+    const int ri = tileBlobFindRangeIndex(ranges, count, zoom);
+    if (ri < 0)
+        return -1;
+    const TileBlobZoomRange &r = ranges[ri];
+    if (tx < r.xMin || tx >= (int)r.xMin + (int)r.width || ty < r.yMin || ty >= (int)r.yMin + (int)r.height)
+        return -1;
+    const uint32_t base = tileBlobBaseIndexForRangeIndex(ranges, ri);
+    const uint32_t local = (uint32_t)(ty - r.yMin) * r.width + (uint32_t)(tx - r.xMin);
+    const uint32_t idx = base + local;
+    return idx < totalCount ? (int)idx : -1;
 }
 
-inline int tileBlobTyAt(int tileIndex, int zLo, int zHi)
+inline int tileBlobZoomAt(const TileBlobZoomRange *ranges, int count, int tileIndex)
 {
-    const int zoom = tileBlobZoomAt(tileIndex, zLo, zHi);
-    const uint32_t local = (uint32_t)tileIndex - tileBlobBaseIndexForZoom(zoom, zLo);
-    return (int)(local / (1u << zoom));
+    uint32_t base = 0;
+    for (int i = 0; i < count; i++) {
+        const uint32_t size = (uint32_t)ranges[i].width * ranges[i].height;
+        if ((uint32_t)tileIndex < base + size)
+            return ranges[i].zoom;
+        base += size;
+    }
+    return count > 0 ? ranges[count - 1].zoom : 0;
+}
+
+inline int tileBlobTxAt(const TileBlobZoomRange *ranges, int count, int tileIndex)
+{
+    uint32_t base = 0;
+    for (int i = 0; i < count; i++) {
+        const uint32_t size = (uint32_t)ranges[i].width * ranges[i].height;
+        if ((uint32_t)tileIndex < base + size) {
+            const uint32_t local = (uint32_t)tileIndex - base;
+            return ranges[i].xMin + (int)(local % ranges[i].width);
+        }
+        base += size;
+    }
+    return 0;
+}
+
+inline int tileBlobTyAt(const TileBlobZoomRange *ranges, int count, int tileIndex)
+{
+    uint32_t base = 0;
+    for (int i = 0; i < count; i++) {
+        const uint32_t size = (uint32_t)ranges[i].width * ranges[i].height;
+        if ((uint32_t)tileIndex < base + size) {
+            const uint32_t local = (uint32_t)tileIndex - base;
+            return ranges[i].yMin + (int)(local / ranges[i].width);
+        }
+        base += size;
+    }
+    return 0;
 }
 
 } // namespace NicheGraphics::MapTiles

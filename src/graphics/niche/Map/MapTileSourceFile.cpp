@@ -15,10 +15,10 @@ using namespace NicheGraphics::MapTiles;
 
 namespace
 {
-bool readEntryAt(File &file, uint32_t entryIndex, TileBlobEntry &out)
+bool readEntryAt(File &file, uint32_t indexTableStart, uint32_t entryIndex, TileBlobEntry &out)
 {
     uint8_t buf[kTileBlobEntrySize];
-    if (!file.seek(kTileBlobHeaderSize + (uint64_t)entryIndex * kTileBlobEntrySize))
+    if (!file.seek(indexTableStart + (uint64_t)entryIndex * kTileBlobEntrySize))
         return false;
     if (file.read(buf, kTileBlobEntrySize) != (int)kTileBlobEntrySize)
         return false;
@@ -29,9 +29,9 @@ bool readEntryAt(File &file, uint32_t entryIndex, TileBlobEntry &out)
 
 bool FileTileSource::begin(const char *path)
 {
-    zLo_ = 0;
-    zHi_ = -1;
+    rangeCount_ = 0;
     count_ = 0;
+    indexTableStart_ = 0;
     payloadStart_ = 0;
     if (file_)
         file_.close();
@@ -56,63 +56,81 @@ bool FileTileSource::begin(const char *path)
         return true;
     }
 
-    // No per-tile index is kept in RAM (see MapTileSourceFile.h) - bin/generate_map_tiles.py always
-    // emits every (zoom, tx, ty) for a requested zoom range, densely, in ascending (zoom, ty, tx)
-    // order, so the whole index's shape is fully determined by just the first and last entries.
-    TileBlobEntry first{};
-    if (!readEntryAt(file_, 0, first)) {
-        LOG_WARN("Map tile file '%s' truncated index", path);
+    uint8_t rangeCountByte;
+    if (file_.read(&rangeCountByte, 1) != 1) {
+        LOG_WARN("Map tile file '%s' truncated (no zoom-range table)", path);
         file_.close();
         return false;
     }
-    const int zLo = first.zoom;
-
-    int zHi = 0;
-    if (!solveTileBlobZoomRange(count, zLo, zHi)) {
-        LOG_WARN("Map tile file '%s': %u tiles isn't a dense zoom range starting at z%d", path, count, zLo);
+    const int rangeCount = rangeCountByte;
+    if (rangeCount <= 0 || rangeCount > kTileBlobMaxZoomRanges) {
+        LOG_WARN("Map tile file '%s': implausible zoom-range count %d", path, rangeCount);
         file_.close();
         return false;
     }
 
-    // Sanity-check the last entry matches where the dense layout predicts it: zoom zHi, at the
-    // last (bottom-right-most) raster position. Catches a sparse/malformed blob before it causes
-    // silently-wrong tile lookups rather than a clean "not supported" failure.
+    uint8_t rangeBuf[kTileBlobMaxZoomRanges * kTileBlobZoomRangeEntrySize];
+    const size_t rangeBytes = (size_t)rangeCount * kTileBlobZoomRangeEntrySize;
+    if (file_.read(rangeBuf, rangeBytes) != (int)rangeBytes) {
+        LOG_WARN("Map tile file '%s' truncated zoom-range table", path);
+        file_.close();
+        return false;
+    }
+    TileBlobZoomRange ranges[kTileBlobMaxZoomRanges];
+    for (int i = 0; i < rangeCount; i++)
+        decodeTileBlobZoomRange(rangeBuf + i * kTileBlobZoomRangeEntrySize, ranges[i]);
+
+    if (!validateTileBlobZoomRanges(ranges, rangeCount, count)) {
+        LOG_WARN("Map tile file '%s': %u tiles doesn't match its zoom-range table", path, count);
+        file_.close();
+        return false;
+    }
+
+    const uint32_t indexTableStart = kTileBlobHeaderSize + 1 + (uint32_t)rangeBytes;
+
+    // Sanity-check the last entry matches where the range table predicts it: the last range's
+    // zoom, at its bottom-right-most raster position. Catches a truncated/malformed tile-entry
+    // table before it causes a silently-wrong tile lookup rather than a clean "not supported"
+    // failure.
     TileBlobEntry last{};
-    const int lastSide = 1 << zHi;
-    if (!readEntryAt(file_, count - 1, last) || last.zoom != zHi || last.tx != lastSide - 1 || last.ty != lastSide - 1) {
-        LOG_WARN("Map tile file '%s': index layout doesn't match the expected dense z%d-%d range", path, zLo, zHi);
+    const TileBlobZoomRange &lastRange = ranges[rangeCount - 1];
+    if (!readEntryAt(file_, indexTableStart, count - 1, last) || last.zoom != lastRange.zoom ||
+        last.tx != lastRange.xMin + lastRange.width - 1 || last.ty != lastRange.yMin + lastRange.height - 1) {
+        LOG_WARN("Map tile file '%s': tile-entry table doesn't match its zoom-range table", path);
         file_.close();
         return false;
     }
 
-    payloadStart_ = kTileBlobHeaderSize + count * kTileBlobEntrySize;
+    payloadStart_ = indexTableStart + count * kTileBlobEntrySize;
+    indexTableStart_ = indexTableStart;
 
-    zLo_ = zLo;
-    zHi_ = zHi;
+    for (int i = 0; i < rangeCount; i++)
+        ranges_[i] = ranges[i];
+    rangeCount_ = rangeCount;
     count_ = count;
     strncpy(path_, path, sizeof(path_) - 1);
-    LOG_INFO("Map tile file '%s': %u tiles, z%d-%d", path, count, zLo_, zHi_);
+    LOG_INFO("Map tile file '%s': %u tiles across %d zoom range(s)", path, count, rangeCount_);
     return true;
 }
 
 int FileTileSource::indexOf(int zoom, int tx, int ty)
 {
-    return tileBlobIndexOf(zoom, tx, ty, zLo_, zHi_, count_);
+    return tileBlobIndexOf(ranges_, rangeCount_, count_, zoom, tx, ty);
 }
 
 int FileTileSource::tileZoomAt(int tileIndex)
 {
-    return tileBlobZoomAt(tileIndex, zLo_, zHi_);
+    return tileBlobZoomAt(ranges_, rangeCount_, tileIndex);
 }
 
 int FileTileSource::tileTxAt(int tileIndex)
 {
-    return tileBlobTxAt(tileIndex, zLo_, zHi_);
+    return tileBlobTxAt(ranges_, rangeCount_, tileIndex);
 }
 
 int FileTileSource::tileTyAt(int tileIndex)
 {
-    return tileBlobTyAt(tileIndex, zLo_, zHi_);
+    return tileBlobTyAt(ranges_, rangeCount_, tileIndex);
 }
 
 bool FileTileSource::decodeTile(int tileIndex, uint8_t *outBuf)
@@ -121,7 +139,7 @@ bool FileTileSource::decodeTile(int tileIndex, uint8_t *outBuf)
         return false;
 
     TileBlobEntry e{};
-    if (!readEntryAt(file_, (uint32_t)tileIndex, e))
+    if (!readEntryAt(file_, indexTableStart_, (uint32_t)tileIndex, e))
         return false;
 
     if (e.kind != kTileKindLZ4)
