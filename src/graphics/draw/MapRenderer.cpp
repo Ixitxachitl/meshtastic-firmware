@@ -223,6 +223,32 @@ void ensureFileTileSourceInitialized()
 }
 #endif
 
+// Offsets used to build a 1px halo by blitting a glyph/icon 8 times before the real draw - see
+// drawHaloXbm/drawHaloString below.
+constexpr int8_t kHaloOffsets[8][2] = {{-1, -1}, {0, -1}, {1, -1}, {-1, 0}, {1, 0}, {-1, 1}, {0, 1}, {1, 1}};
+
+// Draws xbm/text with a solid WHITE halo behind a BLACK fill, so it stays readable against any
+// part of the basemap (dense tile art, blank background, etc.) without depending on XOR/INVERSE
+// against whatever's underneath. Replaces the old drawn-INVERSE approach, which read fine against
+// any single background but caused overlapping elements to XOR-cancel back to background.
+void drawHaloXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm)
+{
+    display->setColor(WHITE);
+    for (auto &o : kHaloOffsets)
+        display->drawXbm(x + o[0], y + o[1], w, h, xbm);
+    display->setColor(BLACK);
+    display->drawXbm(x, y, w, h, xbm);
+}
+
+void drawHaloString(OLEDDisplay *display, int16_t x, int16_t y, const char *text)
+{
+    display->setColor(WHITE);
+    for (auto &o : kHaloOffsets)
+        display->drawString(x + o[0], y + o[1], text);
+    display->setColor(BLACK);
+    display->drawString(x, y, text);
+}
+
 } // namespace
 
 bool MapRenderer::isPanModeEnabled()
@@ -382,17 +408,12 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     // Known node markers (self is drawn separately, last, so it's always on top).
     const NodeNum ourNodeNum = nodeDB->getNodeNum();
 
-    // Everything below is drawn INVERSE (XOR against whatever's already there - tile or blank),
-    // not a fixed color: markers, labels, the crosshair, and both text overlays need to stay
-    // readable regardless of whether they land on a black or white part of the basemap.
-    //
-    // The catch with pure XOR: two overlay elements landing on the *same* pixels (typically two
-    // markers within a few px of each other at low zoom, where many nodes collapse onto nearly
-    // the same screen position) cancel each other out instead of compositing. Rather than an
-    // opaque backing (which reintroduces a fixed color and looks like a solid box), markers dedupe
-    // against nearby already-drawn marker positions below, so the same spot is never XORed twice.
-    display->setColor(INVERSE);
-
+    // Everything below is drawn with drawHaloXbm/drawHaloString (solid WHITE halo behind a BLACK
+    // fill) rather than a fixed color or XOR/INVERSE, so markers, labels, and both text overlays
+    // stay readable no matter what part of the basemap they land on. Markers still dedupe against
+    // nearby already-drawn marker positions below - not needed for correctness anymore (halo draws
+    // don't cancel out like XOR did), but it still avoids wasted draws and visual clutter when many
+    // nodes collapse onto nearly the same screen position at low zoom.
     constexpr int16_t kMarkerDedupeRadius = 4;
     constexpr int kMaxDedupeTracked = 64;
     int16_t drawnMx[kMaxDedupeTracked];
@@ -452,7 +473,7 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
             drawnCount++;
         }
 
-        display->drawXbm(mx - 4, my - 4, 8, 8, icon_map_node);
+        drawHaloXbm(display, mx - 4, my - 4, 8, 8, icon_map_node);
 
         if (node->short_name[0] != '\0') {
             int16_t lx = mx + 5;
@@ -469,7 +490,7 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
             }
 
             if (!overlaps) {
-                display->drawString(lx, ly, node->short_name);
+                drawHaloString(display, lx, ly, node->short_name);
                 if (labelCount < kMaxLabelsTracked) {
                     labelX[labelCount] = lx;
                     labelY[labelCount] = ly;
@@ -495,22 +516,25 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         int16_t sx = x + viewWidth / 2 + (int16_t)(eastMeters * metersToPx);
         int16_t sy = y + viewHeight / 2 - (int16_t)(northMeters * metersToPx);
         if (sx >= x && sx <= x + viewWidth && sy >= y && sy <= y + viewHeight) {
-            // Gap between the circle and the tick marks (rather than full-length crossed lines
-            // through a circle) is deliberate: with INVERSE draws, any pixel two overlapping
-            // primitives both touch gets XORed twice and cancels back to background - a solid
-            // circle crossed by full-length lines punches out holes at every overlap (dead center,
-            // plus the 4 points where the circle meets the lines), reading as a "snowflake" instead
-            // of a crosshair. Keeping the circle and ticks clear of each other avoids any overlap.
+            // Plain crosshair: circle with full-length lines crossing straight through it. The
+            // previous version kept the ticks detached from the circle to dodge a XOR-cancellation
+            // artifact from the old INVERSE draw mode; now that everything below draws with a solid
+            // WHITE halo instead of XOR, overlapping strokes just paint over each other normally, so
+            // there's no reason not to draw the crosshair the straightforward way.
             constexpr int16_t kRadius = 3;
-            constexpr int16_t kGap = 2;
-            constexpr int16_t kTickLen = 4;
-            constexpr int16_t kInner = kRadius + kGap;
-            constexpr int16_t kOuter = kInner + kTickLen;
+            constexpr int16_t kOuter = 9;
+            display->setColor(WHITE);
+            display->fillCircle(sx, sy, kRadius + 2);
+            // Halo the arms too (1px above/below and left/right), so they stay visible past the
+            // edge of the bullseye's halo circle, same as the labels/icons above.
+            display->drawLine(sx - kOuter, sy - 1, sx + kOuter, sy - 1);
+            display->drawLine(sx - kOuter, sy + 1, sx + kOuter, sy + 1);
+            display->drawLine(sx - 1, sy - kOuter, sx - 1, sy + kOuter);
+            display->drawLine(sx + 1, sy - kOuter, sx + 1, sy + kOuter);
+            display->setColor(BLACK);
             display->drawCircle(sx, sy, kRadius);
-            display->drawLine(sx - kOuter, sy, sx - kInner, sy);
-            display->drawLine(sx + kInner, sy, sx + kOuter, sy);
-            display->drawLine(sx, sy - kOuter, sx, sy - kInner);
-            display->drawLine(sx, sy + kInner, sx, sy + kOuter);
+            display->drawLine(sx - kOuter, sy, sx + kOuter, sy);
+            display->drawLine(sx, sy - kOuter, sx, sy + kOuter);
         }
     }
 
@@ -520,37 +544,47 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     display->setFont(FONT_SMALL);
     char coordLabel[24];
     snprintf(coordLabel, sizeof(coordLabel), "%.4f,%.4f", centerLat, centerLng);
-    display->drawString(x + 1, y, coordLabel);
+    drawHaloString(display, x + 1, y, coordLabel);
 
     // Status label, bottom-right corner: zoom level, plus mode/follow indicators.
     display->setTextAlignment(TEXT_ALIGN_RIGHT);
     char statusLabel[24];
     snprintf(statusLabel, sizeof(statusLabel), "z%d%s%s%s", zoom, s_panMode ? " PAN" : "", s_zoomMode ? " ZOOM" : "",
              s_followMe ? " ME" : "");
-    display->drawString(x + viewWidth - 2, y + viewHeight - FONT_HEIGHT_SMALL - 1, statusLabel);
+    drawHaloString(display, x + viewWidth - 2, y + viewHeight - FONT_HEIGHT_SMALL - 1, statusLabel);
 
     // Zoom ruler: shown only while Zoom Mode is active (entered from the menu, held until
     // Back/Cancel). A vertical gauge on the right edge, current level marked, so up/down's effect
-    // is visible at a glance without needing to read the numeric label. Still INVERSE, same as
-    // everything else above - display->setColor(INVERSE) is already in effect from the markers.
+    // is visible at a glance without needing to read the numeric label. Haloed the same as
+    // everything else above, so it stays readable over whatever basemap tile art is behind it.
     if (s_zoomMode) {
         constexpr int16_t kMargin = 10;
         const int16_t rulerX = x + viewWidth - 6;
         const int16_t rulerTop = y + kMargin;
         const int16_t rulerBottom = y + viewHeight - kMargin;
 
+        const float frac = (float)(zoom - kMinZoom) / (float)(kMaxZoom - kMinZoom);
+        const int16_t indicatorY = rulerBottom - (int16_t)(frac * (rulerBottom - rulerTop));
+
+        display->setColor(WHITE);
+        display->drawLine(rulerX - 1, rulerTop, rulerX - 1, rulerBottom);
+        display->drawLine(rulerX + 1, rulerTop, rulerX + 1, rulerBottom);
+        display->drawLine(rulerX - 4, rulerTop - 1, rulerX + 4, rulerTop - 1);
+        display->drawLine(rulerX - 4, rulerTop + 1, rulerX + 4, rulerTop + 1);
+        display->drawLine(rulerX - 4, rulerBottom - 1, rulerX + 4, rulerBottom - 1);
+        display->drawLine(rulerX - 4, rulerBottom + 1, rulerX + 4, rulerBottom + 1);
+        display->fillRect(rulerX - 5, indicatorY - 3, 11, 7);
+
+        display->setColor(BLACK);
         display->drawLine(rulerX, rulerTop, rulerX, rulerBottom);
         display->drawLine(rulerX - 3, rulerTop, rulerX + 3, rulerTop);
         display->drawLine(rulerX - 3, rulerBottom, rulerX + 3, rulerBottom);
-
-        const float frac = (float)(zoom - kMinZoom) / (float)(kMaxZoom - kMinZoom);
-        const int16_t indicatorY = rulerBottom - (int16_t)(frac * (rulerBottom - rulerTop));
         display->fillRect(rulerX - 4, indicatorY - 2, 9, 5);
 
         char zoomText[8];
         snprintf(zoomText, sizeof(zoomText), "z%d", zoom);
         display->setTextAlignment(TEXT_ALIGN_RIGHT);
         display->setFont(FONT_SMALL);
-        display->drawString(rulerX - 7, indicatorY - FONT_HEIGHT_SMALL / 2, zoomText);
+        drawHaloString(display, rulerX - 7, indicatorY - FONT_HEIGHT_SMALL / 2, zoomText);
     }
 }
