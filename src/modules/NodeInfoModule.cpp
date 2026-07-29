@@ -5,6 +5,7 @@
 #include "NodeStatus.h"
 #include "Router.h"
 #include "TransmitHistory.h"
+#include "UptimeClock.h"
 #include "configuration.h"
 #include "gps/RTC.h"
 #include "main.h"
@@ -33,7 +34,9 @@ bool NodeInfoModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, mes
     // Suppress replies to senders we've replied to recently (12H window)
     if (mp.decoded.want_response && !isFromUs(&mp)) {
         const NodeNum sender = getFrom(&mp);
-        const uint32_t now = mp.rx_time ? mp.rx_time : getTime();
+        // A local dedup window, not a wall-clock reading - uptime avoids RTC-quality jumps and
+        // replayed packets' stale rx_time perturbing it.
+        const uint32_t now = (uint32_t)(Time::getMillis64() / 1000);
         auto it = lastNodeInfoSeen.find(sender);
         if (it != lastNodeInfoSeen.end()) {
             uint32_t sinceLast = now >= it->second ? now - it->second : 0;
@@ -169,14 +172,8 @@ meshtastic_MeshPacket *NodeInfoModule::allocReply()
         ignoreRequest = true;
         return NULL;
     } else {
-        ignoreRequest = false;     // Don't ignore requests anymore
-        meshtastic_User u = owner; // deliberate copy: the licensed strip below must not clobber the global owner state
-
-        // Strip the public key if the user is licensed
-        if (u.is_licensed && u.public_key.size > 0) {
-            memset(u.public_key.bytes, 0, sizeof(u.public_key.bytes));
-            u.public_key.size = 0;
-        }
+        ignoreRequest = false; // Don't ignore requests anymore
+        meshtastic_User u = owner;
 
         // FIXME: Clear the user.id field since it should be derived from node number on the receiving end
         // u.id[0] = '\0';
