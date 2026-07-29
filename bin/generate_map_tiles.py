@@ -38,10 +38,12 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import lz4.block
+import mapbox_vector_tile
 import requests
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 TILE_SIZE = (
     512  # Overridden from --tile-size; must match NicheGraphics::MapTiles::kTileSizePx.
@@ -60,18 +62,12 @@ class BakedTile:
     payload: bytes  # empty for WHITE/BLACK
 
 
-def fetch_tile_bytes(
-    session: requests.Session,
-    style: str,
-    api_key: str,
-    z: int,
-    x: int,
-    y: int,
-    retries: int = 3,
+def fetch_url_bytes(
+    session: requests.Session, url: str, z: int, x: int, y: int, retries: int = 3
 ) -> bytes:
-    """Downloads the raw tile image bytes (PNG, as served) - kept separate from decoding so the
-    raw bytes can be persisted to --raw-cache before any thresholding happens."""
-    url = f"https://api.maptiler.com/maps/{style}/{z}/{x}/{y}.png?key={urllib.parse.quote(api_key)}"
+    """Downloads raw bytes from url (a PNG raster tile or a .pbf vector tile) - kept separate from
+    decoding so the raw bytes can be persisted to --raw-cache before any rendering happens.
+    """
     last_exc = None
     for attempt in range(retries):
         try:
@@ -84,9 +80,101 @@ def fetch_tile_bytes(
     raise RuntimeError(f"Failed to fetch tile z={z} x={x} y={y}: {last_exc}")
 
 
+def raster_tile_url(style: str, api_key: str, z: int, x: int, y: int) -> str:
+    return f"https://api.maptiler.com/maps/{style}/{z}/{x}/{y}.png?key={urllib.parse.quote(api_key)}"
+
+
+def vector_tile_url(tileset: str, api_key: str, z: int, x: int, y: int) -> str:
+    return f"https://api.maptiler.com/tiles/{tileset}/{z}/{x}/{y}.pbf?key={urllib.parse.quote(api_key)}"
+
+
 def decode_tile_image(raw: bytes) -> Image.Image:
     img = Image.open(io.BytesIO(raw))
     img.load()
+    return img
+
+
+def _draw_geometry_lines(
+    draw: "ImageDraw.ImageDraw", geometry: dict, extent: int
+) -> None:
+    """Draws a GeoJSON LineString/MultiLineString (as decoded by mapbox_vector_tile) scaled from
+    the tile's local extent (e.g. 4096) down to TILE_SIZE. Polygons/points are handled by callers
+    that care about them (boundary/transportation are line data; place is points) - anything else
+    passed here is silently skipped rather than guessed at."""
+    scale = TILE_SIZE / extent
+    gtype = geometry.get("type")
+    coords = geometry.get("coordinates")
+
+    def draw_line(points: list) -> None:
+        scaled = [(px * scale, py * scale) for px, py in points]
+        if len(scaled) >= 2:
+            draw.line(scaled, fill=0, width=1)
+
+    if gtype == "LineString":
+        draw_line(coords)
+    elif gtype == "MultiLineString":
+        for line in coords:
+            draw_line(line)
+
+
+def rasterize_vector_tile(
+    raw_pbf: bytes,
+    road_classes: set[str],
+    boundary_max_admin_level: int,
+    label_classes: set[str],
+    label_max_rank: int,
+) -> Image.Image:
+    """Renders a minimal line-art basemap tile (roads, admin borders, place-name labels only - no
+    landcover/water/building fills, no POIs) from a MapTiler vector tile (OpenMapTiles schema),
+    matching the black-on-white 1-bit look the raster path produces via toner-v2. Vector tiles use
+    tile-local integer coordinates (0..extent, y-down) instead of pixels, so each layer is scaled
+    to TILE_SIZE here before drawing with PIL.
+
+    Road name / route-shield labels (transportation_name layer, which follow curved road geometry)
+    aren't rendered - that needs text-on-path placement, a meaningfully bigger feature than the
+    point labels done here for place names. Only place-point labels are drawn."""
+    layers = mapbox_vector_tile.decode(raw_pbf, y_coord_down=True)
+    img = Image.new("L", (TILE_SIZE, TILE_SIZE), 255)
+    draw = ImageDraw.Draw(img)
+    font = ImageFont.load_default()
+
+    transportation = layers.get("transportation")
+    if transportation:
+        extent = transportation["extent"]
+        for feature in transportation["features"]:
+            if feature["properties"].get("class") in road_classes:
+                _draw_geometry_lines(draw, feature["geometry"], extent)
+
+    boundary = layers.get("boundary")
+    if boundary:
+        extent = boundary["extent"]
+        for feature in boundary["features"]:
+            admin_level = feature["properties"].get("admin_level", 99)
+            if admin_level <= boundary_max_admin_level:
+                _draw_geometry_lines(draw, feature["geometry"], extent)
+
+    place = layers.get("place")
+    if place:
+        extent = place["extent"]
+        scale = TILE_SIZE / extent
+        for feature in place["features"]:
+            props = feature["properties"]
+            if props.get("class") not in label_classes:
+                continue
+            rank = props.get("rank")
+            if rank is not None and rank > label_max_rank:
+                continue
+            geometry = feature["geometry"]
+            if geometry.get("type") != "Point":
+                continue
+            name = props.get("name:latin") or props.get("name")
+            if not name:
+                continue
+            px, py = geometry["coordinates"]
+            px, py = px * scale, py * scale
+            draw.ellipse([px - 1, py - 1, px + 1, py + 1], fill=0)
+            draw.text((px + 3, py - 3), name, fill=0, font=font)
+
     return img
 
 
@@ -134,24 +222,28 @@ def threshold_tile(img: Image.Image, threshold: int, invert: bool) -> bytes:
 def bake_tile(
     session: requests.Session,
     raw_tiles: dict[tuple[int, int, int], bytes],
-    style: str,
-    api_key: str,
+    fetch_raw: Callable[[requests.Session, int, int, int], bytes],
+    render_image: Callable[[bytes], Image.Image],
     z: int,
     x: int,
     y: int,
     threshold: int,
     invert: bool,
 ) -> tuple[BakedTile, bytes, int, bool]:
-    """Returns (baked_tile, raw_image_bytes, download_bytes, fetched_now). raw_image_bytes/
-    fetched_now let the caller persist newly-downloaded raw bytes to --raw-cache without writing
-    back bytes that were already served from that cache."""
+    """Source-agnostic bake: fetch_raw downloads the tile's raw bytes (PNG for raster, .pbf for
+    vector - see raster_tile_url/vector_tile_url), render_image turns those bytes into a grayscale
+    Image ready for threshold_tile (raster: decode_tile_image; vector: rasterize_vector_tile,
+    which already draws pure black/white so threshold/invert are effectively 128/False for it).
+    Returns (baked_tile, raw_image_bytes, download_bytes, fetched_now); raw_image_bytes/fetched_now
+    let the caller persist newly-downloaded raw bytes to --raw-cache without writing back bytes
+    that were already served from that cache."""
     cached_raw = raw_tiles.get((z, x, y))
     if cached_raw is not None:
         raw_bytes, download_bytes, fetched_now = cached_raw, 0, False
     else:
-        raw_bytes = fetch_tile_bytes(session, style, api_key, z, x, y)
+        raw_bytes = fetch_raw(session, z, x, y)
         download_bytes, fetched_now = len(raw_bytes), True
-    img = decode_tile_image(raw_bytes)
+    img = render_image(raw_bytes)
     packed = threshold_tile(img, threshold, invert)
     if packed == b"":
         return (
@@ -234,20 +326,13 @@ def cache_meta_path(cache_path: Path) -> Path:
     return cache_path.parent / (cache_path.name + ".meta.json")
 
 
-def check_and_write_cache_meta(
-    cache_path: Path, style: str, threshold: int, invert: bool, tile_size: int
-) -> None:
-    """Baked --cache entries are stored post-threshold with no per-record record of which
-    threshold/invert/style/tile-size produced them. Re-running against the same --cache path
-    with different values would silently mix settings within one blob. Guard against that with a
-    small sidecar recording the settings the cache was started with; a legacy cache (no sidecar,
-    from before this check existed) is trusted as-is."""
-    current = {
-        "style": style,
-        "threshold": threshold,
-        "invert": invert,
-        "tile_size": tile_size,
-    }
+def check_and_write_cache_meta(cache_path: Path, current: dict) -> None:
+    """Baked --cache entries are stored post-render with no per-record record of which settings
+    (threshold/invert/style/tile-size, or - in --vector mode - tileset/road-classes/etc.) produced
+    them. Re-running against the same --cache path with different values would silently mix
+    settings within one blob. Guard against that with a small sidecar recording the settings the
+    cache was started with; a legacy cache (no sidecar, from before this check existed) is trusted
+    as-is."""
     meta_path = cache_meta_path(cache_path)
     if meta_path.exists():
         try:
@@ -437,6 +522,52 @@ def main() -> int:
         "256 remains available only for a from-scratch flash/RAM-constrained target that doesn't "
         "exist yet",
     )
+    ap.add_argument(
+        "--vector",
+        action="store_true",
+        help="Fetch MapTiler vector tiles (.pbf, OpenMapTiles schema) and rasterize only the "
+        "layers selected by --road-classes/--boundary-max-admin-level/--label-classes, instead of "
+        "fetching a pre-rendered raster style. Produces a sparser, smaller-to-fetch tile set "
+        "(no landcover/water fills, buildings, or POIs) at the cost of rendering roads/borders/"
+        "labels yourself. --style/--threshold/--invert are ignored in this mode.",
+    )
+    ap.add_argument(
+        "--vector-tileset",
+        default="v3",
+        help="MapTiler vector tileset id (default: v3, their OpenMapTiles-schema planet dataset). "
+        "Only used with --vector.",
+    )
+    ap.add_argument(
+        "--road-classes",
+        default="motorway,trunk,primary,secondary",
+        help="Comma-separated 'transportation' layer class values to draw as roads (default: "
+        "'motorway,trunk,primary,secondary' - major roads only, for a minimal/uncluttered look; "
+        "add 'tertiary,minor,service,track' etc. for more detail). Only used with --vector.",
+    )
+    ap.add_argument(
+        "--boundary-max-admin-level",
+        type=int,
+        default=2,
+        help="Draw 'boundary' layer features with admin_level <= this (default: 2, country "
+        "borders only; OpenMapTiles uses 4 for states/provinces, higher for finer subdivisions). "
+        "Only used with --vector.",
+    )
+    ap.add_argument(
+        "--label-classes",
+        default="country,city",
+        help="Comma-separated 'place' layer class values to draw as text labels (default: "
+        "'country,city'; other OpenMapTiles place classes include town, village, hamlet). Only "
+        "road name labels aren't supported - drawing text along curved road geometry needs "
+        "text-on-path placement, not implemented here. Only used with --vector.",
+    )
+    ap.add_argument(
+        "--label-max-rank",
+        type=int,
+        default=5,
+        help="Only draw place labels with an OpenMapTiles 'rank' property <= this (lower rank = "
+        "more prominent; features with no rank are always drawn). Default 5. Only used with "
+        "--vector.",
+    )
     args = ap.parse_args()
 
     global TILE_SIZE
@@ -457,19 +588,62 @@ def main() -> int:
         coords = coords[: args.max_tiles]
     total_planned = len(coords)
 
+    if args.vector:
+        road_classes = {c.strip() for c in args.road_classes.split(",") if c.strip()}
+        label_classes = {c.strip() for c in args.label_classes.split(",") if c.strip()}
+        cache_settings = {
+            "vector": True,
+            "vector_tileset": args.vector_tileset,
+            "road_classes": sorted(road_classes),
+            "boundary_max_admin_level": args.boundary_max_admin_level,
+            "label_classes": sorted(label_classes),
+            "label_max_rank": args.label_max_rank,
+            "tile_size": args.tile_size,
+        }
+
+        def fetch_raw(session, z, x, y):
+            url = vector_tile_url(args.vector_tileset, args.api_key, z, x, y)
+            return fetch_url_bytes(session, url, z, x, y)
+
+        def render_image(raw_bytes):
+            return rasterize_vector_tile(
+                raw_bytes,
+                road_classes,
+                args.boundary_max_admin_level,
+                label_classes,
+                args.label_max_rank,
+            )
+
+        bake_threshold, bake_invert = 128, False
+        source_desc = f"vector tileset={args.vector_tileset}"
+    else:
+        cache_settings = {
+            "vector": False,
+            "style": args.style,
+            "threshold": args.threshold,
+            "invert": args.invert,
+            "tile_size": args.tile_size,
+        }
+
+        def fetch_raw(session, z, x, y):
+            url = raster_tile_url(args.style, args.api_key, z, x, y)
+            return fetch_url_bytes(session, url, z, x, y)
+
+        render_image = decode_tile_image
+        bake_threshold, bake_invert = args.threshold, args.invert
+        source_desc = f"style={args.style}"
+
     cache_path = (
         args.cache
         if args.cache is not None
         else args.out.with_suffix(args.out.suffix + ".cache")
     )
-    check_and_write_cache_meta(
-        cache_path, args.style, args.threshold, args.invert, args.tile_size
-    )
+    check_and_write_cache_meta(cache_path, cache_settings)
     tiles_by_coord = read_cache(cache_path)
     resumed = len(tiles_by_coord)
     todo = [c for c in coords if c not in tiles_by_coord]
     print(
-        f"Planning {total_planned} tiles across zoom {z_lo}-{z_hi} (style={args.style}, workers={args.workers}) - "
+        f"Planning {total_planned} tiles across zoom {z_lo}-{z_hi} ({source_desc}, workers={args.workers}) - "
         f"{resumed} already cached in '{cache_path}', {len(todo)} left to fetch"
     )
 
@@ -510,13 +684,13 @@ def main() -> int:
             t, raw_bytes, n_bytes, fetched_now = bake_tile(
                 thread_local,
                 raw_tiles,
-                args.style,
-                args.api_key,
+                fetch_raw,
+                render_image,
                 z,
                 tx,
                 ty,
-                args.threshold,
-                args.invert,
+                bake_threshold,
+                bake_invert,
             )
             return coord, t, raw_bytes, n_bytes, fetched_now, None
         except Exception as exc:  # noqa: BLE001 - report it, don't crash the whole pool
