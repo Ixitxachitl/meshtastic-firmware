@@ -11,9 +11,10 @@ Usage:
     python bin/generate_map_tiles.py --api-key KEY --zooms 0-4 --out world_blob.bin
 
 The output is a standalone binary blob (tile index + compressed payloads), NOT a
-compiled-in header - per the plan, this data is meant for external QSPI flash
-storage, not the ~780KB internal app flash budget. A companion --emit-header flag
-can still produce a MapTile.h-compatible header for small test datasets.
+compiled-in header - this data is meant for external storage (SD card, or a plain
+file on a filesystem with room to spare), not the ~780KB internal app flash budget.
+A companion --emit-header flag can still produce a MapTile.h-compatible header for
+small test datasets.
 """
 from __future__ import annotations
 
@@ -32,7 +33,7 @@ import lz4.block
 import requests
 from PIL import Image
 
-TILE_SIZE = 256  # Overridden from --tile-size; must match the target build's MAP_TILE_SIZE_PX.
+TILE_SIZE = 512  # Overridden from --tile-size; must match NicheGraphics::MapTiles::kTileSizePx.
 KIND_LZ4 = 0
 KIND_WHITE = 1
 KIND_BLACK = 2
@@ -258,11 +259,13 @@ def main() -> int:
     ap.add_argument(
         "--tile-size",
         type=int,
-        default=256,
+        default=512,
         choices=(256, 512),
-        help="On-device tile edge length in px - MUST match the target build's MAP_TILE_SIZE_PX "
-        "(default 256; use 512 to match MapTiler's native fetch resolution on unconstrained "
-        "targets like native/portduino or an SD card, avoiding a lossy downsample)",
+        help="On-device tile edge length in px - MUST match NicheGraphics::MapTiles::kTileSizePx "
+        "(src/graphics/niche/Map/MapTileRenderer.h). Default 512 (MapTiler's native fetch "
+        "resolution, avoiding a lossy downsample) - every current Map-capable target uses this; "
+        "256 remains available only for a from-scratch flash/RAM-constrained target that doesn't "
+        "exist yet",
     )
     args = ap.parse_args()
 

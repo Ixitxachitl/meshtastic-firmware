@@ -9,9 +9,6 @@
 #if defined(ARCH_PORTDUINO) || defined(ARCH_ESP32)
 #include "graphics/niche/Map/MapTileSourceFile.h"
 #endif
-#if defined(HAS_QSPI_MAP_TILES)
-#include "graphics/niche/Map/MapTileSourceQSPI.h"
-#endif
 #if defined(HAS_SDCARD)
 #include "graphics/niche/Map/MapTileSourceSD.h"
 #endif
@@ -187,9 +184,8 @@ void panByScreenFraction(float dxFraction, float dyFraction)
 
 #if defined(HAS_SDCARD)
 // Real SD card (e.g. T-Deck): large, reliable, and provisioned by just copying MAP.BIN onto the
-// card with any computer - no bootloader/drag-and-drop complications like the Wio Tracker L1's
-// QSPI chip (see MapTileSourceQSPI.h). Preferred over the plain FSCom file source below when a
-// card is actually present.
+// card with any computer. Preferred over the plain FSCom file source below when a card is
+// actually present.
 bool ensureSDTileSourceInitialized()
 {
     static bool attempted = false;
@@ -208,11 +204,9 @@ bool ensureSDTileSourceInitialized()
 
 #if defined(ARCH_PORTDUINO) || defined(ARCH_ESP32)
 // On platforms with a filesystem that has room to spare (ESP32's LittleFS, or portduino's host
-// filesystem passthrough), the basemap is just a normal file - no QSPI/FAT complexity needed
-// (see MapTileSourceQSPI.h for the Wio Tracker L1's very different situation). Attempted once,
-// lazily, on first draw; if MAP.BIN isn't present this quietly leaves MapTiles with zero tiles
-// (the existing "no basemap baked in" fallback), which is the expected state until someone
-// provisions a file there.
+// filesystem passthrough), the basemap is just a normal file. Attempted once, lazily, on first
+// draw; if MAP.BIN isn't present this quietly leaves MapTiles with zero tiles (the existing "no
+// basemap baked in" fallback), which is the expected state until someone provisions a file there.
 void ensureFileTileSourceInitialized()
 {
 #if defined(HAS_SDCARD)
@@ -225,21 +219,6 @@ void ensureFileTileSourceInitialized()
         return;
     attempted = true;
     if (source.begin("/MAP.BIN"))
-        NicheGraphics::MapTiles::setTileSource(&source);
-}
-#endif
-
-#if defined(HAS_QSPI_MAP_TILES)
-// Wio Tracker L1 (and similar): the basemap lives on the external QSPI chip's existing FAT
-// filesystem - see MapTileSourceQSPI.h for why this is a file read rather than raw flash access.
-void ensureQSPITileSourceInitialized()
-{
-    static bool attempted = false;
-    static NicheGraphics::MapTiles::QSPIFatTileSource source;
-    if (attempted)
-        return;
-    attempted = true;
-    if (source.begin("MAP.BIN"))
         NicheGraphics::MapTiles::setTileSource(&source);
 }
 #endif
@@ -332,9 +311,6 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
 {
 #if defined(ARCH_PORTDUINO) || defined(ARCH_ESP32)
     ensureFileTileSourceInitialized();
-#endif
-#if defined(HAS_QSPI_MAP_TILES)
-    ensureQSPITileSourceInitialized();
 #endif
 
     display->clear();
