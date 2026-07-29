@@ -2289,7 +2289,8 @@ int Screen::handleInputEvent(const InputEvent *event)
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.gps && gps) {
                     menuHandler::positionBaseMenu();
 #endif
-                } else if (framesetInfo.positions.map != 255 && this->ui->getUiState()->currentFrame == framesetInfo.positions.map) {
+                } else if (framesetInfo.positions.map != 255 &&
+                           this->ui->getUiState()->currentFrame == framesetInfo.positions.map) {
                     menuHandler::mapBaseMenu();
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.clock) {
                     menuHandler::clockMenu();
@@ -2355,11 +2356,6 @@ bool Screen::isOverlayBannerShowing()
 bool Screen::isGamesFrameShown()
 {
     return framesetInfo.positions.games != 255 && ui && ui->getUiState()->currentFrame == framesetInfo.positions.games;
-}
-
-bool Screen::isMapFrameShown()
-{
-    return framesetInfo.positions.map != 255 && ui && ui->getUiState()->currentFrame == framesetInfo.positions.map;
 }
 
 } // namespace graphics

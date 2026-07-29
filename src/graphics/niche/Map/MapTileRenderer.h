@@ -79,6 +79,14 @@ constexpr uint8_t kTileKindBlack = 2; // no payload - tile is entirely set (0xFF
 // same LZ4 raw-block decoder as the compiled-in path, rather than duplicating it.
 bool decodeTilePayload(uint8_t kind, const uint8_t *compressed, int compressedSize, uint8_t *outBuf);
 
+// A static, kTileBufferBytes-sized scratch buffer for TileSource implementations to read a
+// compressed tile payload into before calling decodeTilePayload() above - kept here (like
+// s_tileCacheBuffer for the decoded output) rather than as a local in each TileSource, since
+// kTileBufferBytes is 32KB: far too large to put on the stack of the task that ends up calling
+// decodeTile() (e.g. the ESP32 "tft" render task, a 16KB stack). Only one TileSource is ever
+// actively decoding at a time, so sharing this one buffer across all of them is safe.
+uint8_t *tileCompressedScratchBuffer();
+
 // Number of distinct zoom levels present in the baked tile set (accounts for both
 // sparse and grid tile layouts - see MapTile.h). Returns 0 if no tiles are baked in.
 int zoomCount();
@@ -95,7 +103,7 @@ bool hasTiles();
 // nearest available baked zoom if no tile exists at exactly `zoom`, so callers can request
 // smooth intermediate zoom steps. Calls `plot(ctx, x, y)` once per set pixel; callers own
 // clearing the background and drawing everything else (markers, scale bars, etc).
-void drawTileBackground(float latCenter, float lngCenter, int zoom, float metersToPx, int16_t viewWidth,
-                         int16_t viewHeight, PlotFn plot, void *ctx);
+void drawTileBackground(float latCenter, float lngCenter, int zoom, float metersToPx, int16_t viewWidth, int16_t viewHeight,
+                        PlotFn plot, void *ctx);
 
 } // namespace NicheGraphics::MapTiles

@@ -54,10 +54,6 @@ class FileTileSource : public TileSource
     int indexOf(int zoom, int tx, int ty) override;
 
   private:
-    // Cumulative tile count for all zooms below `zoom` (i.e. this zoom's base index), given the
-    // dense/contiguous assumption: sum_{z=zLo_}^{zoom-1} 4^z.
-    uint32_t baseIndexForZoom(int zoom) const;
-
     int zLo_ = 0;
     int zHi_ = -1; // -1 => no tiles / not begun.
     uint32_t count_ = 0;

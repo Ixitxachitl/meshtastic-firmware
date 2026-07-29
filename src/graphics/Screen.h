@@ -292,10 +292,6 @@ class Screen : public concurrency::OSThread
     // ignore D-pad input when the player has navigated to a different frame.
     bool isGamesFrameShown();
 
-    // True if the Map frame is the one currently on screen. Lets the map's hold-select zoom panel
-    // ignore input when the player has navigated to a different frame.
-    bool isMapFrameShown();
-
     bool isScreenOn() { return screenOn; }
 
     // Stores the last 4 of our hardware ID, to make finding the device for pairing easier

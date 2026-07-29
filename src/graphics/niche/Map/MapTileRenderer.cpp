@@ -22,6 +22,9 @@ constexpr uint8_t MAP_TILE_LAYOUT_GRID = 1;
 // Tiles are 1 bit/pixel, column-major: [bx=0..kTileSizePx/8-1][y=0..kTileSizePx-1], 8 px/byte.
 uint8_t s_tileCacheBuffer[NicheGraphics::MapTiles::kTileBufferBytes];
 
+// Shared compressed-payload scratch buffer - see tileCompressedScratchBuffer() in the header.
+uint8_t s_tileCompressedScratchBuffer[NicheGraphics::MapTiles::kTileBufferBytes];
+
 // A baked tile always covers the same geographic span regardless of storage resolution: the
 // standard Web Mercator convention is 256 world-units per tile at any zoom (that's what defines
 // the zoom levels themselves) - a wholly different, fixed concept from kTileSizePx (512, MapTiler's
@@ -125,7 +128,7 @@ const uint8_t *decodeSparseTile(int tileIndex)
 {
     const uint8_t *compressed = map_tile_data + map_tile_offsets[tileIndex];
     bool ok = NicheGraphics::MapTiles::decodeTilePayload(map_tile_kinds[tileIndex], compressed, map_tile_sizes[tileIndex],
-                                                          s_tileCacheBuffer);
+                                                         s_tileCacheBuffer);
     return ok ? s_tileCacheBuffer : nullptr;
 }
 
@@ -156,6 +159,11 @@ bool NicheGraphics::MapTiles::decodeTilePayload(uint8_t kind, const uint8_t *com
     return lz4_decompress(compressed, compressedSize, outBuf, kTileBufferBytes) == kTileBufferBytes;
 }
 
+uint8_t *NicheGraphics::MapTiles::tileCompressedScratchBuffer()
+{
+    return s_tileCompressedScratchBuffer;
+}
+
 int NicheGraphics::MapTiles::zoomCount()
 {
     if (s_activeSource)
@@ -179,8 +187,8 @@ bool NicheGraphics::MapTiles::hasTiles()
 
 // Draw tiles centered on latCenter/lngCenter. Falls back to the nearest available zoom if
 // no tiles exist at exactly zoom (upsamples), enabling smooth zoom steps.
-void NicheGraphics::MapTiles::drawTileBackground(float latCenter, float lngCenter, int zoom, float metersToPx,
-                                                  int16_t viewWidth, int16_t viewHeight, PlotFn plot, void *ctx)
+void NicheGraphics::MapTiles::drawTileBackground(float latCenter, float lngCenter, int zoom, float metersToPx, int16_t viewWidth,
+                                                 int16_t viewHeight, PlotFn plot, void *ctx)
 {
     const int tileCount = s_activeSource ? s_activeSource->tileCount() : tileCountCompiledIn();
     if (tileCount == 0 || metersToPx <= 0.0f)
