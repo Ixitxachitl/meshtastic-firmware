@@ -76,7 +76,9 @@
 #define PIN_GPS_PPS 13
 
 // SPI interface SD card slot (shares the SPI1 bus with LoRa)
-#define HAS_SDCARD
+// HAS_SDCARD itself comes from the platformio.ini -D flag, not a #define here - device-ui's
+// SdCard.cpp doesn't include configuration.h, so it only ever sees the command-line macro.
+// Defining it again here too just collides with that (redefinition warning), see t-deck/variant.h.
 #define SDCARD_USE_SPI1
 #define SPI_MOSI MOSI
 #define SPI_SCK SCK
