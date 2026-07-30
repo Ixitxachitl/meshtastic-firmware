@@ -1549,11 +1549,9 @@ void TFTDisplay::display(bool fromBlank)
                            &linePixelBuffer[x_FirstPixelUpdate]);
 #endif
             somethingChanged = true;
-            rowsPushed++;
         }
         y++;
     }
-    LOG_DEBUG("TFTDisplay::display partial path rowsPushed=%u somethingChanged=%d", rowsPushed, somethingChanged);
     // Copy the Buffer to the Back Buffer
     if (somethingChanged)
         memcpy(buffer_back, buffer, displayBufferSize);
