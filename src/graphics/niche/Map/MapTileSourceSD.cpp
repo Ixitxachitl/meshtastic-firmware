@@ -12,6 +12,18 @@
 
 using namespace NicheGraphics::MapTiles;
 
+// Boards that share the SPI1/HSPI bus with another device (e.g. LoRa - see RadioInterface.cpp)
+// must reuse FSCommon's SPI_HSPI instance rather than starting a second SPIClass(HSPI): a second
+// spi_bus_initialize() on the same host returns ESP_ERR_INVALID_STATE and leaves that instance's
+// handle unusable, hanging any transaction that follows (see t-watch-ultra, where LoRa and the SD
+// card are wired to the same SCK/MOSI/MISO pins).
+#ifdef SDCARD_USE_SPI1
+extern SPIClass SPI_HSPI;
+#define MapSDHandler SPI_HSPI
+#else
+#define MapSDHandler SPI
+#endif
+
 namespace
 {
 #ifndef SD_SPI_FREQUENCY
@@ -44,7 +56,7 @@ bool SDCardTileSource::begin(const char *path)
         // library, FAT16/32 only) - SHARED_SPI here lets SdFs mount the same card independently
         // (its own CMD0/init handshake) without fighting over the bus, exactly like
         // meshtastic-device-ui's SdFsCard::init() already does successfully on this hardware.
-        sdBegun_ = sd_.begin(SdSpiConfig(SDCARD_CS, SHARED_SPI, SD_SPI_FREQUENCY, &SPI));
+        sdBegun_ = sd_.begin(SdSpiConfig(SDCARD_CS, SHARED_SPI, SD_SPI_FREQUENCY, &MapSDHandler));
     }
     if (!sdBegun_) {
         LOG_WARN("Map: no SD card detected");

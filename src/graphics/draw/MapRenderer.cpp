@@ -350,10 +350,12 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     // Shared battery/time header, same as every other BaseUI screen - reserve its height and
     // shift the map viewport down so tiles/markers/overlays never draw underneath it.
     // Matches drawCommonHeader's own internal footprint exactly (SharedUIDisplay.cpp: headerHeight
-    // = highlightHeight + 2, highlightHeight = FONT_HEIGHT_SMALL - 1, so FONT_HEIGHT_SMALL + 1) -
-    // NodeListRenderer's COMMON_HEADER_HEIGHT (FONT_HEIGHT_SMALL - 1) is 2px short of that, which
-    // left the map drawing over the header's bottom edge and XOR-inverting it.
-    const int16_t kHeaderHeight = FONT_HEIGHT_SMALL + 1;
+    // = highlightHeight + 2, highlightHeight = FONT_HEIGHT_SMALL - 1 + BASEUI_HEADER_MARGIN, so
+    // FONT_HEIGHT_SMALL + 1 + BASEUI_HEADER_MARGIN). Deliberately no added BASEUI_BELOW_HEADER_MARGIN
+    // gap here (unlike NodeListRenderer/UIRenderer) - the map should hug the header exactly, not
+    // leave list-style breathing room. BASEUI_HEADER_MARGIN is 0 on every board except the ones
+    // (like t-watch-ultra) that define it, so this is a no-op elsewhere.
+    const int16_t kHeaderHeight = FONT_HEIGHT_SMALL + 1 + BASEUI_HEADER_MARGIN;
     drawCommonHeader(display, x, y, "Map");
     display->setColor(WHITE); // drawCommonHeader leaves its own color state active
     y += kHeaderHeight;
