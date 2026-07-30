@@ -3,6 +3,8 @@
 #include "NodeDB.h"
 #include "gps/GeoCoord.h"
 #include "graphics/SharedUIDisplay.h"
+#include "graphics/TFTColorRegions.h"
+#include "graphics/TFTPalette.h"
 #include "graphics/images.h"
 #include "graphics/niche/Map/MapTileRenderer.h"
 
@@ -231,6 +233,8 @@ constexpr int8_t kHaloOffsets[8][2] = {{-1, -1}, {0, -1}, {1, -1}, {-1, 0}, {1, 
 // part of the basemap (dense tile art, blank background, etc.) without depending on XOR/INVERSE
 // against whatever's underneath. Replaces the old drawn-INVERSE approach, which read fine against
 // any single background but caused overlapping elements to XOR-cancel back to background.
+#if !GRAPHICS_TFT_COLORING_ENABLED
+// Only the node markers use this, and colour builds draw those via drawNodeXbmRed() below.
 void drawHaloXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm)
 {
     display->setColor(WHITE);
@@ -239,6 +243,7 @@ void drawHaloXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t 
     display->setColor(BLACK);
     display->drawXbm(x, y, w, h, xbm);
 }
+#endif
 
 void drawHaloString(OLEDDisplay *display, int16_t x, int16_t y, const char *text)
 {
@@ -248,6 +253,53 @@ void drawHaloString(OLEDDisplay *display, int16_t x, int16_t y, const char *text
     display->setColor(BLACK);
     display->drawString(x, y, text);
 }
+
+#if GRAPHICS_TFT_COLORING_ENABLED
+// Colour screens draw the node markers and their name labels in red instead of the monochrome
+// halo style above.
+//
+// A colour region only carries two colours - set pixels get onColor, unset get offColor - so the
+// glyph has to be the *set* pixels to be tintable, the opposite of drawHaloXbm/drawHaloString's
+// polarity. That also means any basemap ink left inside the region box would be tinted red along
+// with the glyph, which reads as a red block rather than a red marker, so the box is cleared first
+// and only the glyph is drawn back into it.
+//
+// offColor is getThemeBodyBg(), which is exactly what TFTDisplay paints every unset pixel with, so
+// the cleared box is indistinguishable from the surrounding basemap background - no visible
+// rectangle, just the map detail behind the marker erased (the monochrome halo already does this
+// for the 1px ring; this widens it to the glyph box).
+//
+// colorRegions[] is a fixed global pool shared with the header, and it silently evicts the oldest
+// entry once full, so tinting is capped well short of the pool size - nodes past the cap still
+// draw, just untinted, rather than pushing the header's own regions out.
+constexpr int kMaxNodeColorRegions = 24;
+
+void tintRegion(int16_t x, int16_t y, int16_t w, int16_t h, int &budget)
+{
+    if (budget <= 0)
+        return;
+    registerTFTColorRegionDirect(x - 1, y - 1, w + 2, h + 2, TFTPalette::Red, getThemeBodyBg());
+    budget--;
+}
+
+void drawNodeXbmRed(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm, int &budget)
+{
+    display->setColor(BLACK);
+    display->fillRect(x - 1, y - 1, w + 2, h + 2);
+    display->setColor(WHITE);
+    display->drawXbm(x, y, w, h, xbm);
+    tintRegion(x, y, w, h, budget);
+}
+
+void drawNodeStringRed(OLEDDisplay *display, int16_t x, int16_t y, const char *text, int16_t w, int16_t h, int &budget)
+{
+    display->setColor(BLACK);
+    display->fillRect(x - 1, y - 1, w + 2, h + 2);
+    display->setColor(WHITE);
+    display->drawString(x, y, text);
+    tintRegion(x, y, w, h, budget);
+}
+#endif
 
 } // namespace
 
@@ -430,6 +482,10 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     int16_t labelH[kMaxLabelsTracked];
     int labelCount = 0;
 
+#if GRAPHICS_TFT_COLORING_ENABLED
+    int nodeColorRegions = kMaxNodeColorRegions; // shared budget across markers and labels
+#endif
+
     // FONT_SMALL_LOCAL rather than FONT_SMALL deliberately: on TFT/HAS_SPI_TFT builds FONT_SMALL is
     // redirected to the 19px-tall medium font (bigger screen, so BaseUI normally wants bigger text)
     // - far too large for a map label sitting next to a marker, where many names need to fit close
@@ -473,7 +529,11 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
             drawnCount++;
         }
 
+#if GRAPHICS_TFT_COLORING_ENABLED
+        drawNodeXbmRed(display, mx - 4, my - 4, 8, 8, icon_map_node, nodeColorRegions);
+#else
         drawHaloXbm(display, mx - 4, my - 4, 8, 8, icon_map_node);
+#endif
 
         if (node->short_name[0] != '\0') {
             int16_t lx = mx + 5;
@@ -490,7 +550,11 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
             }
 
             if (!overlaps) {
+#if GRAPHICS_TFT_COLORING_ENABLED
+                drawNodeStringRed(display, lx, ly, node->short_name, lw, labelHeight, nodeColorRegions);
+#else
                 drawHaloString(display, lx, ly, node->short_name);
+#endif
                 if (labelCount < kMaxLabelsTracked) {
                     labelX[labelCount] = lx;
                     labelY[labelCount] = ly;
