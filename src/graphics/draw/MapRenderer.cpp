@@ -233,8 +233,6 @@ constexpr int8_t kHaloOffsets[8][2] = {{-1, -1}, {0, -1}, {1, -1}, {-1, 0}, {1, 
 // part of the basemap (dense tile art, blank background, etc.) without depending on XOR/INVERSE
 // against whatever's underneath. Replaces the old drawn-INVERSE approach, which read fine against
 // any single background but caused overlapping elements to XOR-cancel back to background.
-#if !GRAPHICS_TFT_COLORING_ENABLED
-// Only the node markers use this, and colour builds draw those via drawNodeXbmRed() below.
 void drawHaloXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm)
 {
     display->setColor(WHITE);
@@ -243,7 +241,6 @@ void drawHaloXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t 
     display->setColor(BLACK);
     display->drawXbm(x, y, w, h, xbm);
 }
-#endif
 
 void drawHaloString(OLEDDisplay *display, int16_t x, int16_t y, const char *text)
 {
@@ -255,48 +252,39 @@ void drawHaloString(OLEDDisplay *display, int16_t x, int16_t y, const char *text
 }
 
 #if GRAPHICS_TFT_COLORING_ENABLED
-// Colour screens draw the node markers and their name labels in red instead of the monochrome
-// halo style above.
+// Colour screens keep the halo drawing above exactly as-is - white halo hugging a glyph drawn as
+// cleared pixels - and only recolour it, so the glyph that reads as black on a mono screen comes
+// out red instead.
 //
-// A colour region only carries two colours - set pixels get onColor, unset get offColor - so the
-// glyph has to be the *set* pixels to be tintable, the opposite of drawHaloXbm/drawHaloString's
-// polarity. That also means any basemap ink left inside the region box would be tinted red along
-// with the glyph, which reads as a red block rather than a red marker, so the box is cleared first
-// and only the glyph is drawn back into it.
-//
-// offColor is getThemeBodyBg(), which is exactly what TFTDisplay paints every unset pixel with, so
-// the cleared box is indistinguishable from the surrounding basemap background - no visible
-// rectangle, just the map detail behind the marker erased (the monochrome halo already does this
-// for the 1px ring; this widens it to the glyph box).
+// That means the region maps unset -> red (the glyph) and set -> white (the halo). White is also
+// what TFTDisplay paints every set pixel with by default, so basemap ink falling inside the box is
+// left looking untouched. The cost is the reverse: basemap *background* inside the box is unset, so
+// it takes the red too - expect some red fringing in the gaps around the glyph, worst on sparse
+// map areas. Keeping the box tight to the halo is what holds that down.
 //
 // colorRegions[] is a fixed global pool shared with the header, and it silently evicts the oldest
 // entry once full, so tinting is capped well short of the pool size - nodes past the cap still
 // draw, just untinted, rather than pushing the header's own regions out.
 constexpr int kMaxNodeColorRegions = 24;
 
+// Box hugs the glyph plus the 1px halo ring that kHaloOffsets produces.
 void tintRegion(int16_t x, int16_t y, int16_t w, int16_t h, int &budget)
 {
     if (budget <= 0)
         return;
-    registerTFTColorRegionDirect(x - 1, y - 1, w + 2, h + 2, TFTPalette::Red, getThemeBodyBg());
+    registerTFTColorRegionDirect(x - 1, y - 1, w + 2, h + 2, TFTPalette::White, TFTPalette::Red);
     budget--;
 }
 
 void drawNodeXbmRed(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm, int &budget)
 {
-    display->setColor(BLACK);
-    display->fillRect(x - 1, y - 1, w + 2, h + 2);
-    display->setColor(WHITE);
-    display->drawXbm(x, y, w, h, xbm);
+    drawHaloXbm(display, x, y, w, h, xbm);
     tintRegion(x, y, w, h, budget);
 }
 
 void drawNodeStringRed(OLEDDisplay *display, int16_t x, int16_t y, const char *text, int16_t w, int16_t h, int &budget)
 {
-    display->setColor(BLACK);
-    display->fillRect(x - 1, y - 1, w + 2, h + 2);
-    display->setColor(WHITE);
-    display->drawString(x, y, text);
+    drawHaloString(display, x, y, text);
     tintRegion(x, y, w, h, budget);
 }
 #endif
