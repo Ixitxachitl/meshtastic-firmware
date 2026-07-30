@@ -12,6 +12,18 @@
 
 using namespace NicheGraphics::MapTiles;
 
+// Boards that share the SPI1/HSPI bus with another device (e.g. LoRa - see RadioInterface.cpp)
+// must reuse FSCommon's SPI_HSPI instance rather than starting a second SPIClass(HSPI): a second
+// spi_bus_initialize() on the same host returns ESP_ERR_INVALID_STATE and leaves that instance's
+// handle unusable, hanging any transaction that follows (see t-watch-ultra, where LoRa and the SD
+// card are wired to the same SCK/MOSI/MISO pins).
+#ifdef SDCARD_USE_SPI1
+extern SPIClass SPI_HSPI;
+#define MapSDHandler SPI_HSPI
+#else
+#define MapSDHandler SPI
+#endif
+
 namespace
 {
 #ifndef SD_SPI_FREQUENCY
