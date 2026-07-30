@@ -1495,11 +1495,49 @@ void TFTDisplay::display(bool fromBlank)
 #endif
             }
 
-            // Panel_AMOLED::writeImage/setWindow (LovyanGFX) only requires x and width to be even
-            // - there's no row/height alignment requirement - and that's already guaranteed above
-            // (x_FirstPixelUpdate & ~1U / x_LastPixelUpdate | 1U), so CO5300 needs no special
-            // handling here: pushing one row at a time is fine, same as every other TFT board.
+#if defined(CO5300_CS)
+            uint8_t lines_updated = 2;
+            if (y % 2 == 0) {
+                y_byteIndex = ((y + 1) / 8) * displayWidth;
+                y_byteMask = (1 << ((y + 1) & 7));
+                uint32_t bufferIndex = 1;
+                for (x = x_FirstPixelUpdate; x < x_LastPixelUpdate; x++) {
+                    isset = buffer[x + y_byteIndex] & y_byteMask;
+#if GRAPHICS_TFT_COLORING_ENABLED
+                    if (hasColorRegions) {
+                        linePixelBuffer[bufferIndex++ + x_LastPixelUpdate] = graphics::resolveTFTColorPixel(
+                            static_cast<int16_t>(x), static_cast<int16_t>(y), isset, colorTftWhite, colorTftBlack);
+                    } else {
+                        linePixelBuffer[bufferIndex++ + x_LastPixelUpdate] = isset ? colorTftWhite : colorTftBlack;
+                    }
+#else
+                    linePixelBuffer[bufferIndex++ + x_LastPixelUpdate] = isset ? colorTftWhite : colorTftBlack;
+#endif
+                }
+            } else {
+                y_offset = -1;
+                memcpy(&linePixelBuffer[x_LastPixelUpdate + 1], &linePixelBuffer[x_FirstPixelUpdate],
+                       2 * (x_LastPixelUpdate - x_FirstPixelUpdate + 1));
+                y_byteIndex = ((y - 1) / 8) * displayWidth;
+                y_byteMask = (1 << ((y - 1) & 7));
+                uint32_t bufferIndex = 0;
+                for (x = x_FirstPixelUpdate; x < x_LastPixelUpdate; x++) {
+                    isset = buffer[x + y_byteIndex] & y_byteMask;
+#if GRAPHICS_TFT_COLORING_ENABLED
+                    if (hasColorRegions) {
+                        linePixelBuffer[bufferIndex++ + x_FirstPixelUpdate] = graphics::resolveTFTColorPixel(
+                            static_cast<int16_t>(x), static_cast<int16_t>(y), isset, colorTftWhite, colorTftBlack);
+                    } else {
+                        linePixelBuffer[bufferIndex++ + x_FirstPixelUpdate] = isset ? colorTftWhite : colorTftBlack;
+                    }
+#else
+                    linePixelBuffer[bufferIndex++ + x_FirstPixelUpdate] = isset ? colorTftWhite : colorTftBlack;
+#endif
+                }
+            }
+#else
             uint8_t lines_updated = 1;
+#endif
 
 #if defined(HACKADAY_COMMUNICATOR)
             tft->draw16bitBeRGBBitmap(x_FirstPixelUpdate, y, &linePixelBuffer[x_FirstPixelUpdate],
@@ -1511,9 +1549,11 @@ void TFTDisplay::display(bool fromBlank)
                            &linePixelBuffer[x_FirstPixelUpdate]);
 #endif
             somethingChanged = true;
+            rowsPushed++;
         }
         y++;
     }
+    LOG_DEBUG("TFTDisplay::display partial path rowsPushed=%u somethingChanged=%d", rowsPushed, somethingChanged);
     // Copy the Buffer to the Back Buffer
     if (somethingChanged)
         memcpy(buffer_back, buffer, displayBufferSize);
