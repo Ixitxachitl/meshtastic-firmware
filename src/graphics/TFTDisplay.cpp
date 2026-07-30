@@ -1353,7 +1353,23 @@ void TFTDisplay::display(bool fromBlank)
     static uint32_t lastColorFrameSignature = 0;
     const bool hasColorRegions = graphics::getTFTColorRegionCount() > 0;
     const uint32_t colorFrameSignature = graphics::getTFTColorFrameSignature();
+#if defined(CO5300_CS)
+    // CO5300 (t-watch-ultra AMOLED): always take the full-repaint path.
+    //
+    // The diff-based partial path below corrupts small changed spans on this panel - a narrow update
+    // such as the clock's seconds digits comes out as scattered wrong-coloured pixels rather than
+    // glyphs. The panel needs an even row start and an even row count (LovyanGFX's Panel_AMOLED
+    // enforces only the matching x/width rule), which the partial path hand-rolls by pushing row
+    // pairs; that pairing is what misrenders, and the root cause has not been isolated. The chunked
+    // repaint below is inherently even-aligned (8-row chunks, 502 rows, x=0, full 410 width) and
+    // renders correctly, so use it unconditionally here.
+    //
+    // Cost is acceptable: ~410 x 502 x 2 B over QSPI at 75 MHz is roughly 40-50 ms per frame against
+    // a ~1 fps UI budget. Revisit if the partial path is ever fixed for this panel.
+    const bool forceFullColorRepaint = true;
+#else
     const bool forceFullColorRepaint = forceFullRepaint || (colorFrameSignature != lastColorFrameSignature);
+#endif
 
     // When region roles/layout changed, color can differ even with identical monochrome glyph bits.
     // Repaint full frame only for those frames, then return to diff-based updates.
@@ -1496,17 +1512,25 @@ void TFTDisplay::display(bool fromBlank)
             }
 
 #if defined(CO5300_CS)
+            // The CO5300 needs an even row start and an even row count (LovyanGFX's Panel_AMOLED only
+            // enforces the matching x/width rule, not this one), so every push covers the row pair that
+            // contains y. The partner row of the pair is rendered here, after the primary row above.
+            //
+            // partnerY must be used for the colour lookup, not y: resolveTFTColorPixel() tests the
+            // pixel against each region's y range, so passing the primary row's y colours the partner
+            // row using the wrong row's regions wherever a region edge falls between the two.
             uint8_t lines_updated = 2;
+            const int16_t partnerY = (y % 2 == 0) ? (int16_t)(y + 1) : (int16_t)(y - 1);
             if (y % 2 == 0) {
                 y_byteIndex = ((y + 1) / 8) * displayWidth;
                 y_byteMask = (1 << ((y + 1) & 7));
                 uint32_t bufferIndex = 1;
-                for (x = x_FirstPixelUpdate; x < x_LastPixelUpdate; x++) {
+                for (x = x_FirstPixelUpdate; x <= x_LastPixelUpdate; x++) {
                     isset = buffer[x + y_byteIndex] & y_byteMask;
 #if GRAPHICS_TFT_COLORING_ENABLED
                     if (hasColorRegions) {
                         linePixelBuffer[bufferIndex++ + x_LastPixelUpdate] = graphics::resolveTFTColorPixel(
-                            static_cast<int16_t>(x), static_cast<int16_t>(y), isset, colorTftWhite, colorTftBlack);
+                            static_cast<int16_t>(x), partnerY, isset, colorTftWhite, colorTftBlack);
                     } else {
                         linePixelBuffer[bufferIndex++ + x_LastPixelUpdate] = isset ? colorTftWhite : colorTftBlack;
                     }
@@ -1521,12 +1545,12 @@ void TFTDisplay::display(bool fromBlank)
                 y_byteIndex = ((y - 1) / 8) * displayWidth;
                 y_byteMask = (1 << ((y - 1) & 7));
                 uint32_t bufferIndex = 0;
-                for (x = x_FirstPixelUpdate; x < x_LastPixelUpdate; x++) {
+                for (x = x_FirstPixelUpdate; x <= x_LastPixelUpdate; x++) {
                     isset = buffer[x + y_byteIndex] & y_byteMask;
 #if GRAPHICS_TFT_COLORING_ENABLED
                     if (hasColorRegions) {
                         linePixelBuffer[bufferIndex++ + x_FirstPixelUpdate] = graphics::resolveTFTColorPixel(
-                            static_cast<int16_t>(x), static_cast<int16_t>(y), isset, colorTftWhite, colorTftBlack);
+                            static_cast<int16_t>(x), partnerY, isset, colorTftWhite, colorTftBlack);
                     } else {
                         linePixelBuffer[bufferIndex++ + x_FirstPixelUpdate] = isset ? colorTftWhite : colorTftBlack;
                     }
