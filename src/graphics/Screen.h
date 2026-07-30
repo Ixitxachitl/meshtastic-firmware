@@ -748,6 +748,7 @@ class Screen : public concurrency::OSThread
             uint8_t deviceFocused = 255;
             uint8_t system = 255;
             uint8_t gps = 255;
+            uint8_t map = 255;
             uint8_t home = 255;
             uint8_t games = 255;
             uint8_t textMessage = 255;
@@ -789,6 +790,7 @@ class Screen : public concurrency::OSThread
 #endif
         bool gps = false;
 #endif
+        bool map = false; // Doesn't need local GPS - it can show other nodes' positions regardless.
         bool lora = false;
         bool show_favorites = false;
         bool chirpy = true;

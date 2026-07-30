@@ -40,6 +40,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "TimeFormatters.h"
 #include "draw/ClockRenderer.h"
 #include "draw/DebugRenderer.h"
+#include "draw/MapRenderer.h"
 #include "draw/MenuHandler.h"
 #include "draw/MessageRenderer.h"
 #include "draw/NodeListRenderer.h"
@@ -1435,6 +1436,16 @@ void Screen::setFrames(FrameFocus focus)
         indicatorIcons.push_back(icon_compass);
     }
 #endif
+    // Map doesn't need local GPS - it can show other nodes' positions regardless (e.g. T-Deck,
+    // which has no onboard GPS). Restricted to TFT-class color displays and E-Ink: the map needs
+    // more pixels than monochrome OLED screens can usefully spare.
+#if GRAPHICS_TFT_COLORING_ENABLED || defined(USE_EINK)
+    if (!hiddenFrames.map) {
+        fsi.positions.map = numframes;
+        normalFrames[numframes++] = graphics::MapRenderer::drawMapFrame;
+        indicatorIcons.push_back(icon_map);
+    }
+#endif
     if (RadioLibInterface::instance && !hiddenFrames.lora) {
         fsi.positions.lora = numframes;
         normalFrames[numframes++] = graphics::DebugRenderer::drawLoRaFocused;
@@ -1622,6 +1633,9 @@ void Screen::toggleFrameVisibility(const std::string &frameName)
         hiddenFrames.gps = !hiddenFrames.gps;
     }
 #endif
+    if (frameName == "map") {
+        hiddenFrames.map = !hiddenFrames.map;
+    }
     if (frameName == "lora") {
         hiddenFrames.lora = !hiddenFrames.lora;
     }
@@ -1663,6 +1677,8 @@ bool Screen::isFrameHidden(const std::string &frameName) const
     if (frameName == "gps")
         return hiddenFrames.gps;
 #endif
+    if (frameName == "map")
+        return hiddenFrames.map;
     if (frameName == "lora")
         return hiddenFrames.lora;
     if (frameName == "clock")
@@ -1707,6 +1723,7 @@ enum FrameVisBit : uint8_t {
     FVBIT_LORA = 13,
     FVBIT_SHOW_FAVORITES = 14,
     FVBIT_CHIRPY = 15,
+    FVBIT_MAP = 16,
 };
 
 struct __attribute__((packed)) FrameVisFile {
@@ -1753,6 +1770,7 @@ uint32_t Screen::packHiddenFrames() const
 #endif
     setBit(mask, FVBIT_GPS, hiddenFrames.gps);
 #endif
+    setBit(mask, FVBIT_MAP, hiddenFrames.map);
     setBit(mask, FVBIT_LORA, hiddenFrames.lora);
     setBit(mask, FVBIT_SHOW_FAVORITES, hiddenFrames.show_favorites);
     setBit(mask, FVBIT_CHIRPY, hiddenFrames.chirpy);
@@ -1782,6 +1800,7 @@ void Screen::applyHiddenFramesMask(uint32_t mask)
 #endif
     hiddenFrames.gps = getBit(mask, FVBIT_GPS);
 #endif
+    hiddenFrames.map = getBit(mask, FVBIT_MAP);
     hiddenFrames.lora = getBit(mask, FVBIT_LORA);
     hiddenFrames.show_favorites = getBit(mask, FVBIT_SHOW_FAVORITES);
     hiddenFrames.chirpy = getBit(mask, FVBIT_CHIRPY);
@@ -2114,6 +2133,64 @@ int Screen::handleInputEvent(const InputEvent *event)
             return 0;
         }
     }
+    // Pan Mode and Zoom Mode are entered directly from the Map's own menu and held until Back or
+    // Cancel is pressed (not enabled/disabled toggles) - while either is active, the joystick is
+    // claimed entirely so it can't also page between frames underneath. Devices with a single
+    // physical button (e.g. Wio Tracker L1) send INPUT_BROKER_CANCEL for it, not _BACK, so both
+    // need to exit these modes - otherwise Cancel falls through to its device-wide "turn off
+    // screen" meaning further down instead.
+    if (framesetInfo.positions.map != 255 && ui->getUiState()->currentFrame == framesetInfo.positions.map) {
+        if (graphics::MapRenderer::isPanModeEnabled()) {
+            if (event->inputEvent == INPUT_BROKER_BACK || event->inputEvent == INPUT_BROKER_CANCEL) {
+                graphics::MapRenderer::setPanModeEnabled(false);
+                setFastFramerate();
+                return 0;
+            } else if (event->inputEvent == INPUT_BROKER_UP) {
+                graphics::MapRenderer::panUp();
+                setFastFramerate();
+                return 0;
+            } else if (event->inputEvent == INPUT_BROKER_DOWN) {
+                graphics::MapRenderer::panDown();
+                setFastFramerate();
+                return 0;
+            } else if (event->inputEvent == INPUT_BROKER_LEFT) {
+                graphics::MapRenderer::panLeft();
+                setFastFramerate();
+                return 0;
+            } else if (event->inputEvent == INPUT_BROKER_RIGHT) {
+                graphics::MapRenderer::panRight();
+                setFastFramerate();
+                return 0;
+            } else {
+                // Anything else (SELECT opening the menu, a frame-switch key, ...) isn't part of
+                // pan navigation - drop out of Pan Mode so it doesn't linger silently once the menu
+                // opens or the frame changes underneath it, then let the event fall through below
+                // for its normal handling.
+                graphics::MapRenderer::setPanModeEnabled(false);
+            }
+        } else if (graphics::MapRenderer::isZoomModeEnabled()) {
+            if (event->inputEvent == INPUT_BROKER_BACK || event->inputEvent == INPUT_BROKER_CANCEL) {
+                graphics::MapRenderer::setZoomModeEnabled(false);
+                setFastFramerate();
+                return 0;
+            } else if (event->inputEvent == INPUT_BROKER_UP) {
+                graphics::MapRenderer::zoomIn();
+                setFastFramerate();
+                return 0;
+            } else if (event->inputEvent == INPUT_BROKER_DOWN) {
+                graphics::MapRenderer::zoomOut();
+                setFastFramerate();
+                return 0;
+            } else if (event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_RIGHT) {
+                // Swallow - don't let these page frames out from under Zoom Mode.
+                setFastFramerate();
+                return 0;
+            } else {
+                // Same reasoning as Pan Mode above - e.g. SELECT opening the menu.
+                graphics::MapRenderer::setZoomModeEnabled(false);
+            }
+        }
+    }
     // Use left or right input from a keyboard to move between frames,
     // so long as a mesh module isn't using these events for some other purpose
     if (showingNormalScreen) {
@@ -2215,6 +2292,9 @@ int Screen::handleInputEvent(const InputEvent *event)
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.gps && gps) {
                     menuHandler::positionBaseMenu();
 #endif
+                } else if (framesetInfo.positions.map != 255 &&
+                           this->ui->getUiState()->currentFrame == framesetInfo.positions.map) {
+                    menuHandler::mapBaseMenu();
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.clock) {
                     menuHandler::clockMenu();
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.lora) {
