@@ -258,12 +258,16 @@ void drawHaloString(OLEDDisplay *display, int16_t x, int16_t y, const char *text
 // Colour screens draw the node markers and their name labels in red instead of the monochrome
 // halo style above.
 //
-// A colour region tints *set* pixels with its onColor, so these invert the halo polarity: the
-// glyph is drawn set and the 1px surround is cleared, the opposite of drawHaloXbm/drawHaloString.
-// offColor is getThemeBodyBg(), which is exactly what TFTDisplay paints unset pixels with, so the
-// cleared surround blends into the basemap rather than showing as a coloured block. Basemap ink
-// falling inside the small glyph box is tinted red too, which is not worth extra machinery to
-// avoid.
+// A colour region only carries two colours - set pixels get onColor, unset get offColor - so the
+// glyph has to be the *set* pixels to be tintable, the opposite of drawHaloXbm/drawHaloString's
+// polarity. That also means any basemap ink left inside the region box would be tinted red along
+// with the glyph, which reads as a red block rather than a red marker, so the box is cleared first
+// and only the glyph is drawn back into it.
+//
+// offColor is getThemeBodyBg(), which is exactly what TFTDisplay paints every unset pixel with, so
+// the cleared box is indistinguishable from the surrounding basemap background - no visible
+// rectangle, just the map detail behind the marker erased (the monochrome halo already does this
+// for the 1px ring; this widens it to the glyph box).
 //
 // colorRegions[] is a fixed global pool shared with the header, and it silently evicts the oldest
 // entry once full, so tinting is capped well short of the pool size - nodes past the cap still
@@ -281,8 +285,7 @@ void tintRegion(int16_t x, int16_t y, int16_t w, int16_t h, int &budget)
 void drawNodeXbmRed(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm, int &budget)
 {
     display->setColor(BLACK);
-    for (auto &o : kHaloOffsets)
-        display->drawXbm(x + o[0], y + o[1], w, h, xbm);
+    display->fillRect(x - 1, y - 1, w + 2, h + 2);
     display->setColor(WHITE);
     display->drawXbm(x, y, w, h, xbm);
     tintRegion(x, y, w, h, budget);
@@ -291,8 +294,7 @@ void drawNodeXbmRed(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16
 void drawNodeStringRed(OLEDDisplay *display, int16_t x, int16_t y, const char *text, int16_t w, int16_t h, int &budget)
 {
     display->setColor(BLACK);
-    for (auto &o : kHaloOffsets)
-        display->drawString(x + o[0], y + o[1], text);
+    display->fillRect(x - 1, y - 1, w + 2, h + 2);
     display->setColor(WHITE);
     display->drawString(x, y, text);
     tintRegion(x, y, w, h, budget);
