@@ -252,40 +252,27 @@ void drawHaloString(OLEDDisplay *display, int16_t x, int16_t y, const char *text
 }
 
 #if GRAPHICS_TFT_COLORING_ENABLED
-// Colour screens keep the halo drawing above exactly as-is - white halo hugging a glyph drawn as
-// cleared pixels - and only recolour it, so the glyph that reads as black on a mono screen comes
-// out red instead.
+// Colour screens tint only the 2x2 dot at the centre of each node marker red. Everything else -
+// the marker ring, its halo, and the name labels - is left exactly as the monochrome drawing above
+// produces it (black glyph, white halo).
 //
-// That means the region maps unset -> red (the glyph) and set -> white (the halo). White is also
-// what TFTDisplay paints every set pixel with by default, so basemap ink falling inside the box is
-// left looking untouched. The cost is the reverse: basemap *background* inside the box is unset, so
-// it takes the red too - expect some red fringing in the gaps around the glyph, worst on sparse
-// map areas. Keeping the box tight to the halo is what holds that down.
+// icon_map_node is a ring with a 2x2 centre dot at columns/rows 3-4 of its 8x8 box, so drawing the
+// icon at (mx - 4, my - 4) puts that dot at (mx - 1, my - 1)..(mx, my). drawHaloXbm renders the
+// glyph itself with BLACK, i.e. as *cleared* pixels, so the region maps unset -> red to catch the
+// dot. set -> white matches what TFTDisplay already paints set pixels with, so the surrounding halo
+// is unaffected. The box is only 2x2, so there is no room for basemap content to be tinted with it.
 //
 // colorRegions[] is a fixed global pool shared with the header, and it silently evicts the oldest
-// entry once full, so tinting is capped well short of the pool size - nodes past the cap still
-// draw, just untinted, rather than pushing the header's own regions out.
+// entry once full, so this is capped well short of the pool size - markers past the cap still draw,
+// just with a black centre, rather than pushing the header's own regions out.
 constexpr int kMaxNodeColorRegions = 24;
 
-// Box hugs the glyph plus the 1px halo ring that kHaloOffsets produces.
-void tintRegion(int16_t x, int16_t y, int16_t w, int16_t h, int &budget)
+void tintMarkerCenter(int16_t centerX, int16_t centerY, int &budget)
 {
     if (budget <= 0)
         return;
-    registerTFTColorRegionDirect(x - 1, y - 1, w + 2, h + 2, TFTPalette::White, TFTPalette::Red);
+    registerTFTColorRegionDirect(centerX - 1, centerY - 1, 2, 2, TFTPalette::White, TFTPalette::Red);
     budget--;
-}
-
-void drawNodeXbmRed(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm, int &budget)
-{
-    drawHaloXbm(display, x, y, w, h, xbm);
-    tintRegion(x, y, w, h, budget);
-}
-
-void drawNodeStringRed(OLEDDisplay *display, int16_t x, int16_t y, const char *text, int16_t w, int16_t h, int &budget)
-{
-    drawHaloString(display, x, y, text);
-    tintRegion(x, y, w, h, budget);
 }
 #endif
 
@@ -473,7 +460,7 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     int labelCount = 0;
 
 #if GRAPHICS_TFT_COLORING_ENABLED
-    int nodeColorRegions = kMaxNodeColorRegions; // shared budget across markers and labels
+    int nodeColorRegions = kMaxNodeColorRegions; // budget for the red marker-centre tints
 #endif
 
     // FONT_SMALL_LOCAL rather than FONT_SMALL deliberately: on TFT/HAS_SPI_TFT builds FONT_SMALL is
@@ -519,10 +506,9 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
             drawnCount++;
         }
 
-#if GRAPHICS_TFT_COLORING_ENABLED
-        drawNodeXbmRed(display, mx - 4, my - 4, 8, 8, icon_map_node, nodeColorRegions);
-#else
         drawHaloXbm(display, mx - 4, my - 4, 8, 8, icon_map_node);
+#if GRAPHICS_TFT_COLORING_ENABLED
+        tintMarkerCenter(mx, my, nodeColorRegions);
 #endif
 
         if (node->short_name[0] != '\0') {
@@ -540,11 +526,7 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
             }
 
             if (!overlaps) {
-#if GRAPHICS_TFT_COLORING_ENABLED
-                drawNodeStringRed(display, lx, ly, node->short_name, lw, labelHeight, nodeColorRegions);
-#else
                 drawHaloString(display, lx, ly, node->short_name);
-#endif
                 if (labelCount < kMaxLabelsTracked) {
                     labelX[labelCount] = lx;
                     labelY[labelCount] = ly;

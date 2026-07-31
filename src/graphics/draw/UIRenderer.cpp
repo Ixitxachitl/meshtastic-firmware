@@ -40,7 +40,7 @@ static bool gBootSplashBoldPass = false;
 
 static inline void drawSatelliteIcon(OLEDDisplay *display, int16_t x, int16_t y)
 {
-    int yOffset = (currentResolution == ScreenResolution::High) ? -5 : 1;
+    int yOffset = (currentResolution == ScreenResolution::High) ? 0 : 1;
     if (currentResolution == ScreenResolution::High) {
         NodeListRenderer::drawScaledXBitmap16x16(x, y + yOffset, imgGPS_width, imgGPS_height, imgGPS, display);
     } else {
@@ -522,9 +522,9 @@ void UIRenderer::drawGps(OLEDDisplay *display, int16_t x, int16_t y, const mesht
 {
     // Draw satellite image
     if (currentResolution == ScreenResolution::High) {
-        NodeListRenderer::drawScaledXBitmap16x16(x, y - 2, imgGPS_width, imgGPS_height, imgGPS, display);
+        NodeListRenderer::drawScaledXBitmap16x16(x, y + 1, imgGPS_width, imgGPS_height, imgGPS, display);
     } else {
-        display->drawXbm(x + 1, y + 1, imgGPS_width, imgGPS_height, imgGPS);
+        display->drawXbm(x + 1, y + 3, imgGPS_width, imgGPS_height, imgGPS);
     }
     char textString[10];
 
@@ -966,7 +966,7 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
             curX += display->getStringWidth(hopCount) + 2;
 
             const int iconY = yPos + (FONT_HEIGHT_SMALL - hop_height) / 2;
-            display->drawXbm(curX, iconY, hop_width, hop_height, hop);
+            display->drawXbm(curX, iconY, hop_width, hop_height, imghop);
             curX += hop_width + 1;
         }
     }
@@ -1201,7 +1201,8 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
         } else {
             displayLine = config.position.gps_mode == meshtastic_Config_PositionConfig_GpsMode_NOT_PRESENT ? "No GPS" : "GPS off";
         }
-        drawSatelliteIcon(display, x + BASEUI_BODY_LR_MARGIN, getTextPositions(display)[line] + y);
+        int yOffset = (currentResolution == ScreenResolution::High) ? 0 : 2;
+        drawSatelliteIcon(display, x + BASEUI_BODY_LR_MARGIN, getTextPositions(display)[line] + y + yOffset);
         int xOffset = (currentResolution == ScreenResolution::High) ? 6 : 0;
         display->drawString(x + 11 + xOffset + BASEUI_BODY_LR_MARGIN, getTextPositions(display)[line] + y, displayLine);
     } else {
@@ -1610,7 +1611,8 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
         } else {
             displayLine = config.position.gps_mode == meshtastic_Config_PositionConfig_GpsMode_NOT_PRESENT ? "No GPS" : "GPS off";
         }
-        drawSatelliteIcon(display, x, textPos[line] + y);
+        int yOffset = (currentResolution == ScreenResolution::High) ? 1 : 3;
+        drawSatelliteIcon(display, x, textPos[line] + y + yOffset);
         int xOffset = (currentResolution == ScreenResolution::High) ? 6 : 0;
         display->drawString(x + 11 + xOffset + BASEUI_BODY_LR_MARGIN, textPos[line++] + y, displayLine);
     } else {
