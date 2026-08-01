@@ -47,10 +47,36 @@
  * 176/180/184), 16 for original ESP32 and ESP32-S2 (N=16 → 304/308/312).
  */
 
+/*
+ * Opt-in per board: a variant that needs this sets both
+ *   -D MESHTASTIC_WRAP_I2C_MASTER_PROBE
+ *   -Wl,--wrap=i2c_master_probe
+ * in its platformio.ini. The two must be set together - the define without the
+ * linker flag leaves __real_i2c_master_probe undefined.
+ */
+#ifdef MESHTASTIC_WRAP_I2C_MASTER_PROBE
+
 #include "driver/i2c_master.h"
+#include "esp_idf_version.h"
 #include "soc/soc_caps.h"
 #include <stdbool.h>
 #include <stdint.h>
+
+/*
+ * This pokes at fields of the private i2c_master_bus_t by hand-computed byte
+ * offset, so it is only safe against layouts that have actually been checked.
+ * If this fires, re-derive the offsets against the new i2c_private.h (and check
+ * whether the underlying bug has been fixed upstream, in which case delete this
+ * file and the two build flags) before widening the range.
+ */
+#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 3, 0) || ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 6, 0)
+#error "i2c_probe_fix.c: i2c_master_bus_t layout not verified for this ESP-IDF version"
+#endif
+
+/* Layout below assumes 32-bit ESP32 SoCs; see the sizeof note further down. */
+#if SOC_I2C_CMD_REG_NUM != 8 && SOC_I2C_CMD_REG_NUM != 16
+#error "i2c_probe_fix.c: unexpected SOC_I2C_CMD_REG_NUM, re-check the field offsets"
+#endif
 
 /* Provided by the linker --wrap mechanism */
 esp_err_t __real_i2c_master_probe(i2c_master_bus_handle_t bus_handle, uint16_t address, int xfer_timeout_ms);
@@ -84,3 +110,5 @@ esp_err_t __wrap_i2c_master_probe(i2c_master_bus_handle_t bus_handle, uint16_t a
     }
     return __real_i2c_master_probe(bus_handle, address, xfer_timeout_ms);
 }
+
+#endif /* MESHTASTIC_WRAP_I2C_MASTER_PROBE */

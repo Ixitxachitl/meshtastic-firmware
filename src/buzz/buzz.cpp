@@ -11,10 +11,6 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
-#if defined(ESP32)
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
-#endif
 #endif
 
 #if !defined(ARCH_PORTDUINO)
@@ -153,7 +149,7 @@ static inline void chooseDur(int ms, int &denom, bool &dotted)
 
 // Build a full RTTTL string from a ToneDuration array.
 // Writes octaves explicitly on every note so the RTTTL parser never falls back
-// to the header defaultOctave. AudioGeneratorRTTTL3 supports octaves 3-7.
+// to the header defaultOctave. meshtastic::AudioGeneratorRTTTL covers octaves 3-7.
 static size_t tonesToRtttl(char *out, size_t cap, const ToneDuration *td, int n, const char *name = "sys")
 {
     if (!out || cap == 0 || !td || n <= 0)
@@ -198,56 +194,26 @@ static size_t tonesToRtttl(char *out, size_t cap, const ToneDuration *td, int n,
     return pos;
 }
 
-void ensureAudioPumpTaskStarted() {}
-
-#if defined(HAS_I2S) && defined(ESP32)
-static volatile uint32_t g_audioBoostUntilMs = 0;
-
-void buzzBoostFor(uint32_t ms)
-{
-    g_audioBoostUntilMs = millis() + ms;
-}
-
-bool buzzBoostActive()
-{
-    return (int32_t)(millis() - g_audioBoostUntilMs) < 0;
-}
-
-// Queued RTTTL: used when audioThread isn't ready yet at boot
-static char g_pendingRttl[384];
-static volatile bool g_hasPending = false;
+// The boot melody is requested from setup() before audioThread exists, so hold it
+// here until main() hands it over. Static storage, because AudioFileSourcePROGMEM
+// keeps a raw pointer to whatever we pass to beginRttl().
+static char pendingRttl[384];
+static bool hasPendingRttl = false;
 
 static inline void queueRttl(const char *rttl)
 {
-    std::strncpy(g_pendingRttl, rttl, sizeof(g_pendingRttl) - 1);
-    g_pendingRttl[sizeof(g_pendingRttl) - 1] = '\0';
-    g_hasPending = true;
+    std::strncpy(pendingRttl, rttl, sizeof(pendingRttl) - 1);
+    pendingRttl[sizeof(pendingRttl) - 1] = '\0';
+    hasPendingRttl = true;
 }
 
 void buzzOnAudioThreadReady()
 {
-    if (!audioThread || !g_hasPending)
+    if (!audioThread || !hasPendingRttl)
         return;
-    if (!audioThread->isPlaying()) {
-        buzzBoostFor(800);
-        audioThread->beginRttl(g_pendingRttl, std::strlen(g_pendingRttl));
-        g_hasPending = false;
-        // Prime DMA buffer for smooth playback
-        for (int i = 0; i < 6; ++i) {
-            (void)audioThread->isPlaying();
-            delay(0);
-        }
-    }
+    hasPendingRttl = false;
+    audioThread->beginRttl(pendingRttl, std::strlen(pendingRttl));
 }
-
-#else
-void buzzBoostFor(uint32_t) {}
-bool buzzBoostActive()
-{
-    return false;
-}
-void buzzOnAudioThreadReady() {}
-#endif
 
 static inline bool i2sBuzzerEnabled()
 {
@@ -258,15 +224,10 @@ static void startRttlI2S(const char *rttl)
 {
     if (!rttl || !*rttl)
         return;
-#if defined(HAS_I2S) && defined(ESP32)
     if (!audioThread) {
         queueRttl(rttl);
         return;
     }
-#endif
-    if (!audioThread)
-        return;
-    buzzBoostFor(800);
     audioThread->beginRttl(rttl, strlen(rttl));
 }
 #endif // HAS_I2S

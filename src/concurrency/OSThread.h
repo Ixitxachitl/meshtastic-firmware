@@ -18,7 +18,9 @@ extern InterruptableDelay mainDelay;
 
 #if defined(ARDUINO_ARCH_ESP32)
 struct FreeRTOSTaskConfig {
-    uint32_t stackSizeWords = 2048;
+    /// Stack size in BYTES. ESP-IDF's xTaskCreate() differs from vanilla FreeRTOS
+    /// here, where the same argument counts StackType_t words.
+    uint32_t stackSizeBytes = 4096;
     UBaseType_t priority = tskIDLE_PRIORITY + 1;
     BaseType_t coreAffinity = tskNO_AFFINITY;
     bool enabled = false;
@@ -54,6 +56,9 @@ class OSThread : public Thread
 #if defined(ARDUINO_ARCH_ESP32)
     FreeRTOSTaskConfig rtosConfig;
     TaskHandle_t taskHandle = nullptr;
+    /// Written by stopFreeRTOSTask(), read by the task; cleared by the task on exit.
+    volatile bool taskShouldExit = false;
+    volatile bool taskRunning = false;
     static void rtosTaskEntryPoint(void *pvParameters);
     void rtosTaskLoop();
 #endif
@@ -78,9 +83,18 @@ class OSThread : public Thread
     void setIntervalFromNow(unsigned long _interval);
 
 #if defined(ARDUINO_ARCH_ESP32)
-    void setFreeRTOSTask(bool enable = true, uint32_t stackSizeWords = 2048, UBaseType_t priority = tskIDLE_PRIORITY + 1,
+    /**
+     * Ask for runOnce() to be driven by a dedicated FreeRTOS task instead of the
+     * cooperative ThreadController. Call before startFreeRTOSTask(); stackSizeBytes
+     * is in bytes, per ESP-IDF's xTaskCreate().
+     */
+    void setFreeRTOSTask(bool enable = true, uint32_t stackSizeBytes = 4096, UBaseType_t priority = tskIDLE_PRIORITY + 1,
                          BaseType_t coreAffinity = tskNO_AFFINITY);
+    /// Returns false and leaves the thread on the ThreadController if the task cannot be created.
     bool startFreeRTOSTask();
+    /// Cut short the task's current sleep so runOnce() runs now. Safe to call from any thread.
+    void wakeFreeRTOSTask();
+    /// Asks the task to exit and waits for it, so it is never killed mid-runOnce().
     void stopFreeRTOSTask();
     bool isFreeRTOSTask() const { return rtosConfig.enabled; }
 #endif

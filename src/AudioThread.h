@@ -8,7 +8,7 @@
 #include <memory>
 
 #ifdef HAS_I2S
-#include "audio/AudioGeneratorRTTTL3.h"
+#include "audio/AudioGeneratorRTTTL.h"
 #include <AudioFileSourcePROGMEM.h>
 #include <AudioOutputI2S.h>
 #include <ESP8266SAM.h>
@@ -25,93 +25,21 @@ extern ExtensionIOXL9555 io;
 #include "platform/esp32/ExtensionIOMCP23017.h"
 #endif
 
-#ifdef USE_MCP23017
-#include "platform/esp32/ExtensionIOMCP23017.h"
-#endif
-
+// Idle poll interval. Nothing is playing, so this only decides how quickly a
+// melody queued from another thread starts.
 #define AUDIO_THREAD_INTERVAL_MS 100
 
-// Tone entry for direct I2S square-wave playback (bypasses RTTTL octave limits).
-struct BuzzerToneEntry {
-    int freq_hz; // Hz, 0 = silence
-    int dur_ms;  // milliseconds
-};
-
-// Lightweight square-wave generator that plays any frequency directly via
-// AudioOutputI2S without going through AudioGeneratorRTTTL (which clamps to
-// octaves 4-7 and cannot reproduce octave 3 and below).
-class BuzzerToneGenerator
-{
-  public:
-    static constexpr int kRate = 22050;
-
-    bool begin(const BuzzerToneEntry *notes, int count, AudioOutput *out)
-    {
-        list_ = notes;
-        count_ = count;
-        output_ = out;
-        idx_ = 0;
-        samplesLeft_ = 0;
-        phase_ = 0;
-        running_ = (count > 0);
-        if (running_)
-            loadNote();
-        return running_;
-    }
-
-    bool loop()
-    {
-        if (!running_)
-            return false;
-        while (running_) {
-            if (samplesLeft_ == 0) {
-                if (++idx_ >= count_) {
-                    running_ = false;
-                    output_->stop();
-                    return false;
-                }
-                loadNote();
-            }
-            int16_t val = 0;
-            if (wavePeriodFP10_ > 0) {
-                int32_t rem = (phase_ << 10) % wavePeriodFP10_;
-                val = (rem > wavePeriodFP10_ / 2) ? 8192 : -8192;
-            }
-            int16_t s[2] = {val, val};
-            if (!output_->ConsumeSample(s))
-                return true; // DMA full, resume next call
-            phase_++;
-            samplesLeft_--;
-        }
-        return false;
-    }
-
-    bool stop()
-    {
-        running_ = false;
-        return true;
-    }
-    bool isRunning() const { return running_; }
-
-  private:
-    void loadNote()
-    {
-        int freq = list_[idx_].freq_hz;
-        samplesLeft_ = ((int32_t)list_[idx_].dur_ms * kRate) / 1000;
-        phase_ = 0;
-        wavePeriodFP10_ = (freq > 0) ? ((kRate << 10) / freq) : 0;
-    }
-
-    const BuzzerToneEntry *list_ = nullptr;
-    int count_ = 0;
-    AudioOutput *output_ = nullptr;
-    int idx_ = 0;
-    int32_t samplesLeft_ = 0;
-    int32_t phase_ = 0;
-    int32_t wavePeriodFP10_ = 0;
-    bool running_ = false;
-};
-
+/**
+ * Plays RTTTL melodies out of an I2S DAC.
+ *
+ * On ESP32 this runs as its own FreeRTOS task (see setFreeRTOSTask() in the
+ * constructor) so that a slow main loop cannot starve the I2S DMA. If the task
+ * cannot be created, the object stays registered with the cooperative
+ * ThreadController and works the same way, just with main-loop timing.
+ *
+ * Every public method is safe to call from any thread; the mutex serialises
+ * them against the task's own pumping in runOnce().
+ */
 class AudioThread : public concurrency::OSThread
 {
   public:
@@ -119,100 +47,119 @@ class AudioThread : public concurrency::OSThread
     {
         initOutput();
 
-#ifdef HAS_FREE_RTOS
-        const uint32_t audioStackWords = 4096 / sizeof(StackType_t);
-        const UBaseType_t audioPriority = tskIDLE_PRIORITY + 2;
-        const BaseType_t audioCore = 1;
-        setFreeRTOSTask(true, audioStackWords, audioPriority, audioCore);
+#if defined(ARDUINO_ARCH_ESP32)
+        setFreeRTOSTask(true, kTaskStackBytes, kTaskPriority, kTaskCore);
 #endif
     }
 
-    uint32_t pumpTicks() const { return pump_tick_count_; }
-
+    /// Start playing an RTTTL string, replacing anything already playing.
     void beginRttl(const void *data, uint32_t len)
     {
         concurrency::LockGuard lock(&audioMutex);
         stopPlaybackOnly();
-#ifdef AUDIO_AMP_ENABLE
-        AUDIO_AMP_ENABLE(true);
-#endif
-        setCPUFast(true);
+        acquireHardware();
+
         rtttlFile = std::unique_ptr<AudioFileSourcePROGMEM>(new AudioFileSourcePROGMEM(data, len));
-        i2sRtttl = std::unique_ptr<AudioGeneratorRTTTL3>(new AudioGeneratorRTTTL3());
-        if (!i2sRtttl->begin(rtttlFile.get(), audioOut.get())) {
-            i2sRtttl = nullptr;
+        std::unique_ptr<meshtastic::AudioGeneratorRTTTL> generator(new meshtastic::AudioGeneratorRTTTL());
+        if (!generator->begin(rtttlFile.get(), audioOut.get())) {
+            LOG_WARN("Audio: could not parse RTTTL, not playing");
             rtttlFile = nullptr;
-            setCPUFast(false);
+            releaseHardware();
             return;
         }
+        i2sRtttl = std::move(generator);
+#if defined(ARDUINO_ARCH_ESP32)
+        // Start pumping now instead of up to AUDIO_THREAD_INTERVAL_MS from now,
+        // so a key click is not audibly late.
+        wakeFreeRTOSTask();
+#endif
     }
 
-    // Also handles actually playing the RTTTL, needs to be called in loop
+    /// True while a melody is still playing. This is a pure query - the audio
+    /// task does the pumping, so callers must not poll it to drive playback.
     bool isPlaying()
     {
         concurrency::LockGuard lock(&audioMutex);
-        if (i2sRtttl != nullptr) {
-            return i2sRtttl->isRunning() && i2sRtttl->loop();
-        }
-        return false;
+        return i2sRtttl && i2sRtttl->isRunning();
     }
 
     void stop()
     {
         concurrency::LockGuard lock(&audioMutex);
         stopPlaybackOnly();
-        setCPUFast(false);
-#ifdef AUDIO_AMP_ENABLE
-        AUDIO_AMP_ENABLE(false);
-#endif
+        releaseHardware();
     }
 
     void readAloud(const char *text)
     {
-        if (i2sRtttl != nullptr) {
-            i2sRtttl->stop();
-            i2sRtttl = nullptr;
-        }
+        concurrency::LockGuard lock(&audioMutex);
+        stopPlaybackOnly();
+        acquireHardware();
 
-#ifdef AUDIO_AMP_ENABLE
-        AUDIO_AMP_ENABLE(true);
-#endif
         auto sam = std::unique_ptr<ESP8266SAM>(new ESP8266SAM);
         sam->Say(audioOut.get(), text);
-        setCPUFast(false);
-#ifdef AUDIO_AMP_ENABLE
-        AUDIO_AMP_ENABLE(false);
-#endif
+
+        releaseHardware();
     }
 
   protected:
     int32_t runOnce() override
     {
         concurrency::LockGuard lock(&audioMutex);
-        if (i2sRtttl && i2sRtttl->isRunning()) {
-            canSleep = false;
-#ifdef HAS_I2S
-            extern bool buzzBoostActive();
-            const bool boost = buzzBoostActive();
-#else
-            const bool boost = false;
-#endif
-            // During boost (first 800 ms of a new tone) pump 12 frames at 2 ms
-            // to pre-fill the DMA; otherwise 6 frames at 3 ms.
-            const int prefill = boost ? 12 : 6;
-            for (int i = 0; i < prefill; ++i) {
-                if (!i2sRtttl->loop())
-                    break;
+
+        if (i2sRtttl) {
+            // One loop() call fills the DMA chain completely, so there is no
+            // point pumping several times per wakeup.
+            if (i2sRtttl->isRunning() && i2sRtttl->loop()) {
+                canSleep = false; // only consulted on the ThreadController fallback path
+                return kPumpIntervalMs;
             }
-            return boost ? 2 : 3;
+            // The melody ended on its own. Nothing else releases the amp and the
+            // CPU boost on the playTones() path - ExternalNotificationModule is
+            // the only caller of stop(), and it only runs when that module is
+            // enabled - so a system beep would otherwise leave both on forever.
+            stopPlaybackOnly();
+            idleSinceMs = millis();
         }
-        pump_tick_count_++;
+
+        if (hardwareActive) {
+            // Linger before powering the amp down, so that a nag repeat or a
+            // burst of key clicks does not pop it off and on between melodies.
+            if ((millis() - idleSinceMs) < kHardwareLingerMs) {
+                canSleep = false;
+                return AUDIO_THREAD_INTERVAL_MS;
+            }
+            releaseHardware();
+        }
+
         canSleep = true;
         return AUDIO_THREAD_INTERVAL_MS;
     }
 
   private:
-    volatile uint32_t pump_tick_count_ = 0;
+#if defined(ARDUINO_ARCH_ESP32)
+    // ESP-IDF's xTaskCreate() takes the stack size in bytes, not words.
+    static constexpr uint32_t kTaskStackBytes = 4096;
+    static constexpr UBaseType_t kTaskPriority = tskIDLE_PRIORITY + 2;
+    static constexpr BaseType_t kTaskCore = 1;
+#endif
+
+    // ESP8266Audio's AudioOutputI2S uses a fixed 128-frame DMA buffer, and we ask
+    // for kDmaBufCount of them below. Poll at a fraction of the time the hardware
+    // needs to drain that chain, which is where the margin against underrun comes
+    // from - no pre-fill or boost heuristics required.
+    static constexpr int kDmaBufCount = 4;
+    static constexpr int kDmaBufFrames = 128;
+    static constexpr int kSampleRate = 22050; // must match AudioGeneratorRTTTL's rate
+    static constexpr int32_t kDmaDrainMs = (1000 * kDmaBufCount * kDmaBufFrames) / kSampleRate;
+    static constexpr int32_t kPumpIntervalMs = kDmaDrainMs / 3;
+    static_assert(kPumpIntervalMs >= 1, "pump interval rounded down to zero");
+
+    /// How long the amp stays powered after a melody ends, before we shut it down.
+    static constexpr uint32_t kHardwareLingerMs = 300;
+
+    /// Tear down the generator without touching the amp, so that replacing one
+    /// melody with another does not click the amplifier off and back on.
     void stopPlaybackOnly()
     {
         if (i2sRtttl) {
@@ -222,16 +169,46 @@ class AudioThread : public concurrency::OSThread
         rtttlFile = nullptr;
     }
 
+    // AUDIO_AMP_ENABLE typically writes to an I2C IO expander, and runOnce()
+    // reaches these from the audio task rather than the main loop. That is safe
+    // for the variants that define it today - ExtensionIOMCP23017::digitalWrite
+    // locks internally, and tlora-pager only touches its XL9555 during setup -
+    // but a new variant sharing an unlocked expander with the main loop would
+    // need its own guard.
+    void acquireHardware()
+    {
+        if (hardwareActive)
+            return;
+        hardwareActive = true;
+#ifdef AUDIO_AMP_ENABLE
+        AUDIO_AMP_ENABLE(true);
+#endif
+        setCPUFast(true);
+    }
+
+    void releaseHardware()
+    {
+        if (!hardwareActive)
+            return;
+        hardwareActive = false;
+        setCPUFast(false);
+#ifdef AUDIO_AMP_ENABLE
+        AUDIO_AMP_ENABLE(false);
+#endif
+    }
+
     void initOutput()
     {
-        audioOut = std::unique_ptr<AudioOutputI2S>(new AudioOutputI2S(1, AudioOutputI2S::EXTERNAL_I2S, 4));
+        audioOut = std::unique_ptr<AudioOutputI2S>(new AudioOutputI2S(1, AudioOutputI2S::EXTERNAL_I2S, kDmaBufCount));
         audioOut->SetPinout(DAC_I2S_BCK, DAC_I2S_WS, DAC_I2S_DOUT, DAC_I2S_MCLK);
         audioOut->SetGain(0.2);
     };
 
-    std::unique_ptr<AudioGeneratorRTTTL3> i2sRtttl = nullptr;
+    std::unique_ptr<meshtastic::AudioGeneratorRTTTL> i2sRtttl = nullptr;
     std::unique_ptr<AudioOutputI2S> audioOut = nullptr;
     std::unique_ptr<AudioFileSourcePROGMEM> rtttlFile = nullptr;
+    bool hardwareActive = false;
+    uint32_t idleSinceMs = 0;
     concurrency::Lock audioMutex;
 };
 
