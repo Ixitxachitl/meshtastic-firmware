@@ -6,6 +6,7 @@
 #include "mesh/generated/meshtastic/config.pb.h"
 #include <OLEDDisplay.h>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -26,6 +27,9 @@ enum notificationTypeEnum {
     // LOCKED frame. Without this, a first-pair on a locked device cannot
     // complete because the PIN never renders.
     pairing_pin,
+    // Arcade-style initials entry: like number_picker/hex_picker, but each position cycles
+    // through A-Z and 0-9. The assembled string is returned via a text (std::string) callback.
+    alphanumeric_picker,
 };
 
 struct BannerOverlayOptions {
@@ -43,7 +47,7 @@ struct BannerOverlayOptions {
 bool shouldWakeOnReceivedMessage();
 
 #if !HAS_SCREEN
-#include "power.h"
+#include "Power.h"
 namespace graphics
 {
 // Noop class for boards without screen.
@@ -107,6 +111,7 @@ class Screen
 #include "EInkDisplay2.h"
 #include "EInkDynamicDisplay.h"
 #include "PointStruct.h"
+#include "Power.h"
 #include "TFTDisplay.h"
 #include "TypedQueue.h"
 #include "commands.h"
@@ -116,7 +121,6 @@ class Screen
 #include "input/InputBroker.h"
 #include "mesh/MeshModule.h"
 #include "modules/AdminModule.h"
-#include "power.h"
 #include <string>
 #include <vector>
 
@@ -191,27 +195,6 @@ enum class FrameDirection { NEXT, PREVIOUS };
 // Forward declarations
 class Screen;
 
-/// Handles gathering and displaying debug information.
-class DebugInfo
-{
-  public:
-    DebugInfo(const DebugInfo &) = delete;
-    DebugInfo &operator=(const DebugInfo &) = delete;
-
-  private:
-    friend Screen;
-
-    DebugInfo() {}
-
-    /// Renders the debug screen.
-    void drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
-    void drawFrameSettings(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
-    void drawFrameWiFi(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
-
-    /// Protects all of internal state.
-    concurrency::Lock lock;
-};
-
 /**
  * @brief This class deals with showing things on the screen of the device.
  *
@@ -284,6 +267,10 @@ class Screen : public concurrency::OSThread
 
     bool isOverlayBannerShowing();
 
+    // True if the always-present games frame is the one currently on screen. Lets the games module
+    // ignore D-pad input when the player has navigated to a different frame.
+    bool isGamesFrameShown();
+
     bool isScreenOn() { return screenOn; }
 
     // Stores the last 4 of our hardware ID, to make finding the device for pairing easier
@@ -302,8 +289,6 @@ class Screen : public concurrency::OSThread
      * poweroff, but eink screens will show a "I'm sleeping" graphic, possibly with a QR code
      */
     void doDeepSleep();
-
-    void blink();
 
     // Draw north
     float estimatedHeading(double lat, double lon);
@@ -344,7 +329,13 @@ class Screen : public concurrency::OSThread
     void showOverlayBanner(BannerOverlayOptions);
 
     void showNodePicker(const char *message, uint32_t durationMs, std::function<void(uint32_t)> bannerCallback);
-    void showNumberPicker(const char *message, uint32_t durationMs, uint8_t digits, std::function<void(uint32_t)> bannerCallback);
+    void showNumberPicker(const char *message, uint32_t durationMs, uint8_t digits, bool useBase16,
+                          std::function<void(uint32_t)> bannerCallback);
+    // Arcade-style initials entry. `length` positions each cycle A-Z/0-9 (UP/DOWN), LEFT/RIGHT
+    // moves the cursor, SELECT advances; the assembled string is delivered to `bannerCallback`.
+    // `initialText` pre-seeds the positions (uppercased & filtered), defaulting to 'A'.
+    void showAlphanumericPicker(const char *message, const char *initialText, uint32_t durationMs, uint8_t length,
+                                std::function<void(const std::string &)> bannerCallback);
     void showTextInput(const char *header, const char *initialText, uint32_t durationMs,
                        std::function<void(const std::string &)> textCallback);
 
@@ -635,11 +626,6 @@ class Screen : public concurrency::OSThread
                              // stick to standard EASCII codes)
     }
 
-    /// Returns a handle to the DebugInfo screen.
-    //
-    // Use this handle to set things like battery status, user count, GPS status, etc.
-    DebugInfo *debug_info() { return &debugInfo; }
-
     // Handle observer events
     int handleStatusUpdate(const meshtastic::Status *arg);
     int handleUIFrameEvent(const UIFrameEvent *arg);
@@ -734,6 +720,7 @@ class Screen : public concurrency::OSThread
             uint8_t system = 255;
             uint8_t gps = 255;
             uint8_t home = 255;
+            uint8_t games = 255;
             uint8_t textMessage = 255;
             uint8_t nodelist_nodes = 255;
             uint8_t nodelist_location = 255;
@@ -811,9 +798,6 @@ class Screen : public concurrency::OSThread
     float compassHeading;
     uint32_t endCalibrationAt;
 
-    /// Holds state for debug information
-    DebugInfo debugInfo;
-
     /// Display device
 #ifdef USE_ST7789
     ST7789Spi *dispdev;
@@ -830,6 +814,6 @@ class Screen : public concurrency::OSThread
 // Extern declarations for function symbols used in UIRenderer
 extern std::vector<std::string> functionSymbol;
 extern std::string functionSymbolString;
-extern graphics::Screen *screen;
+extern std::unique_ptr<graphics::Screen> screen;
 
 #endif

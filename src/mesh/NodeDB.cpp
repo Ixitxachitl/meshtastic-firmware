@@ -13,7 +13,6 @@
 #include "NodeDB.h"
 #include "PacketHistory.h"
 #include "PowerFSM.h"
-#include "RTC.h"
 #include "RadioInterface.h"
 #include "Router.h"
 #include "SPILock.h"
@@ -21,13 +20,19 @@
 #include "TransmitHistory.h"
 #include "TypeConversions.h"
 #include "error.h"
+#include "gps/RTC.h"
 #include "main.h"
+#include "memory/MemAudit.h"
 #include "mesh-pb-constants.h"
 #include "mesh/generated/meshtastic/deviceonly_legacy.pb.h"
 #include "meshUtils.h"
 #include "modules/NeighborInfoModule.h"
+#include "target_specific.h"
 #if HAS_VARIABLE_HOPS
 #include "modules/HopScalingModule.h"
+#endif
+#if HAS_TRAFFIC_MANAGEMENT
+#include "modules/TrafficManagementModule.h"
 #endif
 #include "xmodem.h"
 #include <ErriezCRC32.h>
@@ -49,11 +54,7 @@
 #include "SPILock.h"
 #include "modules/StoreForwardModule.h"
 #include <Preferences.h>
-#include <esp_efuse.h>
-#include <esp_efuse_table.h>
 #include <nvs_flash.h>
-#include <soc/efuse_reg.h>
-#include <soc/soc.h>
 #endif
 
 #ifdef ARCH_PORTDUINO
@@ -201,7 +202,9 @@ bool meshtastic_NodeDatabase_callback(pb_istream_t *istream, pb_ostream_t *ostre
         if (ostream) {
             const auto *vec = static_cast<const std::vector<meshtastic_NodeInfoLite> *>(iter->pData);
             for (auto item : *vec) {
-                item.snr_q4 = (int32_t)(item.snr * 4.0f);
+                // Round rather than truncate: truncation wiped any |SNR| < 0.25 dB to exactly
+                // 0, which collided with the "never stored" sentinel below.
+                item.snr_q4 = (int32_t)lroundf(item.snr * 4.0f);
                 item.snr = 0.0f;
                 if (!pb_encode_tag_for_field(ostream, iter))
                     return false;
@@ -213,8 +216,14 @@ bool meshtastic_NodeDatabase_callback(pb_istream_t *istream, pb_ostream_t *ostre
             meshtastic_NodeInfoLite node = meshtastic_NodeInfoLite_init_zero;
             auto *vec = static_cast<std::vector<meshtastic_NodeInfoLite> *>(iter->pData);
             if (pb_decode(istream, meshtastic_NodeInfoLite_fields, &node)) {
-                if (node.snr_q4)
+                // snr_q4 = 0 is byte-identical to "field never written" but 0 dB is valid.
+                // NODEINFO_BITFIELD_HAS_SNR_MASK disambiguates going forward; legacy
+                // records (bit clear) treat this as unknown.
+                if (nodeInfoLiteHasSnr(&node)) {
                     node.snr = node.snr_q4 / 4.0f;
+                } else if (node.snr_q4) {
+                    node.snr = node.snr_q4 / 4.0f;
+                }
                 node.snr_q4 = 0;
                 vec->push_back(node);
             }
@@ -371,8 +380,7 @@ void NodeDB::disarmNodeDatabaseDecodeTargets()
  */
 uint32_t radioGeneration;
 
-// FIXME - move this somewhere else
-extern void getMacAddr(uint8_t *dmac);
+// getMacAddr() and getDeviceId() are the per-architecture hooks declared in target_specific.h.
 
 /**
  *
@@ -409,53 +417,13 @@ NodeDB::NodeDB()
     uint32_t channelFileCRC = crc32Buffer(&channelFile, sizeof(channelFile));
 
     int saveWhat = 0;
-    // Get device unique id
-#if defined(CONFIG_IDF_TARGET_ESP32C3) || defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32C6)
-    uint32_t unique_id[4];
-    // ESP32 factory burns a unique id in efuse for S2+ series and evidently C3+ series
-    // This is used for HMACs in the esp-rainmaker AIOT platform and seems to be a good choice for us
-    esp_err_t err = esp_efuse_read_field_blob(ESP_EFUSE_OPTIONAL_UNIQUE_ID, unique_id, sizeof(unique_id) * 8);
-    if (err == ESP_OK) {
-        memcpy(myNodeInfo.device_id.bytes, unique_id, sizeof(unique_id));
-        myNodeInfo.device_id.size = 16;
-    } else {
-        LOG_WARN("Failed to read unique id from efuse");
+    // Re-read the device id from silicon each boot via the per-arch getDeviceId(); clear the
+    // disk-loaded value first so a failed/empty derivation leaves it unset rather than stale.
+    myNodeInfo.device_id.size = 0;
+    memset(myNodeInfo.device_id.bytes, 0, sizeof(myNodeInfo.device_id.bytes));
+    if (getDeviceId(myNodeInfo.device_id.bytes)) {
+        myNodeInfo.device_id.size = sizeof(myNodeInfo.device_id.bytes);
     }
-#elif defined(ARCH_NRF54L15)
-    // nRF54L15: DEVICEID is under FICR->INFO sub-struct (not top-level as on nRF52)
-    uint64_t device_id_start = ((uint64_t)NRF_FICR->INFO.DEVICEID[1] << 32) | NRF_FICR->INFO.DEVICEID[0];
-    uint64_t device_id_end = ((uint64_t)NRF_FICR->DEVICEADDR[1] << 32) | NRF_FICR->DEVICEADDR[0];
-    memcpy(myNodeInfo.device_id.bytes, &device_id_start, sizeof(device_id_start));
-    memcpy(myNodeInfo.device_id.bytes + sizeof(device_id_start), &device_id_end, sizeof(device_id_end));
-    myNodeInfo.device_id.size = 16;
-#elif defined(ARCH_NRF52)
-    // Nordic applies a FIPS compliant Random ID to each chip at the factory
-    // We concatenate the device address to the Random ID to create a unique ID for now
-    // This will likely utilize a crypto module in the future
-    uint64_t device_id_start = ((uint64_t)NRF_FICR->DEVICEID[1] << 32) | NRF_FICR->DEVICEID[0];
-    uint64_t device_id_end = ((uint64_t)NRF_FICR->DEVICEADDR[1] << 32) | NRF_FICR->DEVICEADDR[0];
-    memcpy(myNodeInfo.device_id.bytes, &device_id_start, sizeof(device_id_start));
-    memcpy(myNodeInfo.device_id.bytes + sizeof(device_id_start), &device_id_end, sizeof(device_id_end));
-    myNodeInfo.device_id.size = 16;
-    // Uncomment below to print the device id
-#elif ARCH_PORTDUINO
-    if (portduino_config.has_device_id) {
-        memcpy(myNodeInfo.device_id.bytes, portduino_config.device_id, 16);
-        myNodeInfo.device_id.size = 16;
-    }
-#else
-    // FIXME - implement for other platforms
-#endif
-
-    // if (myNodeInfo.device_id.size == 16) {
-    //     std::string deviceIdHex;
-    //     for (size_t i = 0; i < myNodeInfo.device_id.size; ++i) {
-    //         char buf[3];
-    //         snprintf(buf, sizeof(buf), "%02X", myNodeInfo.device_id.bytes[i]);
-    //         deviceIdHex += buf;
-    //     }
-    //     LOG_DEBUG("Device ID (HEX): %s", deviceIdHex.c_str());
-    // }
 
     // likewise - we always want the app requirements to come from the running appload
     myNodeInfo.min_app_version = 30200; // format is Mmmss (where M is 1+the numeric major number. i.e. 30200 means 2.2.00
@@ -520,6 +488,12 @@ NodeDB::NodeDB()
     preferences.end();
     LOG_DEBUG("Number of Device Reboots: %d", myNodeInfo.reboot_count);
 #endif
+
+    // UA_868 is obsolete; migrate to EU_868 before resetRadioConfig() below validates the region.
+    if (config.lora.region == meshtastic_Config_LoRaConfig_RegionCode_UA_868) {
+        LOG_INFO("UA_868 region is obsolete, migrating saved config to EU_868");
+        config.lora.region = meshtastic_Config_LoRaConfig_RegionCode_EU_868;
+    }
 
     resetRadioConfig(); // If bogus settings got saved, then fix them
     // nodeDB->LOG_DEBUG("region=%d, NODENUM=0x%x, dbsize=%d", config.lora.region, myNodeInfo.my_node_num, numMeshNodes);
@@ -672,6 +646,7 @@ NodeDB::NodeDB()
 #endif
     sortMeshDB();
     saveToDisk(saveWhat);
+    bootInitializationInProgress = false;
 }
 
 /**
@@ -766,6 +741,10 @@ void NodeDB::resetRadioConfig(bool is_fresh_install)
         LOG_INFO("Set default channel and radio preferences!");
 
         channels.initDefaults();
+        // Defaults ship the public PSK, so strip it again before onConfigChanged() publishes hashes;
+        // loadFromDisk's sanitation is a no-op when the channel file was absent or corrupt.
+        if (owner.is_licensed)
+            channels.ensureLicensedOperation();
     }
 
     channels.onConfigChanged();
@@ -803,6 +782,12 @@ bool NodeDB::factoryReset(bool eraseBleBonds)
     // didn't touch it; clear it and persist the empty store.
     warmStore.clear();
     warmStore.saveIfDirty();
+#endif
+#if HAS_TRAFFIC_MANAGEMENT
+    // Factory reset forgets everything; TMM's RAM caches must not survive to resurrect
+    // identities (the device usually reboots after this, but don't rely on it).
+    if (trafficManagementModule)
+        trafficManagementModule->purgeAll();
 #endif
 
     // second, install default state (this will deal with the duplicate mac address issue)
@@ -859,7 +844,7 @@ void NodeDB::installDefaultNodeDatabase()
 void NodeDB::installDefaultConfig(bool preserveKey = false)
 {
     uint8_t private_key_temp[32];
-    bool shouldPreserveKey = preserveKey && config.has_security && config.security.private_key.size > 0;
+    bool shouldPreserveKey = preserveKey && config.has_security && config.security.private_key.size == 32;
     if (shouldPreserveKey) {
         memcpy(private_key_temp, config.security.private_key.bytes, config.security.private_key.size);
     }
@@ -946,7 +931,11 @@ void NodeDB::installDefaultConfig(bool preserveKey = false)
     config.lora.override_frequency = USERPREFS_LORACONFIG_OVERRIDE_FREQUENCY;
 #endif
 
+#if USERPREFS_EVENT_MODE
+    config.lora.hop_limit = Default::eventModeHopLimit;
+#else
     config.lora.hop_limit = HOP_RELIABLE;
+#endif
 #ifdef USERPREFS_CONFIG_LORA_IGNORE_MQTT
     config.lora.ignore_mqtt = USERPREFS_CONFIG_LORA_IGNORE_MQTT;
 #else
@@ -984,6 +973,12 @@ void NodeDB::installDefaultConfig(bool preserveKey = false)
 #endif
 
     config.security.admin_key_count = numAdminKeys;
+
+    // Left at COMPATIBLE when signature checking is compiled out, so we never report a policy
+    // nothing enforces (mirrors the set-config guard in AdminModule).
+#if defined(USERPREFS_CONFIG_SECURITY_PACKET_SIGNATURE_POLICY) && !(MESHTASTIC_EXCLUDE_PKI) && !(MESHTASTIC_EXCLUDE_XEDDSA)
+    config.security.packet_signature_policy = USERPREFS_CONFIG_SECURITY_PACKET_SIGNATURE_POLICY;
+#endif
 
     if (shouldPreserveKey) {
         config.security.private_key.size = 32;
@@ -1183,6 +1178,36 @@ static void installTrafficManagementDefaults(meshtastic_LocalModuleConfig &mc)
 #endif
 }
 
+// --- 2.8 position/telemetry opt-in migration helpers -------------------------------------------------
+// Pure field mutators (no I/O), so the native test suite can exercise them directly. The version gate
+// and saveToDisk live in loadFromDisk() below.
+
+void optInDisablePositionSharing(meshtastic_ChannelFile &cf)
+{
+    for (pb_size_t i = 0; i < cf.channels_count; i++) {
+        // Only flip PUBLIC / default-PSK channels. A channel with a real private key is a deliberate
+        // trusted-group setup where the "leak location to strangers" concern doesn't apply, so its
+        // configured precision (including full precision) is preserved.
+        if (!channelFileUsesPublicKey(cf, (ChannelIndex)i))
+            continue;
+        cf.channels[i].settings.has_module_settings = true;
+        cf.channels[i].settings.module_settings.position_precision = 0;
+    }
+}
+
+void optInDisableTelemetryBroadcast(meshtastic_LocalModuleConfig &mc)
+{
+    // Every mesh-broadcast telemetry enable flag (each gates its module's sendTelemetry() to the mesh).
+    mc.telemetry.device_telemetry_enabled = false;
+    mc.telemetry.environment_measurement_enabled = false;
+    mc.telemetry.air_quality_enabled = false;
+    mc.telemetry.power_measurement_enabled = false;
+    mc.telemetry.health_measurement_enabled = false;
+    // Position leak via the public MQTT map. Leave map_reporting_enabled alone (anonymous presence is
+    // still allowed) and strip only the location component.
+    mc.mqtt.map_report_settings.should_report_location = false;
+}
+
 void NodeDB::installDefaultModuleConfig()
 {
     LOG_INFO("Install default ModuleConfig");
@@ -1245,6 +1270,15 @@ void NodeDB::installDefaultModuleConfig()
     moduleConfig.external_notification.active = true;
 #endif // NANO_G2_ULTRA
 
+#ifdef ELECROW_ThinkNode_M8
+    moduleConfig.canned_message.rotary1_enabled = true;
+    moduleConfig.canned_message.inputbroker_pin_a = PIN_BUTTON_EC04_A;
+    moduleConfig.canned_message.inputbroker_pin_b = PIN_BUTTON_EC04_B;
+    moduleConfig.canned_message.inputbroker_pin_press = PIN_BUTTON_EC04;
+    moduleConfig.canned_message.inputbroker_event_cw = meshtastic_ModuleConfig_CannedMessageConfig_InputEventChar_RIGHT;
+    moduleConfig.canned_message.inputbroker_event_ccw = meshtastic_ModuleConfig_CannedMessageConfig_InputEventChar_LEFT;
+    moduleConfig.canned_message.inputbroker_event_press = meshtastic_ModuleConfig_CannedMessageConfig_InputEventChar_SELECT;
+#endif
 #ifdef T_LORA_PAGER
     moduleConfig.canned_message.updown1_enabled = true;
     moduleConfig.canned_message.inputbroker_pin_a = ROTARY_A;
@@ -1533,16 +1567,34 @@ void NodeDB::initModuleConfigIntervals()
     moduleConfig.telemetry.device_update_interval = MAX_INTERVAL;
 #endif
 
+#ifdef USERPREFS_CONFIG_ENVIRONMENT_MEASUREMENT_ENABLED
+    moduleConfig.telemetry.environment_measurement_enabled = USERPREFS_CONFIG_ENVIRONMENT_MEASUREMENT_ENABLED;
+#endif
+
 #ifdef USERPREFS_CONFIG_ENV_TELEM_UPDATE_INTERVAL
     moduleConfig.telemetry.environment_update_interval = USERPREFS_CONFIG_ENV_TELEM_UPDATE_INTERVAL;
 #else
     moduleConfig.telemetry.environment_update_interval = 0;
 #endif
 
-#ifdef USERPREFS_CONFIG_ENVIRONMENT_MEASUREMENT_ENABLED
-    moduleConfig.telemetry.environment_measurement_enabled = USERPREFS_CONFIG_ENVIRONMENT_MEASUREMENT_ENABLED;
+#ifdef USERPREFS_CONFIG_ENV_SCREEN_SCREEN_ENABLED
+    moduleConfig.telemetry.environment_screen_enabled = USERPREFS_CONFIG_ENV_SCREEN_SCREEN_ENABLED;
 #endif
+
+#ifdef USERPREFS_CONFIG_AQ_TELEM_UPDATE_INTERVAL
+    moduleConfig.telemetry.air_quality_interval = USERPREFS_CONFIG_AQ_TELEM_UPDATE_INTERVAL;
+#else
     moduleConfig.telemetry.air_quality_interval = 0;
+#endif
+
+#ifdef USERPREFS_CONFIG_AQ_MEASUREMENT_ENABLED
+    moduleConfig.telemetry.air_quality_enabled = USERPREFS_CONFIG_AQ_MEASUREMENT_ENABLED;
+#endif
+
+#ifdef USERPREFS_CONFIG_AQ_SCREEN_ENABLED
+    moduleConfig.telemetry.air_quality_screen_enabled = USERPREFS_CONFIG_AQ_SCREEN_ENABLED;
+#endif
+
     moduleConfig.telemetry.power_update_interval = 0;
     moduleConfig.telemetry.health_update_interval = 0;
     moduleConfig.neighbor_info.update_interval = 0;
@@ -1564,15 +1616,19 @@ void NodeDB::resetNodes(bool keepFavorites)
     numMeshNodes = 1;
     if (keepFavorites) {
         LOG_INFO("Clearing node database - preserving favorites");
-        for (size_t i = 0; i < meshNodes->size(); i++) {
-            meshtastic_NodeInfoLite &node = meshNodes->at(i);
-            if (i > 0 && !nodeInfoLiteIsFavorite(&node)) {
-                eraseNodeSatellites(node.num);
-                node = meshtastic_NodeInfoLite();
-            } else {
+        // Compact favorites into contiguous low slots: zeroing in place leaves one above
+        // numMeshNodes, invisible to every `i < numMeshNodes` scan yet still serialized to flash.
+        for (size_t i = 1; i < meshNodes->size(); i++) {
+            const meshtastic_NodeInfoLite &node = meshNodes->at(i);
+            if (nodeInfoLiteIsFavorite(&node)) {
+                if (numMeshNodes != i)
+                    meshNodes->at(numMeshNodes) = node;
                 numMeshNodes += 1;
+            } else if (node.num) {
+                eraseNodeSatellites(node.num);
             }
-        };
+        }
+        std::fill(nodeDatabase.nodes.begin() + numMeshNodes, nodeDatabase.nodes.end(), meshtastic_NodeInfoLite());
     } else {
         LOG_INFO("Clearing node database - removing favorites");
         for (size_t i = 1; i < meshNodes->size(); i++) {
@@ -1585,6 +1641,11 @@ void NodeDB::resetNodes(bool keepFavorites)
     (void)ourNum;
 #if WARM_NODE_COUNT > 0
     warmStore.clear(); // warm entries are never favorites; a DB reset clears them too
+#endif
+#if HAS_TRAFFIC_MANAGEMENT
+    // A user-initiated DB reset forgets everything; TMM's caches must not resurrect it.
+    if (trafficManagementModule)
+        trafficManagementModule->purgeAll();
 #endif
 
     devicestate.has_rx_waypoint = false;
@@ -1604,13 +1665,25 @@ void NodeDB::removeNodeByNum(NodeNum nodeNum)
             removed++;
     }
     numMeshNodes -= removed;
-    std::fill(nodeDatabase.nodes.begin() + numMeshNodes, nodeDatabase.nodes.begin() + numMeshNodes + 1,
-              meshtastic_NodeInfoLite());
-    if (removed)
-        eraseNodeSatellites(nodeNum);
+    if (removed) {
+        // Clear exactly the slots compaction vacated. Sizing this from `removed` (rather than a
+        // fixed one) keeps it inside the vector when nothing matched and the store is full.
+        const size_t first = numMeshNodes;
+        const size_t last = std::min(first + removed, nodeDatabase.nodes.size());
+        std::fill(nodeDatabase.nodes.begin() + first, nodeDatabase.nodes.begin() + last, meshtastic_NodeInfoLite());
+    }
+    // Drop the node's satellite stores and warm-tier copy regardless of which tier it lived in, so
+    // an explicit removal fully forgets it.
+    eraseNodeSatellites(nodeNum);
 #if WARM_NODE_COUNT > 0
     // Explicit user removal: don't let the warm tier resurrect the node
     warmStore.remove(nodeNum);
+#endif
+#if HAS_TRAFFIC_MANAGEMENT
+    // Explicit removal is full removal: the TrafficManagement caches (unified slot +
+    // NodeInfo identity cache) must not keep serving or resurrect the node either.
+    if (trafficManagementModule)
+        trafficManagementModule->purgeNode(nodeNum);
 #endif
 
     LOG_DEBUG("NodeDB::removeNodeByNum purged %d entries. Save changes", removed);
@@ -1796,6 +1869,25 @@ bool NodeDB::enforceSatelliteCaps()
 #endif
 
     (void)trim; // all four maps may be compiled out
+
+    // Approximate satellite heap usage: each std::map entry is one rb-tree node,
+    // value_type plus ~44 B of node overhead (parent/left/right pointers, color,
+    // allocator rounding on 32-bit targets - an estimate, not exact bookkeeping).
+    size_t satBytes = 0;
+#if !MESHTASTIC_EXCLUDE_POSITIONDB
+    satBytes += nodePositions.size() * (sizeof(decltype(nodePositions)::value_type) + 44);
+#endif
+#if !MESHTASTIC_EXCLUDE_TELEMETRYDB
+    satBytes += nodeTelemetry.size() * (sizeof(decltype(nodeTelemetry)::value_type) + 44);
+#endif
+#if !MESHTASTIC_EXCLUDE_ENVIRONMENTDB
+    satBytes += nodeEnvironment.size() * (sizeof(decltype(nodeEnvironment)::value_type) + 44);
+#endif
+#if !MESHTASTIC_EXCLUDE_STATUSDB
+    satBytes += nodeStatus.size() * (sizeof(decltype(nodeStatus)::value_type) + 44);
+#endif
+    memaudit::set("satmaps", satBytes);
+
     return trimmedAny;
 }
 
@@ -1805,6 +1897,8 @@ bool NodeDB::enforceSatelliteCaps()
 // them if they do); otherwise tracker/sensor/tak_tracker are role-protected.
 static uint8_t warmProtectedCategory(const meshtastic_NodeInfoLite &n)
 {
+    if (nodeInfoLiteHasXeddsaSigned(&n))
+        return static_cast<uint8_t>(WarmProtected::XeddsaSigner);
     if (n.bitfield & (NODEINFO_BITFIELD_IS_FAVORITE_MASK | NODEINFO_BITFIELD_IS_IGNORED_MASK |
                       NODEINFO_BITFIELD_IS_KEY_MANUALLY_VERIFIED_MASK))
         return static_cast<uint8_t>(WarmProtected::Flag);
@@ -1846,7 +1940,8 @@ void NodeDB::cleanupMeshDB()
                 // Keep any key we learned (e.g. via a DM before the NodeInfo
                 // exchange completed) rather than losing it with the purge.
                 if (n.public_key.size == 32)
-                    warmStore.absorb(gone, n.last_heard, n.public_key.bytes, n.role, warmProtectedCategory(n));
+                    warmStore.absorb(gone, n.last_heard, n.public_key.bytes, n.role, warmProtectedCategory(n),
+                                     nodeInfoLiteHasXeddsaSigned(&n));
 #endif
 
                 eraseNodeSatellites(gone);
@@ -1894,6 +1989,13 @@ void NodeDB::installDefaultDeviceState()
     memcpy(owner.macaddr, ourMacAddr, sizeof(owner.macaddr));
     owner.has_is_unmessagable = true;
     owner.is_unmessagable = false;
+
+#ifdef HAS_HAM_2M_ONLY
+    // Ham-band-only hardware defaults to licensed operation. The user can still flip this off later
+    // (e.g. a commercial operator on an adjacent allocation who wants to keep encryption on) - we
+    // only set the default here, not on every boot.
+    owner.is_licensed = true;
+#endif
 }
 
 // We reserve a few nodenums for future use
@@ -2030,7 +2132,7 @@ void NodeDB::demoteOldestHotNodesToWarm()
         // Keep the public key if we have one (40 B warm record); keyless nodes
         // still get a placeholder so re-admission restores last_heard.
         warmStore.absorb(n.num, n.last_heard, n.public_key.size > 0 ? n.public_key.bytes : nullptr, n.role,
-                         warmProtectedCategory(n));
+                         warmProtectedCategory(n), nodeInfoLiteHasXeddsaSigned(&n));
         // Demotion drops the node from the header table, so drop its satellites
         // too (the eviction chokepoint) - they'd otherwise orphan until the next
         // enforceSatelliteCaps pass.
@@ -2080,6 +2182,7 @@ void NodeDB::nodeDBSelfCare()
     // Normalise the backing store to the hot cap so getOrCreateMeshNode always
     // has spare slots to append into (it indexes meshNodes->at(numMeshNodes++)).
     meshNodes->resize(MAX_NUM_NODES);
+    memaudit::set("nodedb", MAX_NUM_NODES * sizeof(meshtastic_NodeInfoLite));
 
     const bool satsTrimmed = enforceSatelliteCaps();
 
@@ -2127,6 +2230,41 @@ void NodeDB::loadFromDisk()
 
     migrationSavePending = false;
     configDecodeFailed = false;
+    configLoadComplete = false;
+
+#if !USERPREFS_EVENT_MODE
+#ifdef FSCom
+    const char *eventProfileFiles[] = {EVENT_CONFIG_FILE_NAME, EVENT_CHANNEL_FILE_NAME, EVENT_BACKUP_FILE_NAME};
+    spiLock->lock();
+    for (const char *filename : eventProfileFiles) {
+        if (FSCom.exists(filename) && !FSCom.remove(filename))
+            LOG_WARN("Unable to remove stale event profile file %s", filename);
+    }
+    spiLock->unlock();
+#endif
+#endif
+
+#if USERPREFS_EVENT_MODE
+    // Seed only a missing event config; never overwrite normal files after a corrupt event config.
+    bool eventConfigMissing = false;
+    eventProfileStorageUnavailable = false;
+#ifdef FSCom
+    spiLock->lock();
+    eventConfigMissing = !FSCom.exists(configFileName);
+    if (eventConfigMissing) {
+        const size_t totalBytes = fsTotalBytes();
+        const size_t usedBytes = fsUsedBytes();
+        eventProfileStorageUnavailable = !hasEventProfileStorageSpace(totalBytes, usedBytes);
+        if (eventProfileStorageUnavailable) {
+            LOG_ERROR("Event profile requires %u bytes free; only %u bytes available. Profile changes will not persist.",
+                      static_cast<unsigned>(EVENT_PROFILE_STORAGE_RESERVATION_BYTES),
+                      static_cast<unsigned>(totalBytes >= usedBytes ? totalBytes - usedBytes : 0));
+        }
+    }
+    spiLock->unlock();
+#endif
+    bool initializedEventConfig = false;
+#endif
 
     meshtastic_Config_SecurityConfig backupSecurity = meshtastic_Config_SecurityConfig_init_zero;
 
@@ -2290,7 +2428,7 @@ void NodeDB::loadFromDisk()
         installDefaultDeviceState();
 
         // Attempt recovery of owner fields from our own NodeDB entry if available.
-        meshtastic_NodeInfoLite *us = getMeshNode(getNodeNum());
+        const meshtastic_NodeInfoLite *us = getMeshNode(getNodeNum());
         if (nodeInfoLiteHasUser(us)) {
             LOG_WARN("Restoring owner fields (long_name/short_name/is_licensed/is_unmessagable) from NodeDB for our node 0x%08x",
                      us->num);
@@ -2316,6 +2454,31 @@ void NodeDB::loadFromDisk()
 
     state = loadProto(configFileName, meshtastic_LocalConfig_size, sizeof(meshtastic_LocalConfig), &meshtastic_LocalConfig_msg,
                       &config);
+#if USERPREFS_EVENT_MODE
+    if (eventConfigMissing && state != LoadFileResult::LOAD_SUCCESS) {
+        const LoadFileResult eventConfigState = state;
+        const LoadFileResult standardConfigState =
+            loadProto(STANDARD_CONFIG_FILE_NAME, meshtastic_LocalConfig_size, sizeof(meshtastic_LocalConfig),
+                      &meshtastic_LocalConfig_msg, &config);
+        if (standardConfigState == LoadFileResult::LOAD_SUCCESS) {
+            // Preserve the user's identity and non-radio preferences, then
+            // replace only LoRa with this event build's compiled defaults.
+            const meshtastic_LocalConfig standardConfig = config;
+            installDefaultConfig(true);
+            const meshtastic_Config_LoRaConfig eventLora = config.lora;
+            config = standardConfig;
+            config.has_lora = true;
+            config.lora = eventLora;
+            state = LoadFileResult::LOAD_SUCCESS;
+            initializedEventConfig = true;
+            LOG_INFO("Initialized event config without modifying %s", STANDARD_CONFIG_FILE_NAME);
+        } else {
+            // Keep the event load outcome because loadProto() clears config before decoding.
+            // A normal decode failure must not create a replacement identity.
+            state = standardConfigState == LoadFileResult::DECODE_FAILED ? LoadFileResult::DECODE_FAILED : eventConfigState;
+        }
+    }
+#endif
     if (state == LoadFileResult::DECODE_FAILED) {
         // Config file present but undecodable this boot (corruption / torn write / transient decrypt fail).
         // loadProto() already zeroed `config`, so the keypair is gone from RAM; minting a new one would change
@@ -2337,6 +2500,7 @@ void NodeDB::loadFromDisk()
     } else {
         LOG_INFO("Loaded saved config version %d", config.version);
     }
+    configLoadComplete = true;
 
     // Coerce LoRa config fields derived from presets while bootstrapping.
     // Some clients/UI components display bandwidth/spread_factor directly from config even in preset mode.
@@ -2375,6 +2539,15 @@ void NodeDB::loadFromDisk()
 
 #ifdef USERPREFS_LORACONFIG_OVERRIDE_FREQUENCY
     config.lora.override_frequency = USERPREFS_LORACONFIG_OVERRIDE_FREQUENCY;
+#endif
+
+#if USERPREFS_EVENT_MODE
+    if (initializedEventConfig) {
+        // This is the first durable event-profile write.  A failed write is
+        // safe: normal files remain untouched and the next event boot retries.
+        if (!saveToDisk(SEGMENT_CONFIG))
+            LOG_ERROR("Unable to persist initial event config");
+    }
 #endif
 
     if (backupSecurity.private_key.size > 0) {
@@ -2491,7 +2664,7 @@ void NodeDB::loadFromDisk()
         const int segments[] = {SEGMENT_CONFIG, SEGMENT_MODULECONFIG, SEGMENT_CHANNELS, SEGMENT_DEVICESTATE,
                                 SEGMENT_NODEDATABASE};
         int toSave = 0;
-        for (int i = 0; i < 5; i++) {
+        for (size_t i = 0; i < sizeof(segments) / sizeof(segments[0]); i++) {
             if (!EncryptedStorage::isEncrypted(filesToCheck[i])) {
                 toSave |= segments[i];
             }
@@ -2508,6 +2681,43 @@ void NodeDB::loadFromDisk()
                 EncryptedStorage::migrateFile(fn);
             }
         }
+
+        // Backups are outside saveToDisk(), but can contain radio profile PSKs. Only event builds
+        // introduce a second backup file, so leave normal-firmware backup handling unchanged.
+#if USERPREFS_EVENT_MODE
+#ifdef FSCom
+        spiLock->lock();
+        const bool activeBackupExists = FSCom.exists(backupFileName);
+        spiLock->unlock();
+        if (activeBackupExists && !EncryptedStorage::isEncrypted(backupFileName)) {
+            LOG_INFO("Migrating %s to encrypted storage", backupFileName);
+            if (!EncryptedStorage::migrateFile(backupFileName)) {
+                LOG_ERROR("Unable to migrate %s to encrypted storage", backupFileName);
+                storageCorruptThisLoad = true;
+            }
+        }
+#endif
+#endif
+
+        // Event firmware keeps the normal radio profile inactive, so migrate it separately.
+#if USERPREFS_EVENT_MODE
+#ifdef FSCom
+        const char *inactiveRadioProfileFiles[] = {STANDARD_CONFIG_FILE_NAME, STANDARD_CHANNEL_FILE_NAME,
+                                                   STANDARD_BACKUP_FILE_NAME};
+        for (const char *fn : inactiveRadioProfileFiles) {
+            spiLock->lock();
+            const bool exists = FSCom.exists(fn);
+            spiLock->unlock();
+            if (exists && !EncryptedStorage::isEncrypted(fn)) {
+                LOG_INFO("Migrating inactive radio profile %s to encrypted storage", fn);
+                if (!EncryptedStorage::migrateFile(fn)) {
+                    LOG_ERROR("Unable to migrate %s to encrypted storage", fn);
+                    storageCorruptThisLoad = true;
+                }
+            }
+        }
+#endif
+#endif
     }
 #endif
 
@@ -2529,6 +2739,29 @@ void NodeDB::loadFromDisk()
             moduleConfig.paxcounter.paxcounter_update_interval = 0;
 
         saveToDisk(SEGMENT_MODULECONFIG);
+    }
+
+    // 2.8 - privacy: one-time flip of position sharing and device telemetry to OPT-IN for nodes upgrading
+    // from a build that shipped them on-by-default. Gated on a dedicated watermark (POSITION_TELEMETRY_OPTIN_VER)
+    // so it runs exactly once and does NOT re-clobber a user who later re-enables sharing (ordinary saves never
+    // re-stamp .version, so a re-enabled node stays at the watermark and skips this block on the next boot).
+    // Position is disabled only on public/default-PSK channels; private-PSK channels are preserved.
+    if (channelFile.version < POSITION_TELEMETRY_OPTIN_VER) {
+        LOG_INFO("Opt-in migration: disabling position broadcast on public channels");
+        optInDisablePositionSharing(channelFile);
+        channelFile.version = POSITION_TELEMETRY_OPTIN_VER;
+        saveToDisk(SEGMENT_CHANNELS);
+    }
+    if (moduleConfig.version < POSITION_TELEMETRY_OPTIN_VER) {
+        LOG_INFO("Opt-in migration: forcing device telemetry broadcast to opt-in");
+        optInDisableTelemetryBroadcast(moduleConfig);
+        moduleConfig.version = POSITION_TELEMETRY_OPTIN_VER;
+        saveToDisk(SEGMENT_MODULECONFIG);
+    }
+
+    if (channels.ensureLicensedOperation()) {
+        LOG_WARN("Licensed operation removed persisted channel encryption/admin access");
+        saveToDisk(SEGMENT_CHANNELS);
     }
 #if ARCH_PORTDUINO
     // set any config overrides
@@ -2624,8 +2857,9 @@ bool NodeDB::disableLockdownToPlaintext()
     // plaintext->encrypted migrate loop above. Order does not matter here;
     // EncryptedStorage::removeLockdownArtifacts() (which deletes the DEK,
     // the commit point) only runs after every file is confirmed plaintext.
-    const char *filesToCheck[] = {configFileName, moduleConfigFileName, channelFileName, deviceStateFileName,
-                                  nodeDatabaseFileName};
+    const char *filesToCheck[] = {STANDARD_CONFIG_FILE_NAME, STANDARD_CHANNEL_FILE_NAME, STANDARD_BACKUP_FILE_NAME,
+                                  EVENT_CONFIG_FILE_NAME,    EVENT_CHANNEL_FILE_NAME,    EVENT_BACKUP_FILE_NAME,
+                                  moduleConfigFileName,      deviceStateFileName,        nodeDatabaseFileName};
     for (const char *fn : filesToCheck) {
         if (!EncryptedStorage::migrateFileToPlaintext(fn)) {
             LOG_ERROR("NodeDB: failed to revert %s to plaintext; aborting disable (device stays in lockdown)", fn);
@@ -2644,6 +2878,15 @@ bool NodeDB::disableLockdownToPlaintext()
 bool NodeDB::saveProto(const char *filename, size_t protoSize, const pb_msgdesc_t *fields, const void *dest_struct,
                        bool fullAtomic)
 {
+
+    // Only the radio profile is at risk from an unverified config load, so only defer those writes.
+    // Devicestate/nodedb/module writes must still land, otherwise boot-time recovery (e.g. loadFromDisk()
+    // restoring owner fields) is dropped and never retried.
+    if (isRadioProfileFile(filename) &&
+        shouldDeferBootPersistence(bootInitializationInProgress, configLoadComplete, configDecodeFailed)) {
+        LOG_WARN("NodeDB: deferred boot write to %s until config recovery completes", filename);
+        return true;
+    }
 
     // do not try to save anything if power level is not safe. In many cases flash will be lock-protected
     // and all writes will fail anyway. Device should be sleeping at this point anyway.
@@ -2897,6 +3140,19 @@ bool NodeDB::saveToDiskNoRetry(int saveWhat)
     spiLock->unlock();
 #endif
 
+#if USERPREFS_EVENT_MODE
+    if (eventProfileStorageUnavailable) {
+        if (saveWhat & SEGMENT_CONFIG) {
+            LOG_WARN("Skipping event config write: insufficient profile storage at boot");
+            saveWhat &= ~SEGMENT_CONFIG;
+        }
+        if (saveWhat & SEGMENT_CHANNELS) {
+            LOG_WARN("Skipping event channel write: insufficient profile storage at boot");
+            saveWhat &= ~SEGMENT_CHANNELS;
+        }
+    }
+#endif
+
     if (saveWhat & SEGMENT_CONFIG) {
         config.has_device = true;
         config.has_display = true;
@@ -2924,6 +3180,7 @@ bool NodeDB::saveToDiskNoRetry(int saveWhat)
         moduleConfig.has_audio = true;
         moduleConfig.has_paxcounter = true;
         moduleConfig.has_statusmessage = true;
+        moduleConfig.has_tak = true;
 #if !MESHTASTIC_EXCLUDE_BEACON
         moduleConfig.has_mesh_beacon = true;
 #endif
@@ -2997,6 +3254,11 @@ uint32_t sinceLastSeen(const meshtastic_NodeInfoLite *n)
 
 uint32_t sinceReceived(const meshtastic_MeshPacket *p)
 {
+    // rx_time may be a millis() placeholder while has_rx_time is false - don't age it as
+    // wall-clock, and don't pass it off as "just now" either.
+    if (!p->has_rx_time)
+        return SINCE_UNKNOWN;
+
     uint32_t now = getTime();
 
     int delta = (int)(now - p->rx_time);
@@ -3013,14 +3275,12 @@ HopStartStatus classifyHopStart(const meshtastic_MeshPacket &p)
         return HopStartStatus::INVALID;
 
     if (p.hop_start == 0) {
-        // hop_start == hop_limit == 0: intentional zero-hop broadcast (e.g. beacon). Valid by definition -
-        // the packet was never meant to travel any hops, so no hop_start ambiguity applies.
-        if (p.hop_limit == 0)
-            return HopStartStatus::VALID;
-        // Firmware prior to 2.3.0 (585805c) lacked a hop_start field. Firmware version 2.5.0 (bf34329) introduced a
-        // bitfield that is always present. Use the presence of the bitfield to determine if the origin's firmware
-        // version is guaranteed to have hop_start populated. Note that this can only be done for decoded packets as
-        // the bitfield is encrypted under the channel encryption key.
+        // hop_start == 0 is either a modern zero-hop broadcast (e.g. beacon) or pre-2.3.0 firmware (585805c)
+        // that never populated hop_start. Firmware 2.5.0 (bf34329) introduced a bitfield that is always
+        // present; use it to tell the two apart. The bitfield is encrypted under the channel key, so this can
+        // only be resolved for decoded packets - until then the status stays MISSING_OR_UNKNOWN. Callers
+        // acting before decode must therefore not treat UNKNOWN as a drop (the bitfield isn't readable yet);
+        // the verdict is re-checked post-decode in Router::handleReceived.
         if (p.which_payload_variant == meshtastic_MeshPacket_decoded_tag && p.decoded.has_bitfield)
             return HopStartStatus::VALID;
         return HopStartStatus::MISSING_OR_UNKNOWN;
@@ -3065,6 +3325,9 @@ size_t NodeDB::getNumOnlineMeshNodes(bool localOnly)
 
 #include "MeshModule.h"
 #include "Throttle.h"
+
+// Minimum spacing between evictions once the node database is full.
+#define NODEDB_FULL_EVICTION_INTERVAL_MS (2 * 1000UL)
 
 static constexpr uint32_t HOPSTART_DROP_LOG_INTERVAL_MS = 15000;
 
@@ -3214,6 +3477,9 @@ void NodeDB::addFromContact(meshtastic_SharedContact contact)
             LOG_WARN(PROTECTED_CAP_WARN_FMT, "ignore", contact.node_num, MAX_NUM_NODES - 2);
         nodeInfoLiteSetBit(info, NODEINFO_BITFIELD_IS_FAVORITE_MASK, false);
         eraseNodeSatellites(contact.node_num);
+#if HAS_SCREEN || defined(MESHTASTIC_INCLUDE_NICHE_GRAPHICS)
+        messageStore.deleteAllMessagesFromNode(contact.node_num);
+#endif
     } else {
         /* Clients are sending add_contact before every text message DM (because clients may hold a larger node database with
          * public keys than the radio holds). However, we don't want to update last_heard just because we sent someone a DM!
@@ -3253,8 +3519,15 @@ void NodeDB::addFromContact(meshtastic_SharedContact contact)
 
 /** Update user info and channel for this node based on received user data
  */
-bool NodeDB::updateUser(uint32_t nodeId, meshtastic_User &p, uint8_t channelIndex)
+bool NodeDB::updateUser(uint32_t nodeId, meshtastic_User &p, uint8_t channelIndex, bool xeddsaSigned)
 {
+    // Only a signed update may change the identity of a proven signer; our own record is exempt.
+    // Checked before getOrCreateMeshNode so a refusal cannot evict; isKnownXeddsaSigner covers the warm tier.
+    if (nodeId != getNodeNum() && isKnownXeddsaSigner(nodeId) && !xeddsaSigned) {
+        LOG_WARN("Refusing unsigned identity update for node 0x%08x that previously signed", nodeId);
+        return false;
+    }
+
     meshtastic_NodeInfoLite *info = getOrCreateMeshNode(nodeId);
     if (!info) {
         return false;
@@ -3279,10 +3552,12 @@ bool NodeDB::updateUser(uint32_t nodeId, meshtastic_User &p, uint8_t channelInde
                     "to regenerate your public keys.";
                 LOG_WARN(warning, safeName);
                 meshtastic_ClientNotification *cn = clientNotificationPool.allocZeroed();
-                cn->level = meshtastic_LogRecord_Level_WARNING;
-                cn->time = getValidTime(RTCQualityFromNet);
-                snprintf(cn->message, sizeof(cn->message), warning, safeName);
-                service->sendClientNotification(cn);
+                if (cn) {
+                    cn->level = meshtastic_LogRecord_Level_WARNING;
+                    cn->time = getValidTime(RTCQualityFromNet);
+                    snprintf(cn->message, sizeof(cn->message), warning, safeName);
+                    service->sendClientNotification(cn);
+                }
             }
             return false;
         }
@@ -3334,6 +3609,20 @@ bool NodeDB::updateUser(uint32_t nodeId, meshtastic_User &p, uint8_t channelInde
         }
     }
 
+#if HAS_TRAFFIC_MANAGEMENT
+    // Write-through: every accepted remote-identity commit lands here (NodeInfoModule,
+    // MeshService, and TMM's requester learning all funnel through updateUser; the two
+    // key-write sites that bypass it call onNodeKeyCommitted instead), so TMM's NodeInfo
+    // cache reflects the commit immediately rather than at the next reconcile pass. Runs on
+    // acceptance, not on `changed`: an identical update still proves the identity is
+    // current. `p` is the post-hygiene payload; signerKnown transfers only key-matched
+    // verified-signer status (isVerifiedSignerForKey semantics), never a bare node flag.
+    if (nodeId != getNodeNum() && trafficManagementModule) {
+        const bool signerKnown = p.public_key.size == 32 && isVerifiedSignerForKey(nodeId, p.public_key.bytes);
+        trafficManagementModule->onNodeIdentityCommitted(nodeId, p, signerKnown);
+    }
+#endif
+
     return changed;
 }
 
@@ -3348,16 +3637,41 @@ void NodeDB::updateFrom(const meshtastic_MeshPacket &mp)
     if (mp.which_payload_variant == meshtastic_MeshPacket_decoded_tag && mp.from) {
         LOG_DEBUG("Update DB node 0x%08x, rx_time=%u", mp.from, mp.rx_time);
 
-        meshtastic_NodeInfoLite *info = getOrCreateMeshNode(getFrom(&mp));
+        // mp.from is unauthenticated, so rate-limit admission once the database is full: otherwise
+        // invented node numbers churn it at packet rate and push real neighbours out.
+        meshtastic_NodeInfoLite *info = getMeshNode(getFrom(&mp));
+        if (!info) {
+            if (isFull()) {
+                if (Throttle::isWithinTimespanMs(lastFullEvictionMs, NODEDB_FULL_EVICTION_INTERVAL_MS)) {
+                    LOG_DEBUG("Node database full, defer admitting 0x%08x", mp.from);
+                    return;
+                }
+                lastFullEvictionMs = millis();
+            }
+            info = getOrCreateMeshNode(getFrom(&mp));
+        }
         if (!info) {
             return;
         }
 
-        if (mp.rx_time) // if the packet has a valid timestamp use it to update our last_heard
+        // Gate on has_rx_time, not truthiness - rx_time may hold a millis() placeholder.
+        if (mp.has_rx_time)
             info->last_heard = mp.rx_time;
 
-        if (mp.rx_snr)
+        // Gate on the packet actually having been received over our own radio, not on rx_snr being
+        // truthy, because 0 dB is valid. TRANSPORT_LORA is set only on the real over-the-air RX path
+        // (RadioInterface.cpp); it excludes TRANSPORT_INTERNAL and TRANSPORT_MQTT, while still accepting
+        // an MQTT-origin packet that a gateway rebroadcasts onto LoRa - we genuinely measured that one
+        // ourselves. Mirrors hop histogram below.
+        // Belt-and-braces: also require has_rx_rssi, which every genuine RF-reception site sets
+        // unconditionally alongside rx_snr - unlike PhoneAPI's replay packets, which set TRANSPORT_LORA
+        // too (so the client treats restored history as if heard over the air) but never has_rx_rssi.
+        // Replay packets don't reach updateFrom() today; this check guards against a future change that
+        // routes them back through this path silently recording a replayed rx_snr as a fresh measurement.
+        if (mp.transport_mechanism == meshtastic_MeshPacket_TransportMechanism_TRANSPORT_LORA && mp.has_rx_rssi) {
             info->snr = mp.rx_snr; // keep the most recent SNR we received for this node.
+            nodeInfoLiteSetBit(info, NODEINFO_BITFIELD_HAS_SNR_MASK, true);
+        }
 
         nodeInfoLiteSetBit(info, NODEINFO_BITFIELD_VIA_MQTT_MASK,
                            mp.via_mqtt); // Store if we received this packet via MQTT
@@ -3369,6 +3683,11 @@ void NodeDB::updateFrom(const meshtastic_MeshPacket &mp)
         // inflate the local mesh-size estimate with non-RF nodes (and they usually carry
         // hop_start==0, landing in the hop-0 bucket that pulls the recommendation lowest), so
         // exclude via_mqtt too.
+        //
+        // The std::max clamp below is deliberate, not a bug: Counting an unproven-but-real neighbor as 0 hops is the
+        // conservative direction. This intentionally does not agree with the `hopsAway >= 0`
+        // gate below, which rejects the same -1 rather than storing it as a fabricated 0 -
+        // the histogram and the stored hops_away serve different purposes.
         if (mp.transport_mechanism == meshtastic_MeshPacket_TransportMechanism_TRANSPORT_LORA && !mp.via_mqtt &&
             hopScalingModule) {
             uint8_t hopCount = std::max(int8_t(0), getHopsAway(mp));
@@ -3632,7 +3951,7 @@ uint32_t NodeDB::hotNodeLastHeard(NodeNum n) const
     return 0;
 }
 
-bool NodeDB::copyPublicKey(NodeNum n, meshtastic_NodeInfoLite_public_key_t &out)
+bool NodeDB::copyPublicKeyAuthoritative(NodeNum n, meshtastic_NodeInfoLite_public_key_t &out)
 {
     const meshtastic_NodeInfoLite *info = getMeshNode(n);
     if (info && info->public_key.size == 32) {
@@ -3646,6 +3965,97 @@ bool NodeDB::copyPublicKey(NodeNum n, meshtastic_NodeInfoLite_public_key_t &out)
     }
 #endif
     return false;
+}
+
+bool NodeDB::copyPublicKey(NodeNum n, meshtastic_NodeInfoLite_public_key_t &out)
+{
+    if (copyPublicKeyAuthoritative(n, out))
+        return true;
+#if HAS_TRAFFIC_MANAGEMENT
+    // Last resort: a key the TrafficManagement NodeInfo cache learned from an observed frame
+    // for a node no longer in either NodeDB tier. This extends the pool of peers we can
+    // encrypt to. Keys here may be trust-on-first-use (see copyPublicKey's keyProven), the
+    // same first-contact trust NodeDB itself applies via updateUser().
+    if (trafficManagementModule && trafficManagementModule->copyPublicKey(n, out.bytes)) {
+        out.size = 32;
+        return true;
+    }
+#endif
+    return false;
+}
+
+bool NodeDB::copyPublicKeyForDecrypt(NodeNum n, meshtastic_NodeInfoLite_public_key_t &out)
+{
+    if (copyPublicKeyAuthoritative(n, out))
+        return true;
+#if HAS_TRAFFIC_MANAGEMENT
+    // A cold-tier cache key backs an authenticated decrypt only when key-proven; unverified TOFU
+    // cache keys must not. Outbound encryption still uses the opportunistic copyPublicKey().
+    bool keyProven = false;
+    if (trafficManagementModule && trafficManagementModule->copyPublicKey(n, out.bytes, &keyProven) && keyProven) {
+        out.size = 32;
+        return true;
+    }
+#endif
+    return false;
+}
+
+bool NodeDB::isVerifiedSignerForKey(NodeNum n, const uint8_t *key32)
+{
+    if (!key32)
+        return false;
+    // Hot store is authoritative when present; a node lives in the hot XOR warm tier, so if the
+    // hot store holds it the warm tier does not, and we decide entirely from the hot entry.
+    const meshtastic_NodeInfoLite *info = getMeshNode(n);
+    if (info)
+        return info->public_key.size == 32 && nodeInfoLiteHasXeddsaSigned(info) && memcmp(info->public_key.bytes, key32, 32) == 0;
+#if WARM_NODE_COUNT > 0
+    uint8_t warmKey[32];
+    if (warmStore.copyKey(n, warmKey) && memcmp(warmKey, key32, 32) == 0)
+        return warmStore.hasXeddsaSigned(n);
+#endif
+    return false;
+}
+
+bool NodeDB::isKnownXeddsaSigner(NodeNum n)
+{
+    // A node lives in the hot XOR warm tier, so the hot verdict is final when present.
+    const meshtastic_NodeInfoLite *info = getMeshNode(n);
+    if (info)
+        return nodeInfoLiteHasXeddsaSigned(info);
+#if WARM_NODE_COUNT > 0
+    return warmStore.hasXeddsaSigned(n);
+#else
+    return false;
+#endif
+}
+
+void NodeDB::commitRemoteKey(NodeNum n, const uint8_t key32[32], KeyCommitTrust trust)
+{
+    if (!key32 || n == 0)
+        return;
+    // Local copy first: callers may pass the node's own key bytes back in (e.g. manual
+    // verification re-committing an already-stored key), and memcpy forbids overlap.
+    uint8_t key[32];
+    memcpy(key, key32, 32);
+
+    meshtastic_NodeInfoLite *info = getOrCreateMeshNode(n);
+    if (!info)
+        return;
+    // Unconditional overwrite - deliberately NOT updateUser()'s "don't replace a known key" pin.
+    // That pin protects against unauthenticated NodeInfo broadcasts; the only callers here are
+    // possession/authority-proven (ManuallyVerified = user confirmed the key; AdminChannelProven =
+    // decrypted via the admin key with p->from bound into the AEAD nonce), i.e. exactly the paths
+    // meant to establish or rotate a key. Keep new call sites to that same trust bar.
+    memcpy(info->public_key.bytes, key, 32);
+    info->public_key.size = 32;
+
+#if HAS_TRAFFIC_MANAGEMENT
+    // Write-through, mirroring updateUser()'s identity hook: without it the TrafficManagement
+    // NodeInfo cache diverges until the next hourly reconcile.
+    if (trafficManagementModule)
+        trafficManagementModule->onNodeKeyCommitted(n, key, trust == KeyCommitTrust::ManuallyVerified);
+#endif
 }
 
 meshtastic_Config_DeviceConfig_Role NodeDB::getNodeRole(NodeNum n)
@@ -3703,7 +4113,7 @@ meshtastic_NodeInfoLite *NodeDB::getOrCreateMeshNode(NodeNum n)
                 // Demote to the warm tier so the identity (and crucially the
                 // PKI key) outlives the hot-store slot.
                 warmStore.absorb(evicted.num, evicted.last_heard, evicted.public_key.size == 32 ? evicted.public_key.bytes : NULL,
-                                 evicted.role, warmProtectedCategory(evicted));
+                                 evicted.role, warmProtectedCategory(evicted), nodeInfoLiteHasXeddsaSigned(&evicted));
 #endif
                 eraseNodeSatellites(evicted.num);
                 // Shove the remaining nodes down the chain
@@ -3732,15 +4142,37 @@ meshtastic_NodeInfoLite *NodeDB::getOrCreateMeshNode(NodeNum n)
         // Re-admission: restore what the warm tier kept for this node
         WarmNodeEntry warm;
         if (warmStore.take(n, warm)) {
-            lite->last_heard = warmTimeOf(warm); // mask off the stolen role/protected metadata bits
+            lite->last_heard = warmTimeOf(warm); // mask off the stolen metadata bits
             // Restore the role the warm tier cached, so re-admission isn't stuck at CLIENT
             // until the next NodeInfo arrives.
             lite->role = static_cast<meshtastic_Config_DeviceConfig_Role>(warmRoleOf(warm));
+            // Restore the XEdDSA-signed bit too: it is learned from verified traffic, not from
+            // NodeInfo, so a round trip through the warm tier must not relearn it from zero.
+            nodeInfoLiteSetBit(lite, NODEINFO_BITFIELD_HAS_XEDDSA_SIGNED_MASK, warmXeddsaSignedOf(warm));
             if (!memfll(warm.public_key, 0, sizeof(warm.public_key))) {
                 lite->public_key.size = 32;
                 memcpy(lite->public_key.bytes, warm.public_key, 32);
             }
+            if (warmProtOf(warm) == static_cast<uint8_t>(WarmProtected::XeddsaSigner))
+                nodeInfoLiteSetBit(lite, NODEINFO_BITFIELD_HAS_XEDDSA_SIGNED_MASK, true);
             LOG_MIGRATION("Rehydrated node 0x%08x from warm tier (key=%d)", n, lite->public_key.size == 32);
+        }
+#endif
+#if HAS_TRAFFIC_MANAGEMENT
+        // Name rehydration: the warm tier keeps a node's key but not its name, so a re-admitted
+        // long-tail node is nameless until its next NodeInfo. The TrafficManagement NodeInfo
+        // cache is much larger and often still holds the full User. Restore it - but only when
+        // its cached key matches the key we just restored from warm, so a name never attaches to
+        // a different identity than the one we encrypt to. No-op without the TMM NodeInfo cache
+        // or when no key is present (key-matched by design). CopyUserToNodeInfoLite sets only the
+        // user-related bits, so the warm-restored XEdDSA-signed bit survives.
+        if (lite->public_key.size == 32 && !nodeInfoLiteHasUser(lite) && trafficManagementModule) {
+            meshtastic_User tmmUser = meshtastic_User_init_zero;
+            if (trafficManagementModule->copyUser(n, tmmUser) && tmmUser.public_key.size == 32 &&
+                memcmp(tmmUser.public_key.bytes, lite->public_key.bytes, 32) == 0) {
+                TypeConversions::CopyUserToNodeInfoLite(lite, tmmUser);
+                LOG_INFO("Rehydrated node 0x%08x identity from TMM NodeInfo cache", n);
+            }
         }
 #endif
         LOG_INFO("Adding node to database with %i nodes and %u bytes free!", numMeshNodes, memGet.getFreeHeap());
@@ -3792,15 +4224,14 @@ bool NodeDB::checkLowEntropyPublicKey(const meshtastic_Config_SecurityConfig_pub
 bool NodeDB::generateCryptoKeyPair(const uint8_t *privateKey)
 {
 #if !(MESHTASTIC_EXCLUDE_PKI_KEYGEN || MESHTASTIC_EXCLUDE_PKI)
-    // Only generate keys for non-licensed users and if the LoRa region is set. The native simulator
-    // boots region-UNSET but still needs a keypair so PKI-encrypted DMs work between sim nodes, so
-    // allow keygen there regardless of region.
+    // Generate identity keys once a LoRa region is set. Licensed operation still needs the identity
+    // key for plaintext signatures, even though the key is never used for PKI encryption.
     bool regionBlocksKeygen = config.lora.region == meshtastic_Config_LoRaConfig_RegionCode_UNSET;
 #if ARCH_PORTDUINO
     if (portduino_config.lora_module == use_simradio)
         regionBlocksKeygen = false;
 #endif
-    if (owner.is_licensed || regionBlocksKeygen) {
+    if (regionBlocksKeygen) {
         return false;
     }
 
@@ -3850,13 +4281,28 @@ bool NodeDB::generateCryptoKeyPair(const uint8_t *privateKey)
         LOG_DEBUG("Set DH private key for crypto operations");
         crypto->setDHPrivateKey(config.security.private_key.bytes);
 
-        // Conditionally create new identity based on parameter
-        createNewIdentity();
+        if (createNewIdentity() && owner.is_licensed)
+            licensedIdentityMigrationPending = true;
     }
     return keygenSuccess;
 #else
     return false;
 #endif
+}
+
+bool NodeDB::notifyPendingLicensedIdentityMigration()
+{
+    if (!licensedIdentityMigrationPending || !service)
+        return false;
+    meshtastic_ClientNotification *notification = clientNotificationPool.allocZeroed();
+    if (!notification)
+        return false;
+    notification->level = meshtastic_LogRecord_Level_WARNING;
+    notification->time = getValidTime(RTCQualityFromNet);
+    snprintf(notification->message, sizeof(notification->message), "%s", LICENSED_IDENTITY_MIGRATION_WARNING);
+    service->sendClientNotification(notification);
+    licensedIdentityMigrationPending = false;
+    return true;
 }
 
 bool NodeDB::createNewIdentity()
@@ -3961,6 +4407,13 @@ bool NodeDB::restorePreferences(meshtastic_AdminMessage_BackupLocation location,
                 channelFile = backup.channels;
                 LOG_DEBUG("Restored channels");
             }
+
+            if (owner.is_licensed && channels.ensureLicensedOperation()) {
+                restoreWhat |= SEGMENT_CHANNELS;
+                LOG_WARN("Licensed operation sanitized restored channel encryption/admin access");
+            }
+            if (restoreWhat & SEGMENT_CHANNELS)
+                channels.onConfigChanged();
 
             success = saveToDisk(restoreWhat);
             if (success) {

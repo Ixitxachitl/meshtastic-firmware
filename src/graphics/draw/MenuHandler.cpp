@@ -10,6 +10,7 @@
 #include "MessageStore.h"
 #include "NodeDB.h"
 #include "buzz.h"
+#include "graphics/Backlight.h"
 #include "graphics/Screen.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/TFTColorRegions.h"
@@ -70,12 +71,15 @@ const StoredMessage *getNewestMessageForActiveThread()
     const uint32_t peer = graphics::MessageRenderer::getThreadPeer();
     const uint32_t localNode = nodeDB->getNodeNum();
 
-    if (mode == graphics::MessageRenderer::ThreadMode::ALL) {
-        return &messages.back();
-    }
-
     for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
         const StoredMessage &m = *it;
+        if (!messageStore.isMessageVisible(m)) {
+            continue;
+        }
+
+        if (mode == graphics::MessageRenderer::ThreadMode::ALL) {
+            return &m;
+        }
 
         if (mode == graphics::MessageRenderer::ThreadMode::CHANNEL) {
             if (m.type == MessageType::BROADCAST && static_cast<int>(m.channelIndex) == channel) {
@@ -224,6 +228,16 @@ static void applyLoraRegion(meshtastic_Config_LoRaConfig_RegionCode region, bool
 
 void menuHandler::LoraRegionPicker(uint32_t duration)
 {
+#ifdef HAS_HAM_2M_ONLY
+    // Hardware is restricted to the amateur 2m band - offer only the 2m regions
+    // so the user cannot pick a sub-GHz region the RF path cannot emit or receive.
+    static const LoraRegionOption regionOptions[] = {
+        {"Back", OptionsAction::Back},
+        {"ITU1_2M (144-146)", OptionsAction::Select, meshtastic_Config_LoRaConfig_RegionCode_ITU1_2M},
+        {"ITU2_2M (144-148)", OptionsAction::Select, meshtastic_Config_LoRaConfig_RegionCode_ITU2_2M},
+        {"ITU3_2M (144-148)", OptionsAction::Select, meshtastic_Config_LoRaConfig_RegionCode_ITU3_2M},
+    };
+#else
     static const LoraRegionOption regionOptions[] = {
         {"Back", OptionsAction::Back},
         {"US", OptionsAction::Select, meshtastic_Config_LoRaConfig_RegionCode_US},
@@ -242,7 +256,6 @@ void menuHandler::LoraRegionPicker(uint32_t duration)
         {"TH", OptionsAction::Select, meshtastic_Config_LoRaConfig_RegionCode_TH},
         {"LORA_24", OptionsAction::Select, meshtastic_Config_LoRaConfig_RegionCode_LORA_24},
         {"UA_433", OptionsAction::Select, meshtastic_Config_LoRaConfig_RegionCode_UA_433},
-        {"UA_868", OptionsAction::Select, meshtastic_Config_LoRaConfig_RegionCode_UA_868},
         {"MY_433", OptionsAction::Select, meshtastic_Config_LoRaConfig_RegionCode_MY_433},
         {"MY_919", OptionsAction::Select, meshtastic_Config_LoRaConfig_RegionCode_MY_919},
         {"SG_923", OptionsAction::Select, meshtastic_Config_LoRaConfig_RegionCode_SG_923},
@@ -263,6 +276,7 @@ void menuHandler::LoraRegionPicker(uint32_t duration)
         {"ITU3_70CM (430-450)", OptionsAction::Select, meshtastic_Config_LoRaConfig_RegionCode_ITU3_70CM},
 
     };
+#endif
 
     constexpr size_t regionCount = sizeof(regionOptions) / sizeof(regionOptions[0]);
     static std::array<const char *, regionCount> regionLabels{};
@@ -283,21 +297,19 @@ void menuHandler::LoraRegionPicker(uint32_t duration)
                 return;
             }
 
-            // Guard: without a reboot, reconfigure() applies the region directly, so reject
-            // regions this node can't use up front: unrecognized codes, licensed-only regions,
-            // and radio hardware mismatches (2.4 GHz vs sub-GHz) - the same checks the admin
-            // set-config path applies, but side-effect-free: ignoring a menu selection should
-            // not record a critical error or notify clients. getRadio() used to catch hardware
-            // mismatches post-reboot only.
+            const RegionInfo *selectedRegionInfo = getRegion(selectedRegion);
+            bool hamMode = selectedRegionInfo->code == selectedRegion && selectedRegionInfo->profile &&
+                           selectedRegionInfo->profile->licensedOnly;
+
+            // Validate radio compatibility for a prospective Ham region before confirmation.
             auto candidateLora = config.lora;
             candidateLora.region = selectedRegion;
-            char regionErr[160];
-            if (!RadioInterface::checkConfigRegion(candidateLora, regionErr, sizeof(regionErr))) {
+            char regionErr[160] = {};
+            if (!RadioInterface::checkConfigRegion(candidateLora, regionErr, sizeof(regionErr), hamMode)) {
                 LOG_WARN("Ignoring region selection: %s", regionErr);
                 return;
             }
 
-            bool hamMode = getRegion(selectedRegion)->profile->licensedOnly;
             if (hamMode) {
                 LOG_INFO("User chose an amateur radio mode region");
                 pendingRegion = selectedRegion;
@@ -1097,7 +1109,7 @@ void menuHandler::homeBaseMenu()
         }
         optionsEnumArray[options++] = Mute;
     }
-#if defined(PIN_EINK_EN) || defined(PCA_PIN_EINK_EN)
+#if HAS_PWM_BACKLIGHT || defined(PIN_EINK_EN) || defined(PCA_PIN_EINK_EN)
     optionsArray[options] = "Toggle Backlight";
     optionsEnumArray[options++] = Backlight;
 #else
@@ -1127,7 +1139,10 @@ void menuHandler::homeBaseMenu()
             }
         } else if (selected == Backlight) {
             screen->setOn(false);
-#if defined(PIN_EINK_EN)
+#if HAS_PWM_BACKLIGHT
+            graphics::backlightToggle();
+            saveUIConfig();
+#elif defined(PIN_EINK_EN)
             if (uiconfig.screen_brightness == 1) {
                 uiconfig.screen_brightness = 0;
                 digitalWrite(PIN_EINK_EN, LOW);
@@ -2323,8 +2338,10 @@ void menuHandler::testMenu()
 
 void menuHandler::numberTest()
 {
-    screen->showNumberPicker("Pick a number\n ", 30000, 4,
-                             [](int number_picked) -> void { LOG_WARN("Nodenum: %u", number_picked); });
+    screen->showNumberPicker("Verify Nodenum:\n ", 30000, 8, true, [](uint32_t number_picked) -> void {
+        LOG_DEBUG("Nodenum: 0x%08x", number_picked);
+        keyVerificationModule->sendInitialRequest(number_picked);
+    });
 }
 
 void menuHandler::wifiBaseMenu()
@@ -2508,8 +2525,7 @@ void menuHandler::keyVerificationFinalPrompt()
         options.notificationType = graphics::notificationTypeEnum::selection_picker;
         options.bannerCallback = [=](int selected) {
             if (selected == 1) {
-                auto remoteNodePtr = nodeDB->getMeshNode(keyVerificationModule->getCurrentRemoteNode());
-                remoteNodePtr->bitfield |= NODEINFO_BITFIELD_IS_KEY_MANUALLY_VERIFIED_MASK;
+                keyVerificationModule->commitVerifiedRemoteNode();
             }
         };
         screen->showOverlayBanner(options);
