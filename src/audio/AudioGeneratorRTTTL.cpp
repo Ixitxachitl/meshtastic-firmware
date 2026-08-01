@@ -400,8 +400,9 @@ bool AudioGeneratorRTTTL::begin(AudioFileSource *source, AudioOutput *output)
 
     if (!output->SetRate(rate))
         return false;
-    if (!output->SetBitsPerSample(16))
-        return false;
+    // No SetBitsPerSample() here: ESP8266Audio 2.4.x dropped it (16-bit is assumed),
+    // and on the 2.0.0 fork the variants pin, AudioOutputI2S already defaults bps to
+    // 16 in its constructor - so the call was redundant there and breaks the build on 2.4.x.
     if (!output->SetChannels(2))
         return false;
     if (!output->begin())
