@@ -75,11 +75,14 @@
 #define GPS_TX_PIN 43
 #define PIN_GPS_PPS 13
 
-// SPI interface SD card slot
+// SPI interface SD card slot (shares the SPI1 bus with LoRa)
+#define HAS_SDCARD
+#define SDCARD_USE_SPI1
 #define SPI_MOSI MOSI
 #define SPI_SCK SCK
 #define SPI_MISO MISO
 #define SPI_CS 21
+#define SDCARD_CS SPI_CS
 #define SD_SPI_FREQUENCY 75000000U
 
 #define USE_SX1262
