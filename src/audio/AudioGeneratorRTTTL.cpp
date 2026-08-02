@@ -1,35 +1,65 @@
 /*
-  AudioGeneratorRTTTL3
-  Local copy of AudioGeneratorRTTTL extended to support octaves 3-7.
+  AudioGeneratorRTTTL
+  Audio output generator that plays RTTTL (Nokia ringtone)
 
-  Changes vs upstream:
-  - Class renamed AudioGeneratorRTTTL3
-  - notes[] table extended to include octave 3 (prepended)
-  - Index formula changed from (scale-4)*12 to (scale-3)*12
-  - Clamp changed from scale>=4 to scale>=3
+  Based on the Rtttl Arduino library by James BM, https://github.com/spicajames/Rtttl
+  Based on the gist from Daniel Hall https://gist.github.com/smarthall/1618800
 
-  Based on AudioGeneratorRTTTL by Earle F. Philhower, III (GPL v3+).
+  Copyright (C) 2018  Earle F. Philhower, III
+
+  This program is free software: you can redistribute it and/or modify
+  it under the terms of the GNU General Public License as published by
+  the Free Software Foundation, either version 3 of the License, or
+  (at your option) any later version.
+
+  This program is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  GNU General Public License for more details.
+
+  You should have received a copy of the GNU General Public License
+  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+  See AudioGeneratorRTTTL.h for the list of Meshtastic modifications.
 */
 
-#include "AudioGeneratorRTTTL3.h"
+#include "configuration.h"
+
+// ESP8266Audio, which provides the AudioGenerator base class, is only pulled in
+// by boards that define HAS_I2S. Everything else - nRF52, RP2040, the native
+// test build - must not try to compile this.
+#ifdef HAS_I2S
+
+#include "AudioGeneratorRTTTL.h"
 #include <stdlib.h>
 
-AudioGeneratorRTTTL3::AudioGeneratorRTTTL3()
+namespace meshtastic
+{
+
+AudioGeneratorRTTTL::AudioGeneratorRTTTL()
 {
     running = false;
     file = NULL;
     output = NULL;
     rate = 22050;
     buff = nullptr;
+    len = 0;
     ptr = 0;
+    defaultDuration = 4;
+    defaultOctave = 6;
+    wholeNoteMS = 0;
+    ttlSamplesPerWaveFP10 = 0;
+    phaseFP10 = 0;
+    ttlSamples = 0;
+    samplesSent = 0;
 }
 
-AudioGeneratorRTTTL3::~AudioGeneratorRTTTL3()
+AudioGeneratorRTTTL::~AudioGeneratorRTTTL()
 {
     free(buff);
 }
 
-bool AudioGeneratorRTTTL3::stop()
+bool AudioGeneratorRTTTL::stop()
 {
     if (!file || !output)
         return false;
@@ -38,54 +68,70 @@ bool AudioGeneratorRTTTL3::stop()
     return file->close();
 }
 
-bool AudioGeneratorRTTTL3::isRunning()
+bool AudioGeneratorRTTTL::isRunning()
 {
     return running;
 }
 
-bool AudioGeneratorRTTTL3::loop()
+bool AudioGeneratorRTTTL::FillCurrentNote()
 {
-    if (!running)
-        goto done;
-
-    if (samplesSent == ttlSamples) {
-        if (!GetNextNote()) {
-            running = false;
-            goto done;
-        }
-        samplesSent = 0;
-    }
-
     if (ttlSamplesPerWaveFP10 == 0) {
         int16_t mute[2] = {0, 0};
-        while ((samplesSent < ttlSamples) && output->ConsumeSample(mute))
-            samplesSent++;
-    } else {
         while (samplesSent < ttlSamples) {
-            int samplesSentFP10 = samplesSent << 10;
-            int rem = samplesSentFP10 % ttlSamplesPerWaveFP10;
-            int16_t val = (rem > ttlSamplesPerWaveFP10 / 2) ? 8192 : -8192;
-            int16_t s[2] = {val, val};
-            if (!output->ConsumeSample(s))
-                goto done;
+            if (!output->ConsumeSample(mute))
+                return false;
             samplesSent++;
         }
+        return true;
     }
 
-done:
+    while (samplesSent < ttlSamples) {
+        int16_t val = (phaseFP10 > ttlSamplesPerWaveFP10 / 2) ? 8192 : -8192;
+        int16_t s[2] = {val, val};
+        if (!output->ConsumeSample(s))
+            return false;
+        samplesSent++;
+        // Advance the phase by one sample, wrapped, so this cannot overflow
+        // however long the note runs.
+        phaseFP10 += 1 << 10;
+        if (phaseFP10 >= ttlSamplesPerWaveFP10)
+            phaseFP10 -= ttlSamplesPerWaveFP10;
+    }
+    return true;
+}
+
+bool AudioGeneratorRTTTL::loop()
+{
+    if (!file || !output)
+        return false;
+
+    // Keep handing notes to the output until it refuses a sample, so a single
+    // call fills the whole DMA chain instead of stopping at the next note.
+    while (running) {
+        if (samplesSent == ttlSamples) {
+            if (!GetNextNote()) {
+                running = false;
+                break;
+            }
+            samplesSent = 0;
+        }
+        if (!FillCurrentNote())
+            break; // output is full; pick up here on the next call
+    }
+
     file->loop();
     output->loop();
     return running;
 }
 
-bool AudioGeneratorRTTTL3::SkipWhitespace()
+bool AudioGeneratorRTTTL::SkipWhitespace()
 {
     while ((ptr < len) && (buff[ptr] == ' '))
         ptr++;
     return ptr < len;
 }
 
-bool AudioGeneratorRTTTL3::ReadInt(int *dest)
+bool AudioGeneratorRTTTL::ReadInt(int *dest)
 {
     if (ptr >= len)
         return false;
@@ -95,13 +141,13 @@ bool AudioGeneratorRTTTL3::ReadInt(int *dest)
     if ((buff[ptr] < '0') || (buff[ptr] > '9'))
         return false;
     int t = 0;
-    while ((buff[ptr] >= '0') && (buff[ptr] <= '9'))
+    while ((ptr < len) && (buff[ptr] >= '0') && (buff[ptr] <= '9'))
         t = (t * 10) + (buff[ptr++] - '0');
     *dest = t;
     return true;
 }
 
-bool AudioGeneratorRTTTL3::ParseHeader()
+bool AudioGeneratorRTTTL::ParseHeader()
 {
     while ((ptr < len) && (buff[ptr] != ':'))
         ptr++;
@@ -120,6 +166,8 @@ bool AudioGeneratorRTTTL3::ParseHeader()
         return false;
     if (!ReadInt(&defaultDuration))
         return false;
+    if (defaultDuration <= 0)
+        return false; // would divide by zero in GetNextNote()
     if (!SkipWhitespace())
         return false;
     if (buff[ptr++] != ',')
@@ -153,6 +201,8 @@ bool AudioGeneratorRTTTL3::ParseHeader()
         return false;
     if (!ReadInt(&bpm))
         return false;
+    if (bpm <= 0)
+        return false; // would divide by zero below
     if (!SkipWhitespace())
         return false;
     if (buff[ptr++] != ':')
@@ -165,7 +215,7 @@ bool AudioGeneratorRTTTL3::ParseHeader()
 // Notes table covering octaves 3-7 (5 octaves * 12 notes + 1 rest = 61 entries).
 // Index formula: notes[(scale - 3) * 12 + note]  where note=1..12, scale=3..7.
 // note index: 1=C 2=C# 3=D 4=D# 5=E 6=F 7=F# 8=G 9=G# 10=A 11=A# 12=B
-static int notes3[61] = {
+static const int notes[61] = {
     0, // rest
     // octave 3
     131,
@@ -234,13 +284,16 @@ static int notes3[61] = {
     3951,
 };
 
-bool AudioGeneratorRTTTL3::GetNextNote()
+static const int kLowestOctave = 3;
+static const int kHighestOctave = 7;
+
+bool AudioGeneratorRTTTL::GetNextNote()
 {
     int dur, note, scale;
     if (ptr >= len)
         return false;
 
-    if (!ReadInt(&dur))
+    if (!ReadInt(&dur) || (dur <= 0))
         dur = defaultDuration;
     dur = wholeNoteMS / dur;
 
@@ -285,7 +338,10 @@ bool AudioGeneratorRTTTL3::GetNextNote()
     }
     if ((ptr < len) && (buff[ptr] == '#')) {
         ptr++;
-        note++;
+        // "b#" and "e#" are not legal RTTTL, but a malformed string can still
+        // contain them, and note==13 would index one past the table.
+        if (note < 12)
+            note++;
     }
     if (!ReadInt(&scale))
         scale = defaultOctave;
@@ -298,22 +354,23 @@ bool AudioGeneratorRTTTL3::GetNextNote()
         ptr++;
 
     // Clamp to the supported range (octaves 3-7).
-    if (scale < 3)
-        scale = 3;
-    if (scale > 7)
-        scale = 7;
+    if (scale < kLowestOctave)
+        scale = kLowestOctave;
+    if (scale > kHighestOctave)
+        scale = kHighestOctave;
 
     if (note) {
-        int freq = notes3[(scale - 3) * 12 + note];
+        int freq = notes[(scale - kLowestOctave) * 12 + note];
         ttlSamplesPerWaveFP10 = (rate << 10) / freq;
     } else {
         ttlSamplesPerWaveFP10 = 0;
     }
+    phaseFP10 = 0;
     ttlSamples = (rate * dur) / 1000;
     return true;
 }
 
-bool AudioGeneratorRTTTL3::begin(AudioFileSource *source, AudioOutput *output)
+bool AudioGeneratorRTTTL::begin(AudioFileSource *source, AudioOutput *output)
 {
     if (!source)
         return false;
@@ -325,6 +382,8 @@ bool AudioGeneratorRTTTL3::begin(AudioFileSource *source, AudioOutput *output)
         return false;
 
     len = file->getSize();
+    if (len <= 0)
+        return false;
     buff = (char *)malloc(len);
     if (!buff)
         return false;
@@ -334,14 +393,16 @@ bool AudioGeneratorRTTTL3::begin(AudioFileSource *source, AudioOutput *output)
     ptr = 0;
     samplesSent = 0;
     ttlSamples = 0;
+    phaseFP10 = 0;
 
     if (!ParseHeader())
         return false;
 
     if (!output->SetRate(rate))
         return false;
-    if (!output->SetBitsPerSample(16))
-        return false;
+    // No SetBitsPerSample() here: ESP8266Audio 2.4.x dropped it (16-bit is assumed),
+    // and on the 2.0.0 fork the variants pin, AudioOutputI2S already defaults bps to
+    // 16 in its constructor - so the call was redundant there and breaks the build on 2.4.x.
     if (!output->SetChannels(2))
         return false;
     if (!output->begin())
@@ -350,3 +411,7 @@ bool AudioGeneratorRTTTL3::begin(AudioFileSource *source, AudioOutput *output)
     running = true;
     return true;
 }
+
+} // namespace meshtastic
+
+#endif // HAS_I2S

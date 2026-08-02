@@ -30,6 +30,11 @@
 #include "error.h"
 #include "gps/RTC.h"
 
+#ifdef SENSECAP_INDICATOR // on the indicator run the additional serial port for the RP2040
+#include "IndicatorSerial.h"
+#include "mesh/comms/I2CProxy.h"
+#endif
+
 #if !MESHTASTIC_EXCLUDE_I2C
 #include "detect/ScanI2CConsumer.h"
 #include "detect/ScanI2CTwoWire.h"
@@ -108,6 +113,9 @@ NRF54L15Bluetooth *nrf54l15Bluetooth = nullptr;
 #include "mesh/raspihttp/PiWebServer.h"
 #endif
 #include "platform/portduino/PortduinoGlue.h"
+#ifdef _WIN32
+#include "platform/portduino/windows/WindowsService.h"
+#endif
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -565,7 +573,10 @@ void setup()
 #endif
 
 #if !MESHTASTIC_EXCLUDE_I2C
-#if defined(I2C_SDA1) && defined(ARCH_RP2040)
+#if defined(SENSECAP_INDICATOR)
+    // The Sensecap Indicator has its second I2C bus on the RP2040, bridged
+    // over serial as i2cProxy. No local interface to initialize.
+#elif defined(I2C_SDA1) && defined(ARCH_RP2040)
     Wire1.setSDA(I2C_SDA1);
     Wire1.setSCL(I2C_SCL1);
     Wire1.begin();
@@ -628,6 +639,20 @@ void setup()
     mcp23017EarlyInit();
 #endif
 
+#ifdef SENSECAP_INDICATOR
+    // Power the RP2040 co-processor and start the interdevice link before the
+    // I2C scan, so that its bus can be probed through the bridge
+#ifdef SENSOR_POWER_CTRL_EXPANDER
+    pinMode(SENSOR_POWER_CTRL_EXPANDER, OUTPUT);
+    digitalWrite(SENSOR_POWER_CTRL_EXPANDER, SENSOR_POWER_ON_EXPANDER);
+#endif
+    sensecapIndicator = new SensecapIndicator(Serial2);
+    // the bus behind it is scanned right below and its devices are registered
+    // once, so the link has to be up by then
+    if (!sensecapIndicator->wait_ready(5000))
+        LOG_ERROR("RP2040 co-processor did not answer, its sensors, GPS and SD card are unavailable this session");
+#endif
+
 #if !MESHTASTIC_EXCLUDE_I2C
     // We need to scan here to decide if we have a screen for nodeDB.init() and because power has been applied to
     // accessories
@@ -636,7 +661,7 @@ void setup()
     LOG_INFO("Scan for i2c devices");
 #endif
 
-#if defined(I2C_SDA1) || (defined(NRF52840_XXAA) && (WIRE_INTERFACES_COUNT == 2))
+#if defined(SENSECAP_INDICATOR) || defined(I2C_SDA1) || (defined(NRF52840_XXAA) && (WIRE_INTERFACES_COUNT == 2))
     i2cScanner->scanPort(ScanI2C::I2CPort::WIRE1);
 #endif
 
@@ -844,8 +869,8 @@ void setup()
     router = new ReliableRouter();
 
     // only play start melody when role is not tracker or sensor
-    // audioThread is not created yet - melody queues via queueRttl() and
-    // flushes in loop() once the I2S DMA has warmed up (pumpTicks >= 20).
+    // On I2S boards audioThread does not exist yet, so buzz.cpp queues the melody
+    // and buzzOnAudioThreadReady() hands it over once the thread is up.
     if (config.power.is_power_saving == true &&
         IS_ONE_OF(config.device.role, meshtastic_Config_DeviceConfig_Role_TRACKER,
                   meshtastic_Config_DeviceConfig_Role_TAK_TRACKER, meshtastic_Config_DeviceConfig_Role_SENSOR))
@@ -855,9 +880,13 @@ void setup()
 
 #if HAS_SCREEN
         // fixed screen override?
+        // The geometry picks below are skipped on variants that pin the panel size with
+        // OLED_GEOMETRY_OVERRIDE (see the end of this block) - there they would only be dead stores.
 #if defined(USE_SH1107)
     screen_model = meshtastic_Config_DisplayConfig_OledType_OLED_SH1107; // set dimension of 128x128
+#ifndef OLED_GEOMETRY_OVERRIDE
     screen_geometry = GEOMETRY_128_128;
+#endif
 #elif defined(USE_SH1107_128_64)
     screen_model = meshtastic_Config_DisplayConfig_OledType_OLED_SH1107; // keep dimension of 128x64
 #else
@@ -866,7 +895,9 @@ void setup()
 
         // Fix: update geometry for SH1107 128x128 selected via menu
         if (screen_model == meshtastic_Config_DisplayConfig_OledType_OLED_SH1107_128_128) {
+#ifndef OLED_GEOMETRY_OVERRIDE
             screen_geometry = GEOMETRY_128_128;
+#endif
             screen_model = meshtastic_Config_DisplayConfig_OledType_OLED_SH1107; // normalize
         }
     }
@@ -1035,14 +1066,13 @@ void setup()
     LOG_DEBUG("Start audio thread");
     audioThread = new AudioThread();
 #if defined(ARDUINO_ARCH_ESP32)
-    if (audioThread && audioThread->isFreeRTOSTask()) {
-        if (!audioThread->startFreeRTOSTask()) {
-            LOG_ERROR("Failed to start AudioThread FreeRTOS task");
-            delete audioThread;
-            audioThread = nullptr;
-        }
-    }
+    // Not fatal: startFreeRTOSTask() leaves the thread on the ThreadController,
+    // so playback still works, just paced by the main loop.
+    if (audioThread->isFreeRTOSTask() && !audioThread->startFreeRTOSTask())
+        LOG_ERROR("AudioThread task create failed, falling back to cooperative scheduling");
 #endif
+    // Play the boot melody that setup() queued before we got here.
+    buzzOnAudioThreadReady();
 #endif
 
 #ifdef HAS_UDP_MULTICAST
@@ -1240,6 +1270,11 @@ void setup()
             }
         }
     }
+#endif
+
+#if defined(ARCH_PORTDUINO) && defined(_WIN32)
+    // The node is up; let the SCM stop waiting on START_PENDING. No-op unless --service.
+    windowsServiceReportRunning();
 #endif
 }
 
@@ -1463,25 +1498,6 @@ void loop()
     if (inputBroker)
         inputBroker->processInputEventQueue();
 #endif
-
-// Flush queued boot melody once I2S DMA has warmed up (20 pump ticks ~= 1s)
-#if defined(HAS_I2S) && defined(ARDUINO_ARCH_ESP32)
-    {
-        static bool bootMelodyFlushed = false;
-        static uint32_t flushStartMs = 0;
-        if (!bootMelodyFlushed && audioThread) {
-            if (flushStartMs == 0)
-                flushStartMs = millis();
-            const bool warmedUp = (audioThread->pumpTicks() >= 20);
-            const bool timeFallback = ((millis() - flushStartMs) >= 800);
-            if (warmedUp || timeFallback) {
-                buzzOnAudioThreadReady();
-                bootMelodyFlushed = true;
-            }
-        }
-    }
-#endif
-
 #if ARCH_PORTDUINO
     if (portduino_config.lora_spi_dev == "ch341" && ch341Hal != nullptr) {
         ch341Hal->checkError();

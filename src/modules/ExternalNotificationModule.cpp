@@ -79,7 +79,7 @@ int32_t ExternalNotificationModule::runOnce()
         uint32_t delay = EXT_NOTIFICATION_MODULE_OUTPUT_MS;
         bool isRtttlPlaying = rtttl::isPlaying();
 #ifdef HAS_I2S
-        // audioThread->isPlaying() also handles actually playing the RTTTL, needs to be called in loop
+        // Pure query: audioThread pumps the RTTTL itself, we only ask if it is done
         isRtttlPlaying = isRtttlPlaying || audioThread->isPlaying();
 #endif
         if ((nagCycleCutoff < millis()) && !isRtttlPlaying) {
