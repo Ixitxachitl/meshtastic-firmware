@@ -3,6 +3,8 @@
 #include "NodeDB.h"
 #include "gps/GeoCoord.h"
 #include "graphics/SharedUIDisplay.h"
+#include "graphics/TFTColorRegions.h"
+#include "graphics/TFTPalette.h"
 #include "graphics/images.h"
 #include "graphics/niche/Map/MapTileRenderer.h"
 
@@ -14,6 +16,8 @@
 #endif
 
 #include <math.h>
+#include <stdlib.h>
+#include <string.h>
 
 using namespace graphics;
 
@@ -40,6 +44,77 @@ float metersToPxForZoom(int zoom, float latDeg)
     float latRad = latDeg * DEG_TO_RAD;
     float mpp = (2.0f * (float)M_PI * kEarthRadiusMeters / (256.0f * (float)(1 << zoom))) * cosf(latRad);
     return mpp > 0.0f ? 1.0f / mpp : 0.0f;
+}
+
+// Web Mercator projection, in whole world pixels at `zoom` - the same convention the basemap
+// tiles themselves are cut on (see MapTileRenderer's gpxX/gpxY), just kept in double here.
+// A float mantissa is 24 bits, but the world is 256 * 2^18 = 67.1M px wide at kMaxZoom, so a
+// float can't even represent adjacent world pixels at deep zoom - which is exactly the resolution
+// the snapping below needs to be exact at.
+constexpr double kWorldPxPerTile = 256.0;
+constexpr double kMercatorLatLimit = 85.05112878; // Where the projection reaches the square world edge
+
+double worldPxAtZoom(int zoom)
+{
+    return kWorldPxPerTile * (double)(1u << zoom);
+}
+
+void latLngToWorldPx(double latDeg, double lngDeg, int zoom, double *wx, double *wy)
+{
+    const double worldPx = worldPxAtZoom(zoom);
+    if (latDeg > kMercatorLatLimit)
+        latDeg = kMercatorLatLimit;
+    if (latDeg < -kMercatorLatLimit)
+        latDeg = -kMercatorLatLimit;
+    const double s = sin(latDeg * (double)DEG_TO_RAD);
+    *wx = (lngDeg + 180.0) / 360.0 * worldPx;
+    *wy = (0.5 - log((1.0 + s) / (1.0 - s)) / (4.0 * M_PI)) * worldPx;
+}
+
+void worldPxToLatLng(double wx, double wy, int zoom, float *latDeg, float *lngDeg)
+{
+    const double worldPx = worldPxAtZoom(zoom);
+    *lngDeg = (float)(wx / worldPx * 360.0 - 180.0);
+    // Inverse of the y term above: atanh(sin(lat)) == asinh(tan(lat)), so lat == atan(sinh(...)).
+    *latDeg = (float)(atan(sinh(M_PI * (1.0 - 2.0 * wy / worldPx))) * (double)RAD_TO_DEG);
+}
+
+// Rounds the view centre to the nearest whole world pixel at `zoom`, rewriting *lat/*lng to that
+// snapped position and reporting it as integer world coordinates for the basemap cache key.
+//
+// Follow Me re-centres on the live GPS fix every single frame, and at z14+ (a couple of metres per
+// screen pixel) the ordinary sub-metre jitter between consecutive fixes shifts the projected centre
+// by a fraction of a pixel every time. Nothing on screen actually moves, but the float centre keeps
+// differing, which would miss the rendered-basemap cache below on every frame and - worse - keeps
+// nudging the node markers' colour regions across pixel boundaries, and TFTDisplay hashes those
+// regions into the frame signature it uses to decide between a per-row diff and a full-panel
+// repaint (see TFTDisplay::display). Snapping to the grid the basemap is drawn on anyway makes both
+// stable: the view now only changes when it changes by something actually visible.
+//
+// Deliberately does not write the snapped value back into s_centerLat/s_centerLng. Those stay the
+// true (unsnapped) pan/GPS position, so re-snapping them next frame is a pure function of an
+// unchanged input and lands on the same pixel every time - whereas feeding a snapped value back in
+// could round-trip across a half-pixel boundary and oscillate between two neighbouring pixels.
+void snapCenterToPixelGrid(float *lat, float *lng, int zoom, int32_t *outWx, int32_t *outWy)
+{
+    const double worldPx = worldPxAtZoom(zoom);
+    double wx, wy;
+    latLngToWorldPx(*lat, *lng, zoom, &wx, &wy);
+
+    wx = floor(wx + 0.5);
+    wy = floor(wy + 0.5);
+
+    wx = fmod(wx, worldPx); // Longitude wraps at the antimeridian...
+    if (wx < 0)
+        wx += worldPx;
+    if (wy < 0) // ...latitude doesn't; it just stops at the projection's edge.
+        wy = 0;
+    if (wy > worldPx - 1)
+        wy = worldPx - 1;
+
+    *outWx = (int32_t)wx;
+    *outWy = (int32_t)wy;
+    worldPxToLatLng(wx, wy, zoom, lat, lng);
 }
 
 // Cartesian-average centroid of all known node positions - mirrors InkHUD MapApplet's default
@@ -223,6 +298,101 @@ void ensureFileTileSourceInitialized()
 }
 #endif
 
+// Rendered-basemap cache: the tile background for one (snapped centre, zoom, viewport size) kept
+// as a screen-sized 1bpp bitmap, so a view that hasn't moved repaints from RAM.
+//
+// drawMapFrame is a plain frame callback, so it re-runs on every ui->update(): once a second when
+// idle, but at SCREEN_TRANSITION_FRAMERATE (30fps) while animating between frames, and again for
+// every forced repaint - a button press, the header clock ticking over. Regenerating the tile
+// background each of those times meant re-reading and re-LZ4-decompressing every tile in view,
+// which is what made the Map frame stall the whole display task at deep zoom. A tile is 512 stored
+// pixels but only 256 *screen* pixels wide, so any viewport wider than that spans two tile columns
+// (and two rows), while MapTileRenderer's own cache holds exactly one decoded tile - and since the
+// tiles are visited in the same order each frame, the one left in that slot is always the last one
+// the next frame wants, i.e. it missed on every tile of every frame. Tiles at z14+ are dense enough
+// that LZ4 barely compresses them, so each of those misses is a read of up to kTileBufferBytes.
+//
+// Caching the *rendered* result rather than the decoded tiles is both far smaller (a 1bpp viewport
+// is a fraction of even one 32KB tile buffer) and covers the whole cost, decode and blit alike.
+uint8_t *s_basemapBits = nullptr; // 1bpp, row-major, s_basemapStride bytes per row
+size_t s_basemapCapacity = 0;
+int16_t s_basemapStride = 0;
+bool s_basemapValid = false;
+
+// Identifies exactly what s_basemapBits currently holds. Anything that would change a single
+// basemap pixel has to be in here.
+struct BasemapKey {
+    int32_t worldX, worldY; // Snapped centre, in whole world pixels at `zoom`
+    int16_t zoom;
+    int16_t width, height;
+    bool haveTiles; // A tile source can appear after the first draw - see ensureFileTileSourceInitialized
+
+    bool operator==(const BasemapKey &o) const
+    {
+        return worldX == o.worldX && worldY == o.worldY && zoom == o.zoom && width == o.width && height == o.height &&
+               haveTiles == o.haveTiles;
+    }
+};
+BasemapKey s_basemapKey{};
+
+// Returns false if there's no room for the cache, in which case the caller falls back to rendering
+// tiles straight into the display buffer (the original, uncached behaviour) rather than losing the
+// basemap entirely.
+bool ensureBasemapBuffer(int16_t viewWidth, int16_t viewHeight)
+{
+    if (viewWidth <= 0 || viewHeight <= 0)
+        return false;
+
+    const int16_t stride = (int16_t)((viewWidth + 7) / 8);
+    const size_t needed = (size_t)stride * (size_t)viewHeight;
+
+    if (!s_basemapBits || s_basemapCapacity < needed) {
+        free(s_basemapBits);
+        s_basemapBits = (uint8_t *)malloc(needed);
+        s_basemapCapacity = s_basemapBits ? needed : 0;
+        s_basemapValid = false;
+        if (!s_basemapBits)
+            return false;
+    }
+    if (stride != s_basemapStride) {
+        s_basemapStride = stride; // Different row layout - whatever's in there no longer decodes.
+        s_basemapValid = false;
+    }
+    return true;
+}
+
+struct BasemapPlotCtx {
+    uint8_t *bits;
+    int16_t stride, width, height;
+};
+
+void plotIntoBasemap(void *ctx, int16_t px, int16_t py)
+{
+    auto *c = static_cast<BasemapPlotCtx *>(ctx);
+    if (px < 0 || px >= c->width || py < 0 || py >= c->height)
+        return;
+    c->bits[(size_t)py * c->stride + (px >> 3)] |= (uint8_t)(1 << (px & 7));
+}
+
+void blitBasemap(OLEDDisplay *display, int16_t offX, int16_t offY, int16_t viewWidth, int16_t viewHeight)
+{
+    for (int16_t py = 0; py < viewHeight; py++) {
+        const uint8_t *row = s_basemapBits + (size_t)py * s_basemapStride;
+        for (int16_t bx = 0; bx < s_basemapStride; bx++) {
+            uint8_t bits = row[bx];
+            if (!bits) // The common case by far on a 1bpp basemap - skip 8 pixels at a time.
+                continue;
+            const int16_t baseX = (int16_t)(bx * 8);
+            for (int b = 0; b < 8; b++) {
+                if (baseX + b >= viewWidth)
+                    break;
+                if (bits & (1 << b))
+                    display->setPixel(offX + baseX + b, offY + py);
+            }
+        }
+    }
+}
+
 // Offsets used to build a 1px halo by blitting a glyph/icon 8 times before the real draw - see
 // drawHaloXbm/drawHaloString below.
 constexpr int8_t kHaloOffsets[8][2] = {{-1, -1}, {0, -1}, {1, -1}, {-1, 0}, {1, 0}, {-1, 1}, {0, 1}, {1, 1}};
@@ -248,6 +418,31 @@ void drawHaloString(OLEDDisplay *display, int16_t x, int16_t y, const char *text
     display->setColor(BLACK);
     display->drawString(x, y, text);
 }
+
+#if GRAPHICS_TFT_COLORING_ENABLED
+// Colour screens tint only the 2x2 dot at the centre of each node marker red. Everything else -
+// the marker ring, its halo, and the name labels - is left exactly as the monochrome drawing above
+// produces it (black glyph, white halo).
+//
+// icon_map_node is a ring with a 2x2 centre dot at columns/rows 3-4 of its 8x8 box, so drawing the
+// icon at (mx - 4, my - 4) puts that dot at (mx - 1, my - 1)..(mx, my). drawHaloXbm renders the
+// glyph itself with BLACK, i.e. as *cleared* pixels, so the region maps unset -> red to catch the
+// dot. set -> white matches what TFTDisplay already paints set pixels with, so the surrounding halo
+// is unaffected. The box is only 2x2, so there is no room for basemap content to be tinted with it.
+//
+// colorRegions[] is a fixed global pool shared with the header, and it silently evicts the oldest
+// entry once full, so this is capped well short of the pool size - markers past the cap still draw,
+// just with a black centre, rather than pushing the header's own regions out.
+constexpr int kMaxNodeColorRegions = 24;
+
+void tintMarkerCenter(int16_t centerX, int16_t centerY, int &budget)
+{
+    if (budget <= 0)
+        return;
+    registerTFTColorRegionDirect(centerX - 1, centerY - 1, 2, 2, TFTPalette::White, TFTPalette::Red);
+    budget--;
+}
+#endif
 
 } // namespace
 
@@ -390,6 +585,14 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
 
     ensureZoomInitialized(centerLat, centerLng);
     const int zoom = s_zoom;
+
+    // Round the centre onto the basemap's own pixel grid before anything is projected from it, so
+    // that sub-pixel GPS jitter can't move the view - see snapCenterToPixelGrid. Everything below
+    // (basemap, markers, the self crosshair, the coordinate label) then works from the snapped
+    // centre, so they all stay pinned to each other and to the tiles.
+    int32_t snappedWorldX = 0, snappedWorldY = 0;
+    snapCenterToPixelGrid(&centerLat, &centerLng, zoom, &snappedWorldX, &snappedWorldY);
+
     const float metersToPx = metersToPxForZoom(zoom, centerLat);
 
     struct PlotCtx {
@@ -397,13 +600,29 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         int16_t offX, offY;
     } plotCtx{display, x, y};
 
-    NicheGraphics::MapTiles::drawTileBackground(
-        centerLat, centerLng, zoom, metersToPx, viewWidth, viewHeight,
-        [](void *ctx, int16_t px, int16_t py) {
-            auto *c = static_cast<PlotCtx *>(ctx);
-            c->display->setPixel(c->offX + px, c->offY + py);
-        },
-        &plotCtx);
+    const BasemapKey basemapKey{snappedWorldX, snappedWorldY, (int16_t)zoom,
+                                viewWidth,     viewHeight,    NicheGraphics::MapTiles::hasTiles()};
+
+    if (ensureBasemapBuffer(viewWidth, viewHeight)) {
+        if (!s_basemapValid || !(s_basemapKey == basemapKey)) {
+            memset(s_basemapBits, 0, (size_t)s_basemapStride * (size_t)viewHeight);
+            BasemapPlotCtx basemapCtx{s_basemapBits, s_basemapStride, viewWidth, viewHeight};
+            NicheGraphics::MapTiles::drawTileBackground(centerLat, centerLng, zoom, metersToPx, viewWidth, viewHeight,
+                                                        plotIntoBasemap, &basemapCtx);
+            s_basemapKey = basemapKey;
+            s_basemapValid = true;
+        }
+        blitBasemap(display, x, y, viewWidth, viewHeight);
+    } else {
+        // No room for the cache - render tiles straight into the display buffer, as before.
+        NicheGraphics::MapTiles::drawTileBackground(
+            centerLat, centerLng, zoom, metersToPx, viewWidth, viewHeight,
+            [](void *ctx, int16_t px, int16_t py) {
+                auto *c = static_cast<PlotCtx *>(ctx);
+                c->display->setPixel(c->offX + px, c->offY + py);
+            },
+            &plotCtx);
+    }
 
     // Known node markers (self is drawn separately, last, so it's always on top).
     const NodeNum ourNodeNum = nodeDB->getNodeNum();
@@ -429,6 +648,10 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     int16_t labelW[kMaxLabelsTracked];
     int16_t labelH[kMaxLabelsTracked];
     int labelCount = 0;
+
+#if GRAPHICS_TFT_COLORING_ENABLED
+    int nodeColorRegions = kMaxNodeColorRegions; // budget for the red marker-centre tints
+#endif
 
     // FONT_SMALL_LOCAL rather than FONT_SMALL deliberately: on TFT/HAS_SPI_TFT builds FONT_SMALL is
     // redirected to the 19px-tall medium font (bigger screen, so BaseUI normally wants bigger text)
@@ -474,6 +697,9 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         }
 
         drawHaloXbm(display, mx - 4, my - 4, 8, 8, icon_map_node);
+#if GRAPHICS_TFT_COLORING_ENABLED
+        tintMarkerCenter(mx, my, nodeColorRegions);
+#endif
 
         if (node->short_name[0] != '\0') {
             int16_t lx = mx + 5;
