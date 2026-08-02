@@ -20,6 +20,16 @@ class BHI260APSensor : public MotionSensor
     SensorStepDetector *stepDetector;
     uint32_t steps = 0;
 
+    // Virtual sensor driving wake-on-motion, or 0 if the loaded firmware image offers none. Plain
+    // uint8_t rather than BoschSensorID: the BHI3 gesture IDs are #defines outside that enum.
+    uint8_t wakeGesture = 0;
+    float wakeGestureRate = 0;
+    bool wakeGestureFired = false;
+
+    // Pick the best wake trigger the running firmware image actually reports as available
+    uint8_t selectWakeGesture(const BoschSensorInfo &info) const;
+    static void onWakeGesture(uint8_t sensor_id, uint8_t *data, uint32_t size, uint64_t *timestamp, void *user_data);
+
   public:
     explicit BHI260APSensor(ScanI2C::FoundDevice foundDevice);
     virtual bool init() override;
