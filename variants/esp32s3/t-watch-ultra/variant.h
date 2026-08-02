@@ -62,6 +62,9 @@
 
 #define HAS_BHI260AP
 #define BHI260AP_INT 8
+// Measured from the gravity vector: the part's own axes already line up with the watch (X at 3
+// o'clock, Y at 12, Z out of the screen), so no remapping. Required for the wrist-tilt gesture.
+#define BHI260AP_REMAP_AXES TOP_LAYER_LEFT_CORNER
 #undef MESHTASTIC_EXCLUDE_ACCELEROMETER
 #define SHOW_STEP_COUNTER
 
