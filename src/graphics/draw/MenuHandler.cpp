@@ -2978,7 +2978,7 @@ void menuHandler::mapBaseMenu()
             // Screen::handleInputEvent) - not a picker like Follow Me.
             graphics::MapRenderer::setPanModeEnabled(true);
 #else
-            // No joystick/keyboard to hold a direction on (e.g. T-Beam 1W) - offer each
+            // No joystick/keyboard to hold a direction on - offer each
             // direction as its own menu option instead (see mapPanMenu()).
             menuQueue = MapPanMenu;
             screen->runNow();

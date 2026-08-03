@@ -22,7 +22,7 @@ namespace graphics
  * A regular select press opens the Map's own menu (menuHandler::mapBaseMenu). On devices with real
  * directional input (HAS_DIRECTIONAL_INPUT - a keyboard, rotary encoder, touchscreen, or
  * trackball), Pan Mode and Zoom Level are both entered directly from that menu (not a picker) and
- * held until Back is pressed. Two-button-only devices (e.g. T-Beam 1W) have no direction to hold,
+ * held until Back is pressed. Two-button-only devices have no direction to hold,
  * so they instead get mapPanMenu()/mapZoomLevelMenu() - discrete-option pickers that step the view
  * one direction/level per selection, navigable the same button-press way as every other menu.
  * Follow Me is a plain on/off toggle picker on every device.
