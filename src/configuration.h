@@ -430,6 +430,15 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #ifndef BASEUI_HAS_GAMES
 #define BASEUI_HAS_GAMES 0
 #endif
+// Opt-in: build the BaseUI map frame (basemap tiles + node markers, with pan/zoom/follow-me).
+// Off by default because it costs real flash and needs a provisioned MAP.BIN to be useful; enable
+// per build/variant with -DBASEUI_HAS_MAP=1. Only takes effect on displays with the pixels to
+// spare - the frame still requires GRAPHICS_TFT_COLORING_ENABLED or USE_EINK at the point it is
+// registered (see Screen::setFrames). Independent of InkHUD's own map applet, which shares the
+// tile decoder in graphics/niche/Map/ and is always built.
+#ifndef BASEUI_HAS_MAP
+#define BASEUI_HAS_MAP 0
+#endif
 #ifndef HAS_WIRE
 #define HAS_WIRE 0
 #endif

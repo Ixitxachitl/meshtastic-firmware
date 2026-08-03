@@ -5,7 +5,8 @@
 // whole file silently preprocesses away to nothing on ESP32 targets (link errors, no compile error).
 #include "FSCommon.h"
 
-#if defined(ARCH_PORTDUINO) || defined(ARCH_ESP32)
+// BASEUI_HAS_MAP too - see MapTileSourceSD.h for why this source is BaseUI-only.
+#if BASEUI_HAS_MAP && (defined(ARCH_PORTDUINO) || defined(ARCH_ESP32))
 
 #include "./MapTileBlobFormat.h"
 

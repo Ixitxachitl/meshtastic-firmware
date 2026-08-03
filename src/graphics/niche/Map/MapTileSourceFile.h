@@ -27,7 +27,10 @@ itself.
 
 #include "./MapTileBlobFormat.h" // TileBlobZoomRange, kTileBlobMaxZoomRanges
 #include "./MapTileRenderer.h"
-#include "FSCommon.h" // File
+#include "FSCommon.h" // File, and configuration.h for BASEUI_HAS_MAP
+
+// See MapTileSourceSD.h - this source is BaseUI-map-only, so it compiles away with the frame.
+#if BASEUI_HAS_MAP
 
 namespace NicheGraphics::MapTiles
 {
@@ -67,3 +70,5 @@ class FileTileSource : public TileSource
 };
 
 } // namespace NicheGraphics::MapTiles
+
+#endif // BASEUI_HAS_MAP

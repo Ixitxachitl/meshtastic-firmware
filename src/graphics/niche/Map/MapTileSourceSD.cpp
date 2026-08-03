@@ -1,6 +1,6 @@
 #include "./MapTileSourceSD.h"
 
-#if defined(HAS_SDCARD)
+#if defined(HAS_SDCARD) && BASEUI_HAS_MAP
 
 #include "DebugConfiguration.h"
 #include "SPILock.h"

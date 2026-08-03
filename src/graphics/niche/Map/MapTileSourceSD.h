@@ -28,7 +28,10 @@ crashed a worldwide z0-10 bake (1.4M tiles) on the T-Deck: the old version loade
 // FSCommon.h include for the same trap with ARCH_ESP32/ARCH_PORTDUINO.
 #include "configuration.h"
 
-#if defined(HAS_SDCARD)
+// BASEUI_HAS_MAP too: this source exists solely to feed BaseUI's map frame (MapRenderer.cpp is the
+// only caller of setTileSource). InkHUD's map applet uses the compiled-in MapTile.h fallback
+// instead, so gating here keeps map-disabled builds from pulling SdFat in via the include below.
+#if defined(HAS_SDCARD) && BASEUI_HAS_MAP
 
 #include "./MapTileBlobFormat.h" // TileBlobZoomRange, kTileBlobMaxZoomRanges
 #include "./MapTileRenderer.h"

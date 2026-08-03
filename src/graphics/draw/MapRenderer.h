@@ -1,5 +1,12 @@
 #pragma once
 
+// configuration.h is what defines BASEUI_HAS_MAP (see the opt-in block there) - include it before
+// the guard below, or this whole header silently preprocesses away to nothing and every call site
+// fails at link time instead of compile time. Same trap MapTileSourceSD.h documents for HAS_SDCARD.
+#include "configuration.h"
+
+#if BASEUI_HAS_MAP
+
 #include "graphics/Screen.h"
 #include <OLEDDisplay.h>
 #include <OLEDDisplayUi.h>
@@ -19,6 +26,9 @@ namespace graphics
  * so they instead get mapPanMenu()/mapZoomLevelMenu() - discrete-option pickers that step the view
  * one direction/level per selection, navigable the same button-press way as every other menu.
  * Follow Me is a plain on/off toggle picker on every device.
+ *
+ * Opt-in at build time via -DBASEUI_HAS_MAP=1; off by default, and even then only registered as a
+ * frame on TFT-color or E-Ink displays (see Screen::setFrames).
  */
 namespace MapRenderer
 {
@@ -60,3 +70,5 @@ constexpr int kMaxZoom = 18;
 } // namespace MapRenderer
 
 } // namespace graphics
+
+#endif // BASEUI_HAS_MAP

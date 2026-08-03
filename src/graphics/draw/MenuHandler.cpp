@@ -2935,6 +2935,7 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
     case LicensedToNormalConfirm:
         licensedToNormalConfirmMenu();
         break;
+#if BASEUI_HAS_MAP
     case MapBaseMenu:
         mapBaseMenu();
         break;
@@ -2947,10 +2948,12 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
     case MapPanMenu:
         mapPanMenu();
         break;
+#endif
     }
     menuQueue = MenuNone;
 }
 
+#if BASEUI_HAS_MAP
 void menuHandler::mapBaseMenu()
 {
     enum class MapAction { PanMode, FollowMe, ZoomLevel };
@@ -3132,6 +3135,7 @@ void menuHandler::mapPanMenu()
 
     screen->showOverlayBanner(bannerOptions);
 }
+#endif // BASEUI_HAS_MAP
 
 void menuHandler::saveUIConfig()
 {
