@@ -449,13 +449,16 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 
     // Vertical anchor for the first line of content.
 #if BASEUI_BELOW_HEADER_MARGIN > 0
-    // Variants that reserve a below-header margin draw a header taller than the generic
-    // first-line offset, so anchoring there tucked the topmost bubble - and the text
-    // inside it - underneath the header. Start below the header instead, leaving room
-    // for the bubble's top padding so the clamp further down is a no-op.
-    const int firstLineTop = navHeight + 1 + BUBBLE_PAD_TOP_HEADER;
+    // These variants draw a header taller than the generic first-line offset, so anchoring
+    // there tucked the topmost bubble - and the text inside it - underneath it. Sit directly
+    // on the header's painted bottom edge (drawCommonHeader fills down to headerHeight) and
+    // deliberately skip the below-header margin other screens reserve, leaving only enough
+    // room for the bubble's own top padding so the clamp further down is a no-op.
+    const int contentTop = FONT_HEIGHT_SMALL + 1 + BASEUI_HEADER_MARGIN;
+    const int firstLineTop = contentTop + 1 + BUBBLE_PAD_TOP_HEADER;
     const int usableHeight = scrollBottom - firstLineTop;
 #else
+    const int contentTop = navHeight;
     const int firstLineTop = getTextPositions(display)[1];
     const int usableHeight = scrollBottom;
 #endif
@@ -464,9 +467,20 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     const bool showBubbles = config.display.enable_message_bubbles;
     const int textIndent = showBubbles ? (BUBBLE_PAD_X + BUBBLE_TEXT_INDENT) : LEFT_MARGIN;
 
+    // Centred boxes live in a band that is symmetric about the panel centre, so both
+    // senders wrap to the same width - otherwise the scrollbar side wraps wider than the
+    // band and the box gets clipped rather than centred.
+    constexpr int BUBBLE_EDGE_INSET =
+        (LEFT_MARGIN > (SCROLLBAR_WIDTH + RIGHT_MARGIN)) ? LEFT_MARGIN : (SCROLLBAR_WIDTH + RIGHT_MARGIN);
+
     // Derived widths
+#if BASEUI_CENTER_MESSAGE_BUBBLES
+    const int leftTextWidth = SCREEN_WIDTH - (BUBBLE_EDGE_INSET * 2) - (showBubbles ? (textIndent * 2) : 0);
+    const int rightTextWidth = leftTextWidth;
+#else
     const int leftTextWidth = SCREEN_WIDTH - LEFT_MARGIN - RIGHT_MARGIN - (showBubbles ? (BUBBLE_PAD_X * 2) : 0);
     const int rightTextWidth = SCREEN_WIDTH - LEFT_MARGIN - RIGHT_MARGIN - SCROLLBAR_WIDTH;
+#endif
 
     // Title string depending on mode
     char titleStr[48];
@@ -750,7 +764,6 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 
     int finalScroll = (int)scrollY;
     int yOffset = -finalScroll + firstLineTop;
-    const int contentTop = navHeight;       // bottom edge of the header
     const int contentBottom = scrollBottom; // already excludes nav line
     const int rightEdge = SCREEN_WIDTH - SCROLLBAR_WIDTH - RIGHT_MARGIN;
     const int bubbleGapY = std::max(1, MESSAGE_BLOCK_GAP / 2);
@@ -768,6 +781,46 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             lineTop[i] = yOffset + acc;
             acc += cachedHeights[i];
         }
+    }
+
+    // Horizontal geometry per message block, resolved once so the bubble outline and the
+    // text inside it can never drift apart. innerPad is the bubble's own padding, or 0 when
+    // bubbles are off and the "box" is just the text extent.
+    const int innerPad = showBubbles ? textIndent : 0;
+    const int blockSpan = rightEdge - x;
+    std::vector<int> blockLeft(blocks.size(), x);
+    std::vector<int> blockWidth(blocks.size(), blockSpan);
+    std::vector<int> lineBlock(cachedLines.size(), -1);
+    for (size_t bi = 0; bi < blocks.size(); ++bi) {
+        const auto &b = blocks[bi];
+        if (b.start >= cachedLines.size() || b.end >= cachedLines.size() || b.start > b.end)
+            continue;
+
+        int maxLineW = 0;
+        for (size_t i = b.start; i <= b.end; ++i) {
+            lineBlock[i] = static_cast<int>(bi);
+            int w;
+            if (isHeader[i]) {
+                w = graphics::UIRenderer::measureStringWithEmotes(display, cachedLines[i].c_str());
+                if (b.mine)
+                    w += 12 * BASEUI_ICON_SCALE; // room for ACK/NACK/relay mark
+            } else {
+                w = getRenderedLineWidth(display, cachedLines[i], emotes, numEmotes);
+            }
+            maxLineW = std::max(maxLineW, w);
+        }
+
+        int width = showBubbles ? std::max(BUBBLE_MIN_W, maxLineW + (innerPad * 2)) : maxLineW;
+#if BASEUI_CENTER_MESSAGE_BUBBLES
+        // Centre on the panel's own midpoint, not the midpoint of the content span - the
+        // scrollbar makes that span asymmetric, which is what left boxes looking off-centre.
+        width = std::min(width, SCREEN_WIDTH - (BUBBLE_EDGE_INSET * 2));
+        blockLeft[bi] = x + (SCREEN_WIDTH - width) / 2;
+#else
+        width = std::min(width, blockSpan);
+        blockLeft[bi] = b.mine ? (rightEdge - width) : x;
+#endif
+        blockWidth[bi] = width;
     }
 
     // Draw bubbles (only if enabled)
@@ -821,33 +874,9 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             if (bottomY < contentTop || topY > contentBottom - 1)
                 continue;
 
-            int maxLineW = 0;
-
-            for (size_t i = b.start; i <= b.end; ++i) {
-                int w = 0;
-                if (isHeader[i]) {
-                    w = graphics::UIRenderer::measureStringWithEmotes(display, cachedLines[i].c_str());
-                    if (b.mine)
-                        w += 12 * BASEUI_ICON_SCALE; // room for ACK/NACK/relay mark
-                } else {
-                    w = getRenderedLineWidth(display, cachedLines[i], emotes, numEmotes);
-                }
-                if (w > maxLineW)
-                    maxLineW = w;
-            }
-
-            int bubbleW = std::max(BUBBLE_MIN_W, maxLineW + (textIndent * 2));
-            int bubbleH = (bottomY - topY) + 1;
-            int bubbleX = 0;
-            if (b.mine) {
-                bubbleX = rightEdge - bubbleW;
-            } else {
-                bubbleX = x;
-            }
-            if (bubbleX < x)
-                bubbleX = x;
-            if (bubbleX + bubbleW > rightEdge)
-                bubbleW = std::max(1, rightEdge - bubbleX);
+            const int bubbleX = blockLeft[bi];
+            const int bubbleW = blockWidth[bi];
+            const int bubbleH = (bottomY - topY) + 1;
 
             // Draw rounded rectangle bubble
             if (bubbleW > BUBBLE_RADIUS * 2 && bubbleH > BUBBLE_RADIUS * 2) {
@@ -912,17 +941,22 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     for (size_t i = 0; i < cachedLines.size(); ++i) {
 
         if (lineY > -cachedHeights[i] && lineY < scrollBottom) {
+            // Text follows its block's box, so centred boxes carry their contents with them.
+            const int bi = lineBlock[i];
+            const int boxLeft = (bi >= 0) ? blockLeft[bi] : x;
+            const int boxRight = (bi >= 0) ? (boxLeft + blockWidth[bi]) : rightEdge;
+
             if (isHeader[i]) {
 
                 int w = graphics::UIRenderer::measureStringWithEmotes(display, cachedLines[i].c_str());
                 int headerX;
                 if (isMine[i]) {
-                    // push header left to avoid overlap with scrollbar
-                    headerX = (SCREEN_WIDTH - SCROLLBAR_WIDTH - RIGHT_MARGIN) - w - (showBubbles ? textIndent : 0);
+                    // right-aligned inside the box, leaving room for the ACK mark to its left
+                    headerX = boxRight - innerPad - w;
                     if (headerX < LEFT_MARGIN)
                         headerX = LEFT_MARGIN;
                 } else {
-                    headerX = x + textIndent;
+                    headerX = boxLeft + innerPad;
                 }
                 graphics::UIRenderer::drawStringWithEmotes(display, headerX, lineY, cachedLines[i].c_str(), FONT_HEIGHT_SMALL, 1,
                                                            true);
@@ -964,13 +998,13 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 if (isMine[i]) {
                     // Calculate actual rendered width including emotes
                     int renderedWidth = getRenderedLineWidth(display, cachedLines[i], emotes, numEmotes);
-                    int rightX = (SCREEN_WIDTH - SCROLLBAR_WIDTH - RIGHT_MARGIN) - renderedWidth - (showBubbles ? textIndent : 0);
+                    int rightX = boxRight - innerPad - renderedWidth;
                     if (rightX < LEFT_MARGIN)
                         rightX = LEFT_MARGIN;
 
                     drawStringWithEmotes(display, rightX, lineY, cachedLines[i], emotes, numEmotes);
                 } else {
-                    drawStringWithEmotes(display, x + textIndent, lineY, cachedLines[i], emotes, numEmotes);
+                    drawStringWithEmotes(display, boxLeft + innerPad, lineY, cachedLines[i], emotes, numEmotes);
                 }
             }
         }

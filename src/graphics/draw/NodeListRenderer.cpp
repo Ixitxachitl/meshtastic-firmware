@@ -639,7 +639,9 @@ void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
     int columnWidth = display->getWidth() / totalColumns;
 
     int totalEntries = nodeDB->getNumMeshNodes();
-    int totalRowsAvailable = (display->getHeight() - y) / rowYOffset;
+    int totalRowsAvailable = (display->getHeight() - y) / rowYOffset + BASEUI_NODE_LIST_ROW_ADJUST;
+    if (totalRowsAvailable < 1)
+        totalRowsAvailable = 1;
     int numskipped = 0;
     int visibleNodeRows = totalRowsAvailable;
 
