@@ -141,7 +141,19 @@ bool SDCardTileSource::begin(const char *path)
         return false;
     }
 
-    payloadStart_ = indexTableStart + count * kTileBlobEntrySize;
+    // See FileTileSource::begin - `count` is attacker-controllable (it's just bytes on a removable
+    // card), so the table extent is computed in 64-bit and checked against the card's real file
+    // size before anything derives a 32-bit offset from it.
+    const uint64_t fileSize = file_.fileSize();
+    const uint64_t payloadStart = (uint64_t)indexTableStart + (uint64_t)count * kTileBlobEntrySize;
+    if (payloadStart > fileSize || payloadStart > UINT32_MAX) {
+        LOG_WARN("Map: '%s': tile-entry table doesn't fit the file", path);
+        file_.close();
+        return false;
+    }
+
+    payloadStart_ = (uint32_t)payloadStart;
+    payloadBytes_ = (uint32_t)(fileSize - payloadStart);
     indexTableStart_ = indexTableStart;
 
     for (int i = 0; i < rangeCount; i++)
@@ -178,6 +190,11 @@ bool SDCardTileSource::decodeTile(int tileIndex, uint8_t *outBuf)
     if (!file_)
         return false;
 
+    // See FileTileSource::decodeTile - shouldn't trigger, but keeps an out-of-range index from
+    // being read as an entry out of the payload region.
+    if (tileIndex < 0 || (uint32_t)tileIndex >= count_)
+        return false;
+
     TileBlobEntry e{};
     uint8_t *compressed = nullptr;
 
@@ -194,6 +211,9 @@ bool SDCardTileSource::decodeTile(int tileIndex, uint8_t *outBuf)
 
         if (e.kind == kTileKindLZ4) {
             if (e.size == 0 || e.size > kTileBufferBytes)
+                return false;
+            // See FileTileSource::decodeTile - offset and size are both file data.
+            if ((uint64_t)e.offset + e.size > payloadBytes_)
                 return false;
             compressed = tileCompressedScratchBuffer();
             if (!file_.seekSet(payloadStart_ + e.offset))

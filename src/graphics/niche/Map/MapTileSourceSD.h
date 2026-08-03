@@ -74,6 +74,7 @@ class SDCardTileSource : public TileSource
     uint32_t count_ = 0;
     uint32_t indexTableStart_ = 0; // where the tile-entry table starts (after header + zoom-range table)
     uint32_t payloadStart_ = 0;
+    uint32_t payloadBytes_ = 0; // size of the payload region, so an entry's offset/size can be bounds-checked
     char path_[64] = {};
 };
 

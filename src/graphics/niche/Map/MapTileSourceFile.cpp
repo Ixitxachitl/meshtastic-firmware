@@ -102,7 +102,20 @@ bool FileTileSource::begin(const char *path)
         return false;
     }
 
-    payloadStart_ = indexTableStart + count * kTileBlobEntrySize;
+    // `count` comes straight out of the file, so compute the table extent in 64-bit and check it
+    // against the file's real size: a hostile count would otherwise wrap the uint32 payload base
+    // (count > ~357M is enough), and a truncated file would leave payloadStart_ past the end. The
+    // uint32 ceiling is explicit because every offset built on payloadStart_ below is 32-bit.
+    const uint64_t fileSize = (uint64_t)file_.size();
+    const uint64_t payloadStart = (uint64_t)indexTableStart + (uint64_t)count * kTileBlobEntrySize;
+    if (payloadStart > fileSize || payloadStart > UINT32_MAX) {
+        LOG_WARN("Map tile file '%s': tile-entry table doesn't fit the file", path);
+        file_.close();
+        return false;
+    }
+
+    payloadStart_ = (uint32_t)payloadStart;
+    payloadBytes_ = (uint32_t)(fileSize - payloadStart);
     indexTableStart_ = indexTableStart;
 
     for (int i = 0; i < rangeCount; i++)
@@ -139,6 +152,12 @@ bool FileTileSource::decodeTile(int tileIndex, uint8_t *outBuf)
     if (!file_)
         return false;
 
+    // Every current caller passes either a validated indexOf() result or an index from iterating
+    // 0..tileCount()-1, so this shouldn't trigger - but an out-of-range index would otherwise seek
+    // past the index table and decode 12 arbitrary payload bytes as if they were an entry.
+    if (tileIndex < 0 || (uint32_t)tileIndex >= count_)
+        return false;
+
     TileBlobEntry e{};
     if (!readEntryAt(file_, indexTableStart_, (uint32_t)tileIndex, e))
         return false;
@@ -147,6 +166,11 @@ bool FileTileSource::decodeTile(int tileIndex, uint8_t *outBuf)
         return decodeTilePayload(e.kind, nullptr, 0, outBuf);
 
     if (e.size == 0 || e.size > kTileBufferBytes)
+        return false;
+
+    // The entry's payload has to lie inside the payload region - offset and size are both file
+    // data, so neither can be trusted to point anywhere sensible on its own.
+    if ((uint64_t)e.offset + e.size > payloadBytes_)
         return false;
 
     uint8_t *compressed = tileCompressedScratchBuffer();
