@@ -62,10 +62,11 @@
 #define DAC_I2S_DOUT 11
 #define DAC_I2S_MCLK -1 // TODO
 // The MAX98357A's analog gain is pin-strapped, so these are the only volume control.
-// RTTTL square waves peak at a quarter of full scale, so 4.0 (the library's ceiling)
-// lands them exactly on the rail; SAM speech is already near full scale, so it stops
-// at unity to avoid clipping.
-#define AUDIO_RTTTL_GAIN 4.0f
+// RTTTL square waves peak at a quarter of full scale, so they can take the largest gain
+// AudioOutput::SetGain() can actually hold (see the uint8_t note in AudioThread.h) and
+// still land just under the rail. SAM speech is already near full scale, so it stops at
+// unity to avoid clipping.
+#define AUDIO_RTTTL_GAIN 3.0f
 #define AUDIO_SPEECH_GAIN 1.0f
 
 #define HAS_AXP2101
