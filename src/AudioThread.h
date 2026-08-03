@@ -29,6 +29,22 @@ extern ExtensionIOXL9555 io;
 // melody queued from another thread starts.
 #define AUDIO_THREAD_INTERVAL_MS 100
 
+// Digital gain applied by AudioOutput::Amplify(), which hard-clips at full scale.
+// The library stores it as fixed point 2.6 and caps it at 4.0, so 0.2 is really 12/64.
+// The two sources arrive at very different levels, so each has its own knob:
+//   - AudioGeneratorRTTTL emits its square wave at +/-8192, a quarter of full scale,
+//     so it has two more octaves of headroom before the rail.
+//   - ESP8266SAM upscales 8-bit speech to +/-32512, essentially full scale already,
+//     so anything above unity clips it badly.
+// Both default to the long-standing shared 0.2; variants with an amp and speaker that
+// can take more raise them in variant.h.
+#ifndef AUDIO_RTTTL_GAIN
+#define AUDIO_RTTTL_GAIN 0.2f
+#endif
+#ifndef AUDIO_SPEECH_GAIN
+#define AUDIO_SPEECH_GAIN 0.2f
+#endif
+
 /**
  * Plays RTTTL melodies out of an I2S DAC.
  *
@@ -59,6 +75,7 @@ class AudioThread : public concurrency::OSThread
         stopPlaybackOnly();
         acquireHardware();
 
+        audioOut->SetGain(AUDIO_RTTTL_GAIN);
         rtttlFile = std::unique_ptr<AudioFileSourcePROGMEM>(new AudioFileSourcePROGMEM(data, len));
         std::unique_ptr<meshtastic::AudioGeneratorRTTTL> generator(new meshtastic::AudioGeneratorRTTTL());
         if (!generator->begin(rtttlFile.get(), audioOut.get())) {
@@ -96,6 +113,7 @@ class AudioThread : public concurrency::OSThread
         stopPlaybackOnly();
         acquireHardware();
 
+        audioOut->SetGain(AUDIO_SPEECH_GAIN);
         auto sam = std::unique_ptr<ESP8266SAM>(new ESP8266SAM);
         sam->Say(audioOut.get(), text);
 
@@ -205,7 +223,7 @@ class AudioThread : public concurrency::OSThread
     {
         audioOut = std::unique_ptr<AudioOutputI2S>(new AudioOutputI2S(1, AudioOutputI2S::EXTERNAL_I2S, kDmaBufCount));
         audioOut->SetPinout(DAC_I2S_BCK, DAC_I2S_WS, DAC_I2S_DOUT, DAC_I2S_MCLK);
-        audioOut->SetGain(0.2);
+        audioOut->SetGain(AUDIO_SPEECH_GAIN);
     };
 
     std::unique_ptr<meshtastic::AudioGeneratorRTTTL> i2sRtttl = nullptr;
