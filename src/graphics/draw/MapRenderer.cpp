@@ -405,9 +405,9 @@ void drawHaloXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t 
 {
     display->setColor(WHITE);
     for (auto &o : kHaloOffsets)
-        display->drawXbm(x + o[0], y + o[1], w, h, xbm);
+        graphics::drawScaledXbm(display, x + o[0] * BASEUI_ICON_SCALE, y + o[1] * BASEUI_ICON_SCALE, w, h, xbm);
     display->setColor(BLACK);
-    display->drawXbm(x, y, w, h, xbm);
+    graphics::drawScaledXbm(display, x, y, w, h, xbm);
 }
 
 void drawHaloString(OLEDDisplay *display, int16_t x, int16_t y, const char *text)
@@ -439,7 +439,8 @@ void tintMarkerCenter(int16_t centerX, int16_t centerY, int &budget)
 {
     if (budget <= 0)
         return;
-    registerTFTColorRegionDirect(centerX - 1, centerY - 1, 2, 2, TFTPalette::White, TFTPalette::Red);
+    registerTFTColorRegionDirect(centerX - BASEUI_ICON_SCALE, centerY - BASEUI_ICON_SCALE, 2 * BASEUI_ICON_SCALE,
+                                 2 * BASEUI_ICON_SCALE, TFTPalette::White, TFTPalette::Red);
     budget--;
 }
 #endif
@@ -698,13 +699,13 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
             drawnCount++;
         }
 
-        drawHaloXbm(display, mx - 4, my - 4, 8, 8, icon_map_node);
+        drawHaloXbm(display, mx - 4 * BASEUI_ICON_SCALE, my - 4 * BASEUI_ICON_SCALE, 8, 8, icon_map_node);
 #if GRAPHICS_TFT_COLORING_ENABLED
         tintMarkerCenter(mx, my, nodeColorRegions);
 #endif
 
         if (node->short_name[0] != '\0') {
-            int16_t lx = mx + 5;
+            int16_t lx = mx + 5 * BASEUI_ICON_SCALE;
             int16_t ly = my - labelHeight / 2;
             int16_t lw = (int16_t)display->getStringWidth(node->short_name);
 

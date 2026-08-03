@@ -1848,15 +1848,15 @@ void CannedMessageModule::drawEmotePickerScreen(OLEDDisplay *display, OLEDDispla
         // Draw highlight box 2px taller than emote (1px margin above and below)
         if (emoteIdx == emotePickerIndex) {
             display->fillRect(x + BASEUI_BODY_LR_MARGIN, rowY, display->getWidth() - 8 - 2 * BASEUI_BODY_LR_MARGIN,
-                              emote.height + 2);
+                              emote.height * BASEUI_ICON_SCALE + 2);
             display->setColor(BLACK);
         }
 
         // Emote bitmap (left), centered inside the row
         int labelStartX = x + BASEUI_BODY_LR_MARGIN + bitmapGapX;
-        const int emoteY = rowY + ((rowHeight - emote.height) / 2);
-        display->drawXbm(labelStartX, emoteY, emote.width, emote.height, emote.bitmap);
-        labelStartX += emote.width;
+        const int emoteY = rowY + ((rowHeight - emote.height * BASEUI_ICON_SCALE) / 2);
+        graphics::drawScaledXbm(display, labelStartX, emoteY, emote.width, emote.height, emote.bitmap);
+        labelStartX += emote.width * BASEUI_ICON_SCALE;
 
         // Emote label (right of bitmap)
         display->setFont(FONT_MEDIUM);

@@ -24,6 +24,10 @@
 #include "graphics/fonts/EinkDisplayFonts.h"
 #endif
 
+#ifdef T_WATCH_ULTRA
+#include "graphics/fonts/HugeDisplayFonts.h"
+#endif
+
 #ifdef OLED_GR
 #define FONT_SMALL_LOCAL ArialMT_Plain_10_GR // Height: 13
 #else
@@ -120,6 +124,17 @@
 #define FONT_SMALL Monospaced_plain_30
 #define FONT_MEDIUM Monospaced_plain_30
 #define FONT_LARGE Monospaced_plain_30
+#endif
+
+#ifdef T_WATCH_ULTRA
+// 410x502 AMOLED. The shared TFT tiers above (16/24/24) read tiny at this size,
+// so shift every tier up one step: 24pt body text, 32pt headings.
+#undef FONT_SMALL
+#undef FONT_MEDIUM
+#undef FONT_LARGE
+#define FONT_SMALL FONT_LARGE_LOCAL     // Height: 28
+#define FONT_MEDIUM DejaVuSans_plain_32 // Height: 38
+#define FONT_LARGE DejaVuSans_plain_32  // Height: 38
 #endif
 
 #define _fontHeight(font) ((font)[1] + 1) // height is position 1

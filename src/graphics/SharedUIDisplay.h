@@ -51,6 +51,17 @@ namespace graphics
 #ifndef ROUNDED_SCREEN
 #define ROUNDED_SCREEN false
 #endif
+// Trims (negative) or grows (positive) how many frame icons the navigation bar
+// fits per page, on top of what the usable width alone would allow.
+#ifndef BASEUI_NAV_ICONS_PER_PAGE_ADJUST
+#define BASEUI_NAV_ICONS_PER_PAGE_ADJUST 0
+#endif
+// Multiplier applied to every embedded bitmap (status icons, emotes, node/GPS
+// glyphs, nav bar, logos) and to the layout offsets around them. Variants with a
+// display far larger than the artwork was drawn for bump this up.
+#ifndef BASEUI_ICON_SCALE
+#define BASEUI_ICON_SCALE 1
+#endif
 
 // Quick screen access
 #define SCREEN_WIDTH display->getWidth()
@@ -66,6 +77,12 @@ void decomposeTime(uint32_t rtc_sec, int &hour, int &minute, int &second);
 
 // Rounded highlight (used for inverted headers)
 void drawRoundedHighlight(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r);
+
+// Nearest-neighbour XBM blit. Falls through to the library's drawXbm() at scale 1,
+// so callers can use it unconditionally. w/h are the bitmap's own dimensions; the
+// drawn area is w*scale by h*scale.
+void drawScaledXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm,
+                   int scale = BASEUI_ICON_SCALE);
 
 // Shared battery/time/mail header
 void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *titleStr = "", bool force_no_invert = false,
