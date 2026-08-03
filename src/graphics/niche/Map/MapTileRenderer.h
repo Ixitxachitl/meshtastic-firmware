@@ -20,7 +20,8 @@ namespace NicheGraphics::MapTiles
 
 using PlotFn = void (*)(void *ctx, int16_t x, int16_t y);
 
-// Tile edge length in pixels - MapTiler's native fetch resolution (see bin/generate_map_tiles.py),
+// Tile edge length in pixels - MapTiler's native fetch resolution (see the baker at
+// https://github.com/Ixitxachitl/binary-map-downloader),
 // avoiding the downsample-then-threshold quality loss of shrinking to something smaller. Every
 // current Map-capable target (SD card, native/portduino) has storage to spare for this; there's no
 // more flash/RAM-constrained target needing a smaller tile size since the Wio Tracker L1's map
@@ -53,7 +54,7 @@ class TileSource
     // datasets are at most a few hundred tiles) would be far too slow, and forcing every source to
     // hold a full per-tile index in RAM to make that iteration fast doesn't scale either (that's
     // exactly what crashed the Wio/T-Deck: 1.4M tiles x ~16 bytes each). Sources backed by a dense,
-    // contiguous-zoom-range blob (see bin/generate_map_tiles.py) can instead compute a tile's file
+    // contiguous-zoom-range blob (see MapTileBlobFormat.h) can instead compute a tile's file
     // position algebraically with no per-tile RAM at all - see MapTileSourceFile/MapTileSourceSD.
     virtual bool supportsDirectLookup() { return false; }
     // Returns the tile index for (zoom, tx, ty), or -1 if not present in this source. Only
@@ -67,7 +68,7 @@ class TileSource
 void setTileSource(TileSource *source);
 
 // Tile payload "kind" byte, shared by MapTile.h and any external TileSource's own index -
-// see generate_map_tiles.py / MapTile.h for the canonical definitions.
+// see MapTileBlobFormat.h / MapTile.h for the canonical definitions.
 constexpr uint8_t kTileKindLZ4 = 0;   // payload is an LZ4 raw block, decompresses to kTileBufferBytes
 constexpr uint8_t kTileKindWhite = 1; // no payload - tile is entirely unset (0x00) pixels
 constexpr uint8_t kTileKindBlack = 2; // no payload - tile is entirely set (0xFF) pixels

@@ -2,8 +2,8 @@
 
 /*
 
-Shared parsing helpers for the tile-index blob format written by bin/generate_map_tiles.py (or the
-browser-based baker at https://github.com/.../binary-map-downloader), used by both
+Shared parsing helpers for the tile-index blob format written by the browser-based baker at
+https://github.com/Ixitxachitl/binary-map-downloader, used by both
 MapTileSourceFile (FSCom filesystem) and MapTileSourceSD (real SD card via SdFat) so the two
 readers - which differ only in which file API they read through - can't drift out of sync with
 each other on the actual on-disk format or the index math built on top of it.
@@ -34,10 +34,10 @@ O(1) arithmetic within the matched rectangle).
 namespace NicheGraphics::MapTiles
 {
 
-constexpr uint32_t kTileBlobMagic = 0x324C544D;         // 'MTL2' little-endian
-constexpr size_t kTileBlobHeaderSize = 8;               // u32 magic, u32 tile_count
-constexpr size_t kTileBlobZoomRangeEntrySize = 9;       // u8 zoom, u16 xMin, u16 yMin, u16 width, u16 height
-constexpr size_t kTileBlobEntrySize = 12;               // u8 zoom, u16 tx, u16 ty, u8 kind, u32 offset, u16 size
+constexpr uint32_t kTileBlobMagic = 0x324C544D;   // 'MTL2' little-endian
+constexpr size_t kTileBlobHeaderSize = 8;         // u32 magic, u32 tile_count
+constexpr size_t kTileBlobZoomRangeEntrySize = 9; // u8 zoom, u16 xMin, u16 yMin, u16 width, u16 height
+constexpr size_t kTileBlobEntrySize = 12;         // u8 zoom, u16 tx, u16 ty, u8 kind, u32 offset, u16 size
 
 // A real basemap bake never goes anywhere near this deep; this exists purely so a corrupt/hostile
 // zoom byte can't be used as a shift count >= 32 (undefined behaviour) or blow past a plausible
