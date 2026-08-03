@@ -1441,11 +1441,10 @@ void Screen::setFrames(FrameFocus focus)
         indicatorIcons.push_back(icon_compass);
     }
 #endif
-    // Map doesn't need local GPS - it can show other nodes' positions regardless (e.g. T-Deck,
-    // which has no onboard GPS). Restricted to TFT-class color displays and E-Ink: the map needs
-    // more pixels than monochrome OLED screens can usefully spare. Opt-in on top of that, via
-    // -DBASEUI_HAS_MAP=1 (see configuration.h) - it costs real flash and wants a MAP.BIN basemap.
-#if BASEUI_HAS_MAP && (GRAPHICS_TFT_COLORING_ENABLED || defined(USE_EINK))
+    // Map doesn't need local GPS - it can show other nodes' positions regardless, and falls back to
+    // their centroid when we have no fix of our own. Opt-in via -DBASEUI_HAS_MAP=1, which also
+    // enforces a color-TFT-or-E-Ink display and somewhere to store a basemap (see configuration.h).
+#if BASEUI_HAS_MAP
     if (!hiddenFrames.map) {
         fsi.positions.map = numframes;
         normalFrames[numframes++] = graphics::MapRenderer::drawMapFrame;

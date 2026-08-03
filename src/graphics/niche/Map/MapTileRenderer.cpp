@@ -36,7 +36,10 @@ NicheGraphics::MapTiles::TileSource *s_cachedTileSource = nullptr;
 int s_cachedTileIndex = kNoCachedTile;
 
 // Shared compressed-payload scratch buffer - see tileCompressedScratchBuffer() in the header.
+// Only where a TileSource can exist; InkHUD's compiled-in path decodes straight from flash.
+#if BASEUI_HAS_MAP
 uint8_t s_tileCompressedScratchBuffer[NicheGraphics::MapTiles::kTileBufferBytes];
+#endif
 
 // A baked tile always covers the same geographic span regardless of storage resolution: the
 // standard Web Mercator convention is 256 world-units per tile at any zoom (that's what defines
@@ -173,10 +176,12 @@ bool NicheGraphics::MapTiles::decodeTilePayload(uint8_t kind, const uint8_t *com
     return lz4_decompress(compressed, compressedSize, outBuf, kTileBufferBytes) == kTileBufferBytes;
 }
 
+#if BASEUI_HAS_MAP
 uint8_t *NicheGraphics::MapTiles::tileCompressedScratchBuffer()
 {
     return s_tileCompressedScratchBuffer;
 }
+#endif
 
 int NicheGraphics::MapTiles::zoomCount()
 {

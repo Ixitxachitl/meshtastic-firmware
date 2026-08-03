@@ -16,8 +16,8 @@ namespace graphics
 
 /**
  * @brief Map screen: baked-in basemap tiles (see NicheGraphics::MapTiles) plus known node
- * positions, with joystick pan/zoom. Shared by monochrome OLED and color TFT BaseUI variants -
- * both draw through the same OLEDDisplay primitive calls.
+ * positions, with joystick pan/zoom. Shared by color TFT and E-Ink BaseUI variants - both draw
+ * through the same OLEDDisplay primitive calls.
  *
  * A regular select press opens the Map's own menu (menuHandler::mapBaseMenu). On devices with real
  * directional input (HAS_DIRECTIONAL_INPUT - a keyboard, rotary encoder, touchscreen, or
@@ -27,8 +27,8 @@ namespace graphics
  * one direction/level per selection, navigable the same button-press way as every other menu.
  * Follow Me is a plain on/off toggle picker on every device.
  *
- * Opt-in at build time via -DBASEUI_HAS_MAP=1; off by default, and even then only registered as a
- * frame on TFT-color or E-Ink displays (see Screen::setFrames).
+ * Opt-in at build time via -DBASEUI_HAS_MAP=1; off by default, and the flag additionally requires a
+ * color-TFT or E-Ink display plus SD/portduino basemap storage - see configuration.h.
  */
 namespace MapRenderer
 {
