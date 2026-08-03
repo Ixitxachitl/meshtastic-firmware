@@ -10,7 +10,9 @@
 
 #include "./MapTileBlobFormat.h"
 
+#include <new>
 #include <string.h>
+#include <utility>
 
 using namespace NicheGraphics::MapTiles;
 
@@ -30,7 +32,9 @@ bool readEntryAt(File &file, uint32_t indexTableStart, uint32_t entryIndex, Tile
 
 bool FileTileSource::begin(const char *path)
 {
+    ranges_.reset();
     rangeCount_ = 0;
+    zoomCount_ = 0;
     count_ = 0;
     indexTableStart_ = 0;
     payloadStart_ = 0;
@@ -70,18 +74,26 @@ bool FileTileSource::begin(const char *path)
         return false;
     }
 
-    uint8_t rangeBuf[kTileBlobMaxZoomRanges * kTileBlobZoomRangeEntrySize];
+    // Decoded a record at a time straight into the (exactly-sized) destination: at 255 ranges the
+    // whole table is 2.3KB, far too much to stage through a stack buffer on the tasks this runs on.
     const size_t rangeBytes = (size_t)rangeCount * kTileBlobZoomRangeEntrySize;
-    if (file_.read(rangeBuf, rangeBytes) != (int)rangeBytes) {
-        LOG_WARN("Map tile file '%s' truncated zoom-range table", path);
+    std::unique_ptr<TileBlobZoomRange[]> ranges(new (std::nothrow) TileBlobZoomRange[rangeCount]);
+    if (!ranges) {
+        LOG_WARN("Map tile file '%s': no memory for %d zoom range(s)", path, rangeCount);
         file_.close();
         return false;
     }
-    TileBlobZoomRange ranges[kTileBlobMaxZoomRanges];
-    for (int i = 0; i < rangeCount; i++)
-        decodeTileBlobZoomRange(rangeBuf + i * kTileBlobZoomRangeEntrySize, ranges[i]);
+    for (int i = 0; i < rangeCount; i++) {
+        uint8_t rangeBuf[kTileBlobZoomRangeEntrySize];
+        if (file_.read(rangeBuf, sizeof(rangeBuf)) != (int)sizeof(rangeBuf)) {
+            LOG_WARN("Map tile file '%s' truncated zoom-range table", path);
+            file_.close();
+            return false;
+        }
+        decodeTileBlobZoomRange(rangeBuf, ranges[i]);
+    }
 
-    if (!validateTileBlobZoomRanges(ranges, rangeCount, count)) {
+    if (!validateTileBlobZoomRanges(ranges.get(), rangeCount, count)) {
         LOG_WARN("Map tile file '%s': %u tiles doesn't match its zoom-range table", path, count);
         file_.close();
         return false;
@@ -118,33 +130,33 @@ bool FileTileSource::begin(const char *path)
     payloadBytes_ = (uint32_t)(fileSize - payloadStart);
     indexTableStart_ = indexTableStart;
 
-    for (int i = 0; i < rangeCount; i++)
-        ranges_[i] = ranges[i];
+    zoomCount_ = tileBlobDistinctZooms(ranges.get(), rangeCount, zooms_);
+    ranges_ = std::move(ranges);
     rangeCount_ = rangeCount;
     count_ = count;
     strncpy(path_, path, sizeof(path_) - 1);
-    LOG_INFO("Map tile file '%s': %u tiles across %d zoom range(s)", path, count, rangeCount_);
+    LOG_INFO("Map tile file '%s': %u tiles across %d zoom range(s), %d zoom level(s)", path, count, rangeCount_, zoomCount_);
     return true;
 }
 
 int FileTileSource::indexOf(int zoom, int tx, int ty)
 {
-    return tileBlobIndexOf(ranges_, rangeCount_, count_, zoom, tx, ty);
+    return tileBlobIndexOf(ranges_.get(), rangeCount_, count_, zoom, tx, ty);
 }
 
 int FileTileSource::tileZoomAt(int tileIndex)
 {
-    return tileBlobZoomAt(ranges_, rangeCount_, tileIndex);
+    return tileBlobZoomAt(ranges_.get(), rangeCount_, tileIndex);
 }
 
 int FileTileSource::tileTxAt(int tileIndex)
 {
-    return tileBlobTxAt(ranges_, rangeCount_, tileIndex);
+    return tileBlobTxAt(ranges_.get(), rangeCount_, tileIndex);
 }
 
 int FileTileSource::tileTyAt(int tileIndex)
 {
-    return tileBlobTyAt(ranges_, rangeCount_, tileIndex);
+    return tileBlobTyAt(ranges_.get(), rangeCount_, tileIndex);
 }
 
 bool FileTileSource::decodeTile(int tileIndex, uint8_t *outBuf)
