@@ -14,6 +14,9 @@ class ICM42607PSensor : public MotionSensor
 {
   private:
     std::unique_ptr<ICM42670> sensor;
+#ifdef SHOW_STEP_COUNTER
+    uint32_t steps = 0;
+#endif
 
   public:
     explicit ICM42607PSensor(ScanI2C::FoundDevice foundDevice);

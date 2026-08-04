@@ -7,6 +7,7 @@
 #include <math.h>
 
 // Boards with ICM_42607P_INT_PIN defined run at 12.5Hz instead - startWakeOnMotion() lowers the ODR.
+// Boards that also define SHOW_STEP_COUNTER end up back at 50Hz, which the APEX pedometer requires.
 static constexpr uint16_t ICM42607P_ACCEL_ODR_HZ = 50;
 static constexpr uint16_t ICM42607P_ACCEL_FSR_G = 2;
 static constexpr float ICM42607P_ACCEL_TO_COMPASS_ROTATION_DEG_VALUE =
@@ -14,6 +15,11 @@ static constexpr float ICM42607P_ACCEL_TO_COMPASS_ROTATION_DEG_VALUE =
     ICM42607P_ACCEL_TO_COMPASS_ROTATION_DEG;
 #else
     0.0f;
+#endif
+
+#ifdef SHOW_STEP_COUNTER
+// startPedometer() requires a pin argument even when polling. It is never touched with a null handler.
+static constexpr uint8_t ICM42607P_UNUSED_INT_PIN = 0;
 #endif
 
 #ifdef ICM_42607P_INT_PIN
@@ -63,6 +69,19 @@ bool ICM42607PSensor::init()
     LOG_DEBUG("ICM-42607-P wake-on-motion interrupt ok pin=%d", ICM_42607P_INT_PIN);
 #endif
 
+#ifdef SHOW_STEP_COUNTER
+    // Must follow startWakeOnMotion(), which unconditionally disables the APEX pedometer. The reverse
+    // order silently leaves the step counter off. WOM lives in its own register that the APEX path
+    // never touches, so enabling the pedometer second keeps both alive on INT1. Passing a null handler
+    // means we poll getPedometer() instead, so the pin argument is never used.
+    status = newSensor->startPedometer(ICM42607P_UNUSED_INT_PIN, nullptr);
+    if (status != 0) {
+        LOG_DEBUG("ICM-42607-P pedometer start error %d", status);
+        return false;
+    }
+    LOG_DEBUG("ICM-42607-P pedometer ok");
+#endif
+
     sensor = std::move(newSensor);
     LOG_DEBUG("ICM-42607-P init ok");
     return true;
@@ -75,6 +94,21 @@ int32_t ICM42607PSensor::runOnce()
         ICM42607P_IRQ = false;
         LOG_DEBUG("ICM-42607-P motion interrupt");
         wakeScreen();
+    }
+#endif
+
+#if defined(SHOW_STEP_COUNTER) && !defined(MESHTASTIC_EXCLUDE_SCREEN) && HAS_SCREEN
+    if (sensor != nullptr) {
+        uint32_t stepCount = 0;
+        float stepCadence = 0.0f;
+        const char *activity = nullptr;
+        // Returns non-zero when no step was detected since the last poll, leaving stepCount untouched.
+        if (sensor->getPedometer(stepCount, stepCadence, activity) == 0 && stepCount != steps) {
+            steps = stepCount;
+            LOG_DEBUG("ICM-42607-P step count %u (%s)", steps, activity ? activity : "unknown");
+            if (screen)
+                screen->steps = steps;
+        }
     }
 #endif
 

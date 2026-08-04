@@ -91,6 +91,9 @@ extern "C" {
 #define ICM_42607P_INT_PIN (32 + 1) // INT1 - P1.01, wake-on-motion
 // #define ICM_42607P_INT2_PIN (32 + 7) // INT2 - P1.07, unused
 
+// ICM42607P APEX pedometer, drawn on the device screen
+#define SHOW_STEP_COUNTER
+
 // LoRa (SX1262)
 
 #define USE_SX1262
