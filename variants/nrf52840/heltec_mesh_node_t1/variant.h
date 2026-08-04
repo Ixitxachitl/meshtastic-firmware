@@ -87,9 +87,9 @@ extern "C" {
 #define PIN_SENSOR_EN (32 + 6) // Active LOW - controls IMU and compass VDD
 #define PIN_SENSOR_EN_ACTIVE LOW
 
-// ICM42607P interrupt pins - populated on PCB, not yet used in firmware
-// #define ICM_42607P_INT_PIN  (32 + 1) // INT1 - P1.01
-// #define ICM_42607P_INT2_PIN (32 + 7) // INT2 - P1.07
+// ICM42607P interrupt pins - populated on PCB
+#define ICM_42607P_INT_PIN (32 + 1) // INT1 - P1.01, wake-on-motion
+// #define ICM_42607P_INT2_PIN (32 + 7) // INT2 - P1.07, unused
 
 // LoRa (SX1262)
 

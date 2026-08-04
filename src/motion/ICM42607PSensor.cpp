@@ -6,6 +6,7 @@
 #include <ICM42670P.h>
 #include <math.h>
 
+// Boards with ICM_42607P_INT_PIN defined run at 12.5Hz instead - startWakeOnMotion() lowers the ODR.
 static constexpr uint16_t ICM42607P_ACCEL_ODR_HZ = 50;
 static constexpr uint16_t ICM42607P_ACCEL_FSR_G = 2;
 static constexpr float ICM42607P_ACCEL_TO_COMPASS_ROTATION_DEG_VALUE =
@@ -52,6 +53,8 @@ bool ICM42607PSensor::init()
 
 #ifdef ICM_42607P_INT_PIN
     ICM42607P_IRQ = false;
+    // startWakeOnMotion() leaves the accel running - it only drops it to low-power mode at
+    // 12.5Hz - so the data registers keep updating for the compass tilt compensation below.
     status = newSensor->startWakeOnMotion(ICM_42607P_INT_PIN, ICM42607PSetInterrupt);
     if (status != 0) {
         LOG_DEBUG("ICM-42607-P wake-on-motion start error %d", status);
@@ -73,8 +76,8 @@ int32_t ICM42607PSensor::runOnce()
         LOG_DEBUG("ICM-42607-P motion interrupt");
         wakeScreen();
     }
-    return MOTION_SENSOR_CHECK_INTERVAL_MS;
-#else
+#endif
+
     inv_imu_sensor_event_t event = {};
 
     if (sensor == nullptr || sensor->getDataFromRegisters(event) != 0) {
@@ -104,7 +107,6 @@ int32_t ICM42607PSensor::runOnce()
     publishCompassAccelSample(ax, -ay, -az);
 
     return MOTION_SENSOR_CHECK_INTERVAL_MS;
-#endif
 }
 
 #endif
