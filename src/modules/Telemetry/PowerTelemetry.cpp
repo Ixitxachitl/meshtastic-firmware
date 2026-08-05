@@ -137,11 +137,14 @@ void PowerTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *s
 
     // getTextPositions() only clears the header itself, so add the below-header margin
     // other screens reserve - without it the first row sits flush against the header.
-    auto row = [&](int slot) { return graphics::getTextPositions(display)[slot] + BASEUI_BELOW_HEADER_MARGIN; };
+    auto row = [&](int slot) {
+        return graphics::getTextPositions(display)[slot] + BASEUI_BELOW_HEADER_MARGIN + BASEUI_BODY_TOP_MARGIN;
+    };
+    const int bodyX = x + BASEUI_BODY_LR_MARGIN;
 
     if (lastMeasurementPacket == nullptr) {
         // In case of no valid packet, display "Power Telemetry", "No measurement"
-        display->drawString(x, row(line++), "No measurement");
+        display->drawString(bodyX, row(line++), "No measurement");
         return;
     }
 
@@ -152,7 +155,7 @@ void PowerTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *s
 
     const meshtastic_Data &p = lastMeasurementPacket->decoded;
     if (!pb_decode_from_bytes(p.payload.bytes, p.payload.size, &meshtastic_Telemetry_msg, &lastMeasurement)) {
-        display->drawString(x, row(line++), "Measurement Error");
+        display->drawString(bodyX, row(line++), "Measurement Error");
         LOG_ERROR("Unable to decode last packet");
         return;
     }
@@ -165,7 +168,7 @@ void PowerTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *s
         snprintf(agoStr, sizeof(agoStr), "%us", (unsigned)agoSecs);
     char fromStr[64];
     snprintf(fromStr, sizeof(fromStr), "Pow. From: %s (%s)", lastSender, agoStr);
-    display->drawString(x, row(line++), fromStr);
+    display->drawString(bodyX, row(line++), fromStr);
 
     // Display current and voltage based on ...power_metrics.has_[channel/voltage/current]... flags
     const auto &m = lastMeasurement.variant.power_metrics;
@@ -176,7 +179,7 @@ void PowerTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *s
     auto drawLine = [&](const char *label, float voltage, float current) {
         char lineStr[64];
         snprintf(lineStr, sizeof(lineStr), "%s: %.2fV %.0fmA", label, voltage, current);
-        display->drawString(x, row(line++), lineStr);
+        display->drawString(bodyX, row(line++), lineStr);
     };
 
     if (m.has_ch1_voltage || m.has_ch1_current) {

@@ -37,7 +37,9 @@ extern ExtensionIOXL9555 io;
 //   - ESP8266SAM upscales 8-bit speech to +/-32512, essentially full scale already,
 //     so anything above unity clips it badly.
 // Both default to the long-standing shared 0.2; variants with an amp and speaker that
-// can take more raise them in variant.h.
+// can take more raise them in variant.h. Do not pass exactly 4.0: SetGain() stores
+// f*(1<<6) in a uint8_t, so 4.0 becomes 256, truncates to 0, and the output goes silent.
+// The largest value it can actually hold is 255/64 = 3.984375f.
 #ifndef AUDIO_RTTTL_GAIN
 #define AUDIO_RTTTL_GAIN 0.2f
 #endif

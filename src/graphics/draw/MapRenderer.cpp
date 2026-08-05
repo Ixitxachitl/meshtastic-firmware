@@ -433,9 +433,16 @@ void drawHaloString(OLEDDisplay *display, int16_t x, int16_t y, const char *text
 // is unaffected. The box is only 2x2, so there is no room for basemap content to be tinted with it.
 //
 // colorRegions[] is a fixed global pool shared with the header, and it silently evicts the oldest
-// entry once full, so this is capped well short of the pool size - markers past the cap still draw,
-// just with a black centre, rather than pushing the header's own regions out.
-constexpr int kMaxNodeColorRegions = 24;
+// entry once full, so marker tints get everything the pool has left after a reserve for this
+// screen's own chrome (header background/title/status, footer link icon, nav bar + arrows).
+// Markers past the budget still draw, just with a black centre, rather than pushing those out.
+//
+// Derived from MAX_TFT_COLOR_REGIONS rather than hardcoded, so growing the pool actually reaches
+// the markers - a fixed 24 here silently stayed the binding limit when the pool went 48 -> 255.
+// Small pools (the nRF52840 TFT boards) keep the original 24 instead of dropping below it.
+constexpr int kChromeColorRegionReserve = 32;
+constexpr int kMaxNodeColorRegions =
+    (MAX_TFT_COLOR_REGIONS > kChromeColorRegionReserve + 24) ? (int)MAX_TFT_COLOR_REGIONS - kChromeColorRegionReserve : 24;
 
 void tintMarkerCenter(int16_t centerX, int16_t centerY, int &budget)
 {
@@ -769,20 +776,29 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         }
     }
 
-    // Center coordinates, top-left - a concrete reference for "where am I", especially useful
+    // Center coordinates - a concrete reference for "where am I", especially useful
     // before any basemap tiles are baked in, or after panning away from every known node.
-    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    // Rounded panels clip their corners, so both labels are centred on those instead of
+    // being pinned to a corner.
     display->setFont(FONT_SMALL);
     char coordLabel[24];
     snprintf(coordLabel, sizeof(coordLabel), "%.4f,%.4f", centerLat, centerLng);
+    char statusLabel[24];
+    snprintf(statusLabel, sizeof(statusLabel), "z%d%s%s%s", zoom, s_panMode ? " PAN" : "", s_zoomMode ? " ZOOM" : "",
+             s_followMe ? " ME" : "");
+
+#if ROUNDED_SCREEN
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    drawHaloString(display, x + viewWidth / 2, y, coordLabel);
+    drawHaloString(display, x + viewWidth / 2, y + viewHeight - FONT_HEIGHT_SMALL - 1, statusLabel);
+#else
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
     drawHaloString(display, x + 1, y, coordLabel);
 
     // Status label, bottom-right corner: zoom level, plus mode/follow indicators.
     display->setTextAlignment(TEXT_ALIGN_RIGHT);
-    char statusLabel[24];
-    snprintf(statusLabel, sizeof(statusLabel), "z%d%s%s%s", zoom, s_panMode ? " PAN" : "", s_zoomMode ? " ZOOM" : "",
-             s_followMe ? " ME" : "");
     drawHaloString(display, x + viewWidth - 2, y + viewHeight - FONT_HEIGHT_SMALL - 1, statusLabel);
+#endif
 
     // Zoom ruler: shown only while Zoom Mode is active (entered from the menu, held until
     // Back/Cancel). A vertical gauge on the right edge, current level marked, so up/down's effect
