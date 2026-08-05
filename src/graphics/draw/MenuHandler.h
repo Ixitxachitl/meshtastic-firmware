@@ -38,6 +38,8 @@ class menuHandler
         RemoveFavorite,
         TestMenu,
         NumberTest,
+        EnvironmentTelemetryMenu,
+        EnvironmentTelemetrySourceMenu,
         WifiToggleMenu,
         BluetoothToggleMenu,
         ScreenOptionsMenu,
@@ -108,6 +110,8 @@ class menuHandler
     static void traceRouteMenu();
     static void testMenu();
     static void numberTest();
+    static void environmentTelemetryMenu();
+    static void environmentTelemetrySourceMenu();
     static void wifiBaseMenu();
     static void wifiToggleMenu();
     static void screenOptionsMenu();
