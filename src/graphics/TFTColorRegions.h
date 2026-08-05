@@ -16,11 +16,23 @@ struct TFTColorRegion {
     // Required by ST7789 driver: it scans until the first disabled entry.
     bool enabled = false;
 };
-
-// Sized to hold a full Tetris board (10×16=160 locked cells) + active piece +
-// NXT + HLD previews + header/UI regions, with a sentinel slot. 200 gives ~28
-// slots of headroom over the worst-case Tetris frame (172 regions).
-static constexpr size_t MAX_TFT_COLOR_REGIONS = 200;
+#ifndef MAX_TFT_COLOR_REGIONS
+// The pool is indexed and counted with uint8_t throughout - colorRegionCount,
+// tftColorRowRegions[] (which stores indices into colorRegions[]), tftColorRowCount and
+// getTFTColorRegionCount() - so 255 is the structural ceiling, not an arbitrary number.
+//
+// Cost is 14 bytes per entry plus one byte of row-cull index, i.e. ~3.8 KB at 255 against
+// ~0.7 KB at 48. That is noise on the ESP32/ESP32-S3 boards, which are also the ones
+// driving the large, dense panels that actually run out of regions. The nRF52840 TFT
+// boards stay on the small pool: they have a quarter of the RAM and this repo already
+// trims elsewhere for them (see the FONT_LARGE note in ScreenFonts.h).
+#if defined(ARCH_ESP32)
+static constexpr size_t MAX_TFT_COLOR_REGIONS = 255;
+#else
+static constexpr size_t MAX_TFT_COLOR_REGIONS = 48;
+#endif
+#endif
+static_assert(MAX_TFT_COLOR_REGIONS <= 255, "region indices and counts are uint8_t");
 extern TFTColorRegion colorRegions[MAX_TFT_COLOR_REGIONS];
 
 enum class TFTColorRole : uint8_t {
