@@ -25,7 +25,7 @@ uint8_t s_tileCacheBuffer[NicheGraphics::MapTiles::kTileBufferBytes];
 // Which (source, tileIndex) is currently sitting in s_tileCacheBuffer, so blitTile can skip a
 // redundant decode (SD read + LZ4 decompress) when the exact same tile is needed again. A single
 // slot is enough for the common case that matters most: most Map-capable screens are far smaller
-// than one 512px tile, so a whole redraw - and, critically, most individual pan/zoom steps, which
+// than a single tile, so a whole redraw - and, critically, most individual pan/zoom steps, which
 // usually don't even leave the current tile - needs only one tile. Without this, every such
 // redraw/step was re-reading and re-decompressing the exact same bytes from SD for no reason,
 // which is what actually made panning/zooming feel sluggish even after fixing the per-call file
@@ -36,7 +36,10 @@ NicheGraphics::MapTiles::TileSource *s_cachedTileSource = nullptr;
 int s_cachedTileIndex = kNoCachedTile;
 
 // Shared compressed-payload scratch buffer - see tileCompressedScratchBuffer() in the header.
+// Only where a TileSource can exist; InkHUD's compiled-in path decodes straight from flash.
+#if BASEUI_HAS_MAP
 uint8_t s_tileCompressedScratchBuffer[NicheGraphics::MapTiles::kTileBufferBytes];
+#endif
 
 // A baked tile always covers the same geographic span regardless of storage resolution: the
 // standard Web Mercator convention is 256 world-units per tile at any zoom (that's what defines
@@ -137,6 +140,14 @@ int lz4_decompress(const uint8_t *src, int src_len, uint8_t *dst, int dst_cap)
     return (int)(d - dst);
 }
 
+// The compiled-in tiles are baked at 256px, but kTileSizePx (and so the buffer decodeTilePayload
+// fills) is 512 in a BASEUI_HAS_MAP build - where MAP.BIN is the tile provider and MapTile.h is
+// expected to be the empty stub that ships in the repo. Populating both at once would leave every
+// compiled-in tile failing its decode-length check silently, so catch it at compile time instead.
+static_assert(map_tile_count == 0 || NicheGraphics::MapTiles::kTileSizePx == 256,
+              "compiled-in MapTile.h tiles are baked at 256px, but this build decodes tiles at 512px "
+              "(BASEUI_HAS_MAP) - the two tile providers can't both be populated in one build");
+
 const uint8_t *decodeSparseTile(int tileIndex)
 {
     const uint8_t *compressed = map_tile_data + map_tile_offsets[tileIndex];
@@ -173,10 +184,12 @@ bool NicheGraphics::MapTiles::decodeTilePayload(uint8_t kind, const uint8_t *com
     return lz4_decompress(compressed, compressedSize, outBuf, kTileBufferBytes) == kTileBufferBytes;
 }
 
+#if BASEUI_HAS_MAP
 uint8_t *NicheGraphics::MapTiles::tileCompressedScratchBuffer()
 {
     return s_tileCompressedScratchBuffer;
 }
+#endif
 
 int NicheGraphics::MapTiles::zoomCount()
 {
@@ -301,13 +314,13 @@ void NicheGraphics::MapTiles::drawTileBackground(float latCenter, float lngCente
             for (int sy = syLo; sy <= syHi; sy++) {
                 const float wy = gpxY + (sy - viewHeight * 0.5f) * tileWorldPx;
                 const int py = (int)(wy - tileMinWy); // 0-255, standard world-relative range
-                if (py < 0 || py > 255)
+                if (py < 0 || py >= (int)kWorldUnitsPerTile)
                     continue;
 
                 for (int sx = sxLo; sx <= sxHi; sx++) {
                     const float wx = gpxX + (sx - viewWidth * 0.5f) * tileWorldPx;
                     const int px = (int)(wx - tileMinWx); // 0-255, standard world-relative range
-                    if (px < 0 || px > 255)
+                    if (px < 0 || px >= (int)kWorldUnitsPerTile)
                         continue;
 
                     // Scale from the standard 0-255 world-relative range to this tile's actual
@@ -330,6 +343,11 @@ void NicheGraphics::MapTiles::drawTileBackground(float latCenter, float lngCente
         // effectively hang the T-Deck even after fixing the RAM crash). Compute directly which
         // (small) handful of tx/ty tiles the viewport actually needs instead.
         const int side = 1 << tileZoom;
+        // blitTile does its own -1/0/+1 wrap pass, so where these tx ranges overlap a tile can be
+        // visited more than once. Plotting is idempotent and the decode-once guard inside blitTile
+        // means a repeat visit costs only the (clipped, usually empty) blit loop, so this is left
+        // alone rather than deduplicated - the ranges only overlap when zoomed far enough out for
+        // the whole world to be on screen, where there are few tiles to begin with.
         for (int wrap = -1; wrap <= 1; wrap++) {
             const float shift = wrap * worldWidthAtTileZoom;
             int txLo = (int)floorf((minWx - shift) / kWorldUnitsPerTile);

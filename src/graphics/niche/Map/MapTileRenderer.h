@@ -13,6 +13,7 @@ TFTDisplay) have different drawing APIs.
 
 */
 
+#include "configuration.h" // BASEUI_HAS_MAP
 #include <stdint.h>
 
 namespace NicheGraphics::MapTiles
@@ -20,12 +21,25 @@ namespace NicheGraphics::MapTiles
 
 using PlotFn = void (*)(void *ctx, int16_t x, int16_t y);
 
-// Tile edge length in pixels - MapTiler's native fetch resolution (see bin/generate_map_tiles.py),
-// avoiding the downsample-then-threshold quality loss of shrinking to something smaller. Every
-// current Map-capable target (SD card, native/portduino) has storage to spare for this; there's no
-// more flash/RAM-constrained target needing a smaller tile size since the Wio Tracker L1's map
-// support was dropped (no SD slot and not enough external flash to make a worldwide bake viable).
+// Stored tile edge length in pixels. The two tile providers bake at different resolutions, and
+// exactly one of them is compiled into any given build, so this is a per-build constant rather than
+// a property of the format:
+//
+//   - InkHUD's compiled-in MapTile.h tiles are 256px, unchanged from before this code was factored
+//     out of MapApplet.cpp. Keeping that costs InkHUD nothing: the decode buffer below stays the
+//     8KB it has always been, rather than growing to 32KB on devices that get no basemap from it.
+//   - MAP.BIN blobs (BASEUI_HAS_MAP, see the baker at
+//     https://github.com/Ixitxachitl/binary-map-downloader) are baked at 512 - MapTiler's native
+//     fetch resolution, avoiding the downsample-then-threshold quality loss of shrinking further.
+//     These targets have an SD card or a host filesystem, so the 32KB buffer is affordable.
+//
+// This is a wholly separate concept from kWorldUnitsPerTile (the fixed 256 Web Mercator convention)
+// - see the note by that constant in the .cpp. The blit math handles either stored resolution.
+#if BASEUI_HAS_MAP
 constexpr int kTileSizePx = 512;
+#else
+constexpr int kTileSizePx = 256;
+#endif
 constexpr int kTileBufferBytes = kTileSizePx * kTileSizePx / 8; // 1bpp
 
 // Pluggable source of baked tile data. The default (no source registered) reads the
@@ -53,7 +67,7 @@ class TileSource
     // datasets are at most a few hundred tiles) would be far too slow, and forcing every source to
     // hold a full per-tile index in RAM to make that iteration fast doesn't scale either (that's
     // exactly what crashed the Wio/T-Deck: 1.4M tiles x ~16 bytes each). Sources backed by a dense,
-    // contiguous-zoom-range blob (see bin/generate_map_tiles.py) can instead compute a tile's file
+    // contiguous-zoom-range blob (see MapTileBlobFormat.h) can instead compute a tile's file
     // position algebraically with no per-tile RAM at all - see MapTileSourceFile/MapTileSourceSD.
     virtual bool supportsDirectLookup() { return false; }
     // Returns the tile index for (zoom, tx, ty), or -1 if not present in this source. Only
@@ -67,7 +81,7 @@ class TileSource
 void setTileSource(TileSource *source);
 
 // Tile payload "kind" byte, shared by MapTile.h and any external TileSource's own index -
-// see generate_map_tiles.py / MapTile.h for the canonical definitions.
+// see MapTileBlobFormat.h / MapTile.h for the canonical definitions.
 constexpr uint8_t kTileKindLZ4 = 0;   // payload is an LZ4 raw block, decompresses to kTileBufferBytes
 constexpr uint8_t kTileKindWhite = 1; // no payload - tile is entirely unset (0x00) pixels
 constexpr uint8_t kTileKindBlack = 2; // no payload - tile is entirely set (0xFF) pixels
@@ -85,7 +99,12 @@ bool decodeTilePayload(uint8_t kind, const uint8_t *compressed, int compressedSi
 // kTileBufferBytes is 32KB: far too large to put on the stack of the task that ends up calling
 // decodeTile() (e.g. the ESP32 "tft" render task, a 16KB stack). Only one TileSource is ever
 // actively decoding at a time, so sharing this one buffer across all of them is safe.
+//
+// Only exists where a TileSource can: the compiled-in InkHUD path decodes straight from a flash
+// pointer and never needs it, so InkHUD builds don't carry the 32KB.
+#if BASEUI_HAS_MAP
 uint8_t *tileCompressedScratchBuffer();
+#endif
 
 // Number of distinct zoom levels present in the baked tile set (accounts for both
 // sparse and grid tile layouts - see MapTile.h). Returns 0 if no tiles are baked in.

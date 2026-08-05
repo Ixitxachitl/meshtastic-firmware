@@ -1488,10 +1488,10 @@ void Screen::setFrames(FrameFocus focus)
         PUSH_FRAME_TITLE("GPS");
     }
 #endif
-    // Map doesn't need local GPS - it can show other nodes' positions regardless (e.g. T-Deck,
-    // which has no onboard GPS). Restricted to TFT-class color displays and E-Ink: the map needs
-    // more pixels than monochrome OLED screens can usefully spare.
-#if GRAPHICS_TFT_COLORING_ENABLED || defined(USE_EINK)
+    // Map doesn't need local GPS - it can show other nodes' positions regardless, and falls back to
+    // their centroid when we have no fix of our own. Opt-in via -DBASEUI_HAS_MAP=1, which also
+    // enforces a color-TFT-or-E-Ink display and somewhere to store a basemap (see configuration.h).
+#if BASEUI_HAS_MAP
     if (!hiddenFrames.map) {
         fsi.positions.map = numframes;
         normalFrames[numframes++] = graphics::MapRenderer::drawMapFrame;
@@ -2218,6 +2218,7 @@ int Screen::handleInputEvent(const InputEvent *event)
     // physical button (e.g. Wio Tracker L1) send INPUT_BROKER_CANCEL for it, not _BACK, so both
     // need to exit these modes - otherwise Cancel falls through to its device-wide "turn off
     // screen" meaning further down instead.
+#if BASEUI_HAS_MAP
     if (framesetInfo.positions.map != 255 && ui->getUiState()->currentFrame == framesetInfo.positions.map) {
         if (graphics::MapRenderer::isPanModeEnabled()) {
             if (event->inputEvent == INPUT_BROKER_BACK || event->inputEvent == INPUT_BROKER_CANCEL) {
@@ -2270,6 +2271,7 @@ int Screen::handleInputEvent(const InputEvent *event)
             }
         }
     }
+#endif // BASEUI_HAS_MAP
 #if defined(OLED_COMPACT_UI)
     // UP/DOWN on the compact position screen toggles compass vs coordinates+elevation
     if (graphics::isCompactPanel(dispdev) && ui->getUiState()->currentFrame == framesetInfo.positions.gps) {
@@ -2401,9 +2403,11 @@ int Screen::handleInputEvent(const InputEvent *event)
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.gps && gps) {
                     menuHandler::positionBaseMenu();
 #endif
+#if BASEUI_HAS_MAP
                 } else if (framesetInfo.positions.map != 255 &&
                            this->ui->getUiState()->currentFrame == framesetInfo.positions.map) {
                     menuHandler::mapBaseMenu();
+#endif
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.clock) {
                     menuHandler::clockMenu();
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.lora) {
