@@ -3,6 +3,7 @@
 #if !defined(ARCH_STM32WL) && !MESHTASTIC_EXCLUDE_I2C && __has_include(<ICM42670P.h>)
 
 #include "detect/ScanI2CTwoWire.h"
+#include "mesh/Throttle.h"
 #include <ICM42670P.h>
 #include <math.h>
 
@@ -23,6 +24,11 @@ static constexpr uint8_t ICM42607P_UNUSED_INT_PIN = 0;
 #endif
 
 #ifdef ICM_42607P_INT_PIN
+// startWakeOnMotion() configures WOM with WOM_CONFIG_WOM_INT_DUR_1_SMPL, so the interrupt re-asserts
+// on every sample over the threshold - once per accel period for as long as the device is handled.
+// One wake per burst of movement is all the screen needs, so collapse the rest.
+static constexpr uint32_t ICM42607P_MOTION_WAKE_INTERVAL_MS = 1000;
+
 volatile static bool ICM42607P_IRQ = false;
 
 void ICM42607PSetInterrupt()
@@ -92,8 +98,11 @@ int32_t ICM42607PSensor::runOnce()
 #ifdef ICM_42607P_INT_PIN
     if (ICM42607P_IRQ) {
         ICM42607P_IRQ = false;
-        LOG_DEBUG("ICM-42607-P motion interrupt");
-        wakeScreen();
+        if (!Throttle::isWithinTimespanMs(lastMotionWakeMs, ICM42607P_MOTION_WAKE_INTERVAL_MS)) {
+            lastMotionWakeMs = millis();
+            LOG_DEBUG("ICM-42607-P motion interrupt");
+            wakeScreen();
+        }
     }
 #endif
 
