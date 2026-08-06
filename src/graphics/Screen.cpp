@@ -2524,6 +2524,16 @@ int Screen::handleInputEvent(const InputEvent *event)
                     return 0;
             }
             if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG) {
+#if BASEUI_HAS_MAP
+                // Pan Mode means the map has explicitly claimed directional input: it pans the view
+                // using the swipe the touch layer still classifies on release. Steering a frame
+                // transition from that same gesture would page the map out from under the pan, so
+                // leave the gesture entirely alone here. Outside Pan Mode the map pages like any
+                // other frame.
+                if (framesetInfo.positions.map != 255 && ui->getUiState()->currentFrame == framesetInfo.positions.map &&
+                    graphics::MapRenderer::isPanModeEnabled())
+                    return 0;
+#endif
                 screenDragUpdate(ui, event, displayWidth);
                 setFastFramerate();
                 return 0;

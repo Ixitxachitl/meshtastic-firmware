@@ -543,7 +543,7 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     ensureFileTileSourceInitialized();
 #endif
 
-    display->clear();
+    graphics::clearForFrame(display, state);
     // WHITE is the lit/visible pixel color on OLEDDisplay (unlike InkHUD's e-ink convention,
     // where BLACK means ink) - everything below needs to actually show up on real hardware.
     display->setColor(WHITE);
