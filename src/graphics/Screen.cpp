@@ -871,7 +871,12 @@ void Screen::setup()
     displayWidth = dispdev->width();
     displayHeight = dispdev->height();
 
-    ui->setTimePerTransition(0);           // Disable animation delays
+    // Snap by default. A non-zero transition time is what makes OLEDDisplayUi's IN_TRANSITION state
+    // render at all (at 0, tick() completes the transition before drawFrame() runs, so the
+    // two-frames-sliding branch never executes) - and that is only wanted for touch, where the
+    // slide is feedback for a gesture that will shortly be dragging frames directly. Button and
+    // keyboard navigation opts back out per-event in handleInputEvent().
+    ui->setTimePerTransition(0);
     ui->setIndicatorPosition(BOTTOM);      // Not used (indicators disabled below)
     ui->setIndicatorDirection(LEFT_RIGHT); // Not used (indicators disabled below)
     ui->setFrameAnimation(SLIDE_LEFT);     // Used only when indicators are active
@@ -1076,6 +1081,168 @@ void Screen::forceDisplay(bool forceUiUpdate)
 }
 
 static uint32_t lastScreenTransition;
+
+#if BASEUI_HAS_TOUCH_DRAG
+// Nominal transition length for touch-initiated frame changes. Not milliseconds on screen:
+// ticksPerTransition = time / updateInterval, updateInterval starts at 33ms but drops to 16ms once
+// any banner or picker has called setTargetFPS(60), and the redraw cadence during a transition is
+// ~30fps. Net result is roughly this many ms on a fresh boot and about double that afterwards.
+#ifndef SCREEN_TOUCH_TRANSITION_TIME
+#define SCREEN_TOUCH_TRANSITION_TIME 150
+#endif
+
+// Frame changes animate for touch and snap for everything else. A finger gets a slide because it is
+// about to be steering that slide directly; a button press just wants the next frame, and an
+// animation there is added latency rather than feedback.
+static bool isTouchSourced(const InputEvent *event)
+{
+    return event && event->source && strcmp(event->source, "touchscreen1") == 0;
+}
+
+// Framerate used while a transition is running. Defined here rather than beside setFastFramerate()
+// further down because the drag driver below calls setTargetFPS() with it, and a macro has to be
+// defined before the line that uses it.
+#ifndef SCREEN_TRANSITION_FRAMERATE
+#define SCREEN_TRANSITION_FRAMERATE 30 // fps
+#endif
+
+// ---- Finger-following frame transitions -------------------------------------------------------
+//
+// A drag steers the transition directly instead of deciding a page turn on release. The frames are
+// already drawn at an offset by OLEDDisplayUi::drawFrame(), driven entirely by
+//     progress = ticksSinceLastStateSwitch / ticksPerTransition
+// so following the finger just means writing that counter from the finger's displacement.
+//
+// ticksPerTransition is private, so rather than read it we make it deterministic: setTargetFPS()
+// fixes updateInterval, and setTimePerTransition() then derives ticksPerTransition from it, so
+// calling them in that order gives a tick count we know. Both are re-applied on every drag report
+// because Screen changes the target framerate on its own as the frame state changes.
+#define SCREEN_DRAG_UPDATE_INTERVAL (1000 / SCREEN_TRANSITION_FRAMERATE) // what setTargetFPS() stores
+#define SCREEN_DRAG_HOLD_TIME 33000                                      // nominal, while the finger is down
+#define SCREEN_DRAG_TICKS (SCREEN_DRAG_HOLD_TIME / SCREEN_DRAG_UPDATE_INTERVAL)
+
+// Travel before the gesture commits to an axis. Vertical drags are then left entirely alone, so the
+// swipe the touch layer still classifies on release reaches games, menus and list scrolling as
+// before - this only ever claims horizontal movement.
+#define SCREEN_DRAG_AXIS_LOCK_PX 10
+
+// Fraction of the screen the finger must cover for a released drag to settle on the new frame
+// rather than springing back.
+#define SCREEN_DRAG_COMMIT_FRACTION 0.35f
+
+static uint16_t dragAnchorX = 0;
+static uint16_t dragAnchorY = 0;
+static bool dragAnchorValid = false;
+static uint32_t dragAnchorMs = 0;
+static int8_t dragAxis = 0; // 0 undecided, 1 horizontal (ours), -1 vertical (not ours)
+static bool dragTransitionActive = false;
+static int8_t dragDirection = 0; // +1 advancing, -1 going back - latched with the transition
+static bool dragSuppressNextSwipe = false;
+
+// A drag we anchored can end somewhere we never see - a module can start intercepting input
+// mid-gesture - so treat a report arriving long after the previous one as a new gesture.
+#define DRAG_ANCHOR_STALE_MS 1000
+
+// Steer the in-progress transition from the finger's displacement.
+static void screenDragUpdate(OLEDDisplayUi *ui, const InputEvent *event, int16_t frameWidth)
+{
+    const uint32_t now = millis();
+    if (!dragAnchorValid || (now - dragAnchorMs) > DRAG_ANCHOR_STALE_MS) {
+        dragAnchorX = event->touchX;
+        dragAnchorY = event->touchY;
+        dragAnchorValid = true;
+        dragAxis = 0;
+        dragTransitionActive = false;
+        dragDirection = 0;
+    }
+    dragAnchorMs = now;
+
+    const int32_t dx = (int32_t)event->touchX - (int32_t)dragAnchorX;
+    const int32_t dy = (int32_t)event->touchY - (int32_t)dragAnchorY;
+
+    if (dragAxis == 0) {
+        if (abs(dx) < SCREEN_DRAG_AXIS_LOCK_PX && abs(dy) < SCREEN_DRAG_AXIS_LOCK_PX)
+            return; // too early to tell which way this gesture is going
+        dragAxis = (abs(dx) > abs(dy)) ? 1 : -1;
+    }
+    if (dragAxis < 0)
+        return; // vertical: not ours, the release-time swipe still handles it
+
+    // Frames follow the finger - dragging left pulls the next frame in from the right, dragging
+    // right pulls the previous one in from the left. Deliberately the opposite of the old swipe,
+    // where a left-to-right gesture advanced.
+    const int8_t want = (dx < 0) ? 1 : -1;
+
+    // The incoming frame is chosen when the transition begins and cannot be swapped mid-flight, so
+    // a reversal past the anchor means abandoning this one and opening a fresh transition.
+    if (dragTransitionActive && want != dragDirection) {
+        ui->getUiState()->frameState = FIXED;
+        ui->getUiState()->ticksSinceLastStateSwitch = 0;
+        dragTransitionActive = false;
+    }
+
+    if (!dragTransitionActive && ui->getUiState()->frameState != FIXED)
+        return; // something else is already transitioning - don't fight it, and don't restretch its
+                // transition time on the way out
+
+    // Re-applied every report: Screen changes the target framerate on its own as the frame state
+    // changes, and ticksPerTransition is derived from it - so pin both together to keep the tick
+    // count that the progress below is scaled against predictable.
+    ui->setTargetFPS(SCREEN_TRANSITION_FRAMERATE);
+    ui->setTimePerTransition(SCREEN_DRAG_HOLD_TIME);
+
+    if (!dragTransitionActive) {
+        if (want > 0)
+            ui->nextFrame();
+        else
+            ui->previousFrame();
+        dragDirection = want;
+        dragTransitionActive = true;
+    }
+
+    float progress = (frameWidth > 0) ? ((float)abs(dx) / (float)frameWidth) : 0.0f;
+    if (progress > 0.999f)
+        progress = 0.999f; // 1.0 would let tick() complete the transition out from under the finger
+    ui->getUiState()->ticksSinceLastStateSwitch = (uint16_t)(progress * SCREEN_DRAG_TICKS);
+}
+
+// Finger lifted: settle on the new frame or spring back to the old one.
+static void screenDragEnd(OLEDDisplayUi *ui, const InputEvent *event, int16_t frameWidth)
+{
+    const int32_t dx = (int32_t)event->touchX - (int32_t)dragAnchorX;
+    const bool wasDriving = dragTransitionActive;
+
+    dragAnchorValid = false;
+    dragAxis = 0;
+    dragTransitionActive = false;
+    dragDirection = 0;
+
+    if (!wasDriving)
+        return; // never claimed this gesture (too short, or vertical) - leave it entirely alone
+
+    // We drove this one, so the swipe the touch layer classifies on release would page a second
+    // time on top of where we just settled. Swallow it.
+    dragSuppressNextSwipe = true;
+
+    float progress = (frameWidth > 0) ? ((float)abs(dx) / (float)frameWidth) : 0.0f;
+    ui->setTargetFPS(SCREEN_TRANSITION_FRAMERATE);
+    ui->setTimePerTransition(SCREEN_TOUCH_TRANSITION_TIME);
+
+    if (progress >= SCREEN_DRAG_COMMIT_FRACTION) {
+        // Carry on from where the finger left off rather than restarting the slide.
+        const uint16_t ticks = SCREEN_TOUCH_TRANSITION_TIME / SCREEN_DRAG_UPDATE_INTERVAL;
+        if (progress > 0.999f)
+            progress = 0.999f;
+        ui->getUiState()->ticksSinceLastStateSwitch = (uint16_t)(progress * ticks);
+    } else {
+        // Not far enough. currentFrame never advanced, so returning to FIXED is the whole snap-back
+        // - the library only ever drives a transition forwards, so there is no reverse animation to
+        // run and this lands immediately.
+        ui->getUiState()->frameState = FIXED;
+        ui->getUiState()->ticksSinceLastStateSwitch = 0;
+    }
+}
+#endif // BASEUI_HAS_TOUCH_DRAG
 
 int32_t Screen::runOnce()
 {
@@ -1941,6 +2108,11 @@ void Screen::handleOnPress()
     // If screen was off, just wake it, otherwise advance to next frame
     // If we are in a transition, the press must have bounced, drop it.
     if (ui->getUiState()->frameState == FIXED) {
+#if BASEUI_HAS_TOUCH_DRAG
+        // Only reached by the auto-carousel, which is nobody's gesture - snap, and don't inherit an
+        // animated transition time left behind by the last touch event.
+        ui->setTimePerTransition(0);
+#endif
         ui->nextFrame();
         lastScreenTransition = millis();
         setFastFramerate();
@@ -2029,10 +2201,6 @@ void Screen::showFrame(FrameDirection direction)
     }
 }
 
-#ifndef SCREEN_TRANSITION_FRAMERATE
-#define SCREEN_TRANSITION_FRAMERATE 30 // fps
-#endif
-
 void Screen::setFastFramerate()
 {
 #if defined(OLED_TINY)
@@ -2112,6 +2280,12 @@ int Screen::handleInputEvent(const InputEvent *event)
     LOG_INPUT("Screen Input event %u! kb %u", event->inputEvent, event->kbchar);
     if (!screenOn)
         return 0;
+
+#if BASEUI_HAS_TOUCH_DRAG
+    // Decide up front, before any of the branches below can page a frame, so every route to a
+    // transition inherits the right answer for whatever kind of input caused it.
+    ui->setTimePerTransition(isTouchSourced(event) ? SCREEN_TOUCH_TRANSITION_TIME : 0);
+#endif
 
     // Handle text input notifications specially - pass input to virtual keyboard
     if (NotificationRenderer::current_notification_type == notificationTypeEnum::text_input) {
@@ -2254,6 +2428,28 @@ int Screen::handleInputEvent(const InputEvent *event)
             }
 
             if (handledEncoderScroll) {
+                setFastFramerate();
+                return 0;
+            }
+#endif
+#if BASEUI_HAS_TOUCH_DRAG
+            // A gesture we steered is followed by the touch layer's own swipe classification (see
+            // TouchScreenBase::runOnce, which reports both). Drop that one - we already settled the
+            // frame. Cleared on the first event after the drag whatever it turns out to be, so a
+            // gesture that ended below the swipe threshold cannot leave it armed.
+            if (dragSuppressNextSwipe) {
+                dragSuppressNextSwipe = false;
+                if (event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_RIGHT)
+                    return 0;
+            }
+            if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG) {
+                screenDragUpdate(ui, event, displayWidth);
+                setFastFramerate();
+                return 0;
+            }
+            if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG_END) {
+                screenDragEnd(ui, event, displayWidth);
+                lastScreenTransition = millis();
                 setFastFramerate();
                 return 0;
             }
