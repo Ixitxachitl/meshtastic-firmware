@@ -64,4 +64,12 @@ class TFTDisplay : public OLEDDisplay
 
     uint16_t *linePixelBuffer = nullptr;
     uint16_t *repaintChunkBuffer = nullptr;
+
+    // True when both pixel buffers above live in RAM the SPI DMA engine can reach. That is what
+    // lets display() ask for a DMA push instead of LovyanGFX's byte-at-a-time PIO fallback.
+    bool pixelBuffersAreDmaCapable = false;
+
+    // Send a block of pre-swapped RGB565 pixels to the panel, by DMA where that is available.
+    // Non-const data: TFT_eSPI's pushImage() takes a mutable pointer.
+    void pushPixelBlock(int32_t x, int32_t y, int32_t w, int32_t h, uint16_t *data);
 };
