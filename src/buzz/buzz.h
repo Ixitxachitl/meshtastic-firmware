@@ -14,3 +14,9 @@ void playChirp();
 void playClick();
 bool playNextLeadUpNote();  // Play the next note in the lead-up sequence
 void resetLeadUpSequence(); // Reset the lead-up sequence to start from beginning
+
+#ifdef HAS_I2S
+/// Hand over any melody requested before audioThread existed. Call once, right
+/// after creating it.
+void buzzOnAudioThreadReady();
+#endif
