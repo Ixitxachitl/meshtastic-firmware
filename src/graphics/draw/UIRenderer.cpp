@@ -2051,10 +2051,13 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
         return;
 #endif
 
-    uint8_t frameToHighlight = state->currentFrame;
-    if (state->frameState == IN_TRANSITION && state->transitionFrameTarget < screen->indicatorIcons.size()) {
-        frameToHighlight = state->transitionFrameTarget;
-    }
+    // transitionFrameTarget is only maintained by nextFrame() - previousFrame() never sets it and
+    // tick() zeroes it when a transition completes - so reading it directly highlighted a stale
+    // icon (usually the first) for the whole of a backwards transition, then snapped to the right
+    // one at the end. frameIndexFor() derives the incoming frame properly in both directions.
+    uint8_t frameToHighlight = frameIndexFor(state);
+    if (frameToHighlight >= screen->indicatorIcons.size())
+        frameToHighlight = state->currentFrame;
 
     // Detect frame change and record time
     if (frameToHighlight != lastFrameIndex) {
