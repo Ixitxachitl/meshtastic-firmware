@@ -29,6 +29,10 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #if HAS_SCREEN
 #include "EInkParallelDisplay.h"
 #include <OLEDDisplay.h>
+#if defined(MESHTASTIC_INCLUDE_NICHE_GRAPHICS) && !defined(MESHTASTIC_INCLUDE_INKHUD)
+// Provided by each niche-enabled variant's nicheGraphics.h (defined once, in the main.cpp TU).
+extern NicheGraphics::BaseUIEInkDisplay *setupNicheGraphicsBaseUI();
+#endif
 #if defined(USE_HUB75)
 #include "graphics/HUB75Display.h" // ESP32 HUB75 (I2S-DMA)
 #endif
@@ -48,6 +52,9 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "draw/UIRenderer.h"
 #include "graphics/TFTColorRegions.h"
 #include "modules/CannedMessageModule.h"
+#if HAS_TELEMETRY && HAS_SENSOR && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
+#include "modules/Telemetry/EnvironmentTelemetry.h"
+#endif
 #include "security/LockdownDisplay.h"
 
 #if !MESHTASTIC_EXCLUDE_GPS
@@ -446,22 +453,20 @@ void Screen::showTextInput(const char *header, const char *initialText, uint32_t
 
 static void drawModuleFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-    uint8_t module_frame;
-    // there's a little but in the UI transition code
-    // where it invokes the function at the correct offset
-    // in the array of "drawScreen" functions; however,
-    // the passed-state doesn't quite reflect the "current"
-    // screen, so we have to detect it.
-    if (state->frameState == IN_TRANSITION && state->transitionFrameRelationship == TransitionRelationship_INCOMING) {
-        // if we're transitioning from the end of the frame list back around to the first
-        // frame, then we want this to be `0`
-        module_frame = state->transitionFrameTarget;
-    } else {
-        // otherwise, just display the module frame that's aligned with the current frame
-        module_frame = state->currentFrame;
-    }
-    MeshModule &pi = *moduleFrames.at(module_frame);
-    pi.drawFrame(display, state, x, y);
+    // state->currentFrame names the outgoing frame for the whole of a transition, so it can't be
+    // used directly to pick the module - see frameIndexFor().
+    const uint8_t module_frame = graphics::frameIndexFor(state);
+
+    // moduleFrames is padded with nullptr up to the first module slot and ends before whatever
+    // frames follow the module region, so an index that isn't a live module is both reachable and
+    // fatal: .at() throws past the end, and a padding entry dereferences to null. Neither could
+    // happen while transitions were disabled, because this INCOMING branch never ran.
+    if (module_frame >= moduleFrames.size())
+        return;
+    MeshModule *pi = moduleFrames[module_frame];
+    if (!pi)
+        return;
+    pi->drawFrame(display, state, x, y);
 }
 
 #if BASEUI_HAS_GAMES
@@ -567,12 +572,11 @@ Screen::Screen(ScanI2C::DeviceAddress address, meshtastic_Config_DisplayConfig_O
 #elif defined(USE_SSD1306)
     dispdev = new SSD1306Wire(address.address, -1, -1, geometry,
                               (address.port == ScanI2C::I2CPort::WIRE1) ? HW_I2C::I2C_TWO : HW_I2C::I2C_ONE);
-    isI2cScreen = true;
 #if defined(OLED_Y_OFFSET_PAGES)
-    // Panels whose active window does not start at GDDRAM row 0 (e.g. 72x40
-    // modules on pages 3..7) need a fixed vertical page shift on every write.
+    // Shift writes to the panel's visible GDDRAM pages.
     static_cast<SSD1306Wire *>(dispdev)->setYOffset(OLED_Y_OFFSET_PAGES);
 #endif
+    isI2cScreen = true;
 #elif defined(USE_SPISSD1306)
     dispdev = new SSD1306Spi(SSD1306_RESET, SSD1306_RS, SSD1306_NSS, GEOMETRY_64_48);
     if (!dispdev->init()) {
@@ -608,6 +612,9 @@ Screen::Screen(ScanI2C::DeviceAddress address, meshtastic_Config_DisplayConfig_O
     LOG_DEBUG("Make TFTDisplay!");
     dispdev = new TFTDisplay(address.address, -1, -1, geometry,
                              (address.port == ScanI2C::I2CPort::WIRE1) ? HW_I2C::I2C_TWO : HW_I2C::I2C_ONE);
+#elif defined(USE_EINK) && defined(MESHTASTIC_INCLUDE_NICHE_GRAPHICS) && !defined(MESHTASTIC_INCLUDE_INKHUD)
+    // NicheGraphics-backed BaseUI E-Ink path. Variant provides setupNicheGraphicsBaseUI() in its nicheGraphics.h.
+    dispdev = setupNicheGraphicsBaseUI();
 #elif defined(USE_EINK) && !defined(USE_EINK_DYNAMICDISPLAY) && !defined(USE_EINK_PARALLELDISPLAY)
     dispdev = new EInkDisplay(address.address, -1, -1, geometry,
                               (address.port == ScanI2C::I2CPort::WIRE1) ? HW_I2C::I2C_TWO : HW_I2C::I2C_ONE);
@@ -733,6 +740,10 @@ void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
             enabled = true;
             setInterval(0); // Draw ASAP
             runASAP = true;
+#if defined(OLED_COMPACT_UI)
+            if (graphics::isCompactPanel(dispdev))
+                graphics::UIRenderer::notifyScreenWoke();
+#endif
         } else {
             powerMon->clearState(meshtastic_PowerMon_State_Screen_On);
 #ifdef USE_EINK
@@ -861,7 +872,12 @@ void Screen::setup()
     displayWidth = dispdev->width();
     displayHeight = dispdev->height();
 
-    ui->setTimePerTransition(0);           // Disable animation delays
+    // Snap by default. A non-zero transition time is what makes OLEDDisplayUi's IN_TRANSITION state
+    // render at all (at 0, tick() completes the transition before drawFrame() runs, so the
+    // two-frames-sliding branch never executes) - and that is only wanted for touch, where the
+    // slide is feedback for a gesture that will shortly be dragging frames directly. Button and
+    // keyboard navigation opts back out per-event in handleInputEvent().
+    ui->setTimePerTransition(0);
     ui->setIndicatorPosition(BOTTOM);      // Not used (indicators disabled below)
     ui->setIndicatorDirection(LEFT_RIGHT); // Not used (indicators disabled below)
     ui->setFrameAnimation(SLIDE_LEFT);     // Used only when indicators are active
@@ -887,7 +903,9 @@ void Screen::setup()
     // observer can see them.
     if (meshtastic_security::shouldRedactDisplay()) {
         drawLockdownLockScreen(dispdev);
-#if defined(USE_EINK_PARALLELDISPLAY)
+#if defined(MESHTASTIC_INCLUDE_NICHE_GRAPHICS) && !defined(MESHTASTIC_INCLUDE_INKHUD)
+        static_cast<NicheGraphics::BaseUIEInkDisplay *>(dispdev)->forceDisplay();
+#elif defined(USE_EINK_PARALLELDISPLAY)
         // Parallel-display variants drive refresh through a different path;
         // a bare drawLockdownLockScreen above lands the frame into the
         // panel buffer and the next ui->update() commits it as normal.
@@ -1050,7 +1068,9 @@ void Screen::forceDisplay(bool forceUiUpdate)
     }
 
     // Tell EInk class to update the display
-#if defined(USE_EINK_PARALLELDISPLAY)
+#if defined(MESHTASTIC_INCLUDE_NICHE_GRAPHICS) && !defined(MESHTASTIC_INCLUDE_INKHUD)
+    static_cast<NicheGraphics::BaseUIEInkDisplay *>(dispdev)->forceDisplay();
+#elif defined(USE_EINK_PARALLELDISPLAY)
     static_cast<EInkParallelDisplay *>(dispdev)->forceDisplay();
 #elif defined(USE_EINK)
     static_cast<EInkDisplay *>(dispdev)->forceDisplay();
@@ -1064,6 +1084,168 @@ void Screen::forceDisplay(bool forceUiUpdate)
 }
 
 static uint32_t lastScreenTransition;
+
+#if BASEUI_HAS_TOUCH_DRAG
+// Nominal transition length for touch-initiated frame changes. Not milliseconds on screen:
+// ticksPerTransition = time / updateInterval, updateInterval starts at 33ms but drops to 16ms once
+// any banner or picker has called setTargetFPS(60), and the redraw cadence during a transition is
+// ~30fps. Net result is roughly this many ms on a fresh boot and about double that afterwards.
+#ifndef SCREEN_TOUCH_TRANSITION_TIME
+#define SCREEN_TOUCH_TRANSITION_TIME 150
+#endif
+
+// Frame changes animate for touch and snap for everything else. A finger gets a slide because it is
+// about to be steering that slide directly; a button press just wants the next frame, and an
+// animation there is added latency rather than feedback.
+static bool isTouchSourced(const InputEvent *event)
+{
+    return event && event->source && strcmp(event->source, "touchscreen1") == 0;
+}
+
+// Framerate used while a transition is running. Defined here rather than beside setFastFramerate()
+// further down because the drag driver below calls setTargetFPS() with it, and a macro has to be
+// defined before the line that uses it.
+#ifndef SCREEN_TRANSITION_FRAMERATE
+#define SCREEN_TRANSITION_FRAMERATE 30 // fps
+#endif
+
+// ---- Finger-following frame transitions -------------------------------------------------------
+//
+// A drag steers the transition directly instead of deciding a page turn on release. The frames are
+// already drawn at an offset by OLEDDisplayUi::drawFrame(), driven entirely by
+//     progress = ticksSinceLastStateSwitch / ticksPerTransition
+// so following the finger just means writing that counter from the finger's displacement.
+//
+// ticksPerTransition is private, so rather than read it we make it deterministic: setTargetFPS()
+// fixes updateInterval, and setTimePerTransition() then derives ticksPerTransition from it, so
+// calling them in that order gives a tick count we know. Both are re-applied on every drag report
+// because Screen changes the target framerate on its own as the frame state changes.
+#define SCREEN_DRAG_UPDATE_INTERVAL (1000 / SCREEN_TRANSITION_FRAMERATE) // what setTargetFPS() stores
+#define SCREEN_DRAG_HOLD_TIME 33000                                      // nominal, while the finger is down
+#define SCREEN_DRAG_TICKS (SCREEN_DRAG_HOLD_TIME / SCREEN_DRAG_UPDATE_INTERVAL)
+
+// Travel before the gesture commits to an axis. Vertical drags are then left entirely alone, so the
+// swipe the touch layer still classifies on release reaches games, menus and list scrolling as
+// before - this only ever claims horizontal movement.
+#define SCREEN_DRAG_AXIS_LOCK_PX 10
+
+// Fraction of the screen the finger must cover for a released drag to settle on the new frame
+// rather than springing back.
+#define SCREEN_DRAG_COMMIT_FRACTION 0.35f
+
+static uint16_t dragAnchorX = 0;
+static uint16_t dragAnchorY = 0;
+static bool dragAnchorValid = false;
+static uint32_t dragAnchorMs = 0;
+static int8_t dragAxis = 0; // 0 undecided, 1 horizontal (ours), -1 vertical (not ours)
+static bool dragTransitionActive = false;
+static int8_t dragDirection = 0; // +1 advancing, -1 going back - latched with the transition
+static bool dragSuppressNextSwipe = false;
+
+// A drag we anchored can end somewhere we never see - a module can start intercepting input
+// mid-gesture - so treat a report arriving long after the previous one as a new gesture.
+#define DRAG_ANCHOR_STALE_MS 1000
+
+// Steer the in-progress transition from the finger's displacement.
+static void screenDragUpdate(OLEDDisplayUi *ui, const InputEvent *event, int16_t frameWidth)
+{
+    const uint32_t now = millis();
+    if (!dragAnchorValid || (now - dragAnchorMs) > DRAG_ANCHOR_STALE_MS) {
+        dragAnchorX = event->touchX;
+        dragAnchorY = event->touchY;
+        dragAnchorValid = true;
+        dragAxis = 0;
+        dragTransitionActive = false;
+        dragDirection = 0;
+    }
+    dragAnchorMs = now;
+
+    const int32_t dx = (int32_t)event->touchX - (int32_t)dragAnchorX;
+    const int32_t dy = (int32_t)event->touchY - (int32_t)dragAnchorY;
+
+    if (dragAxis == 0) {
+        if (abs(dx) < SCREEN_DRAG_AXIS_LOCK_PX && abs(dy) < SCREEN_DRAG_AXIS_LOCK_PX)
+            return; // too early to tell which way this gesture is going
+        dragAxis = (abs(dx) > abs(dy)) ? 1 : -1;
+    }
+    if (dragAxis < 0)
+        return; // vertical: not ours, the release-time swipe still handles it
+
+    // Frames follow the finger - dragging left pulls the next frame in from the right, dragging
+    // right pulls the previous one in from the left. Deliberately the opposite of the old swipe,
+    // where a left-to-right gesture advanced.
+    const int8_t want = (dx < 0) ? 1 : -1;
+
+    // The incoming frame is chosen when the transition begins and cannot be swapped mid-flight, so
+    // a reversal past the anchor means abandoning this one and opening a fresh transition.
+    if (dragTransitionActive && want != dragDirection) {
+        ui->getUiState()->frameState = FIXED;
+        ui->getUiState()->ticksSinceLastStateSwitch = 0;
+        dragTransitionActive = false;
+    }
+
+    if (!dragTransitionActive && ui->getUiState()->frameState != FIXED)
+        return; // something else is already transitioning - don't fight it, and don't restretch its
+                // transition time on the way out
+
+    // Re-applied every report: Screen changes the target framerate on its own as the frame state
+    // changes, and ticksPerTransition is derived from it - so pin both together to keep the tick
+    // count that the progress below is scaled against predictable.
+    ui->setTargetFPS(SCREEN_TRANSITION_FRAMERATE);
+    ui->setTimePerTransition(SCREEN_DRAG_HOLD_TIME);
+
+    if (!dragTransitionActive) {
+        if (want > 0)
+            ui->nextFrame();
+        else
+            ui->previousFrame();
+        dragDirection = want;
+        dragTransitionActive = true;
+    }
+
+    float progress = (frameWidth > 0) ? ((float)abs(dx) / (float)frameWidth) : 0.0f;
+    if (progress > 0.999f)
+        progress = 0.999f; // 1.0 would let tick() complete the transition out from under the finger
+    ui->getUiState()->ticksSinceLastStateSwitch = (uint16_t)(progress * SCREEN_DRAG_TICKS);
+}
+
+// Finger lifted: settle on the new frame or spring back to the old one.
+static void screenDragEnd(OLEDDisplayUi *ui, const InputEvent *event, int16_t frameWidth)
+{
+    const int32_t dx = (int32_t)event->touchX - (int32_t)dragAnchorX;
+    const bool wasDriving = dragTransitionActive;
+
+    dragAnchorValid = false;
+    dragAxis = 0;
+    dragTransitionActive = false;
+    dragDirection = 0;
+
+    if (!wasDriving)
+        return; // never claimed this gesture (too short, or vertical) - leave it entirely alone
+
+    // We drove this one, so the swipe the touch layer classifies on release would page a second
+    // time on top of where we just settled. Swallow it.
+    dragSuppressNextSwipe = true;
+
+    float progress = (frameWidth > 0) ? ((float)abs(dx) / (float)frameWidth) : 0.0f;
+    ui->setTargetFPS(SCREEN_TRANSITION_FRAMERATE);
+    ui->setTimePerTransition(SCREEN_TOUCH_TRANSITION_TIME);
+
+    if (progress >= SCREEN_DRAG_COMMIT_FRACTION) {
+        // Carry on from where the finger left off rather than restarting the slide.
+        const uint16_t ticks = SCREEN_TOUCH_TRANSITION_TIME / SCREEN_DRAG_UPDATE_INTERVAL;
+        if (progress > 0.999f)
+            progress = 0.999f;
+        ui->getUiState()->ticksSinceLastStateSwitch = (uint16_t)(progress * ticks);
+    } else {
+        // Not far enough. currentFrame never advanced, so returning to FIXED is the whole snap-back
+        // - the library only ever drives a transition forwards, so there is no reverse animation to
+        // run and this lands immediately.
+        ui->getUiState()->frameState = FIXED;
+        ui->getUiState()->ticksSinceLastStateSwitch = 0;
+    }
+}
+#endif // BASEUI_HAS_TOUCH_DRAG
 
 int32_t Screen::runOnce()
 {
@@ -1252,7 +1434,8 @@ int32_t Screen::runOnce()
 
             // If an E-Ink display struggles with fast refresh, force carousel to use full refresh instead
             // Carousel is potentially a major source of E-Ink display wear
-#if !defined(EINK_BACKGROUND_USES_FAST)
+            // (NicheGraphics BaseUI variants leave this to the shared DisplayHealth model instead)
+#if !defined(EINK_BACKGROUND_USES_FAST) && !defined(MESHTASTIC_INCLUDE_NICHE_GRAPHICS)
             EINK_ADD_FRAMEFLAG(dispdev, COSMETIC);
 #endif
 
@@ -1289,7 +1472,8 @@ void Screen::setScreensaverFrames(FrameCallback einkScreensaver)
     static FrameCallback screensaverFrame;
     static OverlayCallback screensaverOverlay;
 
-#if defined(HAS_EINK_ASYNCFULL) && defined(USE_EINK_DYNAMICDISPLAY)
+#if (defined(HAS_EINK_ASYNCFULL) && defined(USE_EINK_DYNAMICDISPLAY)) ||                                                         \
+    (defined(MESHTASTIC_INCLUDE_NICHE_GRAPHICS) && !defined(MESHTASTIC_INCLUDE_INKHUD))
     // Join (await) a currently running async refresh, then run the post-update code.
     // Avoid skipping of screensaver frame. Would otherwise be handled by NotifiedWorkerThread.
     EINK_JOIN_ASYNCREFRESH(dispdev);
@@ -1316,7 +1500,9 @@ void Screen::setScreensaverFrames(FrameCallback einkScreensaver)
         updateUiFrame(ui);
     } while (ui->getUiState()->lastUpdate < startUpdate);
 
-#if defined(USE_EINK_PARALLELDISPLAY)
+#if defined(MESHTASTIC_INCLUDE_NICHE_GRAPHICS) && !defined(MESHTASTIC_INCLUDE_INKHUD)
+    static_cast<NicheGraphics::BaseUIEInkDisplay *>(dispdev)->forceDisplay(0);
+#elif defined(USE_EINK_PARALLELDISPLAY)
     static_cast<EInkParallelDisplay *>(dispdev)->forceDisplay(0);
 #elif defined(USE_EINK) && !defined(USE_EINK_DYNAMICDISPLAY)
     // Old EInkDisplay class
@@ -1331,13 +1517,22 @@ void Screen::setScreensaverFrames(FrameCallback einkScreensaver)
 #ifdef EINK_HASQUIRK_GHOSTING
     EINK_ADD_FRAMEFLAG(dispdev, COSMETIC); // Really ugly to see ghosting from "screen paused"
 #else
-    EINK_ADD_FRAMEFLAG(dispdev, RESPONSIVE);              // Really nice to wake screen with a fast-refresh
+    EINK_ADD_FRAMEFLAG(dispdev, RESPONSIVE); // Really nice to wake screen with a fast-refresh
 #endif
 }
 #endif
 
 // Regenerate the normal set of frames, focusing a specific frame if requested
 // Called when a frame should be added / removed, or custom frames should be cleared
+// No-op on other boards, so this costs them no flash/RAM.
+#if defined(OLED_COMPACT_UI)
+#define PUSH_FRAME_TITLE(x) frameTitles.push_back(x)
+#define CLEAR_FRAME_TITLES() frameTitles.clear()
+#else
+#define PUSH_FRAME_TITLE(x)
+#define CLEAR_FRAME_TITLES()
+#endif
+
 void Screen::setFrames(FrameFocus focus)
 {
     // Block setFrames calls when virtual keyboard is active to prevent overlay interference
@@ -1355,6 +1550,7 @@ void Screen::setFrames(FrameFocus focus)
     showingNormalScreen = true;
 
     indicatorIcons.clear();
+    CLEAR_FRAME_TITLES();
 
     size_t numframes = 0;
 
@@ -1363,19 +1559,23 @@ void Screen::setFrames(FrameFocus focus)
     if (error_code) {
         normalFrames[numframes++] = NotificationRenderer::drawCriticalFaultFrame;
         indicatorIcons.push_back(icon_error);
+        PUSH_FRAME_TITLE("Alert");
         focus = FOCUS_FAULT; // Change our "focus" parameter, to ensure we show the fault frame
     }
 
 #if defined(DISPLAY_CLOCK_FRAME)
     if (!hiddenFrames.clock) {
         fsi.positions.clock = numframes;
-#if defined(OLED_TINY)
+#if defined(OLED_COMPACT_UI)
+        normalFrames[numframes++] = graphics::ClockRenderer::drawDigitalClockFrame;
+#elif defined(OLED_TINY)
         normalFrames[numframes++] = graphics::ClockRenderer::drawAnalogClockFrame;
 #else
         normalFrames[numframes++] = uiconfig.is_clockface_analog ? graphics::ClockRenderer::drawAnalogClockFrame
                                                                  : graphics::ClockRenderer::drawDigitalClockFrame;
 #endif
         indicatorIcons.push_back(digital_icon_clock);
+        PUSH_FRAME_TITLE("Clock");
     }
 #endif
 
@@ -1383,6 +1583,7 @@ void Screen::setFrames(FrameFocus focus)
         fsi.positions.home = numframes;
         normalFrames[numframes++] = graphics::UIRenderer::drawDeviceFocused;
         indicatorIcons.push_back(icon_home);
+        PUSH_FRAME_TITLE("Home");
     }
 
 #if BASEUI_HAS_GAMES
@@ -1391,23 +1592,27 @@ void Screen::setFrames(FrameFocus focus)
         fsi.positions.games = numframes;
         normalFrames[numframes++] = drawGamesFrame;
         indicatorIcons.push_back(joystick_small);
+        PUSH_FRAME_TITLE("Games");
     }
 #endif
 
     fsi.positions.textMessage = numframes;
     normalFrames[numframes++] = graphics::MessageRenderer::drawTextMessageFrame;
     indicatorIcons.push_back(icon_mail);
+    PUSH_FRAME_TITLE("Messages");
 
 #ifndef USE_EINK
     if (!hiddenFrames.nodelist_nodes) {
         fsi.positions.nodelist_nodes = numframes;
         normalFrames[numframes++] = graphics::NodeListRenderer::drawDynamicListScreen_Nodes;
         indicatorIcons.push_back(icon_nodes);
+        PUSH_FRAME_TITLE("Nodes");
     }
     if (!hiddenFrames.nodelist_location) {
         fsi.positions.nodelist_location = numframes;
         normalFrames[numframes++] = graphics::NodeListRenderer::drawDynamicListScreen_Location;
         indicatorIcons.push_back(icon_list);
+        PUSH_FRAME_TITLE("Node List");
     }
 #endif
 
@@ -1417,16 +1622,19 @@ void Screen::setFrames(FrameFocus focus)
         fsi.positions.nodelist_lastheard = numframes;
         normalFrames[numframes++] = graphics::NodeListRenderer::drawLastHeardScreen;
         indicatorIcons.push_back(icon_nodes);
+        PUSH_FRAME_TITLE("Nodes");
     }
     if (!hiddenFrames.nodelist_hopsignal) {
         fsi.positions.nodelist_hopsignal = numframes;
         normalFrames[numframes++] = graphics::NodeListRenderer::drawHopSignalScreen;
         indicatorIcons.push_back(icon_signal);
+        PUSH_FRAME_TITLE("Signal");
     }
     if (!hiddenFrames.nodelist_distance) {
         fsi.positions.nodelist_distance = numframes;
         normalFrames[numframes++] = graphics::NodeListRenderer::drawDistanceScreen;
         indicatorIcons.push_back(icon_distance);
+        PUSH_FRAME_TITLE("Distance");
     }
 #endif
 #if HAS_GPS
@@ -1435,12 +1643,14 @@ void Screen::setFrames(FrameFocus focus)
         fsi.positions.nodelist_bearings = numframes;
         normalFrames[numframes++] = graphics::NodeListRenderer::drawNodeListWithCompasses;
         indicatorIcons.push_back(icon_list);
+        PUSH_FRAME_TITLE("Bearings");
     }
 #endif
     if (!hiddenFrames.gps) {
         fsi.positions.gps = numframes;
         normalFrames[numframes++] = graphics::UIRenderer::drawCompassAndLocationScreen;
         indicatorIcons.push_back(icon_compass);
+        PUSH_FRAME_TITLE("GPS");
     }
 #endif
     // Map doesn't need local GPS - it can show other nodes' positions regardless (e.g. T-Deck,
@@ -1457,24 +1667,32 @@ void Screen::setFrames(FrameFocus focus)
         fsi.positions.lora = numframes;
         normalFrames[numframes++] = graphics::DebugRenderer::drawLoRaFocused;
         indicatorIcons.push_back(icon_radio);
+        PUSH_FRAME_TITLE("LoRa");
     }
     if (!hiddenFrames.system) {
         fsi.positions.system = numframes;
         normalFrames[numframes++] = graphics::DebugRenderer::drawSystemScreen;
         indicatorIcons.push_back(icon_system);
+        PUSH_FRAME_TITLE("System");
     }
 #if !defined(DISPLAY_CLOCK_FRAME)
     if (!hiddenFrames.clock) {
         fsi.positions.clock = numframes;
+#if defined(OLED_COMPACT_UI)
+        normalFrames[numframes++] = graphics::ClockRenderer::drawDigitalClockFrame;
+#else
         normalFrames[numframes++] = uiconfig.is_clockface_analog ? graphics::ClockRenderer::drawAnalogClockFrame
                                                                  : graphics::ClockRenderer::drawDigitalClockFrame;
+#endif
         indicatorIcons.push_back(digital_icon_clock);
+        PUSH_FRAME_TITLE("Clock");
     }
 #endif
     if (!hiddenFrames.chirpy) {
         fsi.positions.chirpy = numframes;
         normalFrames[numframes++] = graphics::DebugRenderer::drawChirpy;
         indicatorIcons.push_back(chirpy_small);
+        PUSH_FRAME_TITLE("Chirpy");
     }
 
 #if HAS_WIFI && !defined(ARCH_PORTDUINO)
@@ -1482,6 +1700,7 @@ void Screen::setFrames(FrameFocus focus)
         fsi.positions.wifi = numframes;
         normalFrames[numframes++] = graphics::DebugRenderer::drawFrameWiFi;
         indicatorIcons.push_back(icon_wifi);
+        PUSH_FRAME_TITLE("WiFi");
     }
 #endif
 
@@ -1509,6 +1728,7 @@ void Screen::setFrames(FrameFocus focus)
                 fsi.positions.waypoint = numframes;
 
             indicatorIcons.push_back(icon_module);
+            PUSH_FRAME_TITLE("Module");
             numframes++;
         }
     }
@@ -1537,6 +1757,7 @@ void Screen::setFrames(FrameFocus focus)
             for (const auto &f : favoriteFrames) {
                 normalFrames[numframes++] = f;
                 indicatorIcons.push_back(icon_node);
+                PUSH_FRAME_TITLE("Favorite");
             }
             fsi.positions.lastFavorite = numframes - 1;
         } else {
@@ -1908,6 +2129,11 @@ void Screen::handleOnPress()
     // If screen was off, just wake it, otherwise advance to next frame
     // If we are in a transition, the press must have bounced, drop it.
     if (ui->getUiState()->frameState == FIXED) {
+#if BASEUI_HAS_TOUCH_DRAG
+        // Only reached by the auto-carousel, which is nobody's gesture - snap, and don't inherit an
+        // animated transition time left behind by the last touch event.
+        ui->setTimePerTransition(0);
+#endif
         ui->nextFrame();
         lastScreenTransition = millis();
         setFastFramerate();
@@ -1996,10 +2222,6 @@ void Screen::showFrame(FrameDirection direction)
     }
 }
 
-#ifndef SCREEN_TRANSITION_FRAMERATE
-#define SCREEN_TRANSITION_FRAMERATE 30 // fps
-#endif
-
 void Screen::setFastFramerate()
 {
 #if defined(OLED_TINY)
@@ -2079,6 +2301,12 @@ int Screen::handleInputEvent(const InputEvent *event)
     LOG_INPUT("Screen Input event %u! kb %u", event->inputEvent, event->kbchar);
     if (!screenOn)
         return 0;
+
+#if BASEUI_HAS_TOUCH_DRAG
+    // Decide up front, before any of the branches below can page a frame, so every route to a
+    // transition inherits the right answer for whatever kind of input caused it.
+    ui->setTimePerTransition(isTouchSourced(event) ? SCREEN_TOUCH_TRANSITION_TIME : 0);
+#endif
 
     // Handle text input notifications specially - pass input to virtual keyboard
     if (NotificationRenderer::current_notification_type == notificationTypeEnum::text_input) {
@@ -2214,6 +2442,36 @@ int Screen::handleInputEvent(const InputEvent *event)
             }
         }
     }
+#if defined(OLED_COMPACT_UI)
+    // UP/DOWN on the compact position screen toggles compass vs coordinates+elevation
+    if (graphics::isCompactPanel(dispdev) && ui->getUiState()->currentFrame == framesetInfo.positions.gps) {
+        if (event->inputEvent == INPUT_BROKER_UP) {
+            graphics::UIRenderer::scrollPositionUp();
+            setFastFramerate();
+            return 0;
+        }
+        if (event->inputEvent == INPUT_BROKER_DOWN) {
+            graphics::UIRenderer::scrollPositionDown();
+            setFastFramerate();
+            return 0;
+        }
+    }
+    // UP/DOWN on the compact favorite-node screen toggles compass+distance vs status/telemetry
+    if (graphics::isCompactPanel(dispdev) && framesetInfo.positions.firstFavorite != 255 &&
+        ui->getUiState()->currentFrame >= framesetInfo.positions.firstFavorite &&
+        ui->getUiState()->currentFrame <= framesetInfo.positions.lastFavorite) {
+        if (event->inputEvent == INPUT_BROKER_UP) {
+            graphics::UIRenderer::scrollFavoriteUp();
+            setFastFramerate();
+            return 0;
+        }
+        if (event->inputEvent == INPUT_BROKER_DOWN) {
+            graphics::UIRenderer::scrollFavoriteDown();
+            setFastFramerate();
+            return 0;
+        }
+    }
+#endif
     // Use left or right input from a keyboard to move between frames,
     // so long as a mesh module isn't using these events for some other purpose
     if (showingNormalScreen) {
@@ -2249,6 +2507,28 @@ int Screen::handleInputEvent(const InputEvent *event)
             }
 
             if (handledEncoderScroll) {
+                setFastFramerate();
+                return 0;
+            }
+#endif
+#if BASEUI_HAS_TOUCH_DRAG
+            // A gesture we steered is followed by the touch layer's own swipe classification (see
+            // TouchScreenBase::runOnce, which reports both). Drop that one - we already settled the
+            // frame. Cleared on the first event after the drag whatever it turns out to be, so a
+            // gesture that ended below the swipe threshold cannot leave it armed.
+            if (dragSuppressNextSwipe) {
+                dragSuppressNextSwipe = false;
+                if (event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_RIGHT)
+                    return 0;
+            }
+            if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG) {
+                screenDragUpdate(ui, event, displayWidth);
+                setFastFramerate();
+                return 0;
+            }
+            if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG_END) {
+                screenDragEnd(ui, event, displayWidth);
+                lastScreenTransition = millis();
                 setFastFramerate();
                 return 0;
             }
@@ -2332,6 +2612,16 @@ int Screen::handleInputEvent(const InputEvent *event)
                             menuHandler::textMessageBaseMenu();
                         }
                     }
+                    // moduleFrames.size() bounds the module-frame region, before favorites are appended; its leading
+                    // slots are nullptr padding for the built-in frames, so only a non-null entry is a real module frame.
+                } else if (this->ui->getUiState()->currentFrame < moduleFrames.size() &&
+                           moduleFrames.at(this->ui->getUiState()->currentFrame) != nullptr) {
+#if HAS_TELEMETRY && HAS_SENSOR && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
+                    const MeshModule *currentModule = moduleFrames.at(this->ui->getUiState()->currentFrame);
+                    if (environmentTelemetryModule != nullptr && environmentTelemetryModule->ownsFrame(currentModule)) {
+                        menuHandler::environmentTelemetryMenu();
+                    }
+#endif
                 } else if (framesetInfo.positions.firstFavorite != 255 &&
                            this->ui->getUiState()->currentFrame >= framesetInfo.positions.firstFavorite &&
                            this->ui->getUiState()->currentFrame <= framesetInfo.positions.lastFavorite) {
