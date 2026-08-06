@@ -16,7 +16,18 @@
 #define TFT_OFFSET_X 22
 #define TFT_OFFSET_Y 0
 #define TFT_OFFSET_ROTATION 0
-#define SCREEN_TRANSITION_FRAMERATE 5 // fps
+// Framerate while a frame transition is animating - including one a finger is dragging.
+//
+// This is a hard cap, not a hint: setFastFramerate() feeds it to OLEDDisplayUi::setTargetFPS(),
+// which turns it into updateInterval, and update() then refuses to redraw more often than that no
+// matter how many times the thread runs. At the old value of 5 a drag was drawn five times a
+// second, which is what made swiping here feel worse than the T-Deck (30).
+//
+// 15 is sized to what the panel measurably does: a full repaint costs ~26 ms idle and ~46 ms
+// mid-transition, when both the outgoing and incoming frame register colour regions to overprint.
+// Going higher just saturates the cooperative scheduler and starves the touch poll, since these
+// threads cannot preempt each other.
+#define SCREEN_TRANSITION_FRAMERATE 15 // fps
 #define USE_TFTDISPLAY 1
 #define HAS_SCREEN 1
 #define TFT_RESET_AFTER_SLEEP
@@ -43,6 +54,15 @@
 #define TOUCH_I2C_PORT 0
 #define TOUCH_SLAVE_ADDRESS 0x1A
 #define WAKE_ON_TOUCH
+
+// Touch sampling deliberately left on the shared defaults (20 ms floor / 20 ms active).
+//
+// Sampling faster was tried - TOUCH_MIN_POLL_INTERVAL 8 with TOUCH_POLL_INTERVAL_ACTIVE 10 - and it
+// does reach ~11 ms in practice, but it produces phantom taps: the CST92xx only returns a point
+// when its interrupt says a new one is ready, so polling ahead of the chip's own report rate reads
+// as an intermittent release, and a release is what synthesises a tap. Measurement also showed
+// polling was never the constraint here - the screen only repaints a few times a second during a
+// drag, so the finger is tracked far more finely than it is ever drawn.
 
 #define BUTTON_PIN 0
 

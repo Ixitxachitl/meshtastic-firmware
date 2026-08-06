@@ -1153,6 +1153,19 @@ static bool dragSuppressNextSwipe = false;
 // mid-gesture - so treat a report arriving long after the previous one as a new gesture.
 #define DRAG_ANCHOR_STALE_MS 1000
 
+// True while a finger is steering, or is about to steer, a frame transition. runOnce() uses this to
+// leave the framerate alone mid-gesture.
+//
+// Deliberately derived from how recently a drag report arrived, rather than from a flag set on
+// drag start and cleared on drag end. A gesture can end somewhere we never see - a module can
+// begin intercepting input mid-drag, which is why the anchor already carries a staleness timeout -
+// and a flag left stuck true would pin the screen at the transition framerate indefinitely. That
+// is a battery leak rather than a cosmetic bug, so this self-heals instead.
+static bool screenDragOwnsFramerate()
+{
+    return dragAnchorValid && (millis() - dragAnchorMs) <= DRAG_ANCHOR_STALE_MS;
+}
+
 // Steer the in-progress transition from the finger's displacement.
 static void screenDragUpdate(OLEDDisplayUi *ui, const InputEvent *event, int16_t frameWidth)
 {
@@ -1256,6 +1269,23 @@ static void screenDragEnd(OLEDDisplayUi *ui, const InputEvent *event, int16_t fr
 
 int32_t Screen::runOnce()
 {
+#ifdef UI_PERF_DEBUG
+    // How often the scheduler actually gets here, against how often we ask it to. Paired with the
+    // frame count TFTDisplay reports, this separates "nothing is calling us" from "we are called
+    // but OLEDDisplayUi::update() declines to redraw" - the two have nothing in common as fixes.
+    {
+        static uint32_t calls = 0, lastReportMs = 0;
+        calls++;
+        const uint32_t now = millis();
+        if (now - lastReportMs >= 1000) {
+            LOG_INFO("Screen::runOnce: %u calls in %u ms, targetFps=%u frameState=%d", (unsigned)calls,
+                     (unsigned)(now - lastReportMs), (unsigned)targetFramerate, (int)ui->getUiState()->frameState);
+            calls = 0;
+            lastReportMs = now;
+        }
+    }
+#endif
+
     // If we don't have a screen, don't ever spend any CPU for us.
     if (!useDisplay) {
         enabled = false;
@@ -1423,7 +1453,18 @@ int32_t Screen::runOnce()
     }
 #endif
 
-    if (targetFramerate != desiredFramerate && ui->getUiState()->frameState == FIXED) {
+#if BASEUI_HAS_TOUCH_DRAG
+    // A finger steering a transition owns the framerate. Without this the reset below fires during
+    // the first few pixels of a drag - before SCREEN_DRAG_AXIS_LOCK_PX commits an axis there is no
+    // transition yet, so frameState is still FIXED - and it does more than slow the thread down:
+    // it calls setTargetFPS(), which OLEDDisplayUi turns into updateInterval, so update() then
+    // refuses to redraw at all until a full second has passed.
+    const bool dragOwnsFramerate = screenDragOwnsFramerate();
+#else
+    const bool dragOwnsFramerate = false;
+#endif
+
+    if (targetFramerate != desiredFramerate && ui->getUiState()->frameState == FIXED && !dragOwnsFramerate) {
         // oldFrameState = ui->getUiState()->frameState;
         targetFramerate = desiredFramerate;
 

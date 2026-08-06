@@ -28,6 +28,16 @@
 #define TOUCH_POLL_INTERVAL_ACTIVE_FAST TOUCH_POLL_INTERVAL_ACTIVE
 #endif
 
+// Hard floor on how often runOnce() will actually sample the panel, guarding against the scheduler
+// calling back faster than the bus can usefully be read.
+//
+// This is a ceiling on finger tracking, not just a guard: at the default 20 ms nothing can be
+// sampled faster than 50 Hz, and any TOUCH_POLL_INTERVAL_* a variant sets below it is silently
+// ignored. A board that wants faster tracking has to lower this too.
+#ifndef TOUCH_MIN_POLL_INTERVAL
+#define TOUCH_MIN_POLL_INTERVAL 20
+#endif
+
 #ifndef TOUCH_POLL_INTERVAL_RELEASE_FAST
 #define TOUCH_POLL_INTERVAL_RELEASE_FAST TOUCH_POLL_INTERVAL_RELEASE
 #endif
@@ -82,9 +92,12 @@ void TouchScreenBase::init(bool hasTouch)
 int32_t TouchScreenBase::runOnce()
 {
     uint32_t nowMs = millis();
-    if (nowMs - _lastRun < 20) { // suppress too fast consecutive runOnce() executions
-        return 20;
+    if (nowMs - _lastRun < TOUCH_MIN_POLL_INTERVAL) { // suppress too fast consecutive runOnce() executions
+        return TOUCH_MIN_POLL_INTERVAL;
     }
+#ifdef UI_PERF_DEBUG
+    const uint32_t sinceLastPollMs = nowMs - _lastRun;
+#endif
     _lastRun = nowMs;
     TouchEvent e;
     e.touchEvent = static_cast<char>(TOUCH_ACTION_NONE);
@@ -202,6 +215,26 @@ int32_t TouchScreenBase::runOnce()
             e.touchEvent = static_cast<char>(TOUCH_ACTION_DRAG);
         }
     }
+#ifdef UI_PERF_DEBUG
+    // The cadence we actually achieve with a finger down, which is what decides how far the drawn
+    // frame trails the finger. Expect this to exceed the configured interval whenever a long
+    // repaint blocks the cooperative scheduler - these threads cannot preempt each other.
+    if (touched) {
+        static uint32_t samples = 0, sumMs = 0, worstMs = 0;
+        samples++;
+        sumMs += sinceLastPollMs;
+        if (sinceLastPollMs > worstMs)
+            worstMs = sinceLastPollMs;
+        if (samples >= 32) {
+            LOG_INFO("touch poll: %u ms avg, %u ms worst (target %u)", (unsigned)(sumMs / samples), (unsigned)worstMs,
+                     (unsigned)TOUCH_POLL_INTERVAL_ACTIVE);
+            samples = 0;
+            sumMs = 0;
+            worstMs = 0;
+        }
+    }
+#endif
+
     _touchedOld = touched;
 
 #if defined RAK14014
