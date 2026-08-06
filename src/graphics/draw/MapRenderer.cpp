@@ -1,5 +1,7 @@
 #include "graphics/draw/MapRenderer.h"
 
+#if BASEUI_HAS_MAP
+
 #include "NodeDB.h"
 #include "gps/GeoCoord.h"
 #include "graphics/SharedUIDisplay.h"
@@ -814,3 +816,5 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         drawHaloString(display, rulerX - 7, indicatorY - FONT_HEIGHT_SMALL / 2, zoomText);
     }
 }
+
+#endif // BASEUI_HAS_MAP
