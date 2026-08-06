@@ -38,6 +38,47 @@ static std::vector<std::string> cachedLines;
 static std::vector<int> cachedHeights;
 static bool manualScrolling = false;
 
+// One message's span of lines, so its bubble can be drawn as a single rounded rect.
+struct MessageBlock {
+    size_t start;
+    size_t end;
+    bool mine;
+};
+
+// The rest of the laid-out message list, cached alongside cachedLines/cachedHeights.
+//
+// Building this is the expensive part of drawing the frame - it word-wraps every visible message
+// and allocates up to MAX_CACHED_LINES std::strings - and it used to run on every single redraw,
+// which on a screen that scrolls continuously means constantly. Bubbles make it worse twice over:
+// they narrow the text column so messages wrap into more lines, and each bubble registers a TFT
+// colour region that TFTDisplay::display() then overprints per row.
+//
+// So it is now keyed on everything that can change a laid-out line (see MessageLayoutKey) and
+// rebuilt only when one of those actually moves. Scrolling, which is what runs every frame, no
+// longer rebuilds anything.
+static std::vector<bool> cachedIsMine;
+static std::vector<bool> cachedIsHeader;
+static std::vector<AckStatus> cachedAckForLine;
+static std::vector<MessageBlock> cachedBlocks;
+
+struct MessageLayoutKey {
+    uint32_t contentHash = 0;
+    uint32_t messageCount = 0xFFFFFFFFu; // Sentinel: never matches a real first pass
+    int mode = -1;
+    int channel = -1;
+    uint32_t peer = 0;
+    int16_t width = 0, height = 0;
+    bool bubbles = false;
+    bool compact = false;
+
+    bool operator==(const MessageLayoutKey &o) const
+    {
+        return contentHash == o.contentHash && messageCount == o.messageCount && mode == o.mode && channel == o.channel &&
+               peer == o.peer && width == o.width && height == o.height && bubbles == o.bubbles && compact == o.compact;
+    }
+};
+static MessageLayoutKey cachedLayoutKey;
+
 // Scroll state (file scope so we can reset on new message)
 float scrollY = 0.0f;
 uint32_t lastTime = 0;
@@ -139,11 +180,54 @@ void nudgeScroll(int8_t direction)
     }
 }
 
+void scrollByFingerDelta(float dyPx)
+{
+    if (dyPx == 0.0f || cachedHeights.empty())
+        return;
+
+    OLEDDisplay *display = (screen != nullptr) ? screen->getDisplayDevice() : nullptr;
+    const int displayHeight = display ? display->getHeight() : 64;
+    const int usableHeight = std::max(0, displayHeight - FONT_HEIGHT_SMALL);
+
+    int totalHeight = 0;
+    for (int h : cachedHeights)
+        totalHeight += h;
+
+    manualScrolling = true; // Claim the view from the auto-scroll animation, as nudgeScroll does.
+    if (totalHeight <= usableHeight) {
+        scrollY = 0.0f;
+        return;
+    }
+
+    // The text follows the finger, so dragging down (dyPx > 0, screen y grows downward) walks back
+    // towards the top of the list. Same sense as the map pan, opposite to a scroll-down button.
+    const int scrollStop = std::max(0, totalHeight - usableHeight + cachedHeights.back());
+    float newScroll = scrollY - dyPx;
+    if (newScroll < 0.0f)
+        newScroll = 0.0f;
+    if (newScroll > (float)scrollStop)
+        newScroll = (float)scrollStop;
+
+    if (newScroll != scrollY) {
+        scrollY = newScroll;
+        // Don't let the auto-scroll's reset-to-top timer fire under a finger that is still moving.
+        waitingToReset = false;
+        scrollStarted = false;
+        scrollStartDelay = millis();
+        lastTime = millis();
+    }
+}
+
 // Fully free cached message data from heap
 void clearMessageCache()
 {
     std::vector<std::string>().swap(cachedLines);
     std::vector<int>().swap(cachedHeights);
+    std::vector<bool>().swap(cachedIsMine);
+    std::vector<bool>().swap(cachedIsHeader);
+    std::vector<AckStatus>().swap(cachedAckForLine);
+    std::vector<MessageBlock>().swap(cachedBlocks);
+    cachedLayoutKey = MessageLayoutKey{}; // Its sentinel count can't collide with a real rebuild.
 
     // Reset scroll so we rebuild cleanly next time we enter the screen
     resetScrollState();
@@ -264,12 +348,6 @@ static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &
 {
     return graphics::EmoteRenderer::analyzeLine(display, line, 0, emotes, emoteCount).width;
 }
-
-struct MessageBlock {
-    size_t start;
-    size_t end;
-    bool mine;
-};
 
 #if GRAPHICS_TFT_COLORING_ENABLED
 static void setDarkModeBubbleRoleColors(uint32_t themeId, bool mine)
@@ -537,236 +615,274 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         return;
     }
 
-    // Build lines for filtered messages (newest first)
-    std::vector<std::string> allLines;
-    std::vector<bool> isMine;   // track alignment
-    std::vector<bool> isHeader; // track header lines
-    std::vector<AckStatus> ackForLine;
-    // Hard limit on total cached lines to prevent unbounded growth from a single long message.
-    // Reserve to the actual cache cap up front, because a single message can expand to many more
-    // wrapped display lines than a small per-message estimate would predict. For a display
-    // rendering only ~5-30 lines at a time, caching more than this limit wastes heap. Stop
-    // appending once we reach MAX_CACHED_LINES to prevent a single message from blowing out the
-    // heap.
-    constexpr size_t MAX_CACHED_LINES = 100U; // ~5-6KB for std::string overhead on 32-bit (if each ~50-60 bytes avg)
-    allLines.reserve(MAX_CACHED_LINES);
-    isMine.reserve(MAX_CACHED_LINES);
-    isHeader.reserve(MAX_CACHED_LINES);
-    ackForLine.reserve(MAX_CACHED_LINES);
+    // Everything the laid-out lines depend on. Rebuilding is the expensive part of this frame, so
+    // it only happens when one of these actually changes - see cachedLines and friends. The hash
+    // covers ack status because a delivery receipt changes the mark drawn on a line.
+    MessageLayoutKey layoutKey;
+    layoutKey.messageCount = (uint32_t)filtered.size();
+    layoutKey.mode = (int)currentMode;
+    layoutKey.channel = currentChannel;
+    layoutKey.peer = currentPeer;
+    layoutKey.width = (int16_t)SCREEN_WIDTH;
+    layoutKey.height = (int16_t)SCREEN_HEIGHT;
+    layoutKey.bubbles = showBubbles;
+    layoutKey.compact = compactPanel;
+    {
+        uint32_t h = 2166136261u; // FNV-1a
+        for (const auto &m : filtered) {
+            const uint32_t words[] = {
+                m.timestamp,           m.sender, m.dest, (uint32_t)m.channelIndex, (uint32_t)m.ackStatus, (uint32_t)m.textOffset,
+                (uint32_t)m.textLength};
+            for (uint32_t w : words) {
+                h ^= w;
+                h *= 16777619u;
+            }
+        }
+        layoutKey.contentHash = h;
+    }
 
-    for (auto it = filtered.rbegin(); it != filtered.rend(); ++it) {
-        const auto &m = *it;
+    const bool layoutValid = !cachedLines.empty() && cachedLayoutKey == layoutKey;
 
-        // Channel / destination labeling
-        char chanType[32] = "";
-        if (currentMode == ThreadMode::ALL) {
-            if (m.dest == NODENUM_BROADCAST) {
-                const char *name = channels.getName(m.channelIndex);
-                if (currentResolution == ScreenResolution::Low || currentResolution == ScreenResolution::UltraLow) {
-                    if (strcmp(name, "ShortTurbo") == 0)
-                        name = "ShortT";
-                    else if (strcmp(name, "ShortSlow") == 0)
-                        name = "ShortS";
-                    else if (strcmp(name, "ShortFast") == 0)
-                        name = "ShortF";
-                    else if (strcmp(name, "MediumSlow") == 0)
-                        name = "MedS";
-                    else if (strcmp(name, "MediumFast") == 0)
-                        name = "MedF";
-                    else if (strcmp(name, "LongSlow") == 0)
-                        name = "LongS";
-                    else if (strcmp(name, "LongFast") == 0)
-                        name = "LongF";
-                    else if (strcmp(name, "LongTurbo") == 0)
-                        name = "LongT";
-                    else if (strcmp(name, "LongMod") == 0)
-                        name = "LongM";
+    // Bound to the caches so the drawing code below is unchanged whether we rebuilt or not.
+    std::vector<bool> &isMine = cachedIsMine;
+    std::vector<bool> &isHeader = cachedIsHeader;
+    std::vector<AckStatus> &ackForLine = cachedAckForLine;
+    std::vector<MessageBlock> &blocks = cachedBlocks;
+
+    if (!layoutValid) {
+        // Build lines for filtered messages (newest first)
+        std::vector<std::string> allLines;
+        isMine.clear();
+        isHeader.clear();
+        ackForLine.clear();
+        // Hard limit on total cached lines to prevent unbounded growth from a single long message.
+        // Reserve to the actual cache cap up front, because a single message can expand to many more
+        // wrapped display lines than a small per-message estimate would predict. For a display
+        // rendering only ~5-30 lines at a time, caching more than this limit wastes heap. Stop
+        // appending once we reach MAX_CACHED_LINES to prevent a single message from blowing out the
+        // heap.
+        constexpr size_t MAX_CACHED_LINES = 100U; // ~5-6KB for std::string overhead on 32-bit (if each ~50-60 bytes avg)
+        allLines.reserve(MAX_CACHED_LINES);
+        isMine.reserve(MAX_CACHED_LINES);
+        isHeader.reserve(MAX_CACHED_LINES);
+        ackForLine.reserve(MAX_CACHED_LINES);
+
+        for (auto it = filtered.rbegin(); it != filtered.rend(); ++it) {
+            const auto &m = *it;
+
+            // Channel / destination labeling
+            char chanType[32] = "";
+            if (currentMode == ThreadMode::ALL) {
+                if (m.dest == NODENUM_BROADCAST) {
+                    const char *name = channels.getName(m.channelIndex);
+                    if (currentResolution == ScreenResolution::Low || currentResolution == ScreenResolution::UltraLow) {
+                        if (strcmp(name, "ShortTurbo") == 0)
+                            name = "ShortT";
+                        else if (strcmp(name, "ShortSlow") == 0)
+                            name = "ShortS";
+                        else if (strcmp(name, "ShortFast") == 0)
+                            name = "ShortF";
+                        else if (strcmp(name, "MediumSlow") == 0)
+                            name = "MedS";
+                        else if (strcmp(name, "MediumFast") == 0)
+                            name = "MedF";
+                        else if (strcmp(name, "LongSlow") == 0)
+                            name = "LongS";
+                        else if (strcmp(name, "LongFast") == 0)
+                            name = "LongF";
+                        else if (strcmp(name, "LongTurbo") == 0)
+                            name = "LongT";
+                        else if (strcmp(name, "LongMod") == 0)
+                            name = "LongM";
+                    }
+                    snprintf(chanType, sizeof(chanType), "#%s", name);
+                } else {
+                    snprintf(chanType, sizeof(chanType), "(DM)");
                 }
-                snprintf(chanType, sizeof(chanType), "#%s", name);
-            } else {
-                snprintf(chanType, sizeof(chanType), "(DM)");
             }
-        }
 
-        // Calculate how long ago
-        uint32_t nowSecs = getValidTime(RTCQuality::RTCQualityDevice, true);
-        uint32_t seconds = 0;
-        bool invalidTime = true;
+            // Calculate how long ago
+            uint32_t nowSecs = getValidTime(RTCQuality::RTCQualityDevice, true);
+            uint32_t seconds = 0;
+            bool invalidTime = true;
 
-        if (m.timestamp > 0 && nowSecs > 0) {
-            if (nowSecs >= m.timestamp) {
-                seconds = nowSecs - m.timestamp;
-                invalidTime = (seconds > 315360000); // >10 years
-            } else {
-                uint32_t ahead = m.timestamp - nowSecs;
-                if (ahead <= 600) { // allow small skew
-                    seconds = 0;
-                    invalidTime = false;
-                }
-            }
-        } else if (m.timestamp > 0 && nowSecs == 0) {
-            // RTC not valid: only trust boot-relative if same boot
-            uint32_t bootNow = millis() / 1000;
-            if (m.isBootRelative && m.timestamp <= bootNow) {
-                seconds = bootNow - m.timestamp;
-                invalidTime = false;
-            } else {
-                invalidTime = true; // old persisted boot-relative, ignore until healed
-            }
-        }
-
-        char timeBuf[16];
-        if (invalidTime) {
-            snprintf(timeBuf, sizeof(timeBuf), "???");
-        } else if (seconds < 60) {
-            snprintf(timeBuf, sizeof(timeBuf), "%us", seconds);
-        } else if (seconds < 3600) {
-            snprintf(timeBuf, sizeof(timeBuf), "%um", seconds / 60);
-        } else if (seconds < 86400) {
-            snprintf(timeBuf, sizeof(timeBuf), "%uh", seconds / 3600);
-        } else {
-            snprintf(timeBuf, sizeof(timeBuf), "%ud", seconds / 86400);
-        }
-
-        // Build header line for this message
-        meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(m.sender);
-        meshtastic_NodeInfoLite *node_recipient = nodeDB->getMeshNode(m.dest);
-
-        char senderName[64] = "";
-        if (nodeInfoLiteHasUser(node)) {
-            if (node->long_name[0]) {
-                strncpy(senderName, node->long_name, sizeof(senderName) - 1);
-            } else if (node->short_name[0]) {
-                strncpy(senderName, node->short_name, sizeof(senderName) - 1);
-            }
-            senderName[sizeof(senderName) - 1] = '\0';
-        }
-        if (!senderName[0]) {
-            snprintf(senderName, sizeof(senderName), "(%08x)", m.sender);
-        }
-
-        // If this is *our own* message, override senderName to who the recipient was
-        bool mine = (m.sender == nodeDB->getNodeNum());
-        if (mine && nodeInfoLiteHasUser(node_recipient)) {
-            if (node_recipient->long_name[0]) {
-                strncpy(senderName, node_recipient->long_name, sizeof(senderName) - 1);
-                senderName[sizeof(senderName) - 1] = '\0';
-            } else if (node_recipient->short_name[0]) {
-                strncpy(senderName, node_recipient->short_name, sizeof(senderName) - 1);
-                senderName[sizeof(senderName) - 1] = '\0';
-            }
-        }
-        // If recipient info is missing/empty, prefer a recipient identifier for outbound messages.
-        if (mine && (!nodeInfoLiteHasUser(node_recipient) || (!node_recipient->long_name[0] && !node_recipient->short_name[0]))) {
-            snprintf(senderName, sizeof(senderName), "(%08x)", m.dest);
-        }
-
-        // Shrink Sender name if needed; compact panels put it on its own line, so no sharing with timeBuf/chanType.
-        int availWidth = compactPanel ? (mine ? rightTextWidth : leftTextWidth)
-                                      : (mine ? rightTextWidth : leftTextWidth) - display->getStringWidth(timeBuf) -
-                                            display->getStringWidth(chanType);
-        // Compact panels hard-cut (no "...") so drop its width reservation too.
-        availWidth -= graphics::UIRenderer::measureStringWithEmotes(display, compactPanel ? "*@" : "  *@...");
-        if (availWidth < 0)
-            availWidth = 0;
-        char truncatedSender[64];
-        graphics::UIRenderer::truncateStringWithEmotes(display, senderName, truncatedSender, sizeof(truncatedSender), availWidth,
-                                                       compactPanel ? "" : "...");
-
-        // Determine signed-message prefix before building the header line, since it needs to go
-        // at the front of headerStr rather than appended after (strncat only appends at the end).
-        const char *signPrefix = "";
-#if !(MESHTASTIC_EXCLUDE_PKI_KEYGEN || MESHTASTIC_EXCLUDE_PKI)
-        bool is_xeddsa_signed = m.xeddsaSigned;
-        if (is_xeddsa_signed) {
-            signPrefix = "*";
-        }
-#endif
-
-        if (compactPanel) {
-            // Time and sender don't fit on one line at this width - time first, name below.
-            allLines.push_back(timeBuf);
-            isMine.push_back(mine);
-            isHeader.push_back(true);
-            ackForLine.push_back(AckStatus::NONE); // ack mark shown on the name line instead
-
-            char nameLine[80] = "";
-            if (mine) {
-                if (currentMode == ThreadMode::ALL) {
-                    if (strcmp(chanType, "(DM)") == 0) {
-                        snprintf(nameLine, sizeof(nameLine), "to %s", truncatedSender);
-                    } else {
-                        snprintf(nameLine, sizeof(nameLine), "to %s", chanType);
+            if (m.timestamp > 0 && nowSecs > 0) {
+                if (nowSecs >= m.timestamp) {
+                    seconds = nowSecs - m.timestamp;
+                    invalidTime = (seconds > 315360000); // >10 years
+                } else {
+                    uint32_t ahead = m.timestamp - nowSecs;
+                    if (ahead <= 600) { // allow small skew
+                        seconds = 0;
+                        invalidTime = false;
                     }
                 }
-            } else {
-                snprintf(nameLine, sizeof(nameLine), chanType[0] ? "%s%s@%s" : "%s%s", signPrefix, truncatedSender, chanType);
+            } else if (m.timestamp > 0 && nowSecs == 0) {
+                // RTC not valid: only trust boot-relative if same boot
+                uint32_t bootNow = millis() / 1000;
+                if (m.isBootRelative && m.timestamp <= bootNow) {
+                    seconds = bootNow - m.timestamp;
+                    invalidTime = false;
+                } else {
+                    invalidTime = true; // old persisted boot-relative, ignore until healed
+                }
             }
 
-            if (nameLine[0]) {
-                allLines.push_back(nameLine);
+            char timeBuf[16];
+            if (invalidTime) {
+                snprintf(timeBuf, sizeof(timeBuf), "???");
+            } else if (seconds < 60) {
+                snprintf(timeBuf, sizeof(timeBuf), "%us", seconds);
+            } else if (seconds < 3600) {
+                snprintf(timeBuf, sizeof(timeBuf), "%um", seconds / 60);
+            } else if (seconds < 86400) {
+                snprintf(timeBuf, sizeof(timeBuf), "%uh", seconds / 3600);
+            } else {
+                snprintf(timeBuf, sizeof(timeBuf), "%ud", seconds / 86400);
+            }
+
+            // Build header line for this message
+            meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(m.sender);
+            meshtastic_NodeInfoLite *node_recipient = nodeDB->getMeshNode(m.dest);
+
+            char senderName[64] = "";
+            if (nodeInfoLiteHasUser(node)) {
+                if (node->long_name[0]) {
+                    strncpy(senderName, node->long_name, sizeof(senderName) - 1);
+                } else if (node->short_name[0]) {
+                    strncpy(senderName, node->short_name, sizeof(senderName) - 1);
+                }
+                senderName[sizeof(senderName) - 1] = '\0';
+            }
+            if (!senderName[0]) {
+                snprintf(senderName, sizeof(senderName), "(%08x)", m.sender);
+            }
+
+            // If this is *our own* message, override senderName to who the recipient was
+            bool mine = (m.sender == nodeDB->getNodeNum());
+            if (mine && nodeInfoLiteHasUser(node_recipient)) {
+                if (node_recipient->long_name[0]) {
+                    strncpy(senderName, node_recipient->long_name, sizeof(senderName) - 1);
+                    senderName[sizeof(senderName) - 1] = '\0';
+                } else if (node_recipient->short_name[0]) {
+                    strncpy(senderName, node_recipient->short_name, sizeof(senderName) - 1);
+                    senderName[sizeof(senderName) - 1] = '\0';
+                }
+            }
+            // If recipient info is missing/empty, prefer a recipient identifier for outbound messages.
+            if (mine &&
+                (!nodeInfoLiteHasUser(node_recipient) || (!node_recipient->long_name[0] && !node_recipient->short_name[0]))) {
+                snprintf(senderName, sizeof(senderName), "(%08x)", m.dest);
+            }
+
+            // Shrink Sender name if needed; compact panels put it on its own line, so no sharing with timeBuf/chanType.
+            int availWidth = compactPanel ? (mine ? rightTextWidth : leftTextWidth)
+                                          : (mine ? rightTextWidth : leftTextWidth) - display->getStringWidth(timeBuf) -
+                                                display->getStringWidth(chanType);
+            // Compact panels hard-cut (no "...") so drop its width reservation too.
+            availWidth -= graphics::UIRenderer::measureStringWithEmotes(display, compactPanel ? "*@" : "  *@...");
+            if (availWidth < 0)
+                availWidth = 0;
+            char truncatedSender[64];
+            graphics::UIRenderer::truncateStringWithEmotes(display, senderName, truncatedSender, sizeof(truncatedSender),
+                                                           availWidth, compactPanel ? "" : "...");
+
+            // Determine signed-message prefix before building the header line, since it needs to go
+            // at the front of headerStr rather than appended after (strncat only appends at the end).
+            const char *signPrefix = "";
+#if !(MESHTASTIC_EXCLUDE_PKI_KEYGEN || MESHTASTIC_EXCLUDE_PKI)
+            bool is_xeddsa_signed = m.xeddsaSigned;
+            if (is_xeddsa_signed) {
+                signPrefix = "*";
+            }
+#endif
+
+            if (compactPanel) {
+                // Time and sender don't fit on one line at this width - time first, name below.
+                allLines.push_back(timeBuf);
+                isMine.push_back(mine);
+                isHeader.push_back(true);
+                ackForLine.push_back(AckStatus::NONE); // ack mark shown on the name line instead
+
+                char nameLine[80] = "";
+                if (mine) {
+                    if (currentMode == ThreadMode::ALL) {
+                        if (strcmp(chanType, "(DM)") == 0) {
+                            snprintf(nameLine, sizeof(nameLine), "to %s", truncatedSender);
+                        } else {
+                            snprintf(nameLine, sizeof(nameLine), "to %s", chanType);
+                        }
+                    }
+                } else {
+                    snprintf(nameLine, sizeof(nameLine), chanType[0] ? "%s%s@%s" : "%s%s", signPrefix, truncatedSender, chanType);
+                }
+
+                if (nameLine[0]) {
+                    allLines.push_back(nameLine);
+                    isMine.push_back(mine);
+                    isHeader.push_back(true);
+                    ackForLine.push_back(m.ackStatus);
+                } else {
+                    // Nothing to show on a second line (e.g. "mine" in ALL mode) - move the ack mark back.
+                    ackForLine.back() = m.ackStatus;
+                }
+            } else {
+                // Final header line
+                char headerStr[128];
+                if (mine) {
+                    if (currentMode == ThreadMode::ALL) {
+                        if (strcmp(chanType, "(DM)") == 0) {
+                            snprintf(headerStr, sizeof(headerStr), "%s to %s", timeBuf, truncatedSender);
+                        } else {
+                            snprintf(headerStr, sizeof(headerStr), "%s to %s", timeBuf, chanType);
+                        }
+                    } else {
+                        snprintf(headerStr, sizeof(headerStr), "%s", timeBuf);
+                    }
+                } else {
+                    snprintf(headerStr, sizeof(headerStr), chanType[0] ? "%s %s@%s %s" : "%s %s@%s", timeBuf, signPrefix,
+                             truncatedSender, chanType);
+                }
+
+                allLines.push_back(headerStr);
                 isMine.push_back(mine);
                 isHeader.push_back(true);
                 ackForLine.push_back(m.ackStatus);
-            } else {
-                // Nothing to show on a second line (e.g. "mine" in ALL mode) - move the ack mark back.
-                ackForLine.back() = m.ackStatus;
             }
-        } else {
-            // Final header line
-            char headerStr[128];
-            if (mine) {
-                if (currentMode == ThreadMode::ALL) {
-                    if (strcmp(chanType, "(DM)") == 0) {
-                        snprintf(headerStr, sizeof(headerStr), "%s to %s", timeBuf, truncatedSender);
-                    } else {
-                        snprintf(headerStr, sizeof(headerStr), "%s to %s", timeBuf, chanType);
-                    }
-                } else {
-                    snprintf(headerStr, sizeof(headerStr), "%s", timeBuf);
+
+            const char *msgText = MessageStore::getText(m);
+
+            int wrapWidth = mine ? rightTextWidth : leftTextWidth;
+            std::vector<std::string> wrapped = generateLines(display, "", msgText, wrapWidth);
+            // Per-message wrap-line limit: even if wrapping produces many lines, cap them to prevent
+            // a single long message from consuming most or all of the cache.
+            constexpr size_t MAX_WRAPPED_LINES_PER_MSG = 20U;
+            size_t wrappedCount = 0;
+            for (auto &ln : wrapped) {
+                if (allLines.size() >= MAX_CACHED_LINES || wrappedCount >= MAX_WRAPPED_LINES_PER_MSG)
+                    break; // Cache limit or per-message limit reached; stop adding lines from this message
+                allLines.emplace_back(std::move(ln));
+                isMine.push_back(mine);
+                isHeader.push_back(false);
+                ackForLine.push_back(AckStatus::NONE);
+                ++wrappedCount;
+            }
+        }
+
+        // Cache lines and heights
+        cachedLines.swap(allLines);
+        cachedHeights = calculateLineHeights(cachedLines, emotes, isHeader);
+        if (compactPanel) {
+            for (size_t i = 0; i < cachedHeights.size(); ++i) {
+                if (isHeader[i]) {
+                    cachedHeights[i] = 10;
                 }
-            } else {
-                snprintf(headerStr, sizeof(headerStr), chanType[0] ? "%s %s@%s %s" : "%s %s@%s", timeBuf, signPrefix,
-                         truncatedSender, chanType);
-            }
-
-            allLines.push_back(headerStr);
-            isMine.push_back(mine);
-            isHeader.push_back(true);
-            ackForLine.push_back(m.ackStatus);
-        }
-
-        const char *msgText = MessageStore::getText(m);
-
-        int wrapWidth = mine ? rightTextWidth : leftTextWidth;
-        std::vector<std::string> wrapped = generateLines(display, "", msgText, wrapWidth);
-        // Per-message wrap-line limit: even if wrapping produces many lines, cap them to prevent
-        // a single long message from consuming most or all of the cache.
-        constexpr size_t MAX_WRAPPED_LINES_PER_MSG = 20U;
-        size_t wrappedCount = 0;
-        for (auto &ln : wrapped) {
-            if (allLines.size() >= MAX_CACHED_LINES || wrappedCount >= MAX_WRAPPED_LINES_PER_MSG)
-                break; // Cache limit or per-message limit reached; stop adding lines from this message
-            allLines.emplace_back(std::move(ln));
-            isMine.push_back(mine);
-            isHeader.push_back(false);
-            ackForLine.push_back(AckStatus::NONE);
-            ++wrappedCount;
-        }
-    }
-
-    // Cache lines and heights
-    cachedLines.swap(allLines);
-    cachedHeights = calculateLineHeights(cachedLines, emotes, isHeader);
-    if (compactPanel) {
-        for (size_t i = 0; i < cachedHeights.size(); ++i) {
-            if (isHeader[i]) {
-                cachedHeights[i] = 10;
             }
         }
-    }
 
-    std::vector<MessageBlock> blocks = buildMessageBlocks(isHeader, isMine);
+        blocks = buildMessageBlocks(isHeader, isMine);
+        cachedLayoutKey = layoutKey;
+    }
 
     // Scrolling logic (unchanged)
     int totalHeight = 0;
