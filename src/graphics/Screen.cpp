@@ -455,7 +455,7 @@ static void drawModuleFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int
 {
     // state->currentFrame names the outgoing frame for the whole of a transition, so it can't be
     // used directly to pick the module - see frameIndexFor().
-    const uint8_t module_frame = graphics::frameIndexFor(state);
+    const uint8_t module_frame = graphics::frameIndexFor(state, screen ? screen->frameCount : 0);
 
     // moduleFrames is padded with nullptr up to the first module slot and ends before whatever
     // frames follow the module region, so an index that isn't a live module is both reachable and
