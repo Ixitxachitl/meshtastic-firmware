@@ -2550,9 +2550,31 @@ int Screen::handleInputEvent(const InputEvent *event)
                 return 0;
             }
 #endif
-            if (event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_ALT_PRESS) {
+#if BASEUI_HAS_TOUCH_DRAG
+            const bool fromTouch = isTouchSourced(event);
+#else
+            const bool fromTouch = false;
+#endif
+            // A tap must not page the frame on a touchscreen: swiping is the deliberate gesture
+            // for that, and tap-to-advance turns any stray contact into a frame change. Keyed on
+            // the source, because INPUT_BROKER_USER_PRESS is also how single-button devices
+            // navigate - see i2cButton, SeesawRotary and InputBroker's singlePress config.
+            const bool tapFromTouchscreen = fromTouch && !BASEUI_TAP_ADVANCES_FRAME;
+
+            // A gesture too quick to produce a drag sample never reaches the drag handler and
+            // arrives here as a classified direction instead. Its historic mapping is the opposite
+            // of finger tracking: dragging left moves the content left, which brings the NEXT frame
+            // in from the right, whereas INPUT_BROKER_LEFT has always meant "go back". Flip it for
+            // touch so a quick flick and a slow drag of the same gesture agree. Keyboard arrows keep
+            // the conventional meaning.
+            const bool wantsNext =
+                fromTouch ? (event->inputEvent == INPUT_BROKER_LEFT) : (event->inputEvent == INPUT_BROKER_RIGHT);
+            const bool wantsPrevious =
+                fromTouch ? (event->inputEvent == INPUT_BROKER_RIGHT) : (event->inputEvent == INPUT_BROKER_LEFT);
+
+            if (wantsPrevious || event->inputEvent == INPUT_BROKER_ALT_PRESS) {
                 showFrame(FrameDirection::PREVIOUS);
-            } else if (event->inputEvent == INPUT_BROKER_RIGHT || event->inputEvent == INPUT_BROKER_USER_PRESS) {
+            } else if (wantsNext || (event->inputEvent == INPUT_BROKER_USER_PRESS && !tapFromTouchscreen)) {
                 showFrame(FrameDirection::NEXT);
             } else if (event->inputEvent == INPUT_BROKER_FN_F1) {
                 this->ui->switchToFrame(0);

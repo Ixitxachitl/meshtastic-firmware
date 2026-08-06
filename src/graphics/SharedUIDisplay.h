@@ -89,6 +89,15 @@ namespace graphics
 #ifndef BASEUI_SPLASH_CORNER_INSET_PCT
 #define BASEUI_SPLASH_CORNER_INSET_PCT 0
 #endif
+// Whether a touchscreen tap pages to the next frame. On by default because it predates swipe
+// navigation and is how touch devices without a swipe gesture get around. Variants where swiping
+// is the intended way to change frames set this to 0, so a stray contact can't page the screen.
+// Only affects taps from the touchscreen - INPUT_BROKER_USER_PRESS is also how single-button
+// devices navigate, and that is untouched.
+#ifndef BASEUI_TAP_ADVANCES_FRAME
+#define BASEUI_TAP_ADVANCES_FRAME 1
+#endif
+
 // Multiplier applied to every embedded bitmap (status icons, emotes, node/GPS
 // glyphs, nav bar, logos) and to the layout offsets around them. Variants with a
 // display far larger than the artwork was drawn for bump this up.
