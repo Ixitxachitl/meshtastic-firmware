@@ -539,7 +539,7 @@ void UIRenderer::drawGps(OLEDDisplay *display, int16_t x, int16_t y, const mesht
     const int textOffset = (currentResolution == ScreenResolution::High) ? 18 * BASEUI_ICON_SCALE : 11;
     if (center) {
         int contentWidth = textOffset + display->getStringWidth(textString);
-        x = (SCREEN_WIDTH - contentWidth) / 2;
+        x += (SCREEN_WIDTH - contentWidth) / 2;
     }
 
     // Draw satellite image
@@ -714,7 +714,7 @@ void UIRenderer::drawNodes(OLEDDisplay *display, int16_t x, int16_t y, const mes
     int string_offset = (currentResolution == ScreenResolution::High) ? 9 + 16 * (BASEUI_ICON_SCALE - 1) : 0;
     if (center) {
         int contentWidth = 10 + string_offset + display->getStringWidth(usersString);
-        x = (SCREEN_WIDTH - contentWidth) / 2;
+        x += (SCREEN_WIDTH - contentWidth) / 2;
     }
 
 #if (defined(USE_EINK) || defined(HAS_SPI_TFT)) && !defined(DISPLAY_FORCE_SMALL_FONTS)
@@ -758,14 +758,14 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
         return;
 
     // --- Only display if index is valid ---
-    int nodeIndex = state->currentFrame - (screen->frameCount - favoritedNodes.size());
+    int nodeIndex = frameIndexFor(state) - (screen->frameCount - favoritedNodes.size());
     if (nodeIndex < 0 || nodeIndex >= (int)favoritedNodes.size())
         return;
 
     meshtastic_NodeInfoLite *node = favoritedNodes[nodeIndex];
     if (!node || node->num == nodeDB->getNodeNum() || !nodeInfoLiteIsFavorite(node))
         return;
-    display->clear();
+    clearForFrame(display, state);
 #if defined(OLED_TINY)
     uint32_t now = millis();
     if (now - lastSwitchTime >= 10000) // 10000 ms = 10 秒
@@ -829,7 +829,7 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
             int compassRadius = maxCompassDiameter / 2;
             if (compassRadius < 8)
                 compassRadius = 8;
-            const int compassX = SCREEN_WIDTH - compassRadius - 4;
+            const int compassX = x + SCREEN_WIDTH - compassRadius - 4;
             const int compassY = compassTop + availableHeight / 2;
             drawBearingCompassOrStatus(display, compassX, compassY, compassRadius, showCompass, myHeading, bearing, statusLine1,
                                        statusLine2, /*showRing=*/false);
@@ -852,7 +852,7 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
                     else
                         snprintf(distStr, sizeof(distStr), "%dkm", (meters + 500) / 1000);
                 }
-                display->drawString(2, getTextPositions(display)[cline++], distStr);
+                display->drawString(x + 2, getTextPositions(display)[cline++], distStr);
             }
 
             // --- Last heard, directly under distance ---
@@ -867,7 +867,7 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
                          (days    ? 'd'
                           : hours ? 'h'
                                   : 'm'));
-                display->drawString(2, getTextPositions(display)[cline++], seenStr);
+                display->drawString(x + 2, getTextPositions(display)[cline++], seenStr);
             }
         } else {
             // --- Page 1: status, signal/hops, heard, uptime, battery ---
@@ -923,7 +923,7 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
         }
 
         // Two-page indicator, matching the position screen's scrollbar thumb style.
-        const int scrollbarX = SCREEN_WIDTH - 2;
+        const int scrollbarX = x + SCREEN_WIDTH - 2;
         const int thumbHeight = SCREEN_HEIGHT / 2;
         const int thumbY = favoriteViewIndex * (SCREEN_HEIGHT - thumbHeight);
         for (int i = 0; i < thumbHeight; i++) {
@@ -1322,7 +1322,7 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
 // ****************************
 void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-    display->clear();
+    clearForFrame(display, state);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
     int line = 1;
@@ -1349,7 +1349,7 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
             const char *txdisabled = "Transmit Disabled";
             if (compactPanel) {
                 int textWidth = display->getStringWidth(txdisabled);
-                display->drawString((SCREEN_WIDTH - textWidth) / 2, getTextPositions(display)[line] + y, txdisabled);
+                display->drawString(x + (SCREEN_WIDTH - textWidth) / 2, getTextPositions(display)[line] + y, txdisabled);
             } else {
                 display->drawString(x, getTextPositions(display)[line] + y, txdisabled);
             }
@@ -1370,7 +1370,7 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
             getUptimeStr(millis(), "Up: ", uptimeStr, sizeof(uptimeStr));
         }
         if (!compactPanel) {
-            display->drawString(SCREEN_WIDTH - display->getStringWidth(uptimeStr) - BASEUI_BODY_LR_MARGIN,
+            display->drawString(x + SCREEN_WIDTH - display->getStringWidth(uptimeStr) - BASEUI_BODY_LR_MARGIN,
                                 getTextPositions(display)[line++] + y, uptimeStr);
         } else {
             line++;
@@ -1392,7 +1392,7 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
         char chUtilStr[16];
         snprintf(chUtilStr, sizeof(chUtilStr), "ChUtil %d%%", chutil_percent);
         int chUtilWidth = display->getStringWidth(chUtilStr);
-        display->drawString((SCREEN_WIDTH - chUtilWidth) / 2, getTextPositions(display)[line++], chUtilStr);
+        display->drawString(x + (SCREEN_WIDTH - chUtilWidth) / 2, getTextPositions(display)[line++], chUtilStr);
 
         // === Node Identity: long name (falls back to short), truncated with "..." if too wide ===
         const char *longName = (nodeInfoLiteHasUser(ourNode) && ourNode->long_name[0]) ? ourNode->long_name : "";
@@ -1401,14 +1401,14 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
         char nodeName[32];
         UIRenderer::truncateStringWithEmotes(display, rawName, nodeName, sizeof(nodeName), SCREEN_WIDTH - 4);
         int textWidth = UIRenderer::measureStringWithEmotes(display, nodeName);
-        int nameX = (SCREEN_WIDTH - textWidth) / 2;
+        int nameX = x + (SCREEN_WIDTH - textWidth) / 2;
         UIRenderer::drawStringWithEmotes(display, nameX, getTextPositions(display)[line++], nodeName, FONT_HEIGHT_SMALL, 1,
                                          false);
     } else {
         // === Node Identity ===
         const char *shortName = owner.short_name[0] ? owner.short_name : "";
         int textWidth = UIRenderer::measureStringWithEmotes(display, shortName);
-        int nameX = (SCREEN_WIDTH - textWidth) / 2;
+        int nameX = x + (SCREEN_WIDTH - textWidth) / 2;
         UIRenderer::drawStringWithEmotes(display, nameX, getTextPositions(display)[line++], shortName, FONT_HEIGHT_SMALL, 1,
                                          false);
     }
@@ -1810,7 +1810,7 @@ void UIRenderer::scrollPositionUp()
 
 void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-    display->clear();
+    clearForFrame(display, state);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
     int line = 1;
@@ -1909,11 +1909,11 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
             const char *displayLine =
                 (config.position.gps_mode == meshtastic_Config_PositionConfig_GpsMode_NOT_PRESENT) ? "No GPS" : "GPS off";
             int textWidth = display->getStringWidth(displayLine);
-            display->drawString((SCREEN_WIDTH - textWidth) / 2, textPos[line], displayLine);
+            display->drawString(x + (SCREEN_WIDTH - textWidth) / 2, textPos[line], displayLine);
         }
 
         // Two-page indicator, matching NodeListRenderer::drawScrollbar's thumb style.
-        const int scrollbarX = SCREEN_WIDTH - 2;
+        const int scrollbarX = x + SCREEN_WIDTH - 2;
         const int thumbHeight = SCREEN_HEIGHT / 2;
         const int thumbY = positionViewIndex * (SCREEN_HEIGHT - thumbHeight);
         for (int i = 0; i < thumbHeight; i++) {
@@ -2099,10 +2099,13 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
         return;
 #endif
 
-    uint8_t frameToHighlight = state->currentFrame;
-    if (state->frameState == IN_TRANSITION && state->transitionFrameTarget < screen->indicatorIcons.size()) {
-        frameToHighlight = state->transitionFrameTarget;
-    }
+    // transitionFrameTarget is only maintained by nextFrame() - previousFrame() never sets it and
+    // tick() zeroes it when a transition completes - so reading it directly highlighted a stale
+    // icon (usually the first) for the whole of a backwards transition, then snapped to the right
+    // one at the end. frameIndexFor() derives the incoming frame properly in both directions.
+    uint8_t frameToHighlight = frameIndexFor(state);
+    if (frameToHighlight >= screen->indicatorIcons.size())
+        frameToHighlight = state->currentFrame;
 
     // Detect frame change and record time
     if (frameToHighlight != lastFrameIndex) {

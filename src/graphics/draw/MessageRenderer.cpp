@@ -386,12 +386,13 @@ static std::vector<MessageBlock> buildMessageBlocks(const std::vector<bool> &isH
     return blocks;
 }
 
-static void drawMessageScrollbar(OLEDDisplay *display, int visibleHeight, int totalHeight, int scrollOffset, int startY)
+static void drawMessageScrollbar(OLEDDisplay *display, int visibleHeight, int totalHeight, int scrollOffset, int startY,
+                                 int16_t x)
 {
     if (totalHeight <= visibleHeight)
         return; // no scrollbar needed
 
-    int scrollbarX = display->getWidth() - 2;
+    int scrollbarX = x + display->getWidth() - 2;
     int scrollbarHeight = visibleHeight;
     int thumbHeight = std::max(6, (scrollbarHeight * visibleHeight) / totalHeight);
     int maxScroll = std::max(1, totalHeight - visibleHeight);
@@ -438,7 +439,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             filtered.push_back(m);
     }
 
-    display->clear();
+    clearForFrame(display, state);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
     const bool compactPanel = graphics::isCompactPanel(display);
@@ -530,7 +531,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         graphics::drawCommonHeader(display, x, y, titleStr);
         didReset = false;
         const char *messageString = "No messages";
-        int center_text = (SCREEN_WIDTH / 2) - (display->getStringWidth(messageString) / 2);
+        int center_text = x + (SCREEN_WIDTH / 2) - (display->getStringWidth(messageString) / 2);
         display->drawString(center_text, getTextPositions(display)[2], messageString);
         graphics::drawCommonFooter(display, x, y);
         return;
@@ -815,7 +816,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     int finalScroll = (int)scrollY;
     int yOffset = -finalScroll + firstLineTop;
     const int contentBottom = scrollBottom; // already excludes nav line
-    const int rightEdge = SCREEN_WIDTH - SCROLLBAR_WIDTH - RIGHT_MARGIN;
+    const int rightEdge = x + SCREEN_WIDTH - SCROLLBAR_WIDTH - RIGHT_MARGIN;
     const int bubbleGapY = std::max(1, MESSAGE_BLOCK_GAP / 2);
 #if GRAPHICS_TFT_COLORING_ENABLED
     const uint32_t themeId = getActiveTheme().id;
@@ -1065,7 +1066,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     }
 
     // Draw scrollbar
-    drawMessageScrollbar(display, usableHeight, totalHeight, finalScroll, firstLineTop);
+    drawMessageScrollbar(display, usableHeight, totalHeight, finalScroll, firstLineTop, x);
     if (!compactPanel) {
         graphics::drawCommonHeader(display, x, y, titleStr);
     }

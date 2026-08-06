@@ -464,7 +464,7 @@ bool EnvironmentTelemetryModule::wantUIFrame()
 void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     // === Setup display ===
-    display->clear();
+    graphics::clearForFrame(display, state);
     display->setFont(FONT_SMALL);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     int line = 1;
@@ -611,7 +611,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     // === Show first available metric on top-right of first line ===
     if (!entries.empty()) {
         String valueStr = entries.front();
-        int rightX = SCREEN_WIDTH - BASEUI_BODY_LR_MARGIN - display->getStringWidth(valueStr);
+        int rightX = x + SCREEN_WIDTH - BASEUI_BODY_LR_MARGIN - display->getStringWidth(valueStr);
         display->drawString(rightX, currentY, valueStr);
         entries.erase(entries.begin()); // Remove from queue
     }
@@ -626,7 +626,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
 
         // Right column if it exists
         if (i + 1 < entries.size()) {
-            int rightX = SCREEN_WIDTH / 2;
+            int rightX = x + SCREEN_WIDTH / 2;
             display->drawString(rightX, currentY, entries[i + 1]);
         }
 

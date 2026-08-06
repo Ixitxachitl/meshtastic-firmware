@@ -49,7 +49,7 @@ namespace DebugRenderer
 void drawFrameWiFi(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
 #if HAS_WIFI && !defined(ARCH_PORTDUINO)
-    display->clear();
+    clearForFrame(display, state);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
     int line = 1;
@@ -135,7 +135,7 @@ void drawFrameWiFi(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, i
 // ****************************
 void drawLoRaFocused(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-    display->clear();
+    clearForFrame(display, state);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
     int line = 1;
@@ -161,7 +161,7 @@ void drawLoRaFocused(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x,
         snprintf(shortnameble, sizeof(shortnameble), "BLE: %s", screen->ourId);
     }
     int textWidth = display->getStringWidth(shortnameble);
-    int nameX = (SCREEN_WIDTH - textWidth - BASEUI_BODY_LR_MARGIN);
+    int nameX = x + (SCREEN_WIDTH - textWidth - BASEUI_BODY_LR_MARGIN);
     display->drawString(nameX, getTextPositions(display)[line++] + y, shortnameble);
 
     if (!graphics::isCompactPanel(display)) {
@@ -170,7 +170,7 @@ void drawLoRaFocused(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x,
         char device_role[25];
         snprintf(device_role, sizeof(device_role), "Role: %s", role);
         textWidth = display->getStringWidth(device_role);
-        nameX = (SCREEN_WIDTH - textWidth) / 2;
+        nameX = x + (SCREEN_WIDTH - textWidth) / 2;
         display->drawString(nameX, getTextPositions(display)[line++] + y, device_role);
     }
 
@@ -196,7 +196,7 @@ void drawLoRaFocused(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x,
         }
     }
     textWidth = display->getStringWidth(regionradiopreset);
-    nameX = (SCREEN_WIDTH - textWidth) / 2;
+    nameX = x + (SCREEN_WIDTH - textWidth) / 2;
     display->drawString(nameX, getTextPositions(display)[line++] + y, regionradiopreset);
 
     // === Fourth Row: Frequency / ChanNum ===
@@ -222,7 +222,7 @@ void drawLoRaFocused(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x,
         frequencyslot[len - 4] = '\0'; // Remove the last three characters
     }
     textWidth = display->getStringWidth(frequencyslot);
-    nameX = (SCREEN_WIDTH - textWidth) / 2;
+    nameX = x + (SCREEN_WIDTH - textWidth) / 2;
     display->drawString(nameX, getTextPositions(display)[line++] + y, frequencyslot);
 
 #if !defined(OLED_TINY)
@@ -242,7 +242,7 @@ void drawLoRaFocused(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x,
     int chutil_percent = airTime->channelUtilizationPercent();
     const int raw_chutil_percent = chutil_percent;
 
-    int centerofscreen = SCREEN_WIDTH / 2;
+    int centerofscreen = x + SCREEN_WIDTH / 2;
     int total_line_content_width = (chUtil_x + chutil_bar_width + display->getStringWidth(chUtilPercentage) + extraoffset) / 2;
     int starting_position = centerofscreen - total_line_content_width;
 
@@ -304,7 +304,7 @@ void drawLoRaFocused(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x,
 // ****************************
 void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-    display->clear();
+    clearForFrame(display, state);
     display->setFont(FONT_SMALL);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
 
@@ -350,10 +350,10 @@ void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x
 
         int textWidth = display->getStringWidth(combinedStr);
         int labelWidth = display->getStringWidth(label);
-        if (barX < BASEUI_BODY_LR_MARGIN + labelWidth) {
-            barX = BASEUI_BODY_LR_MARGIN + labelWidth;
+        if (barX < x + BASEUI_BODY_LR_MARGIN + labelWidth) {
+            barX = x + BASEUI_BODY_LR_MARGIN + labelWidth;
         }
-        int adjustedBarWidth = SCREEN_WIDTH - barX - textWidth - 6 - BASEUI_BODY_LR_MARGIN;
+        int adjustedBarWidth = x + SCREEN_WIDTH - barX - textWidth - 6 - BASEUI_BODY_LR_MARGIN;
         if (adjustedBarWidth < 10)
             adjustedBarWidth = 10;
 
@@ -384,7 +384,7 @@ void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x
 #endif
         // Value string
         display->setTextAlignment(TEXT_ALIGN_RIGHT);
-        display->drawString(SCREEN_WIDTH - BASEUI_BODY_LR_MARGIN, getTextPositions(display)[line] + y, combinedStr);
+        display->drawString(x + SCREEN_WIDTH - BASEUI_BODY_LR_MARGIN, getTextPositions(display)[line] + y, combinedStr);
     };
 
     // === Memory values ===
@@ -471,7 +471,7 @@ void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x
         }
     }
     int textWidth = display->getStringWidth(appversionstr);
-    int nameX = (SCREEN_WIDTH - textWidth) / 2;
+    int nameX = x + (SCREEN_WIDTH - textWidth) / 2;
 
     display->drawString(nameX, getTextPositions(display)[line++] + y, appversionstr);
 
@@ -480,7 +480,7 @@ void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x
         char uptimeStr[32] = "";
         getUptimeStr(millis(), "Up: ", uptimeStr, sizeof(uptimeStr));
         textWidth = display->getStringWidth(uptimeStr);
-        nameX = (SCREEN_WIDTH - textWidth) / 2;
+        nameX = x + (SCREEN_WIDTH - textWidth) / 2;
         display->drawString(nameX, getTextPositions(display)[line++] + y, uptimeStr);
     }
 
@@ -528,8 +528,8 @@ void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x
         }
 #endif
         if (api_state[0] != '\0') {
-            display->drawString((SCREEN_WIDTH - display->getStringWidth(api_state)) / 2, getTextPositions(display)[line++] + y,
-                                api_state);
+            display->drawString(x + (SCREEN_WIDTH - display->getStringWidth(api_state)) / 2,
+                                getTextPositions(display)[line++] + y, api_state);
         }
     }
 
@@ -541,7 +541,7 @@ void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x
 // ****************************
 void drawChirpy(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-    display->clear();
+    clearForFrame(display, state);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
     int line = 1;
@@ -551,7 +551,7 @@ void drawChirpy(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int1
         textX_offset = textX_offset * 4;
         scale = 2 * BASEUI_ICON_SCALE;
     }
-    const int iconX = SCREEN_WIDTH - (chirpy_width * scale) - ((chirpy_width * scale) / 3);
+    const int iconX = x + SCREEN_WIDTH - (chirpy_width * scale) - ((chirpy_width * scale) / 3);
     const int iconY = (SCREEN_HEIGHT - (chirpy_height * scale)) / 2;
     graphics::drawScaledXbm(display, iconX, iconY, chirpy_width, chirpy_height, chirpy, scale);
 
@@ -568,9 +568,9 @@ void drawChirpy(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int1
                                            graphics::TFTPalette::Black, graphics::TFTPalette::White);
 #endif
 
-    int textX = (display->getWidth() / 2) - textX_offset - (display->getStringWidth("Hello") / 2);
+    int textX = x + (display->getWidth() / 2) - textX_offset - (display->getStringWidth("Hello") / 2);
     display->drawString(textX, getTextPositions(display)[line++], "Hello");
-    textX = (display->getWidth() / 2) - textX_offset - (display->getStringWidth("World!") / 2);
+    textX = x + (display->getWidth() / 2) - textX_offset - (display->getStringWidth("World!") / 2);
     display->drawString(textX, getTextPositions(display)[line++], "World!");
 }
 

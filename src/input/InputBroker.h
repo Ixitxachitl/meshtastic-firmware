@@ -25,6 +25,13 @@ enum input_broker_event {
     INPUT_BROKER_USER_PRESS,
     INPUT_BROKER_ALT_PRESS,
     INPUT_BROKER_ALT_LONG,
+    // Continuous touch drag (BASEUI_HAS_TOUCH_DRAG only). _TOUCH_DRAG repeats while the finger is
+    // held down and moving, carrying the current position in touchX/touchY - deltas are the
+    // consumer's job, since touchX/touchY are unsigned and a drag runs in both directions.
+    // _TOUCH_DRAG_END fires once on release and replaces the swipe/tap that would otherwise be
+    // classified for that gesture, so a drag never also pages a frame when the finger lifts.
+    INPUT_BROKER_TOUCH_DRAG = 31,
+    INPUT_BROKER_TOUCH_DRAG_END = 32,
     INPUT_BROKER_FACTORY_RST = 0x9a,
     INPUT_BROKER_SHUTDOWN = 0x9b,
     INPUT_BROKER_GPS_TOGGLE = 0x9e,
