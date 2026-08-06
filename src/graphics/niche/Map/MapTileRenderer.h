@@ -125,4 +125,11 @@ bool hasTiles();
 void drawTileBackground(float latCenter, float lngCenter, int zoom, float metersToPx, int16_t viewWidth, int16_t viewHeight,
                         PlotFn plot, void *ctx);
 
+#ifdef UI_PERF_DEBUG
+// Tile decodes (SD read + LZ4) against reuses of the single decoded-tile slot, for the most recent
+// drawTileBackground() call. A decode-heavy ratio means the viewport spans more tiles than the one
+// slot can hold, so every frame re-reads them all.
+void lastTileStats(uint32_t *decodes, uint32_t *cacheHits);
+#endif
+
 } // namespace NicheGraphics::MapTiles

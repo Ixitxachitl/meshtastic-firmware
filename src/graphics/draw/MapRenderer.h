@@ -49,6 +49,14 @@ void panDown();
 void panLeft();
 void panRight();
 
+// Touch pan - moves the map by an exact finger displacement in screen pixels, for hardware that
+// reports a continuous drag (BASEUI_HAS_TOUCH_DRAG). Pass the delta between consecutive drag
+// reports, not the offset from where the finger landed.
+//
+// The map follows the finger, which is the opposite sense to the joystick calls above: a press
+// means "move the view that way", a finger means "move the map that way". Also disables Follow Me.
+void panByFingerDelta(float dxPx, float dyPx);
+
 // Follow Me: while enabled (the default), the view re-centers on our own position (or the node
 // centroid, if we have none) every frame. Disabling it freezes the view wherever it currently is.
 bool isFollowMeEnabled();

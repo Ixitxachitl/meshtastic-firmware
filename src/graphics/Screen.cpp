@@ -1153,19 +1153,6 @@ static bool dragSuppressNextSwipe = false;
 // mid-gesture - so treat a report arriving long after the previous one as a new gesture.
 #define DRAG_ANCHOR_STALE_MS 1000
 
-// True while a finger is steering, or is about to steer, a frame transition. runOnce() uses this to
-// leave the framerate alone mid-gesture.
-//
-// Deliberately derived from how recently a drag report arrived, rather than from a flag set on
-// drag start and cleared on drag end. A gesture can end somewhere we never see - a module can
-// begin intercepting input mid-drag, which is why the anchor already carries a staleness timeout -
-// and a flag left stuck true would pin the screen at the transition framerate indefinitely. That
-// is a battery leak rather than a cosmetic bug, so this self-heals instead.
-static bool screenDragOwnsFramerate()
-{
-    return dragAnchorValid && (millis() - dragAnchorMs) <= DRAG_ANCHOR_STALE_MS;
-}
-
 // Steer the in-progress transition from the finger's displacement.
 static void screenDragUpdate(OLEDDisplayUi *ui, const InputEvent *event, int16_t frameWidth)
 {
@@ -1264,6 +1251,77 @@ static void screenDragEnd(OLEDDisplayUi *ui, const InputEvent *event, int16_t fr
         ui->getUiState()->frameState = FIXED;
         ui->getUiState()->ticksSinceLastStateSwitch = 0;
     }
+}
+
+#if BASEUI_HAS_MAP
+// ---- Finger-tracked map panning ---------------------------------------------------------------
+//
+// Pan Mode moves the map with the finger instead of stepping a fixed fraction of the view per
+// classified swipe. Unlike the frame transitions above this never commits to an axis: panning is
+// two-dimensional, so both components of every drag report are used.
+//
+// Only the delta between consecutive reports is applied, never the offset from where the finger
+// landed. That keeps the map tracking the finger exactly even though the first report already
+// arrives some pixels into the gesture (TOUCH_DRAG_START_THRESHOLD), which an absolute offset
+// would show up as a jump on the first move.
+static bool mapPanAnchorValid = false;
+static uint16_t mapPanLastX = 0;
+static uint16_t mapPanLastY = 0;
+static uint32_t mapPanLastMs = 0;
+static bool mapPanSuppressNextSwipe = false;
+
+static void mapPanDragUpdate(const InputEvent *event)
+{
+    const uint32_t now = millis();
+    // Same staleness reasoning as the frame drag above - a gesture can end somewhere we never see.
+    if (!mapPanAnchorValid || (now - mapPanLastMs) > DRAG_ANCHOR_STALE_MS) {
+        mapPanAnchorValid = true;
+        mapPanLastX = event->touchX;
+        mapPanLastY = event->touchY;
+        mapPanLastMs = now;
+        return; // this report only establishes where the finger currently is
+    }
+
+    const float dx = (float)((int32_t)event->touchX - (int32_t)mapPanLastX);
+    const float dy = (float)((int32_t)event->touchY - (int32_t)mapPanLastY);
+    mapPanLastX = event->touchX;
+    mapPanLastY = event->touchY;
+    mapPanLastMs = now;
+
+    graphics::MapRenderer::panByFingerDelta(dx, dy);
+}
+
+static void mapPanDragEnd()
+{
+    // We moved the map ourselves, so the swipe the touch layer classifies on release would step it
+    // again on top of where the finger left it.
+    if (mapPanAnchorValid)
+        mapPanSuppressNextSwipe = true;
+    mapPanAnchorValid = false;
+}
+#endif // BASEUI_HAS_MAP
+
+// True while a finger is steering something that owns the framerate - a frame transition, or a map
+// pan. runOnce() uses this to leave the framerate alone mid-gesture.
+//
+// Deliberately derived from how recently a drag report arrived, rather than from a flag set on drag
+// start and cleared on drag end. A gesture can end somewhere we never see - a module can begin
+// intercepting input mid-drag, which is why the anchors already carry a staleness timeout - and a
+// flag left stuck true would pin the screen at the transition framerate indefinitely. That is a
+// battery leak rather than a cosmetic bug, so this self-heals instead.
+static bool screenDragOwnsFramerate()
+{
+    const uint32_t now = millis();
+    if (dragAnchorValid && (now - dragAnchorMs) <= DRAG_ANCHOR_STALE_MS)
+        return true;
+#if BASEUI_HAS_MAP
+    // Panning never starts a frame transition, so frameState stays FIXED for the whole gesture and
+    // the demote in runOnce() would otherwise fire on every single drag report - dropping the
+    // framerate to idle between one report and the next.
+    if (mapPanAnchorValid && (now - mapPanLastMs) <= DRAG_ANCHOR_STALE_MS)
+        return true;
+#endif
+    return false;
 }
 #endif // BASEUI_HAS_TOUCH_DRAG
 
@@ -2440,15 +2498,45 @@ int Screen::handleInputEvent(const InputEvent *event)
     // screen" meaning further down instead.
 #if BASEUI_HAS_MAP
     if (framesetInfo.positions.map != 255 && ui->getUiState()->currentFrame == framesetInfo.positions.map) {
+#if BASEUI_HAS_TOUCH_DRAG
+        // Where the hardware reports a continuous drag, Pan Mode tracks the finger directly rather
+        // than waiting for a swipe to be classified and jumping a fixed fraction of the view.
+        if (graphics::MapRenderer::isPanModeEnabled()) {
+            if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG) {
+                mapPanDragUpdate(event);
+                setFastFramerate();
+                return 0;
+            }
+            if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG_END) {
+                mapPanDragEnd();
+                setFastFramerate();
+                return 0;
+            }
+        }
+#endif
         // A touch drag arrives as a continuous stream of reports alongside the swipe the touch
-        // layer still classifies on release. While Pan or Zoom Mode is held it is that swipe which
-        // pans or zooms, so the drag reports are neither a navigation command nor evidence the user
-        // did something else. Swallow them here, or the else-branches below read them as "not part
-        // of pan navigation" and drop out of the mode - which made any touch at all cancel it.
+        // layer still classifies on release. While Zoom Mode is held it is that swipe which zooms -
+        // there is no continuous equivalent of a zoom step - so the drag reports are neither a
+        // navigation command nor evidence the user did something else. Swallow them here, or the
+        // else-branches below read them as "not part of pan navigation" and drop out of the mode -
+        // which made any touch at all cancel it. Pan Mode only reaches this on builds without
+        // BASEUI_HAS_TOUCH_DRAG, where the swipe is still what pans.
         if ((graphics::MapRenderer::isPanModeEnabled() || graphics::MapRenderer::isZoomModeEnabled()) &&
             (event->inputEvent == INPUT_BROKER_TOUCH_DRAG || event->inputEvent == INPUT_BROKER_TOUCH_DRAG_END))
             return 0;
         if (graphics::MapRenderer::isPanModeEnabled()) {
+#if BASEUI_HAS_TOUCH_DRAG
+            // We already moved the map under the finger, so drop the swipe that follows it. Cleared
+            // on the first event after the drag whatever that turns out to be, so a gesture ending
+            // below the swipe threshold cannot leave it armed. A flick too quick to produce any
+            // drag report never arms it at all, and still pans a step the old way.
+            if (mapPanSuppressNextSwipe) {
+                mapPanSuppressNextSwipe = false;
+                if (event->inputEvent == INPUT_BROKER_UP || event->inputEvent == INPUT_BROKER_DOWN ||
+                    event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_RIGHT)
+                    return 0;
+            }
+#endif
             if (event->inputEvent == INPUT_BROKER_BACK || event->inputEvent == INPUT_BROKER_CANCEL) {
                 graphics::MapRenderer::setPanModeEnabled(false);
                 setFastFramerate();

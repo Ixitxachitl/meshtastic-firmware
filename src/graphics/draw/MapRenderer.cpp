@@ -234,7 +234,9 @@ void ensureCenterInitialized()
 // through real-world meters let a distant known node (dragging auto-fit zoom down) or a sign bug
 // turn one press into a jump across the planet. Plain degrees-per-pixel can't do that - the worst
 // case at any zoom is still bounded to a fixed fraction of one screen.
-void panByScreenFraction(float dxFraction, float dyFraction)
+// Shared by both pan entry points below. Moves the viewport by an exact pixel offset, where +lngPx
+// is east and +latPx is north.
+static void panViewportByPixels(float lngPx, float latPx)
 {
     ensureCenterInitialized();
     if (!s_centerInitialized)
@@ -246,17 +248,21 @@ void panByScreenFraction(float dxFraction, float dyFraction)
     const float degPerPxLng = 360.0f / worldPxAtZoom;
     const float degPerPxLat = degPerPxLng * cosf(s_centerLat * DEG_TO_RAD);
 
-    constexpr float kPanFractionOfView = 0.15f;
-    const float stepPx = min(s_lastViewWidth, s_lastViewHeight) * kPanFractionOfView;
-
-    s_centerLat += dyFraction * stepPx * degPerPxLat;
-    s_centerLng += dxFraction * stepPx * degPerPxLng;
+    s_centerLat += latPx * degPerPxLat;
+    s_centerLng += lngPx * degPerPxLng;
 
     if (s_centerLat > 85.0f)
         s_centerLat = 85.0f;
     if (s_centerLat < -85.0f)
         s_centerLat = -85.0f;
     s_centerLng = fmodf(s_centerLng + 540.0f, 360.0f) - 180.0f; // Wrap to [-180, 180).
+}
+
+void panByScreenFraction(float dxFraction, float dyFraction)
+{
+    constexpr float kPanFractionOfView = 0.15f;
+    const float stepPx = min(s_lastViewWidth, s_lastViewHeight) * kPanFractionOfView;
+    panViewportByPixels(dxFraction * stepPx, dyFraction * stepPx);
 }
 
 #if defined(HAS_SDCARD)
@@ -488,6 +494,18 @@ void MapRenderer::panRight()
     panByScreenFraction(1.0f, 0.0f);
 }
 
+void MapRenderer::panByFingerDelta(float dxPx, float dyPx)
+{
+    // The map travels with the finger, so the viewport moves the opposite way: dragging the map
+    // rightwards reveals what was off the left edge, which is further west. Screen y grows
+    // downward, so dragging down already walks the viewport north - hence only the x term is
+    // negated.
+    //
+    // Deliberately the opposite sense to panLeft()/panRight() above: a joystick press means "move
+    // the view that way", where a finger means "move the map that way".
+    panViewportByPixels(-dxPx, dyPx);
+}
+
 bool MapRenderer::isFollowMeEnabled()
 {
     return s_followMe;
@@ -619,8 +637,19 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         if (!s_basemapValid || !(s_basemapKey == basemapKey)) {
             memset(s_basemapBits, 0, (size_t)s_basemapStride * (size_t)viewHeight);
             BasemapPlotCtx basemapCtx{s_basemapBits, s_basemapStride, viewWidth, viewHeight};
+#ifdef UI_PERF_DEBUG
+            const uint32_t tileStartMs = millis();
+#endif
             NicheGraphics::MapTiles::drawTileBackground(centerLat, centerLng, zoom, metersToPx, viewWidth, viewHeight,
                                                         plotIntoBasemap, &basemapCtx);
+#ifdef UI_PERF_DEBUG
+            // Only logged on a basemap miss, which is every frame while panning - the key includes
+            // the centre, so any movement at all rebuilds the whole viewport from tiles.
+            uint32_t tileDecodes = 0, tileCacheHits = 0;
+            NicheGraphics::MapTiles::lastTileStats(&tileDecodes, &tileCacheHits);
+            LOG_INFO("map basemap rebuild: %u ms, z%d, %u tile decodes, %u cache hits", (unsigned)(millis() - tileStartMs), zoom,
+                     (unsigned)tileDecodes, (unsigned)tileCacheHits);
+#endif
             s_basemapKey = basemapKey;
             s_basemapValid = true;
         }
