@@ -41,6 +41,12 @@ OSThread::OSThread(const char *_name, uint32_t period, ThreadController *_contro
 
 OSThread::~OSThread()
 {
+#if defined(ARDUINO_ARCH_ESP32)
+    // Backstop only. A subclass that starts a task should stop it in its own
+    // destructor - by the time we get here the subclass half of the object, and
+    // therefore the runOnce() the task may be inside, is already destroyed.
+    stopFreeRTOSTask();
+#endif
     if (controller)
         controller->remove(this);
 }
@@ -121,6 +127,139 @@ int32_t OSThread::disable()
  * this makes it guaranteed that the global mainController is fully constructed first.
  */
 bool hasBeenSetup;
+
+#if defined(ARDUINO_ARCH_ESP32)
+
+/// How long stopFreeRTOSTask() waits for a clean exit before killing the task.
+static const int kTaskExitTimeoutMs = 250;
+
+/// Longest a task-driven thread sleeps in one go; see rtosTaskLoop().
+static const unsigned long kMaxTaskSleepMs = 60 * 1000;
+
+void OSThread::setFreeRTOSTask(bool enable, uint32_t stackSizeBytes, UBaseType_t priority, BaseType_t coreAffinity)
+{
+    if (taskHandle != nullptr) {
+        LOG_WARN("Cannot reconfigure FreeRTOS task while it's running");
+        return;
+    }
+    rtosConfig.enabled = enable;
+    rtosConfig.stackSizeBytes = stackSizeBytes;
+    rtosConfig.priority = priority;
+    rtosConfig.coreAffinity = coreAffinity;
+}
+
+bool OSThread::startFreeRTOSTask()
+{
+    if (!rtosConfig.enabled) {
+        LOG_WARN("Thread %s: FreeRTOS task not enabled", ThreadName.c_str());
+        return false;
+    }
+    if (taskHandle != nullptr) {
+        LOG_WARN("Thread %s: FreeRTOS task already running", ThreadName.c_str());
+        return false;
+    }
+
+    // Detach from the cooperative scheduler before the task exists, so runOnce()
+    // never has two callers, and re-attach if the create fails - a thread that
+    // cannot get a task still works, just on main-loop timing.
+    ThreadController *previousController = controller;
+    if (controller) {
+        controller->remove(this);
+        controller = nullptr;
+    }
+
+    taskShouldExit = false;
+    taskRunning = true;
+    BaseType_t result = xTaskCreatePinnedToCore(rtosTaskEntryPoint, ThreadName.c_str(), rtosConfig.stackSizeBytes, this,
+                                                rtosConfig.priority, &taskHandle, rtosConfig.coreAffinity);
+    if (result != pdPASS) {
+        LOG_ERROR("Thread %s: Failed to create FreeRTOS task", ThreadName.c_str());
+        taskHandle = nullptr;
+        taskRunning = false;
+        if (previousController && previousController->add(this))
+            controller = previousController;
+        return false;
+    }
+
+    LOG_INFO("Thread %s: FreeRTOS task started", ThreadName.c_str());
+    return true;
+}
+
+void OSThread::wakeFreeRTOSTask()
+{
+    if (taskHandle != nullptr)
+        xTaskNotifyGive(taskHandle);
+}
+
+void OSThread::stopFreeRTOSTask()
+{
+    if (taskHandle == nullptr)
+        return;
+
+    if (xTaskGetCurrentTaskHandle() == taskHandle) {
+        // Called from inside our own task; it will unwind and delete itself.
+        taskShouldExit = true;
+        return;
+    }
+
+    // Let the task finish the runOnce() it may be in and drop whatever locks it
+    // holds. vTaskDelete()ing it mid-call would leak those permanently.
+    taskShouldExit = true;
+    wakeFreeRTOSTask(); // don't wait out the current interval first
+    for (int i = 0; taskRunning && i < kTaskExitTimeoutMs; i++)
+        vTaskDelay(pdMS_TO_TICKS(1));
+
+    if (taskRunning) {
+        LOG_ERROR("Thread %s: FreeRTOS task did not exit, forcing delete", ThreadName.c_str());
+        vTaskDelete(taskHandle);
+        taskRunning = false;
+    }
+    taskHandle = nullptr;
+}
+
+void OSThread::rtosTaskEntryPoint(void *pvParameters)
+{
+    OSThread *instance = static_cast<OSThread *>(pvParameters);
+    if (instance) {
+        instance->rtosTaskLoop();
+        instance->taskRunning = false; // hands control back to stopFreeRTOSTask()
+    }
+    vTaskDelete(nullptr);
+}
+
+void OSThread::rtosTaskLoop()
+{
+    // Deliberately does not touch OSThread::currentThread: that static is owned by
+    // the main loop's ThreadController, and writing it from a second core both
+    // races with it and mislabels the main thread's log lines.
+    while (!taskShouldExit) {
+        if (enabled) {
+            int32_t delayMs = runOnce();
+            // Same bookkeeping and same contract as OSThread::run(): a negative
+            // return (RUN_SAME) keeps the interval asked for last time.
+            runned();
+            if (delayMs >= 0)
+                setInterval(delayMs);
+        }
+
+        // Always sleep at least one tick. A thread that returns 0 would otherwise
+        // spin this task, and above the idle priority on a pinned core that
+        // starves the idle task and trips the task watchdog.
+        //
+        // The upper clamp matters too: disable() parks interval at INT32_MAX, and
+        // pdMS_TO_TICKS() multiplies by the tick rate before dividing, so that
+        // would overflow TickType_t. Waking once a minute to find enabled still
+        // false costs nothing, and wakeFreeRTOSTask() ends the sleep early anyway.
+        unsigned long sleepMs = interval > kMaxTaskSleepMs ? kMaxTaskSleepMs : interval;
+        TickType_t ticks = pdMS_TO_TICKS(sleepMs);
+        if (ticks == 0)
+            ticks = 1;
+        // Sleep out the interval, but let wakeFreeRTOSTask() cut it short so
+        // work handed to us from another thread starts without waiting.
+        ulTaskNotifyTake(pdTRUE, ticks);
+    }
+}
+#endif // ARDUINO_ARCH_ESP32
 
 void assertIsSetup()
 {
