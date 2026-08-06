@@ -48,6 +48,12 @@
 #define BASEUI_FIXED_COMPASS_SIZE 1
 #define BASEUI_SPLASH_CORNER_INSET_PCT 25
 #define BASEUI_ICON_SCALE 2
+// The virtual keyboard is the only screen that puts touch targets hard against the panel edges. The
+// strap crowds the bottom of a watch, so the key block is lifted clear of it; the sides need only a
+// hair, since fourteen columns are already narrow and the panel does not round away far enough
+// there to swallow a key. Much smaller than BASEUI_BODY_LR_MARGIN, and deliberately so.
+#define BASEUI_KEYBOARD_LR_MARGIN_PCT 1
+#define BASEUI_KEYBOARD_BOTTOM_MARGIN_PCT 10
 
 #define HAS_TOUCHSCREEN 1
 #define HAS_SPI_TFT 1
