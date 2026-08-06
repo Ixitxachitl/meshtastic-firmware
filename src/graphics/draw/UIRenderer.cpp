@@ -758,7 +758,7 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
         return;
 
     // --- Only display if index is valid ---
-    int nodeIndex = frameIndexFor(state) - (screen->frameCount - favoritedNodes.size());
+    int nodeIndex = frameIndexFor(state, screen->frameCount) - (screen->frameCount - favoritedNodes.size());
     if (nodeIndex < 0 || nodeIndex >= (int)favoritedNodes.size())
         return;
 
@@ -2103,7 +2103,7 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
     // tick() zeroes it when a transition completes - so reading it directly highlighted a stale
     // icon (usually the first) for the whole of a backwards transition, then snapped to the right
     // one at the end. frameIndexFor() derives the incoming frame properly in both directions.
-    uint8_t frameToHighlight = frameIndexFor(state);
+    uint8_t frameToHighlight = frameIndexFor(state, screen->frameCount);
     if (frameToHighlight >= screen->indicatorIcons.size())
         frameToHighlight = state->currentFrame;
 
