@@ -464,7 +464,7 @@ bool EnvironmentTelemetryModule::wantUIFrame()
 void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     // === Setup display ===
-    display->clear();
+    graphics::clearForFrame(display, state);
     display->setFont(FONT_SMALL);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     int line = 1;

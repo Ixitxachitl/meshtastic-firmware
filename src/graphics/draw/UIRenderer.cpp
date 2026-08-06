@@ -753,14 +753,14 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
         return;
 
     // --- Only display if index is valid ---
-    int nodeIndex = state->currentFrame - (screen->frameCount - favoritedNodes.size());
+    int nodeIndex = frameIndexFor(state) - (screen->frameCount - favoritedNodes.size());
     if (nodeIndex < 0 || nodeIndex >= (int)favoritedNodes.size())
         return;
 
     meshtastic_NodeInfoLite *node = favoritedNodes[nodeIndex];
     if (!node || node->num == nodeDB->getNodeNum() || !nodeInfoLiteIsFavorite(node))
         return;
-    display->clear();
+    clearForFrame(display, state);
 #if defined(OLED_TINY)
     uint32_t now = millis();
     if (now - lastSwitchTime >= 10000) // 10000 ms = 10 秒
@@ -1305,7 +1305,7 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
 // ****************************
 void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-    display->clear();
+    clearForFrame(display, state);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
     int line = 1;
@@ -1763,7 +1763,7 @@ void UIRenderer::scrollPositionUp()
 
 void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-    display->clear();
+    clearForFrame(display, state);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
     int line = 1;

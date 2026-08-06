@@ -49,7 +49,7 @@ namespace DebugRenderer
 void drawFrameWiFi(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
 #if HAS_WIFI && !defined(ARCH_PORTDUINO)
-    display->clear();
+    clearForFrame(display, state);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
     int line = 1;
@@ -134,7 +134,7 @@ void drawFrameWiFi(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, i
 // ****************************
 void drawLoRaFocused(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-    display->clear();
+    clearForFrame(display, state);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
     int line = 1;
@@ -301,7 +301,7 @@ void drawLoRaFocused(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x,
 // ****************************
 void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-    display->clear();
+    clearForFrame(display, state);
     display->setFont(FONT_SMALL);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
 
@@ -533,18 +533,18 @@ void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x
 // ****************************
 void drawChirpy(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-    display->clear();
+    clearForFrame(display, state);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
     int line = 1;
     int scale = 1;
-    int iconX = SCREEN_WIDTH - chirpy_width - (chirpy_width / 3);
+    int iconX = x + SCREEN_WIDTH - chirpy_width - (chirpy_width / 3);
     int iconY = (SCREEN_HEIGHT - chirpy_height) / 2;
     int textX_offset = 10;
     if (currentResolution == ScreenResolution::High) {
         textX_offset = textX_offset * 4;
         scale = 2;
-        iconX = SCREEN_WIDTH - (chirpy_width * 2) - ((chirpy_width * 2) / 3);
+        iconX = x + SCREEN_WIDTH - (chirpy_width * 2) - ((chirpy_width * 2) / 3);
         iconY = (SCREEN_HEIGHT - (chirpy_height * 2)) / 2;
         const int bytesPerRow = (chirpy_width + 7) / 8;
 

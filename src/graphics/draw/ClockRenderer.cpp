@@ -139,7 +139,7 @@ void drawVerticalSegment(OLEDDisplay *display, int x, int y, int width, int heig
 
 void drawDigitalClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-    display->clear();
+    clearForFrame(display, state);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
 
     // === Set Title, Blank for Clock
@@ -309,7 +309,7 @@ void drawAnalogClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 {
 #if GRAPHICS_TFT_COLORING_ENABLED
     // Clear previous frame pixels so moving hands don't leave stale artifacts on TFT light theme.
-    display->clear();
+    clearForFrame(display, state);
 #endif
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     // === Set Title, Blank for Clock
