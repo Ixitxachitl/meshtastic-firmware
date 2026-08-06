@@ -79,6 +79,14 @@ namespace graphics
 #ifndef BASEUI_CENTER_MESSAGE_BUBBLES
 #define BASEUI_CENTER_MESSAGE_BUBBLES 0
 #endif
+// Widest a left/right-aligned message bubble may grow, as a percentage of the content span.
+// Below 100 this leaves a gutter on the side the bubble is not anchored to, which is what makes
+// the incoming/outgoing split readable rather than two columns of near-full-width blocks. Applies
+// to both the bubble and the width its text wraps to, so a message can't wrap wider than the
+// bubble that has to contain it. Ignored when BASEUI_CENTER_MESSAGE_BUBBLES is set.
+#ifndef BASEUI_MESSAGE_BUBBLE_MAX_PCT
+#define BASEUI_MESSAGE_BUBBLE_MAX_PCT 100
+#endif
 // When set, the favorite-node compass is sized from the full text budget instead of the
 // rows a given node happens to fill, so it stays the same size across favorites.
 #ifndef BASEUI_FIXED_COMPASS_SIZE

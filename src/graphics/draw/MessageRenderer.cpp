@@ -566,8 +566,12 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     const int leftTextWidth = SCREEN_WIDTH - (BUBBLE_EDGE_INSET * 2) - (showBubbles ? (textIndent * 2) : 0);
     const int rightTextWidth = leftTextWidth;
 #else
-    const int leftTextWidth = SCREEN_WIDTH - LEFT_MARGIN - RIGHT_MARGIN - (showBubbles ? (BUBBLE_PAD_X * 2) : 0);
-    const int rightTextWidth = SCREEN_WIDTH - LEFT_MARGIN - RIGHT_MARGIN - SCROLLBAR_WIDTH;
+    // Wrap to the same budget the bubble is capped at below, or a long message would wrap wider
+    // than the bubble containing it and be clipped instead of the bubble growing to fit.
+    const int leftTextWidth = ((SCREEN_WIDTH - LEFT_MARGIN - RIGHT_MARGIN) * BASEUI_MESSAGE_BUBBLE_MAX_PCT / 100) -
+                              (showBubbles ? (BUBBLE_PAD_X * 2) : 0);
+    const int rightTextWidth =
+        (SCREEN_WIDTH - LEFT_MARGIN - RIGHT_MARGIN - SCROLLBAR_WIDTH) * BASEUI_MESSAGE_BUBBLE_MAX_PCT / 100;
 #endif
 
     // Title string depending on mode
@@ -995,7 +999,8 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         width = std::min(width, SCREEN_WIDTH - (BUBBLE_EDGE_INSET * 2));
         blockLeft[bi] = x + (SCREEN_WIDTH - width) / 2;
 #else
-        width = std::min(width, blockSpan);
+        // Anchored to its sender's edge, leaving the rest of the span as a gutter on the far side.
+        width = std::min(width, blockSpan * BASEUI_MESSAGE_BUBBLE_MAX_PCT / 100);
         blockLeft[bi] = b.mine ? (rightEdge - width) : x;
 #endif
         blockWidth[bi] = width;

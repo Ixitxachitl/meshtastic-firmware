@@ -41,7 +41,10 @@
 #define BASEUI_NAV_ICONS_PER_PAGE 5
 #define BASEUI_NAV_ICON_SIZE_PCT 75
 #define BASEUI_NODE_LIST_ROW_ADJUST -1
-#define BASEUI_CENTER_MESSAGE_BUBBLES 1
+// Messages sit against their sender's edge - incoming left, outgoing right - rather than centred,
+// with the remaining fifth of the width left as a gutter on the far side so the split reads at a
+// glance. BASEUI_CENTER_MESSAGE_BUBBLES stays at its shared default of 0.
+#define BASEUI_MESSAGE_BUBBLE_MAX_PCT 80
 #define BASEUI_FIXED_COMPASS_SIZE 1
 #define BASEUI_SPLASH_CORNER_INSET_PCT 25
 #define BASEUI_ICON_SCALE 2
