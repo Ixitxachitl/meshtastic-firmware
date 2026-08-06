@@ -1458,7 +1458,7 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
         if (!config.bluetooth.enabled) {
             starting_position -= (display->getStringWidth("BT off") + extraoffset);
         }
-        starting_position /= 2;
+        starting_position = x + starting_position / 2;
 
         display->drawString(starting_position, getTextPositions(display)[line] + y, chUtil);
 
@@ -1517,26 +1517,26 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
         }
         if (SCREEN_WIDTH - UIRenderer::measureStringWithEmotes(display, combinedName) > 10) {
             textWidth = UIRenderer::measureStringWithEmotes(display, combinedName);
-            nameX = (SCREEN_WIDTH - textWidth) / 2;
+            nameX = x + (SCREEN_WIDTH - textWidth) / 2;
             UIRenderer::drawStringWithEmotes(display, nameX, getTextPositions(display)[line++] + yOffset + y, combinedName,
                                              FONT_HEIGHT_SMALL, 1, false);
         } else {
             // === LongName Centered ===
             textWidth = UIRenderer::measureStringWithEmotes(display, longName);
-            nameX = (SCREEN_WIDTH - textWidth) / 2;
+            nameX = x + (SCREEN_WIDTH - textWidth) / 2;
             UIRenderer::drawStringWithEmotes(display, nameX, getTextPositions(display)[line++] + y, longName, FONT_HEIGHT_SMALL,
                                              1, false);
 
             // === ShortName Centered ===
             textWidth = UIRenderer::measureStringWithEmotes(display, shortName);
-            nameX = (SCREEN_WIDTH - textWidth) / 2;
+            nameX = x + (SCREEN_WIDTH - textWidth) / 2;
             UIRenderer::drawStringWithEmotes(display, nameX, getTextPositions(display)[line++] + y, shortName, FONT_HEIGHT_SMALL,
                                              1, false);
         }
 #ifdef SHOW_STEP_COUNTER
         std::string stepsLine = "Steps: " + std::to_string(screen->steps);
         textWidth = UIRenderer::measureStringWithEmotes(display, stepsLine.c_str());
-        nameX = (SCREEN_WIDTH - textWidth) / 2;
+        nameX = x + (SCREEN_WIDTH - textWidth) / 2;
         UIRenderer::drawStringWithEmotes(display, nameX, getTextPositions(display)[line++] + y, stepsLine.c_str(),
                                          FONT_HEIGHT_SMALL, 1, false);
 #endif
