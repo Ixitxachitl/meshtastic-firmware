@@ -337,7 +337,7 @@ void AirQualityTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSta
     // === Show first available metric on top-right of first line ===
     if (!entries.empty()) {
         String valueStr = entries.front();
-        int rightX = SCREEN_WIDTH - display->getStringWidth(valueStr);
+        int rightX = x + SCREEN_WIDTH - display->getStringWidth(valueStr);
         display->drawString(rightX, currentY, valueStr);
         entries.erase(entries.begin()); // Remove from queue
     }
@@ -352,7 +352,7 @@ void AirQualityTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSta
 
         // Right column if it exists
         if (i + 1 < entries.size()) {
-            int rightX = SCREEN_WIDTH / 2;
+            int rightX = x + SCREEN_WIDTH / 2;
             display->drawString(rightX, currentY, entries[i + 1]);
         }
 
