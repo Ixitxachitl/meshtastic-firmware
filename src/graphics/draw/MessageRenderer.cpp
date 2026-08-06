@@ -948,6 +948,10 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     // list scrolls, and where it stops, are exactly as before.
     const int contentBottom = SCREEN_HEIGHT;
     const int rightEdge = x + SCREEN_WIDTH - SCROLLBAR_WIDTH - RIGHT_MARGIN;
+    // The left end of the content span. rightEdge already insets for the scrollbar and RIGHT_MARGIN,
+    // so anchoring left-hand blocks at plain x left them flush against the panel while right-hand
+    // ones were inset - and made blockSpan LEFT_MARGIN wider than the area actually available.
+    const int contentLeft = x + LEFT_MARGIN;
     const int bubbleGapY = std::max(1, MESSAGE_BLOCK_GAP / 2);
 #if GRAPHICS_TFT_COLORING_ENABLED
     const uint32_t themeId = getActiveTheme().id;
@@ -969,8 +973,8 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     // text inside it can never drift apart. innerPad is the bubble's own padding, or 0 when
     // bubbles are off and the "box" is just the text extent.
     const int innerPad = showBubbles ? textIndent : 0;
-    const int blockSpan = rightEdge - x;
-    std::vector<int> blockLeft(blocks.size(), x);
+    const int blockSpan = rightEdge - contentLeft;
+    std::vector<int> blockLeft(blocks.size(), contentLeft);
     std::vector<int> blockWidth(blocks.size(), blockSpan);
     std::vector<int> lineBlock(cachedLines.size(), -1);
     for (size_t bi = 0; bi < blocks.size(); ++bi) {
@@ -1001,7 +1005,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 #else
         // Anchored to its sender's edge, leaving the rest of the span as a gutter on the far side.
         width = std::min(width, blockSpan * BASEUI_MESSAGE_BUBBLE_MAX_PCT / 100);
-        blockLeft[bi] = b.mine ? (rightEdge - width) : x;
+        blockLeft[bi] = b.mine ? (rightEdge - width) : contentLeft;
 #endif
         blockWidth[bi] = width;
     }
@@ -1126,7 +1130,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         if (lineY > -cachedHeights[i] && lineY < contentBottom) {
             // Text follows its block's box, so centred boxes carry their contents with them.
             const int bi = lineBlock[i];
-            const int boxLeft = (bi >= 0) ? blockLeft[bi] : x;
+            const int boxLeft = (bi >= 0) ? blockLeft[bi] : contentLeft;
             const int boxRight = (bi >= 0) ? (boxLeft + blockWidth[bi]) : rightEdge;
 
             if (isHeader[i]) {
