@@ -931,7 +931,18 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 
     int finalScroll = (int)scrollY;
     int yOffset = -finalScroll + firstLineTop;
-    const int contentBottom = scrollBottom; // already excludes nav line
+    // Culling boundary - deliberately the panel edge, not scrollBottom.
+    //
+    // scrollBottom sits navHeight above the bottom, which on variants with generous header margins
+    // is ~50px of otherwise empty panel. Culling there meant a line or bubble was skipped entirely
+    // until its top crossed that boundary and then drawn in full the instant it did, so content
+    // appeared to pop into existence part-way up the screen rather than sliding in from the edge.
+    // Nothing paints that band to hide the effect either: drawCommonFooter() only draws when the
+    // API is connected, and the nav bar is a brief, icon-width overlay.
+    //
+    // Only culling changes. usableHeight above still measures from scrollBottom, so how far the
+    // list scrolls, and where it stops, are exactly as before.
+    const int contentBottom = SCREEN_HEIGHT;
     const int rightEdge = x + SCREEN_WIDTH - SCROLLBAR_WIDTH - RIGHT_MARGIN;
     const int bubbleGapY = std::max(1, MESSAGE_BLOCK_GAP / 2);
 #if GRAPHICS_TFT_COLORING_ENABLED
@@ -1107,7 +1118,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     int lineY = yOffset;
     for (size_t i = 0; i < cachedLines.size(); ++i) {
 
-        if (lineY > -cachedHeights[i] && lineY < scrollBottom) {
+        if (lineY > -cachedHeights[i] && lineY < contentBottom) {
             // Text follows its block's box, so centred boxes carry their contents with them.
             const int bi = lineBlock[i];
             const int boxLeft = (bi >= 0) ? blockLeft[bi] : x;
