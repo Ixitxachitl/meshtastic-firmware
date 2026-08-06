@@ -135,6 +135,17 @@ bool TouchScreenImpl1::longPressEnabled() const
     return !fastTapModeEnabled();
 }
 
+bool TouchScreenImpl1::dragEventsEnabled() const
+{
+#if BASEUI_HAS_TOUCH_DRAG
+    // Not while a tap-heavy applet (the InkHUD keyboard) owns the screen - there a finger sliding
+    // between keys is still aiming at one of them, not dragging the view.
+    return !fastTapModeEnabled();
+#else
+    return false;
+#endif
+}
+
 /**
  * @brief forward touchscreen event
  *
@@ -173,6 +184,14 @@ void TouchScreenImpl1::onEvent(const TouchEvent &event)
     }
     case TOUCH_ACTION_TAP: {
         e.inputEvent = INPUT_BROKER_USER_PRESS;
+        break;
+    }
+    case TOUCH_ACTION_DRAG: {
+        e.inputEvent = INPUT_BROKER_TOUCH_DRAG;
+        break;
+    }
+    case TOUCH_ACTION_DRAG_END: {
+        e.inputEvent = INPUT_BROKER_TOUCH_DRAG_END;
         break;
     }
     default:

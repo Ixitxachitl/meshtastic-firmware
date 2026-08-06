@@ -189,7 +189,8 @@ void drawColumnSeparator(OLEDDisplay *display, int16_t x, int16_t yStart, int16_
     }
 }
 
-void drawScrollbar(OLEDDisplay *display, int visibleNodeRows, int totalEntries, int scrollIndex, int columns, int scrollStartY)
+void drawScrollbar(OLEDDisplay *display, int visibleNodeRows, int totalEntries, int scrollIndex, int columns, int scrollStartY,
+                   int16_t x)
 {
     if (totalEntries <= visibleNodeRows * columns)
         return;
@@ -199,7 +200,7 @@ void drawScrollbar(OLEDDisplay *display, int visibleNodeRows, int totalEntries, 
     int thumbY = scrollStartY + (scrollIndex * (scrollbarHeight - thumbHeight)) /
                                     max(1, max(0, (totalEntries - 1) / (visibleNodeRows * columns)));
 
-    int scrollbarX = display->getWidth() - 2;
+    int scrollbarX = x + display->getWidth() - 2;
     for (int i = 0; i < thumbHeight; i++) {
         display->setPixel(scrollbarX, thumbY + i);
     }
@@ -615,7 +616,7 @@ void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
         locationScreen = true;
     else if (strcmp(title, "Distance") == 0)
         locationScreen = true;
-    display->clear();
+    clearForFrame(display, state);
 
     // Draw the battery/time header
     graphics::drawCommonHeader(display, x, y, title);
@@ -718,12 +719,12 @@ void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
     if (currentResolution != ScreenResolution::UltraLow && shownCount > 0) {
         const int firstNodeY = y + 3;
         for (int horizontal_offset = 1; horizontal_offset < totalColumns; horizontal_offset++) {
-            drawColumnSeparator(display, columnWidth * horizontal_offset, firstNodeY, lastNodeY);
+            drawColumnSeparator(display, x + columnWidth * horizontal_offset, firstNodeY, lastNodeY);
         }
     }
 
     const int scrollStartY = y + 3;
-    drawScrollbar(display, visibleNodeRows, totalEntries, scrollIndex, totalColumns, scrollStartY);
+    drawScrollbar(display, visibleNodeRows, totalEntries, scrollIndex, totalColumns, scrollStartY, x);
     graphics::drawCommonFooter(display, x, y);
 
     // Scroll Popup Overlay

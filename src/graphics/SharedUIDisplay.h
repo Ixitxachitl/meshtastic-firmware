@@ -1,6 +1,7 @@
 #pragma once
 
 #include <OLEDDisplay.h>
+#include <OLEDDisplayUi.h>
 #include <stdint.h>
 #include <string>
 
@@ -58,6 +59,41 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
 
 // Shared battery/time/mail header
 void drawCommonFooter(OLEDDisplay *display, int16_t x, int16_t y);
+
+// Frame renderers must clear through this rather than calling display->clear() directly.
+//
+// While OLEDDisplayUi is IN_TRANSITION it draws *two* frames into the same buffer before
+// committing: the outgoing one first at a sliding offset, then the incoming one on top. A frame
+// that clears unconditionally therefore wipes the outgoing frame that was just drawn, so the
+// transition renders as a blank screen instead of two frames sliding past each other. Only the
+// first draw of a cycle owns the clear - the outgoing frame mid-transition, or the current frame
+// when there is no transition at all (relationship NONE).
+//
+// Inline so this stays free: with transitions off the branch folds away to the original clear.
+static inline void clearForFrame(OLEDDisplay *display, const OLEDDisplayUiState *state)
+{
+    if (!state || state->transitionFrameRelationship != TransitionRelationship_INCOMING)
+        display->clear();
+}
+
+// The frame index this callback is drawing for.
+//
+// state->currentFrame names the *outgoing* frame for the entire duration of a transition, so any
+// frame that identifies itself from it - to pick which module, which favourite node, which page -
+// picks the wrong one while it is sliding in, and typically bails out and draws nothing until the
+// transition completes. transitionFrameTarget is only maintained by nextFrame(), never by
+// previousFrame(), so going backwards the incoming index has to be derived from the direction.
+static inline uint8_t frameIndexFor(const OLEDDisplayUiState *state)
+{
+    if (!state)
+        return 0;
+    if (state->frameState == IN_TRANSITION && state->transitionFrameRelationship == TransitionRelationship_INCOMING) {
+        if (state->frameTransitionDirection < 0)
+            return (state->currentFrame > 0) ? state->currentFrame - 1 : state->currentFrame;
+        return state->transitionFrameTarget;
+    }
+    return state->currentFrame;
+}
 
 // Inline so non-compact boards fold this to a constant false at every call site, cost-free.
 static inline bool isCompactPanel(OLEDDisplay *display)
