@@ -2390,6 +2390,14 @@ int Screen::handleInputEvent(const InputEvent *event)
     // screen" meaning further down instead.
 #if BASEUI_HAS_MAP
     if (framesetInfo.positions.map != 255 && ui->getUiState()->currentFrame == framesetInfo.positions.map) {
+        // A touch drag arrives as a continuous stream of reports alongside the swipe the touch
+        // layer still classifies on release. While Pan or Zoom Mode is held it is that swipe which
+        // pans or zooms, so the drag reports are neither a navigation command nor evidence the user
+        // did something else. Swallow them here, or the else-branches below read them as "not part
+        // of pan navigation" and drop out of the mode - which made any touch at all cancel it.
+        if ((graphics::MapRenderer::isPanModeEnabled() || graphics::MapRenderer::isZoomModeEnabled()) &&
+            (event->inputEvent == INPUT_BROKER_TOUCH_DRAG || event->inputEvent == INPUT_BROKER_TOUCH_DRAG_END))
+            return 0;
         if (graphics::MapRenderer::isPanModeEnabled()) {
             if (event->inputEvent == INPUT_BROKER_BACK || event->inputEvent == INPUT_BROKER_CANCEL) {
                 graphics::MapRenderer::setPanModeEnabled(false);
@@ -2522,16 +2530,6 @@ int Screen::handleInputEvent(const InputEvent *event)
                     return 0;
             }
             if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG) {
-#if BASEUI_HAS_MAP
-                // Pan Mode means the map has explicitly claimed directional input: it pans the view
-                // using the swipe the touch layer still classifies on release. Steering a frame
-                // transition from that same gesture would page the map out from under the pan, so
-                // leave the gesture entirely alone here. Outside Pan Mode the map pages like any
-                // other frame.
-                if (framesetInfo.positions.map != 255 && ui->getUiState()->currentFrame == framesetInfo.positions.map &&
-                    graphics::MapRenderer::isPanModeEnabled())
-                    return 0;
-#endif
                 screenDragUpdate(ui, event, displayWidth);
                 setFastFramerate();
                 return 0;
