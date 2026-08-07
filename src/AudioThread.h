@@ -1,239 +1,189 @@
 #pragma once
-#include "PowerFSM.h"
-#include "concurrency/LockGuard.h"
+
+#include "Observer.h"
+#include "audio/RtttlPcm.h"
+#include "audio/SamPcm.h"
 #include "concurrency/OSThread.h"
 #include "configuration.h"
-#include "main.h"
-#include "sleep.h"
+#include <atomic>
 #include <memory>
 
 #ifdef HAS_I2S
-#include "audio/AudioGeneratorRTTTL.h"
-#include <AudioFileSourcePROGMEM.h>
-#include <AudioOutputI2S.h>
-#include <ESP8266SAM.h>
 
-// A board with an I2S amplifier opts in by defining AUDIO_AMP_ENABLE(on) in its variant.h to power the
-// amp on/off around playback (e.g. an enable pin on an I/O expander). The includes below expose the
-// expander instances (io / mcpIoExpander) those macros typically reference.
-#ifdef USE_XL9555
-#include "ExtensionIOXL9555.hpp"
-extern ExtensionIOXL9555 io;
-#endif
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
-#ifdef USE_MCP23017
-#include "platform/esp32/ExtensionIOMCP23017.h"
-#endif
-
-// Idle poll interval. Nothing is playing, so this only decides how quickly a
-// melody queued from another thread starts.
-#define AUDIO_THREAD_INTERVAL_MS 100
-
-// Digital gain applied by AudioOutput::Amplify(), which hard-clips at full scale.
-// The library stores it as fixed point 2.6 and caps it at 4.0, so 0.2 is really 12/64.
-// The two sources arrive at very different levels, so each has its own knob:
-//   - AudioGeneratorRTTTL emits its square wave at +/-8192, a quarter of full scale,
-//     so it has two more octaves of headroom before the rail.
-//   - ESP8266SAM upscales 8-bit speech to +/-32512, essentially full scale already,
-//     so anything above unity clips it badly.
-// Both default to the long-standing shared 0.2; variants with an amp and speaker that
-// can take more raise them in variant.h. Do not pass exactly 4.0: SetGain() stores
-// f*(1<<6) in a uint8_t, so 4.0 becomes 256, truncates to 0, and the output goes silent.
-// The largest value it can actually hold is 255/64 = 3.984375f.
-#ifndef AUDIO_RTTTL_GAIN
-#define AUDIO_RTTTL_GAIN 0.2f
-#endif
-#ifndef AUDIO_SPEECH_GAIN
-#define AUDIO_SPEECH_GAIN 0.2f
-#endif
+class MeshtasticI2SOut;
 
 /**
- * Plays RTTTL melodies out of an I2S DAC.
+ * I2S playback for tones and ringtones.
  *
- * On ESP32 this runs as its own FreeRTOS task (see setFreeRTOSTask() in the
- * constructor) so that a slow main loop cannot starve the I2S DMA. If the task
- * cannot be created, the object stays registered with the cooperative
- * ThreadController and works the same way, just with main-loop timing.
+ * The public API is unchanged from the ESP8266Audio implementation this replaces.
+ * readAloud() is opt-in per variant via MESHTASTIC_ENABLE_TTS: BackgroundAudio's own
+ * espeak-ng speech is unaffordable here (~947KB of flash, ~88KB of permanent DRAM, and it
+ * does not fit the app partition at all on an 8MB board), and the stock ESP8266SAM library
+ * cannot be linked alongside BackgroundAudio - both its libmad and espeak's
+ * `SetSpeed`/`speed` globals collide. SAM is therefore vendored under audio/sam/ with
+ * those two symbols renamed, and SamPcm wraps it as a pull-style source so speech feeds
+ * through exactly the same path as a melody.
  *
- * Every public method is safe to call from any thread; the mutex serialises
- * them against the task's own pumping in runOnce().
+ * The other difference that matters: playback is asynchronous. Samples are generated on
+ * demand by RtttlPcm and pushed into the I2S DMA ring by a small per-playback feeder
+ * task. The feeder exists because the main loop cannot be trusted to run often enough:
+ * on MUI builds the tft task holds spiLock across entire LVGL cycles (render plus the
+ * SPI flush), and on shared-SPI-bus boards like T-Deck the main loop then blocks behind
+ * it on every radio operation - longer than any affordable DMA ring, which was audible
+ * as stuttering. The feeder touches only the generator and the I2S channel, never
+ * spiLock, so display and radio contention cannot starve it. Note this is NOT upstream
+ * BackgroundAudio's task coming back: that one exists to maintain availableForWrite()
+ * from ISR notifications, which is the machinery MeshtasticI2SOut deliberately avoids -
+ * the feeder uses the same ask-the-IDF-directly zero-timeout writes as before. If the
+ * task cannot be created, feeding falls back to the main loop (runOnce/isPlaying), the
+ * pre-feeder behavior.
+ *
+ * isPlaying() stays true until the DMA has actually drained, not just until the last
+ * sample was queued - the amplifier must not be cut before the audio has physically
+ * left the pin.
+ *
+ * The I2S channel is allocated per playback and released when idle, matching what
+ * ESP8266Audio did, so an idle board draws no more than it used to; the feeder task
+ * and its stack likewise only exist while a melody is in flight.
  */
 class AudioThread : public concurrency::OSThread
 {
   public:
-    AudioThread() : OSThread("Audio")
-    {
-        initOutput();
+    AudioThread();
+    ~AudioThread();
 
-#if defined(ARDUINO_ARCH_ESP32)
-        setFreeRTOSTask(true, kTaskStackBytes, kTaskPriority, kTaskCore);
+    /// Play an RTTTL string (a user ringtone). Malformed songs are ignored.
+    void beginRttl(const void *data, uint32_t len);
+
+    /// Play a system melody directly, without going via RTTTL.
+    void beginTones(const ToneDuration *tones, size_t count);
+
+#ifdef MESHTASTIC_ENABLE_TTS
+    /// Speak `text` with SAM. Returns immediately; the utterance is rendered on its own
+    /// task and fed to the DMA through the same feeder path as a melody.
+    void readAloud(const char *text);
 #endif
-    }
 
-    /// Start playing an RTTTL string, replacing anything already playing.
-    void beginRttl(const void *data, uint32_t len)
-    {
-        concurrency::LockGuard lock(&audioMutex);
-        stopPlaybackOnly();
-        acquireHardware();
+    /// True while anything is still playing or draining. Also services the DMA, so it is
+    /// safe - and useful - for callers to poll it.
+    bool isPlaying();
 
-        audioOut->SetGain(AUDIO_RTTTL_GAIN);
-        rtttlFile = std::unique_ptr<AudioFileSourcePROGMEM>(new AudioFileSourcePROGMEM(data, len));
-        std::unique_ptr<meshtastic::AudioGeneratorRTTTL> generator(new meshtastic::AudioGeneratorRTTTL());
-        if (!generator->begin(rtttlFile.get(), audioOut.get())) {
-            LOG_WARN("Audio: could not parse RTTTL, not playing");
-            rtttlFile = nullptr;
-            releaseHardware();
-            return;
-        }
-        i2sRtttl = std::move(generator);
-#if defined(ARDUINO_ARCH_ESP32)
-        // Start pumping now instead of up to AUDIO_THREAD_INTERVAL_MS from now,
-        // so a key click is not audibly late.
-        wakeFreeRTOSTask();
-#endif
-    }
+    /// Stop immediately and power the amplifier down. Safe to call when nothing is
+    /// playing; ExternalNotificationModule::stopNow() relies on that (see 2ae391197).
+    void stop();
 
-    /// True while a melody is still playing. This is a pure query - the audio
-    /// task does the pumping, so callers must not poll it to drive playback.
-    bool isPlaying()
-    {
-        concurrency::LockGuard lock(&audioMutex);
-        return i2sRtttl && i2sRtttl->isRunning();
-    }
+    /// Veto light sleep while audio is in flight - sleeping gates the I2S peripheral
+    /// clock, which would truncate playback.
+    int preflightSleepCb(void *unused) { return isIdle() ? 0 : 1; }
 
-    void stop()
-    {
-        concurrency::LockGuard lock(&audioMutex);
-        stopPlaybackOnly();
-        releaseHardware();
-    }
-
-    void readAloud(const char *text)
-    {
-        concurrency::LockGuard lock(&audioMutex);
-        stopPlaybackOnly();
-        acquireHardware();
-
-        audioOut->SetGain(AUDIO_SPEECH_GAIN);
-        auto sam = std::unique_ptr<ESP8266SAM>(new ESP8266SAM);
-        sam->Say(audioOut.get(), text);
-
-        // ESP8266SAM::Say() calls begin() on the output but never stop(), and
-        // releaseHardware() only handles the amp and the CPU boost - the melody
-        // path stops the I2S output from AudioGeneratorRTTTL::stop() instead.
-        audioOut->stop();
-        releaseHardware();
-    }
+    CallbackObserver<AudioThread, void *> preflightSleepObserver =
+        CallbackObserver<AudioThread, void *>(this, &AudioThread::preflightSleepCb);
 
   protected:
-    int32_t runOnce() override
-    {
-        concurrency::LockGuard lock(&audioMutex);
-
-        if (i2sRtttl) {
-            // One loop() call fills the DMA chain completely, so there is no
-            // point pumping several times per wakeup.
-            if (i2sRtttl->isRunning() && i2sRtttl->loop()) {
-                canSleep = false; // only consulted on the ThreadController fallback path
-                return kPumpIntervalMs;
-            }
-            // The melody ended on its own. Nothing else releases the amp and the
-            // CPU boost on the playTones() path - ExternalNotificationModule is
-            // the only caller of stop(), and it only runs when that module is
-            // enabled - so a system beep would otherwise leave both on forever.
-            stopPlaybackOnly();
-            idleSinceMs = millis();
-        }
-
-        if (hardwareActive) {
-            // Linger before powering the amp down, so that a nag repeat or a
-            // burst of key clicks does not pop it off and on between melodies.
-            if ((millis() - idleSinceMs) < kHardwareLingerMs) {
-                canSleep = false;
-                return AUDIO_THREAD_INTERVAL_MS;
-            }
-            releaseHardware();
-        }
-
-        canSleep = true;
-        return AUDIO_THREAD_INTERVAL_MS;
-    }
+    int32_t runOnce() override;
 
   private:
-#if defined(ARDUINO_ARCH_ESP32)
-    // ESP-IDF's xTaskCreate() takes the stack size in bytes, not words.
-    static constexpr uint32_t kTaskStackBytes = 4096;
-    static constexpr UBaseType_t kTaskPriority = tskIDLE_PRIORITY + 2;
-    static constexpr BaseType_t kTaskCore = 1;
+    enum class State { IDLE, PLAYING, DRAINING };
+
+    /// Frames generated and handed to the DMA per write. Need not match the DMA buffer
+    /// size; writes land mid-descriptor just fine.
+    static constexpr size_t kStagingFrames = 128;
+
+    /// Silence preloaded ahead of the first real sample, giving the just-enabled amp and
+    /// the codec unmute ramp time to settle. Also the entire startup latency of a click.
+    static constexpr size_t kAmpLeadInFrames = (RtttlPcm::kSampleRate * 10) / 1000; // 10ms
+
+    /// Extra quiet time after the DMA has drained, before the amp is cut.
+    static constexpr uint32_t kSettleMs = 20;
+
+    /// If the DMA accepts nothing for this long while playing, something is wrong with the
+    /// channel. Give up rather than leave the amplifier powered indefinitely. A real song
+    /// makes progress every tick, since a DMA buffer frees roughly every 12ms.
+    static constexpr uint32_t kStallTimeoutMs = 1000;
+
+    static constexpr int32_t kActiveIntervalMs = 10;
+    static constexpr int32_t kIdleIntervalMs = 100;
+
+    /// Feeder task sizing. The loop is RtttlPcm math plus a zero-timeout I2S write, with
+    /// LOG_WARN reachable on the telemetry path; 4KB covers that comfortably. Priority 2
+    /// (above loopTask's 1) and pinned to the same core as loopTask, so it preempts only
+    /// the loop it replaces, briefly, and stays off core 0 where the radio ISRs, BLE and
+    /// the MUI tft task live. It sleeps kFeederIntervalMs between fills; a 256-frame DMA
+    /// buffer drains in ~11.6ms, so 5ms polling can never miss the ring by more than half
+    /// a buffer.
+    static constexpr uint32_t kFeederStackBytes = 4096;
+    static constexpr UBaseType_t kFeederPriority = 2;
+    static constexpr BaseType_t kFeederCore = 1;
+    static constexpr uint32_t kFeederIntervalMs = 5;
+
+    bool isIdle() const { return state == State::IDLE; }
+
+    /// Arm the sink and start feeding, assuming the generator is already loaded.
+    bool startPlayback();
+    /// Release the channel and power down the amp. Idempotent.
+    void stopPlayback();
+    /// Fill the disabled DMA ring (lead-in silence, then melody) before start().
+    void preloadRing();
+    /// Move samples into the DMA until it is full or the song ends. Main-loop fallback,
+    /// used only when the feeder task could not be created.
+    void pump();
+    /// Body of the feeder task: pump until the melody ends, a stall is detected, or
+    /// joinFeeder() asks it to quit. Owns generator/staging while it runs.
+    void feederLoop();
+    static void feederEntry(void *self) { static_cast<AudioThread *>(self)->feederLoop(); }
+    /// React (on the main loop) to the feeder finishing or stalling.
+    void serviceFeeder();
+    /// Signal the feeder and wait for it to exit. Must precede sink->end() or any
+    /// generator re-arm - the channel and generator must not be torn down under a live
+    /// writer. Bounded: the feeder checks the flag at least every kFeederIntervalMs.
+    /// Returns false only if the feeder failed to exit (teardown must then be skipped).
+    bool joinFeeder();
+    /// Hold on until the queued audio has physically played out.
+    void beginDrain();
+    void ampEnable(bool on);
+    /// Pull frames from whichever source is armed - melody or speech.
+    size_t generateFrames(int16_t *out, size_t maxFrames);
+
+    std::unique_ptr<MeshtasticI2SOut> sink;
+
+    RtttlPcm generator;
+
+#ifdef MESHTASTIC_ENABLE_TTS
+    SamPcm speech;
+    /// Which source generateFrames() pulls from. Set by readAloud(), cleared on teardown.
+    bool usingSpeech = false;
 #endif
 
-    // ESP8266Audio's AudioOutputI2S uses a fixed 128-frame DMA buffer, and we ask
-    // for kDmaBufCount of them below. Poll at a fraction of the time the hardware
-    // needs to drain that chain, which is where the margin against underrun comes
-    // from - no pre-fill or boost heuristics required.
-    static constexpr int kDmaBufCount = 4;
-    static constexpr int kDmaBufFrames = 128;
-    static constexpr int kSampleRate = 22050; // must match AudioGeneratorRTTTL's rate
-    static constexpr int32_t kDmaDrainMs = (1000 * kDmaBufCount * kDmaBufFrames) / kSampleRate;
-    static constexpr int32_t kPumpIntervalMs = kDmaDrainMs / 3;
-    static_assert(kPumpIntervalMs >= 1, "pump interval rounded down to zero");
+    // Frames generated but not yet accepted by the DMA. generate() is destructive, so a
+    // short write has to be carried across pump() calls rather than regenerated.
+    int16_t staging[kStagingFrames * 2] = {};
+    size_t stagedFrames = 0;
+    size_t stagedOffset = 0;
 
-    /// How long the amp stays powered after a melody ends, before we shut it down.
-    static constexpr uint32_t kHardwareLingerMs = 300;
+    State state = State::IDLE;
+    uint32_t drainUntil = 0;
+    uint32_t lastProgressMs = 0;
 
-    /// Tear down the generator without touching the amp, so that replacing one
-    /// melody with another does not click the amplifier off and back on.
-    void stopPlaybackOnly()
-    {
-        if (i2sRtttl) {
-            i2sRtttl->stop();
-            i2sRtttl = nullptr;
-        }
-        rtttlFile = nullptr;
-    }
+    /// When pump() last ran while PLAYING. A gap longer than the ring's drain time is a
+    /// proven underrun - logged so testers can attribute dropouts to main-loop stalls.
+    uint32_t lastPumpMs = 0;
 
-    // AUDIO_AMP_ENABLE typically writes to an I2C IO expander, and runOnce()
-    // reaches these from the audio task rather than the main loop. That is safe
-    // for the variants that define it today - ExtensionIOMCP23017::digitalWrite
-    // locks internally, and tlora-pager only touches its XL9555 during setup -
-    // but a new variant sharing an unlocked expander with the main loop would
-    // need its own guard.
-    void acquireHardware()
-    {
-        if (hardwareActive)
-            return;
-        hardwareActive = true;
-#ifdef AUDIO_AMP_ENABLE
-        AUDIO_AMP_ENABLE(true);
-#endif
-        setCPUFast(true);
-    }
+    /// Feeder task lifecycle. The handle is only ever touched from the main loop; the
+    /// flags are the sole cross-task communication. feederExited doubles as the join
+    /// signal - once true the task has passed its last generator/sink access and is
+    /// about to self-delete, so teardown may proceed.
+    TaskHandle_t feederTask = nullptr;
+    std::atomic<bool> feederStop{false};
+    std::atomic<bool> feederExited{false};
+    std::atomic<bool> feederStalled{false};
 
-    void releaseHardware()
-    {
-        if (!hardwareActive)
-            return;
-        hardwareActive = false;
-        setCPUFast(false);
-#ifdef AUDIO_AMP_ENABLE
-        AUDIO_AMP_ENABLE(false);
-#endif
-    }
-
-    void initOutput()
-    {
-        audioOut = std::unique_ptr<AudioOutputI2S>(new AudioOutputI2S(1, AudioOutputI2S::EXTERNAL_I2S, kDmaBufCount));
-        audioOut->SetPinout(DAC_I2S_BCK, DAC_I2S_WS, DAC_I2S_DOUT, DAC_I2S_MCLK);
-        audioOut->SetGain(AUDIO_SPEECH_GAIN);
-    };
-
-    std::unique_ptr<meshtastic::AudioGeneratorRTTTL> i2sRtttl = nullptr;
-    std::unique_ptr<AudioOutputI2S> audioOut = nullptr;
-    std::unique_ptr<AudioFileSourcePROGMEM> rtttlFile = nullptr;
-    bool hardwareActive = false;
-    uint32_t idleSinceMs = 0;
-    concurrency::Lock audioMutex;
+    /// Tracks the amp enable so it is only driven on an actual change. On the two boards
+    /// that have one it is an I2C expander write, and needlessly cycling it off and on at
+    /// the start of every tone is audible as a pop (see commit 42e475963).
+    bool ampOn = false;
 };
 
-#endif
+#endif // HAS_I2S

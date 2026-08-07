@@ -1,5 +1,13 @@
 #pragma once
 
+#include "configuration.h"
+
+#ifdef HAS_I2S
+/// Play the system melody that was requested before audioThread existed, if any.
+/// Call once from setup(), after lateInitVariant().
+void buzzOnAudioThreadReady();
+#endif
+
 void playBeep();
 void playLongBeep();
 void playStartMelody();

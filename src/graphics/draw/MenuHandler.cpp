@@ -742,7 +742,7 @@ void menuHandler::messageResponseMenu()
     optionsArray[options] = "Delete";
     optionsEnumArray[options++] = DeleteMenu;
 
-#ifdef HAS_I2S
+#ifdef MESHTASTIC_ENABLE_TTS
     optionsArray[options] = "Read Aloud";
     optionsEnumArray[options++] = Aloud;
 #endif
@@ -785,7 +785,7 @@ void menuHandler::messageResponseMenu()
             menuHandler::menuQueue = menuHandler::DeleteMessagesMenu;
             screen->runNow();
 
-#ifdef HAS_I2S
+#ifdef MESHTASTIC_ENABLE_TTS
         } else if (selected == Aloud) {
             if (const StoredMessage *latest = getNewestMessageForActiveThread()) {
                 const char *msg = MessageStore::getText(*latest);
@@ -2370,7 +2370,7 @@ void menuHandler::traceRouteMenu()
 void menuHandler::testMenu()
 {
 
-    enum optionsNumbers { Back, NumberPicker, ShowChirpy, TestAnnounce };
+    enum optionsNumbers { Back, NumberPicker, ShowChirpy };
     static const char *optionsArray[5] = {"Back"};
     static int optionsEnumArray[5] = {Back};
     int options = 1;
@@ -2380,10 +2380,6 @@ void menuHandler::testMenu()
 
     optionsArray[options] = screen->isFrameHidden("chirpy") ? "Show Chirpy" : "Hide Chirpy";
     optionsEnumArray[options++] = ShowChirpy;
-#ifdef HAS_I2S
-    optionsArray[options] = "Test Announce";
-    optionsEnumArray[options++] = TestAnnounce;
-#endif
 
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = "Hidden Test Menu";
@@ -2398,10 +2394,6 @@ void menuHandler::testMenu()
             screen->toggleFrameVisibility("chirpy");
             screen->setFrames(Screen::FOCUS_SYSTEM);
 
-        } else if (selected == TestAnnounce) {
-#ifdef HAS_I2S
-            audioThread->readAloud("This is a test of the emergency broadcast system. This is only a test.");
-#endif
         } else {
             menuQueue = SystemBaseMenu;
             screen->runNow();

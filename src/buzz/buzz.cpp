@@ -1,6 +1,9 @@
 #include "buzz.h"
 #include "NodeDB.h"
 #include "configuration.h"
+// ToneDuration lives with the synthesizer that consumes it, so the I2S path can play a
+// melody directly instead of round-tripping it through an RTTTL string.
+#include "audio/RtttlPcm.h"
 
 #if !defined(ARCH_ESP32) && !defined(ARCH_RP2040) && !defined(ARCH_PORTDUINO)
 #include "Tone.h"
@@ -8,9 +11,7 @@
 
 #if defined(HAS_I2S)
 #include "main.h"
-#include <algorithm>
-#include <cstdio>
-#include <cstring>
+#include <string.h>
 #endif
 
 #if defined(HAS_I2S_SPEAKER_NRF52)
@@ -21,13 +22,8 @@
 extern "C" void delay(uint32_t dwMs);
 #endif
 
-struct ToneDuration {
-    int frequency_khz;
-    int duration_ms;
-};
-
-// Note frequencies (scientific pitch notation)
-#define NOTE_SILENT 0
+// Some common frequencies.
+#define NOTE_SILENT 1
 #define NOTE_C3 131
 #define NOTE_CS3 139
 #define NOTE_D3 147
@@ -40,50 +36,19 @@ struct ToneDuration {
 #define NOTE_A3 220
 #define NOTE_AS3 233
 #define NOTE_B3 247
-#define NOTE_C4 262
 #define NOTE_CS4 277
-#define NOTE_D4 294
-#define NOTE_DS4 311
-#define NOTE_E4 330
-#define NOTE_F4 349
-#define NOTE_FS4 370
-#define NOTE_G4 392
-#define NOTE_GS4 415
-#define NOTE_A4 440
-#define NOTE_AS4 466
 #define NOTE_B4 494
-#define NOTE_C5 523
-#define NOTE_CS5 554
-#define NOTE_D5 587
-#define NOTE_DS5 622
-#define NOTE_E5 659
 #define NOTE_F5 698
-#define NOTE_FS5 740
-#define NOTE_G5 784
-#define NOTE_GS5 831
-#define NOTE_A5 880
-#define NOTE_AS5 932
-#define NOTE_B5 988
-#define NOTE_C6 1047
-#define NOTE_CS6 1109
-#define NOTE_D6 1175
-#define NOTE_DS6 1245
-#define NOTE_E6 1319
-#define NOTE_F6 1397
-#define NOTE_FS6 1480
 #define NOTE_G6 1568
-#define NOTE_GS6 1661
-#define NOTE_A6 1760
-#define NOTE_AS6 1865
-#define NOTE_B6 1976
-#define NOTE_C7 2093
-#define NOTE_CS7 2217
-#define NOTE_D7 2349
-#define NOTE_DS7 2489
 #define NOTE_E7 2637
-#define NOTE_F7 2794
-#define NOTE_FS7 2960
-#define NOTE_G7 3136
+
+#define NOTE_C4 262
+#define NOTE_E4 330
+#define NOTE_G4 392
+#define NOTE_A4 440
+#define NOTE_C5 523
+#define NOTE_E5 659
+#define NOTE_G5 784
 
 const int DURATION_1_16 = 62;  // 1/16 note
 const int DURATION_1_8 = 125;  // 1/8 note
@@ -93,148 +58,23 @@ const int DURATION_3_4 = 750;  // 3/4 note
 const int DURATION_1_1 = 1000; // 1/1 note
 
 #ifdef HAS_I2S
-// Full chromatic note map used to convert raw Hz frequencies to RTTTL note names.
-struct NoteToken {
-    int freq;
-    const char *note;
-    int octave;
-};
-static const NoteToken kNoteMap[] = {
-    {NOTE_C3, "c", 3},   {NOTE_CS3, "c#", 3}, {NOTE_D3, "d", 3},   {NOTE_DS3, "d#", 3}, {NOTE_E3, "e", 3},   {NOTE_F3, "f", 3},
-    {NOTE_FS3, "f#", 3}, {NOTE_G3, "g", 3},   {NOTE_GS3, "g#", 3}, {NOTE_A3, "a", 3},   {NOTE_AS3, "a#", 3}, {NOTE_B3, "b", 3},
-    {NOTE_C4, "c", 4},   {NOTE_CS4, "c#", 4}, {NOTE_D4, "d", 4},   {NOTE_DS4, "d#", 4}, {NOTE_E4, "e", 4},   {NOTE_F4, "f", 4},
-    {NOTE_FS4, "f#", 4}, {NOTE_G4, "g", 4},   {NOTE_GS4, "g#", 4}, {NOTE_A4, "a", 4},   {NOTE_AS4, "a#", 4}, {NOTE_B4, "b", 4},
-    {NOTE_C5, "c", 5},   {NOTE_CS5, "c#", 5}, {NOTE_D5, "d", 5},   {NOTE_DS5, "d#", 5}, {NOTE_E5, "e", 5},   {NOTE_F5, "f", 5},
-    {NOTE_FS5, "f#", 5}, {NOTE_G5, "g", 5},   {NOTE_GS5, "g#", 5}, {NOTE_A5, "a", 5},   {NOTE_AS5, "a#", 5}, {NOTE_B5, "b", 5},
-    {NOTE_C6, "c", 6},   {NOTE_CS6, "c#", 6}, {NOTE_D6, "d", 6},   {NOTE_DS6, "d#", 6}, {NOTE_E6, "e", 6},   {NOTE_F6, "f", 6},
-    {NOTE_FS6, "f#", 6}, {NOTE_G6, "g", 6},   {NOTE_GS6, "g#", 6}, {NOTE_A6, "a", 6},   {NOTE_AS6, "a#", 6}, {NOTE_B6, "b", 6},
-    {NOTE_C7, "c", 7},   {NOTE_CS7, "c#", 7}, {NOTE_D7, "d", 7},   {NOTE_DS7, "d#", 7}, {NOTE_E7, "e", 7},   {NOTE_F7, "f", 7},
-    {NOTE_FS7, "f#", 7}, {NOTE_G7, "g", 7},
-};
-
-static inline int freqToNoteIndex(int freq)
-{
-    if (freq <= 0)
-        return -1; // rest
-    int bestIdx = -1, bestErr = 1000000;
-    for (int i = 0; i < (int)(sizeof(kNoteMap) / sizeof(kNoteMap[0])); ++i) {
-        int err = (kNoteMap[i].freq > freq) ? (kNoteMap[i].freq - freq) : (freq - kNoteMap[i].freq);
-        if (err < bestErr) {
-            bestErr = err;
-            bestIdx = i;
-        }
-    }
-    return bestIdx;
-}
-
-struct DurCand {
-    int denom;
-    bool dotted;
-    int ms;
-};
-static const DurCand kDur[] = {
-    {1, false, 1000}, {2, true, 750},  {2, false, 500}, {4, true, 375},  {4, false, 250},
-    {8, true, 187},   {8, false, 125}, {16, true, 94},  {16, false, 62}, {32, false, 31},
-};
-
-static inline void chooseDur(int ms, int &denom, bool &dotted)
-{
-    int bestIdx = 0, bestErr = 0x7fffffff;
-    for (int i = 0; i < (int)(sizeof(kDur) / sizeof(kDur[0])); ++i) {
-        int err = (kDur[i].ms > ms) ? (kDur[i].ms - ms) : (ms - kDur[i].ms);
-        if (err < bestErr) {
-            bestErr = err;
-            bestIdx = i;
-        }
-    }
-    denom = kDur[bestIdx].denom;
-    dotted = kDur[bestIdx].dotted;
-}
-
-// Build a full RTTTL string from a ToneDuration array.
-// Writes octaves explicitly on every note so the RTTTL parser never falls back
-// to the header defaultOctave. meshtastic::AudioGeneratorRTTTL covers octaves 3-7.
-static size_t tonesToRtttl(char *out, size_t cap, const ToneDuration *td, int n, const char *name = "sys")
-{
-    if (!out || cap == 0 || !td || n <= 0)
-        return 0;
-    out[0] = '\0';
-
-    int wrote = snprintf(out, cap, "%s:d=4,o=4,b=240:", name);
-    if (wrote <= 0 || (size_t)wrote >= cap)
-        return (size_t)std::max(0, wrote);
-    size_t pos = (size_t)wrote;
-
-    for (int i = 0; i < n; ++i) {
-        int denom;
-        bool dotted;
-        chooseDur(td[i].duration_ms, denom, dotted);
-
-        int noteIdx = freqToNoteIndex(td[i].frequency_khz);
-        char token[16];
-
-        if (noteIdx < 0) {
-            snprintf(token, sizeof(token), dotted ? "%dp." : "%dp", denom);
-        } else {
-            // Always include the explicit octave; the RTTTL parser has no
-            // "current octave" state and would otherwise use defaultOctave.
-            const char *noteName = kNoteMap[noteIdx].note;
-            int noteOctave = kNoteMap[noteIdx].octave;
-            snprintf(token, sizeof(token), dotted ? "%d%s%d." : "%d%s%d", denom, noteName, noteOctave);
-        }
-
-        const char *sep = (i + 1 < n) ? ((td[i].duration_ms < 80) ? ",32p," : ",") : "";
-        size_t need = strlen(token) + strlen(sep);
-        if (pos + need >= cap)
-            break;
-        memcpy(out + pos, token, strlen(token));
-        pos += strlen(token);
-        if (*sep) {
-            memcpy(out + pos, sep, strlen(sep));
-            pos += strlen(sep);
-        }
-        out[pos] = '\0';
-    }
-    return pos;
-}
-
-// The boot melody is requested from setup() before audioThread exists, so hold it
-// here until main() hands it over. Static storage, because AudioFileSourcePROGMEM
-// keeps a raw pointer to whatever we pass to beginRttl().
-static char pendingRttl[384];
-static bool hasPendingRttl = false;
-
-static inline void queueRttl(const char *rttl)
-{
-    std::strncpy(pendingRttl, rttl, sizeof(pendingRttl) - 1);
-    pendingRttl[sizeof(pendingRttl) - 1] = '\0';
-    hasPendingRttl = true;
-}
+// playStartMelody() is called from setup() at main.cpp:852, long before audioThread is
+// constructed at :1034, so the boot melody had nowhere to go: boards without a piezo fell
+// through to the PIN_BUZZER path and dropped it silently. Park it here instead and let
+// main() hand it over from buzzOnAudioThreadReady(), once the thread exists and
+// lateInitVariant() has made the amp enable pin an output.
+static ToneDuration pendingTones[RtttlPcm::kMaxTones];
+static size_t pendingToneCount = 0;
 
 void buzzOnAudioThreadReady()
 {
-    if (!audioThread || !hasPendingRttl)
+    size_t count = pendingToneCount;
+    pendingToneCount = 0;
+    if (!audioThread || count == 0)
         return;
-    hasPendingRttl = false;
-    audioThread->beginRttl(pendingRttl, std::strlen(pendingRttl));
+    audioThread->beginTones(pendingTones, count);
 }
-
-static inline bool i2sBuzzerEnabled()
-{
-    return moduleConfig.external_notification.use_i2s_as_buzzer;
-}
-
-static void startRttlI2S(const char *rttl)
-{
-    if (!rttl || !*rttl)
-        return;
-    if (!audioThread) {
-        queueRttl(rttl);
-        return;
-    }
-    audioThread->beginRttl(rttl, strlen(rttl));
-}
-#endif // HAS_I2S
+#endif
 
 void playTones(const ToneDuration *tone_durations, int size)
 {
@@ -244,11 +84,19 @@ void playTones(const ToneDuration *tone_durations, int size)
         return;
     }
 #ifdef HAS_I2S
-    if (i2sBuzzerEnabled()) {
-        // Static so AudioFileSourcePROGMEM's raw pointer stays valid after we return.
-        static char rttl[384];
-        tonesToRtttl(rttl, sizeof(rttl), tone_durations, size);
-        startRttlI2S(rttl);
+    if (moduleConfig.external_notification.use_i2s_as_buzzer) {
+        if (audioThread) {
+            // Hand the melody straight to the synthesizer - frequency and duration are already
+            // in hand, so there is no reason to encode them as RTTTL and parse them back. This
+            // returns immediately; playback continues from the audio thread.
+            audioThread->beginTones(tone_durations, (size_t)size);
+        } else if (size > 0) {
+            // Too early for the audio thread; remember it for buzzOnAudioThreadReady().
+            // Only the most recent request is kept, which is all setup() ever makes.
+            size_t n = (size_t)size < RtttlPcm::kMaxTones ? (size_t)size : RtttlPcm::kMaxTones;
+            memcpy(pendingTones, tone_durations, n * sizeof(ToneDuration));
+            pendingToneCount = n;
+        }
         return;
     }
 #endif

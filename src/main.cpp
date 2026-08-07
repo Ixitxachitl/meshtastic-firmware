@@ -1177,6 +1177,13 @@ void setup()
 
     lateInitVariant(); // Do board specific init (see extra_variants/README.md for documentation)
 
+#ifdef HAS_I2S
+    // Now that the audio thread exists and lateInitVariant() has configured the amp
+    // enable pin, play the boot melody that playStartMelody() asked for back at the top
+    // of setup(). No-op if nothing was queued.
+    buzzOnAudioThreadReady();
+#endif
+
 #if !MESHTASTIC_EXCLUDE_MQTT
     mqttInit();
 #endif
