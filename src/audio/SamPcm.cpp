@@ -38,14 +38,23 @@ size_t SamPcm::ringCount() const
 
 bool SamPcm::pushSample(uint8_t sample)
 {
+    // Never refuse a sample. ESP8266SAM::OutputByte() ignores the return value and spins
+    //   while (!output->ConsumeSample(sample)) yield();
+    // so returning false wedges the render task inside Say() forever: it never sets
+    // _renderDone, reset() eventually gives up on it, and the next utterance starts a
+    // second renderer writing into the same ring. Once stopping we are discarding the
+    // utterance anyway, so swallow the rest and let Say() run out quickly.
+    if (_stop.load(std::memory_order_relaxed))
+        return true;
+
     size_t head = _head.load(std::memory_order_relaxed);
     size_t next = (head + 1) % kRingFrames;
 
-    // Wait for the consumer rather than dropping: a dropped sample is an audible click,
-    // and there is no way to ask SAM to re-emit one.
+    // Otherwise wait for the consumer rather than dropping: a dropped sample is an
+    // audible click, and there is no way to ask SAM to re-emit one.
     while (next == _tail.load(std::memory_order_acquire)) {
         if (_stop.load(std::memory_order_relaxed))
-            return false;
+            return true; // same reasoning as above
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 
@@ -76,6 +85,13 @@ bool SamPcm::begin(const char *text)
 
     if (!text || !text[0])
         return false;
+
+    if (_task) {
+        // reset() could not join the previous renderer. Starting another would give two
+        // tasks the same ring; refuse instead, and let the next attempt try again.
+        LOG_ERROR("Speech: previous renderer still running, skipping");
+        return false;
+    }
 
     // SAM refuses anything longer than one page; truncate rather than say nothing.
     strncpy(_text, text, sizeof(_text) - 1);
@@ -165,9 +181,12 @@ void SamPcm::reset()
             _tail.store(_head.load(std::memory_order_acquire), std::memory_order_release);
             vTaskDelay(pdMS_TO_TICKS(1));
         }
-        if (!_renderDone.load(std::memory_order_acquire))
+        if (_renderDone.load(std::memory_order_acquire)) {
+            _task = nullptr;
+        } else {
+            // Keep the handle so begin() can refuse rather than stacking renderers.
             LOG_ERROR("Speech: render task did not exit");
-        _task = nullptr;
+        }
     }
     _head.store(0, std::memory_order_relaxed);
     _tail.store(0, std::memory_order_relaxed);
