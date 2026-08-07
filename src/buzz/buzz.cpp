@@ -11,6 +11,7 @@
 
 #if defined(HAS_I2S)
 #include "main.h"
+#include <string.h>
 #endif
 
 #if !defined(ARCH_PORTDUINO)
@@ -52,6 +53,25 @@ const int DURATION_1_2 = 500;  // 1/2 note
 const int DURATION_3_4 = 750;  // 3/4 note
 const int DURATION_1_1 = 1000; // 1/1 note
 
+#ifdef HAS_I2S
+// playStartMelody() is called from setup() at main.cpp:852, long before audioThread is
+// constructed at :1034, so the boot melody had nowhere to go: boards without a piezo fell
+// through to the PIN_BUZZER path and dropped it silently. Park it here instead and let
+// main() hand it over from buzzOnAudioThreadReady(), once the thread exists and
+// lateInitVariant() has made the amp enable pin an output.
+static ToneDuration pendingTones[RtttlPcm::kMaxTones];
+static size_t pendingToneCount = 0;
+
+void buzzOnAudioThreadReady()
+{
+    size_t count = pendingToneCount;
+    pendingToneCount = 0;
+    if (!audioThread || count == 0)
+        return;
+    audioThread->beginTones(pendingTones, count);
+}
+#endif
+
 void playTones(const ToneDuration *tone_durations, int size)
 {
     if (config.device.buzzer_mode == meshtastic_Config_DeviceConfig_BuzzerMode_DISABLED ||
@@ -60,11 +80,19 @@ void playTones(const ToneDuration *tone_durations, int size)
         return;
     }
 #ifdef HAS_I2S
-    if (moduleConfig.external_notification.use_i2s_as_buzzer && audioThread) {
-        // Hand the melody straight to the synthesizer - frequency and duration are already
-        // in hand, so there is no reason to encode them as RTTTL and parse them back. This
-        // returns immediately; playback continues from the audio thread.
-        audioThread->beginTones(tone_durations, (size_t)size);
+    if (moduleConfig.external_notification.use_i2s_as_buzzer) {
+        if (audioThread) {
+            // Hand the melody straight to the synthesizer - frequency and duration are already
+            // in hand, so there is no reason to encode them as RTTTL and parse them back. This
+            // returns immediately; playback continues from the audio thread.
+            audioThread->beginTones(tone_durations, (size_t)size);
+        } else if (size > 0) {
+            // Too early for the audio thread; remember it for buzzOnAudioThreadReady().
+            // Only the most recent request is kept, which is all setup() ever makes.
+            size_t n = (size_t)size < RtttlPcm::kMaxTones ? (size_t)size : RtttlPcm::kMaxTones;
+            memcpy(pendingTones, tone_durations, n * sizeof(ToneDuration));
+            pendingToneCount = n;
+        }
         return;
     }
 #endif
