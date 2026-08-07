@@ -131,7 +131,17 @@ size_t SamPcm::generate(int16_t *interleavedLR, size_t maxFrames)
         size_t take = avail < (maxFrames - n) ? avail : (maxFrames - n);
         for (size_t i = 0; i < take; i++) {
             // 8-bit unsigned to signed 16-bit, duplicated to both channels.
-            int16_t v = (int16_t)((((int16_t)_ring[tail]) - 128) << 8);
+            int32_t s = (int32_t)((((int16_t)_ring[tail]) - 128) << 8);
+            if (kGainQ8 != 256) {
+                s = (s * kGainQ8) >> 8;
+                // Saturate: SAM is already near full scale, so any gain above unity
+                // would otherwise wrap and turn loud passages into noise.
+                if (s > 32767)
+                    s = 32767;
+                else if (s < -32768)
+                    s = -32768;
+            }
+            int16_t v = (int16_t)s;
             interleavedLR[2 * (n + i)] = v;
             interleavedLR[2 * (n + i) + 1] = v;
             tail = (tail + 1) % kRingFrames;

@@ -3,6 +3,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/// Default matches the historical AudioOutputI2S SetGain(0.2); variants override it.
+#ifndef AUDIO_RTTTL_AMPLITUDE
+#define AUDIO_RTTTL_AMPLITUDE 1536
+#endif
+
 // A single tone in a system melody. Frequency is in Hz despite the historical
 // field name; a frequency of NOTE_SILENT (1) or less is treated as a rest.
 struct ToneDuration {
@@ -32,7 +37,11 @@ class RtttlPcm
     /// Peak amplitude. AudioGeneratorRTTTL emitted +/-8192 and AudioOutputI2S then
     /// applied SetGain(0.2) -> gainF2P6 = 12 -> 8192 * 12 >> 6 = 1536. ESP32I2SAudio
     /// has no gain stage, so the attenuation is baked in here instead.
-    static constexpr int16_t kAmplitude = 1536;
+    ///
+    /// Overridable per variant, because it is now the only volume control: boards like
+    /// t-watch-ultra drive a MAX98357A whose analog gain is pin-strapped, so a fixed
+    /// digital amplitude is all there is. 8192 reproduces the old SetGain(1.0).
+    static constexpr int16_t kAmplitude = AUDIO_RTTTL_AMPLITUDE;
 
     /// Longest melody buzz.cpp defines is 10 notes; round up for headroom.
     static constexpr size_t kMaxTones = 16;
