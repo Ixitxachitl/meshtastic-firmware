@@ -702,7 +702,7 @@ void menuHandler::clockMenu()
 }
 void menuHandler::messageResponseMenu()
 {
-    enum optionsNumbers { Back = 0, ViewMode, DeleteMenu, ReplyMenu, MuteChannel, enumEnd };
+    enum optionsNumbers { Back = 0, ViewMode, DeleteMenu, ReplyMenu, MuteChannel, Aloud, enumEnd };
 
     static const char *optionsArray[enumEnd];
     static int optionsEnumArray[enumEnd];
@@ -733,6 +733,11 @@ void menuHandler::messageResponseMenu()
     // Delete submenu
     optionsArray[options] = "Delete";
     optionsEnumArray[options++] = DeleteMenu;
+
+#ifdef MESHTASTIC_ENABLE_TTS
+    optionsArray[options] = "Read Aloud";
+    optionsEnumArray[options++] = Aloud;
+#endif
 
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = "Message Action";
@@ -771,6 +776,16 @@ void menuHandler::messageResponseMenu()
         } else if (selected == DeleteMenu) {
             menuHandler::menuQueue = menuHandler::DeleteMessagesMenu;
             screen->runNow();
+
+#ifdef MESHTASTIC_ENABLE_TTS
+        } else if (selected == Aloud) {
+            if (const StoredMessage *latest = getNewestMessageForActiveThread()) {
+                const char *msg = MessageStore::getText(*latest);
+                if (msg && msg[0]) {
+                    audioThread->readAloud(msg);
+                }
+            }
+#endif
         }
     };
     screen->showOverlayBanner(bannerOptions);

@@ -2,6 +2,7 @@
 
 #include "Observer.h"
 #include "audio/RtttlPcm.h"
+#include "audio/SamPcm.h"
 #include "concurrency/OSThread.h"
 #include "configuration.h"
 #include <atomic>
@@ -17,11 +18,14 @@ class MeshtasticI2SOut;
 /**
  * I2S playback for tones and ringtones.
  *
- * The public API is unchanged from the ESP8266Audio implementation this replaces, minus
- * readAloud(): BackgroundAudio has no SAM equivalent, its espeak-ng speech costs ~947KB of
- * flash and ~88KB of permanent internal DRAM, and ESP8266SAM cannot be kept alongside it -
- * espeak's `SetSpeed`/`speed` globals collide with SAM's at link time. Text-to-speech is
- * therefore dropped for now.
+ * The public API is unchanged from the ESP8266Audio implementation this replaces.
+ * readAloud() is opt-in per variant via MESHTASTIC_ENABLE_TTS: BackgroundAudio's own
+ * espeak-ng speech is unaffordable here (~947KB of flash, ~88KB of permanent DRAM, and it
+ * does not fit the app partition at all on an 8MB board), and the stock ESP8266SAM library
+ * cannot be linked alongside BackgroundAudio - both its libmad and espeak's
+ * `SetSpeed`/`speed` globals collide. SAM is therefore vendored under audio/sam/ with
+ * those two symbols renamed, and SamPcm wraps it as a pull-style source so speech feeds
+ * through exactly the same path as a melody.
  *
  * The other difference that matters: playback is asynchronous. Samples are generated on
  * demand by RtttlPcm and pushed into the I2S DMA ring by a small per-playback feeder
@@ -56,6 +60,12 @@ class AudioThread : public concurrency::OSThread
 
     /// Play a system melody directly, without going via RTTTL.
     void beginTones(const ToneDuration *tones, size_t count);
+
+#ifdef MESHTASTIC_ENABLE_TTS
+    /// Speak `text` with SAM. Returns immediately; the utterance is rendered on its own
+    /// task and fed to the DMA through the same feeder path as a melody.
+    void readAloud(const char *text);
+#endif
 
     /// True while anything is still playing or draining. Also services the DMA, so it is
     /// safe - and useful - for callers to poll it.
@@ -134,10 +144,18 @@ class AudioThread : public concurrency::OSThread
     /// Hold on until the queued audio has physically played out.
     void beginDrain();
     void ampEnable(bool on);
+    /// Pull frames from whichever source is armed - melody or speech.
+    size_t generateFrames(int16_t *out, size_t maxFrames);
 
     std::unique_ptr<MeshtasticI2SOut> sink;
 
     RtttlPcm generator;
+
+#ifdef MESHTASTIC_ENABLE_TTS
+    SamPcm speech;
+    /// Which source generateFrames() pulls from. Set by readAloud(), cleared on teardown.
+    bool usingSpeech = false;
+#endif
 
     // Frames generated but not yet accepted by the DMA. generate() is destructive, so a
     // short write has to be carried across pump() calls rather than regenerated.

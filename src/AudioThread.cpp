@@ -6,6 +6,10 @@
 #include "sleep.h"
 #include <cstring>
 
+#ifdef MESHTASTIC_ENABLE_TTS
+#include "audio/sam/ESP8266SAM.h"
+#endif
+
 // A board with an I2S amplifier opts in by defining AUDIO_AMP_ENABLE(on) in its
 // variant.h to power the amp on/off around playback (e.g. an enable pin on an I/O
 // expander). The includes below expose the expander instances (io / mcpIoExpander) those
@@ -131,7 +135,7 @@ void AudioThread::feederLoop()
             }
 
             stagedOffset = 0;
-            stagedFrames = generator.generate(staging, kStagingFrames);
+            stagedFrames = generateFrames(staging, kStagingFrames);
             if (!stagedFrames) {
                 done = true; // melody complete; runOnce()/isPlaying() will start the drain
                 break;
@@ -185,6 +189,15 @@ bool AudioThread::joinFeeder()
     return true;
 }
 
+size_t AudioThread::generateFrames(int16_t *out, size_t maxFrames)
+{
+#ifdef MESHTASTIC_ENABLE_TTS
+    if (usingSpeech)
+        return speech.generate(out, maxFrames);
+#endif
+    return generator.generate(out, maxFrames);
+}
+
 void AudioThread::preloadRing()
 {
     stagedFrames = 0;
@@ -215,7 +228,7 @@ void AudioThread::preloadRing()
         }
 
         stagedOffset = 0;
-        stagedFrames = generator.generate(staging, kStagingFrames);
+        stagedFrames = generateFrames(staging, kStagingFrames);
         if (!stagedFrames)
             return; // whole melody preloaded; the first pump() will begin the drain
     }
@@ -268,7 +281,7 @@ void AudioThread::pump()
         }
 
         stagedOffset = 0;
-        stagedFrames = generator.generate(staging, kStagingFrames);
+        stagedFrames = generateFrames(staging, kStagingFrames);
         if (!stagedFrames) {
             beginDrain();
             return;
@@ -285,6 +298,11 @@ void AudioThread::beginRttl(const void *data, uint32_t len)
     // read while playback is live.
     stopPlayback();
 
+#ifdef MESHTASTIC_ENABLE_TTS
+    speech.reset();
+    usingSpeech = false;
+#endif
+
     if (!generator.begin((const char *)data, len)) {
         LOG_WARN("Audio: ignoring malformed RTTTL");
         return;
@@ -298,6 +316,11 @@ void AudioThread::beginTones(const ToneDuration *tones, size_t count)
         return;
 
     stopPlayback(); // as in beginRttl: no generator re-arm under a live feeder
+
+#ifdef MESHTASTIC_ENABLE_TTS
+    speech.reset();
+    usingSpeech = false;
+#endif
 
     if (!generator.beginTones(tones, count))
         return;
@@ -323,8 +346,12 @@ bool AudioThread::isPlaying()
 
 void AudioThread::stop()
 {
-    stopPlayback(); // joins the feeder; reset the generator only after that
+    stopPlayback(); // joins the feeder; reset the sources only after that
     generator.reset();
+#ifdef MESHTASTIC_ENABLE_TTS
+    speech.reset();
+    usingSpeech = false;
+#endif
 }
 
 int32_t AudioThread::runOnce()
@@ -360,5 +387,23 @@ int32_t AudioThread::runOnce()
         return kIdleIntervalMs;
     }
 }
+
+#ifdef MESHTASTIC_ENABLE_TTS
+void AudioThread::readAloud(const char *text)
+{
+    if (!text || !text[0])
+        return;
+
+    stopPlayback(); // speech replaces whatever is playing
+
+    generator.reset();
+    if (!speech.begin(text))
+        return;
+    usingSpeech = true;
+
+    if (!startPlayback())
+        usingSpeech = false;
+}
+#endif // MESHTASTIC_ENABLE_TTS
 
 #endif // HAS_I2S
