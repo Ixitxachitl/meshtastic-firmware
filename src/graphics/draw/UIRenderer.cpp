@@ -2123,9 +2123,17 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
     // tick() zeroes it when a transition completes - so reading it directly highlighted a stale
     // icon (usually the first) for the whole of a backwards transition, then snapped to the right
     // one at the end. frameIndexFor() derives the incoming frame properly in both directions.
-    uint8_t frameToHighlight = frameIndexFor(state, screen->frameCount);
-    if (frameToHighlight >= screen->indicatorIcons.size())
-        frameToHighlight = state->currentFrame;
+    // Wrap on the icon count, not the frame count. frameIndexFor() only consults the count it is
+    // given when a backwards transition wraps off frame 0, so if the two ever disagree the
+    // wrap landed past the end of indicatorIcons - and the guard below then fell back to
+    // currentFrame, which mid-transition is the frame being left rather than the one arriving.
+    // That showed as the footer sitting one icon behind for the length of a rightward swipe
+    // before snapping to the right one, and only ever rightward, since forward transitions read
+    // transitionFrameTarget and never wrap through here.
+    const size_t iconCount = screen->indicatorIcons.size();
+    uint8_t frameToHighlight = frameIndexFor(state, iconCount);
+    if (iconCount && frameToHighlight >= iconCount)
+        frameToHighlight %= iconCount; // wrap into range rather than show the outgoing frame
 
     // Detect frame change and record time
     if (frameToHighlight != lastFrameIndex) {
@@ -2143,7 +2151,7 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
     const int bigOffset = (currentResolution == ScreenResolution::High) ? 1 : 0;
     const bool compactPanel = graphics::isCompactPanel(display);
 
-    const size_t totalIcons = screen->indicatorIcons.size();
+    const size_t totalIcons = iconCount;
     if (totalIcons == 0)
         return;
 
