@@ -1381,6 +1381,9 @@ static bool screenDragOwnsFramerate()
     // a module sees input before the screen does, so that one cannot live here with the rest.
     if (isEmoteScrollFingerSteering())
         return true;
+    // Same for the on-screen keyboard's horizontal pan, which is driven from the same module.
+    if (isKeyboardPanFingerSteering())
+        return true;
     return false;
 }
 #endif // BASEUI_HAS_TOUCH_DRAG

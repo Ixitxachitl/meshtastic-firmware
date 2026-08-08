@@ -63,6 +63,17 @@ extern MessageStore messageStore;
 // Expressed as percentages rather than pixels so a variant states the intent once, whatever its
 // resolution. Kept apart from BASEUI_BODY_LR_MARGIN: that insets text, this insets touch targets,
 // and a device can want very different amounts of each.
+// How wide the key grid is drawn, as a percentage of the space between the side insets. Above
+// 100 the keyboard is wider than the screen and pans horizontally with a finger drag, which buys
+// bigger keys on a small touchscreen. 100 keeps every existing board exactly as it was.
+#ifndef BASEUI_KEYBOARD_ZOOM_PCT
+#define BASEUI_KEYBOARD_ZOOM_PCT 100
+#endif
+// Key row height as a percentage of what the available space would otherwise give. Above 100 the
+// block grows upward from the bottom inset, taking room from the draft above it.
+#ifndef BASEUI_KEYBOARD_KEY_HEIGHT_PCT
+#define BASEUI_KEYBOARD_KEY_HEIGHT_PCT 100
+#endif
 #ifndef BASEUI_KEYBOARD_LR_MARGIN_PCT
 #define BASEUI_KEYBOARD_LR_MARGIN_PCT 0
 #endif
@@ -503,6 +514,11 @@ static void drawWrappedEmoteText(OLEDDisplay *display, int x, int y, const char 
  * Routes keyboard/button/touch input to the correct handler based on the current runState.
  * Only one handler (per state) processes each event, eliminating redundancy.
  */
+#if BASEUI_HAS_TOUCH_DRAG
+static bool keyboardPanDragUpdate(const InputEvent *event, CannedMessageModule *module);
+static bool keyboardPanDragEnd();
+#endif
+
 int CannedMessageModule::handleInputEvent(const InputEvent *event)
 {
     // Block ALL input if an alert banner is active
@@ -587,6 +603,12 @@ void CannedMessageModule::updateState(cannedMessageModuleRunState newState, bool
     // scrolled to; out of range is the signal for the next draw to recentre on the selection.
     if (newState == CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER && runState != CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER)
         emoteScrollOffset = -1;
+
+    // Shift is a property of the on-screen keyboard, so it must not outlive the composer.
+    // Leaving by anything other than the ESC key used to leave it latched, and it was then
+    // still latched - and still inverted - on the next visit.
+    if (newState != CANNED_MESSAGE_RUN_STATE_FREETEXT && runState == CANNED_MESSAGE_RUN_STATE_FREETEXT)
+        shift = false;
 
     runState = newState;
     if (runState == CANNED_MESSAGE_RUN_STATE_FREETEXT) {
@@ -942,8 +964,12 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
 #endif
 
 #if defined(USE_VIRTUAL_KEYBOARD)
-    // Cancel (dismiss freetext screen)
-    if (event->inputEvent == INPUT_BROKER_LEFT) {
+    // Cancel (dismiss freetext screen). A swipe classified by the touch layer arrives as
+    // INPUT_BROKER_LEFT too, so on a board whose keyboard pans horizontally that gesture would
+    // close the composer instead of sliding the keys. Only a physical left key cancels there;
+    // the touch route out is the ESC key, which is on the keyboard itself.
+    if (event->inputEvent == INPUT_BROKER_LEFT &&
+        !(BASEUI_KEYBOARD_ZOOM_PCT > 100 && event->source && strcmp(event->source, "touchscreen1") == 0)) {
         updateState(CANNED_MESSAGE_RUN_STATE_INACTIVE);
         freetext = "";
         cursor = 0;
@@ -957,9 +983,36 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
         screen->forceDisplay();
         return true;
     }
+#if BASEUI_HAS_TOUCH_DRAG
+    // Drag reports are swallowed whole while the composer is open, not just once the pan has
+    // committed to an axis. Screen's finger-tracked frame transition anchors on the same first
+    // report and locks its axis at the same 10px, so leaving the early reports to fall through
+    // let it start paging out from under the keyboard - and once this handler did claim the
+    // gesture, that half-run transition was left stranded mid-slide. Claiming from the first
+    // report means no frame transition can begin behind the keyboard at all.
+    //
+    // Panning itself still only happens on a horizontal gesture, and only when the grid is
+    // actually wider than the screen; a vertical drag is simply consumed and ignored.
+    if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG) {
+        if (keyboardPanDragUpdate(event, this))
+            // runNow() rather than forceDisplay(): the pan needs the transition framerate held
+            // for the whole gesture, not a single redraw per report. screenDragOwnsFramerate()
+            // keeps Screen from demoting it again while the finger is still steering.
+            screen->runNow();
+        return true;
+    }
+    if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG_END) {
+        keyboardPanDragEnd();
+        return true;
+    }
+#endif
+
     // Touch input (virtual keyboard) handling
     // Only handle if touch coordinates present (CardKB won't set these)
     if (event->touchX != 0 || event->touchY != 0) {
+        // A pan that ends over a key would otherwise be taken as a tap on it.
+        if (isKeyboardPanFingerSteering())
+            return true;
         String keyTapped = keyForCoordinates(event->touchX, event->touchY);
         bool valid = false;
 
@@ -1197,6 +1250,90 @@ void CannedMessageModule::scrollEmotesByFingerDelta(float dyPx)
     // Screen y grows downward, so dragging down (dyPx > 0) walks back towards the first row
     const float next = emoteScrollOffset - dyPx / emoteCellSize;
     emoteScrollOffset = std::min(std::max(next, 0.0f), maxScrollOffset);
+}
+
+void CannedMessageModule::panKeyboardByFingerDelta(float dxPx)
+{
+    if (dxPx == 0.0f || keyboardMinPanX >= 0)
+        return; // not zoomed: there is nothing off-screen to pan to
+
+    const float next = keyboardPanX + dxPx;
+    keyboardPanX = std::min(std::max(next, (float)keyboardMinPanX), 0.0f);
+}
+
+#if BASEUI_HAS_TOUCH_DRAG
+// ---- Finger-tracked keyboard panning -----------------------------------------------------------
+//
+// Same driver as the emote grid below, mirrored: the keyboard is wider than the screen rather than
+// taller, so this one claims the horizontal half. Only active when the grid is actually zoomed -
+// otherwise a horizontal drag still belongs to the frame transition, as it does everywhere else.
+static bool kbDragAnchorValid = false;
+static uint16_t kbDragAnchorX = 0;
+static uint16_t kbDragAnchorY = 0;
+static uint16_t kbDragLastX = 0;
+static uint32_t kbDragLastMs = 0;
+static int8_t kbDragAxis = 0; // 0 undecided, 1 horizontal (ours), -1 vertical (not ours)
+
+#define KB_DRAG_AXIS_LOCK_PX 10
+#define KB_DRAG_ANCHOR_STALE_MS 1000
+
+static bool keyboardPanDragUpdate(const InputEvent *event, CannedMessageModule *module)
+{
+    const uint32_t now = millis();
+    if (!kbDragAnchorValid || (now - kbDragLastMs) > KB_DRAG_ANCHOR_STALE_MS) {
+        kbDragAnchorValid = true;
+        kbDragAnchorX = event->touchX;
+        kbDragAnchorY = event->touchY;
+        kbDragLastX = event->touchX;
+        kbDragLastMs = now;
+        kbDragAxis = 0;
+        return false; // this report only establishes where the finger started
+    }
+    kbDragLastMs = now;
+
+    if (kbDragAxis == 0) {
+        const int32_t dx = (int32_t)event->touchX - (int32_t)kbDragAnchorX;
+        const int32_t dy = (int32_t)event->touchY - (int32_t)kbDragAnchorY;
+        if (abs(dx) < KB_DRAG_AXIS_LOCK_PX && abs(dy) < KB_DRAG_AXIS_LOCK_PX)
+            return false; // too early to tell which way this gesture is going
+        kbDragAxis = (abs(dx) > abs(dy)) ? 1 : -1;
+    }
+    if (kbDragAxis < 0)
+        return false; // vertical: not ours
+
+    const float dx = (float)((int32_t)event->touchX - (int32_t)kbDragLastX);
+    kbDragLastX = event->touchX;
+    module->panKeyboardByFingerDelta(dx);
+    return true;
+}
+
+// When the gesture that just ended was a pan. The touch layer still classifies a tap on release,
+// so without a window here letting go over a key typed it.
+static uint32_t kbPanEndedMs = 0;
+#define KB_PAN_TAP_SUPPRESS_MS 400
+
+static bool keyboardPanDragEnd()
+{
+    const bool claimed = kbDragAnchorValid && kbDragAxis > 0;
+    if (claimed)
+        kbPanEndedMs = millis();
+    kbDragAnchorValid = false;
+    kbDragAxis = 0;
+    return claimed;
+}
+#endif // BASEUI_HAS_TOUCH_DRAG
+
+bool isKeyboardPanFingerSteering()
+{
+#if BASEUI_HAS_TOUCH_DRAG
+    // Includes a short tail after the finger lifts: keyboardPanDragEnd() clears the anchor
+    // immediately, but the tap the touch layer classifies on release arrives after that.
+    if (kbPanEndedMs && (millis() - kbPanEndedMs) <= KB_PAN_TAP_SUPPRESS_MS)
+        return true;
+    return kbDragAnchorValid && (millis() - kbDragLastMs) <= KB_DRAG_ANCHOR_STALE_MS;
+#else
+    return false;
+#endif
 }
 
 #if BASEUI_HAS_TOUCH_DRAG
@@ -1899,7 +2036,17 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
     const int screenWidth = display->getWidth();
     const int screenHeight = display->getHeight();
     const int sideInset = screenWidth * BASEUI_KEYBOARD_LR_MARGIN_PCT / 100;
-    const int keyAreaWidth = screenWidth - sideInset * 2;
+    const int visibleKeyAreaWidth = screenWidth - sideInset * 2;
+    const int keyAreaWidth = visibleKeyAreaWidth * BASEUI_KEYBOARD_ZOOM_PCT / 100;
+
+    // Publish the pan limit for the drag handler, and keep the current offset legal - the layout
+    // can change underneath it (rotation, a variant tweak) while a pan is held.
+    this->keyboardMinPanX = std::min(0, visibleKeyAreaWidth - keyAreaWidth);
+    if (this->keyboardPanX < (float)this->keyboardMinPanX)
+        this->keyboardPanX = (float)this->keyboardMinPanX;
+    if (this->keyboardPanX > 0.0f)
+        this->keyboardPanX = 0.0f;
+    const int panX = (int)lroundf(this->keyboardPanX);
     const int keyAreaBottom = screenHeight - screenHeight * BASEUI_KEYBOARD_BOTTOM_MARGIN_PCT / 100;
 
     int keyFontHeight;
@@ -1917,7 +2064,10 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
     // Rows are sized to the space between the halfway mark and the bottom inset, then the block is
     // anchored to that inset rather than grown downwards - so the padding is what the user sees, and
     // any height the clamp leaves over goes to the draft above instead of a gap underneath.
-    const int cellHeight = std::min(45, std::max(20, (keyAreaBottom - screenHeight / 2 - 4) / outerSize));
+    const int baseCellHeight = std::min(45, std::max(20, (keyAreaBottom - screenHeight / 2 - 4) / outerSize));
+    // Clamp so a tall setting cannot push the rows up over the draft and header.
+    const int maxCellHeight = std::max(20, (keyAreaBottom - FONT_HEIGHT_SMALL * 3) / outerSize);
+    const int cellHeight = std::min(maxCellHeight, baseCellHeight * BASEUI_KEYBOARD_KEY_HEIGHT_PCT / 100);
     int yOffset = y + keyAreaBottom - cellHeight * outerSize;
     const int buttonPadding = 1;
     const int buttonRadius = 7;
@@ -1976,13 +2126,13 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
                     cellWidth = remaining - spaceWidth;
                     break;
                 }
-                xOffset += x + sideInset;
+                xOffset += x + sideInset + panX;
             } else {
                 // Distribute from the running total rather than a fixed width, so rounding never
                 // leaves a gap at the right edge
                 const int startX = (innerIndex * keyAreaWidth) / innerSize;
                 const int endX = ((innerIndex + 1) * keyAreaWidth) / innerSize;
-                xOffset = x + sideInset + startX;
+                xOffset = x + sideInset + startX + panX;
                 cellWidth = endX - startX;
             }
 
@@ -2003,12 +2153,19 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
 
             // Shift latches, so it stays inverted; every other key inverts only for the frame after
             // it was tapped, as feedback
+            const bool isShiftKey = (letter.character == "⇧");
             const bool inverted =
-                (letter.character == "⇧") ? this->shift : (this->highlight.length() > 0 && this->highlight == letter.character);
+                isShiftKey ? this->shift : (this->highlight.length() > 0 && this->highlight == letter.character);
             if (inverted) {
                 fillRoundedRect(display, capX, capY, capW, capH, buttonRadius);
                 display->setColor(OLEDDISPLAY_COLOR::BLACK);
-                setIntervalFromNow(0); // redraw promptly so the flash is brief
+                // Only for the transient tap flash, which clears itself at the end of this
+                // function. Shift's inversion latches, so asking for an immediate redraw here
+                // re-armed a zero interval on every frame for as long as shift was on - the
+                // module then span runOnce(), regenerating the frameset continuously, and the
+                // UI stopped responding to touches.
+                if (!isShiftKey)
+                    setIntervalFromNow(0);
             } else {
                 drawRoundedRect(display, capX, capY, capW, capH, buttonRadius);
             }
@@ -2268,6 +2425,13 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
 #ifndef EMOTE_MIN_TOUCH_CELL_PX
 #define EMOTE_MIN_TOUCH_CELL_PX 44
 #endif
+// Cells are sized from maxEmoteHeight(), which already multiplies by BASEUI_ICON_SCALE, but the
+// artwork is drawn at emoteScale alone - so on a variant with an icon scale above 1 the glyph
+// only fills that fraction of its cell. Variants can boost the drawn scale to take up the space
+// without changing the grid. 1 leaves every existing board exactly as it was.
+#ifndef EMOTE_PICKER_SCALE_BOOST
+#define EMOTE_PICKER_SCALE_BOOST 1
+#endif
 #ifndef EMOTE_MAX_TOUCH_SCALE
 #define EMOTE_MAX_TOUCH_SCALE 4
 #endif
@@ -2312,6 +2476,8 @@ void CannedMessageModule::drawEmotePickerScreen(OLEDDisplay *display, OLEDDispla
         emoteScale++;
 #endif
     const int cellSize = emoteSize * emoteScale + cellPadding * 2;
+    // Grid geometry stays on emoteScale; only the artwork is boosted.
+    const int drawScale = emoteScale * EMOTE_PICKER_SCALE_BOOST;
 
     const int headerY = y + BASEUI_HEADER_MARGIN;
     const int gridX = x + BASEUI_BODY_LR_MARGIN;
@@ -2366,9 +2532,9 @@ void CannedMessageModule::drawEmotePickerScreen(OLEDDisplay *display, OLEDDispla
                 display->setColor(BLACK);
             }
 
-            drawClippedScaledXbm(display, cellX + (cellSize - emote.width * emoteScale) / 2,
-                                 cellY + (cellSize - emote.height * emoteScale) / 2, emote.width, emote.height, emote.bitmap,
-                                 emoteScale, gridTop, gridBottom);
+            drawClippedScaledXbm(display, cellX + (cellSize - emote.width * drawScale) / 2,
+                                 cellY + (cellSize - emote.height * drawScale) / 2, emote.width, emote.height, emote.bitmap,
+                                 drawScale, gridTop, gridBottom);
 
             if (idx == emotePickerIndex)
                 display->setColor(WHITE);

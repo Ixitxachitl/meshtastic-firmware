@@ -51,6 +51,14 @@
 #define BASEUI_FIXED_COMPASS_SIZE 1
 #define BASEUI_SPLASH_CORNER_INSET_PCT 25
 #define BASEUI_ICON_SCALE 2
+// Emote picker cells are sized with BASEUI_ICON_SCALE already applied, so at scale 2 the
+// artwork filled only half its cell. Draw it twice as large to fill the space.
+#define EMOTE_PICKER_SCALE_BOOST 2
+// Draw the on-screen keyboard twice as wide as the screen so the keys are big enough to hit on
+// this panel, and pan it left/right with a finger to reach the rest.
+#define BASEUI_KEYBOARD_ZOOM_PCT 200
+// ...and half again as tall, which this panel has the vertical room for.
+#define BASEUI_KEYBOARD_KEY_HEIGHT_PCT 150
 // The virtual keyboard is the only screen that puts touch targets hard against the panel edges. The
 // strap crowds the bottom of a watch, so the key block is lifted clear of it; the sides need only a
 // hair, since fourteen columns are already narrow and the panel does not round away far enough
