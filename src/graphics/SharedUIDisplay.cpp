@@ -138,6 +138,27 @@ void drawStretchedXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int
     }
 }
 
+void drawStretchedXbmClipped(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm, int16_t destW,
+                             int16_t destH, int16_t clipLeft, int16_t clipRight)
+{
+    if (w <= 0 || h <= 0 || destW <= 0 || destH <= 0)
+        return;
+
+    const int16_t bytesPerRow = (w + 7) / 8;
+    for (int16_t dy = 0; dy < destH; ++dy) {
+        const uint8_t *rowPtr = xbm + (dy * h / destH) * bytesPerRow;
+        for (int16_t dx = 0; dx < destW; ++dx) {
+            const int16_t px = x + dx;
+            if (px < clipLeft || px >= clipRight)
+                continue; // horizontal clip, so a glyph can slide past the edge a column at a time
+            const int16_t sx = dx * w / destW;
+            if (pgm_read_byte(rowPtr + (sx >> 3)) & (1U << (sx & 7))) { // XBM is LSB-first
+                display->setPixel(px, y + dy);
+            }
+        }
+    }
+}
+
 // *************************
 // * Common Header Drawing *
 // *************************

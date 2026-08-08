@@ -39,6 +39,9 @@
 #define BASEUI_BODY_LR_MARGIN 35
 #define BASEUI_BODY_TOP_MARGIN 8
 #define BASEUI_NAV_ICONS_PER_PAGE 5
+// Swipe navigation: keep the current frame lit in the middle slot and rotate the rest
+// past it, rather than paging. Paging made the highlight look wrong mid-swipe.
+#define BASEUI_NAV_INFINITE_SCROLL 1
 #define BASEUI_NAV_ICON_SIZE_PCT 75
 #define BASEUI_NODE_LIST_ROW_ADJUST -1
 // Messages sit against their sender's edge - incoming left, outgoing right - rather than centred,
