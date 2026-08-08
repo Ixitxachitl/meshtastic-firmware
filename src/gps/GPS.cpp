@@ -807,54 +807,139 @@ bool GPS::verifyCachedProbePresence()
  *  to known GPS responses.
  * @retval Whether setup reached the end of its potential to configure the GPS.
  */
+// The M10 configuration is a run of VALSET writes that each need settling time before the next -
+// several of them restart the receiver, so the gaps are load-bearing rather than politeness. Sent
+// back to back with delay() in between it came to ~10s inside a single cooperative-scheduler tick,
+// which starved every other thread for the whole of boot: the screen managed one frame in twenty
+// seconds, so the boot logo sat frozen while its wall-clock timers ran out underneath it. Same
+// commands and the same spacing, but one per call, with the waiting handed back to the scheduler.
+namespace
+{
+struct M10ConfigStep {
+    const uint8_t *payload;
+    uint8_t len;
+    const char *what;
+    uint16_t ackTimeoutMs;
+    bool flushFirst; // drain any pending NMEA before writing, as the original did for these
+};
+} // namespace
+
+bool GPS::configureUblox10Staged()
+{
+    // Settling time between commands, and the longer pause the module wants after power-up before
+    // it will accept the first VALSET.
+    static constexpr int32_t M10_SETTLE_MS = 750;
+    static constexpr int32_t M10_WARMUP_MS = 1000;
+
+    static const M10ConfigStep steps[] = {
+        {_message_VALSET_DISABLE_NMEA_RAM, sizeof(_message_VALSET_DISABLE_NMEA_RAM), "disable NMEA messages in M10 RAM", 300,
+         true},
+        {_message_VALSET_DISABLE_NMEA_BBR, sizeof(_message_VALSET_DISABLE_NMEA_BBR), "disable NMEA messages in M10 BBR", 300,
+         true},
+        {_message_VALSET_DISABLE_TXT_INFO_RAM, sizeof(_message_VALSET_DISABLE_TXT_INFO_RAM),
+         "disable Info messages for M10 GPS RAM", 300, true},
+        {_message_VALSET_DISABLE_TXT_INFO_BBR, sizeof(_message_VALSET_DISABLE_TXT_INFO_BBR),
+         "disable Info messages for M10 GPS BBR", 300, true},
+        {_message_VALSET_PM_RAM, sizeof(_message_VALSET_PM_RAM), "enable powersave for M10 GPS RAM", 300, false},
+        {_message_VALSET_PM_BBR, sizeof(_message_VALSET_PM_BBR), "enable powersave for M10 GPS BBR", 300, false},
+        {_message_VALSET_ITFM_RAM, sizeof(_message_VALSET_ITFM_RAM), "enable jam detection M10 GPS RAM", 300, false},
+        {_message_VALSET_ITFM_BBR, sizeof(_message_VALSET_ITFM_BBR), "enable jam detection M10 GPS BBR", 300, false},
+        // These two restart the receiver
+        {_message_VALSET_DISABLE_SBAS_RAM, sizeof(_message_VALSET_DISABLE_SBAS_RAM), "disable SBAS M10 GPS RAM", 300, false},
+        {_message_VALSET_DISABLE_SBAS_BBR, sizeof(_message_VALSET_DISABLE_SBAS_BBR), "disable SBAS M10 GPS BBR", 300, false},
+        // Enable the NMEA messages we want in BBR first so they survive a periodic sleep, then RAM
+        {_message_VALSET_ENABLE_NMEA_BBR, sizeof(_message_VALSET_ENABLE_NMEA_BBR), "enable messages for M10 GPS BBR", 300, false},
+        {_message_VALSET_ENABLE_NMEA_RAM, sizeof(_message_VALSET_ENABLE_NMEA_RAM), "enable messages for M10 GPS RAM", 500, false},
+    };
+
+    // Step 0 is the warm-up pause only; steps 1..N send steps[step - 1].
+    if (m10ConfigStep == 0) {
+        m10ConfigStep = 1;
+        setupResumeMs = M10_WARMUP_MS;
+        return false;
+    }
+
+    const uint8_t index = m10ConfigStep - 1;
+    if (index < array_count(steps)) {
+        const M10ConfigStep &step = steps[index];
+        if (step.flushFirst)
+            clearBuffer();
+        uint8_t msglen = makeUBXPacket(0x06, 0x8A, step.len, step.payload);
+        _serial_gps->write(UBXscratch, msglen);
+        if (getACK(0x06, 0x8A, step.ackTimeoutMs) != GNSS_RESPONSE_OK)
+            LOG_WARN(failMessage, step.what);
+        m10ConfigStep++;
+        setupResumeMs = M10_SETTLE_MS;
+        return false;
+    }
+
+    // As the M10 has no flash, the best we can do to preserve the config is to set it in RAM and
+    // BBR. BBR will survive a restart, and power off for a while, but modules with small backup
+    // batteries or super caps will not retain the config for a long power off time.
+    uint8_t msglen = makeUBXPacket(0x06, 0x09, sizeof(_message_SAVE_10), _message_SAVE_10);
+    _serial_gps->write(UBXscratch, msglen);
+    if (getACK(0x06, 0x09, 2000) != GNSS_RESPONSE_OK) {
+        LOG_WARN("Unable to save GNSS module config");
+    } else {
+        LOG_INFO("GNSS module configuration saved!");
+    }
+    return true;
+}
+
 bool GPS::setup()
 {
     if (!didSerialInit) {
         int msglen = 0;
-        if (tx_gpio && gnssModel == GNSS_MODEL_UNKNOWN) {
-            if (!hasProbeCache && !triedProbeCache) {
-                (void)loadProbeCache();
-            }
-
-            if (hasProbeCache && !triedProbeCache) {
-                triedProbeCache = true;
-                if (!verifyCachedProbePresence()) {
-                    currentStep = 0;
-                    speedSelect = 0;
-                    probeTries = 0;
+        // The staged M10 sequence re-enters setup() once per command. Everything down to the end
+        // of the probe is one-shot - setConnected() and saveProbeCache() in particular, the latter
+        // writing to flash - so skip it on those resume passes and fall straight to the model
+        // branch below. m10ConfigStep is only ever non-zero once that sequence is under way.
+        if (m10ConfigStep == 0) {
+            if (tx_gpio && gnssModel == GNSS_MODEL_UNKNOWN) {
+                if (!hasProbeCache && !triedProbeCache) {
+                    (void)loadProbeCache();
                 }
-            }
 
-            if (gnssModel == GNSS_MODEL_UNKNOWN && probeTries < GPS_PROBETRIES) {
-                // No usable cache: walk common baud rates first.
-                gnssModel = probe(serialSpeeds[speedSelect]);
-                if (gnssModel != GNSS_MODEL_UNKNOWN) {
-                    detectedBaud = serialSpeeds[speedSelect];
-                } else if (currentStep == 0 && ++speedSelect == array_count(serialSpeeds)) {
-                    speedSelect = 0;
-                    ++probeTries;
+                if (hasProbeCache && !triedProbeCache) {
+                    triedProbeCache = true;
+                    if (!verifyCachedProbePresence()) {
+                        currentStep = 0;
+                        speedSelect = 0;
+                        probeTries = 0;
+                    }
                 }
-            }
-            // Rare Serial Speeds
+
+                if (gnssModel == GNSS_MODEL_UNKNOWN && probeTries < GPS_PROBETRIES) {
+                    // No usable cache: walk common baud rates first.
+                    gnssModel = probe(serialSpeeds[speedSelect]);
+                    if (gnssModel != GNSS_MODEL_UNKNOWN) {
+                        detectedBaud = serialSpeeds[speedSelect];
+                    } else if (currentStep == 0 && ++speedSelect == array_count(serialSpeeds)) {
+                        speedSelect = 0;
+                        ++probeTries;
+                    }
+                }
+                // Rare Serial Speeds
 #ifndef CONFIG_IDF_TARGET_ESP32C6
-            else if (gnssModel == GNSS_MODEL_UNKNOWN && probeTries == GPS_PROBETRIES) {
-                // Then try less common baud rates before giving up.
-                gnssModel = probe(rareSerialSpeeds[speedSelect]);
-                if (gnssModel != GNSS_MODEL_UNKNOWN) {
-                    detectedBaud = rareSerialSpeeds[speedSelect];
-                } else if (currentStep == 0 && ++speedSelect == array_count(rareSerialSpeeds)) {
-                    LOG_WARN("Give up on GPS probe and set to %d", GPS_BAUDRATE);
-                    return true;
+                else if (gnssModel == GNSS_MODEL_UNKNOWN && probeTries == GPS_PROBETRIES) {
+                    // Then try less common baud rates before giving up.
+                    gnssModel = probe(rareSerialSpeeds[speedSelect]);
+                    if (gnssModel != GNSS_MODEL_UNKNOWN) {
+                        detectedBaud = rareSerialSpeeds[speedSelect];
+                    } else if (currentStep == 0 && ++speedSelect == array_count(rareSerialSpeeds)) {
+                        LOG_WARN("Give up on GPS probe and set to %d", GPS_BAUDRATE);
+                        return true;
+                    }
                 }
-            }
 #endif
-        }
+            }
 
-        if (gnssModel != GNSS_MODEL_UNKNOWN) {
-            setConnected();
-            (void)saveProbeCache();
-        } else {
-            return false;
+            if (gnssModel != GNSS_MODEL_UNKNOWN) {
+                setConnected();
+                (void)saveProbeCache();
+            } else {
+                return false;
+            }
         }
 
         if (gnssModel == GNSS_MODEL_MTK) {
@@ -1083,53 +1168,10 @@ bool GPS::setup()
                 LOG_INFO("GNSS module configuration saved!");
             }
         } else if (gnssModel == GNSS_MODEL_UBLOX10) {
-            delay(1000);
-            clearBuffer();
-            SEND_UBX_PACKET(0x06, 0x8A, _message_VALSET_DISABLE_NMEA_RAM, "disable NMEA messages in M10 RAM", 300);
-            delay(750);
-            clearBuffer();
-            SEND_UBX_PACKET(0x06, 0x8A, _message_VALSET_DISABLE_NMEA_BBR, "disable NMEA messages in M10 BBR", 300);
-            delay(750);
-            clearBuffer();
-            SEND_UBX_PACKET(0x06, 0x8A, _message_VALSET_DISABLE_TXT_INFO_RAM, "disable Info messages for M10 GPS RAM", 300);
-            delay(750);
-            // Next disable Info txt messages in BBR layer
-            clearBuffer();
-            SEND_UBX_PACKET(0x06, 0x8A, _message_VALSET_DISABLE_TXT_INFO_BBR, "disable Info messages for M10 GPS BBR", 300);
-            delay(750);
-            // Do M10 configuration for Power Management.
-            SEND_UBX_PACKET(0x06, 0x8A, _message_VALSET_PM_RAM, "enable powersave for M10 GPS RAM", 300);
-            delay(750);
-            SEND_UBX_PACKET(0x06, 0x8A, _message_VALSET_PM_BBR, "enable powersave for M10 GPS BBR", 300);
-            delay(750);
-            SEND_UBX_PACKET(0x06, 0x8A, _message_VALSET_ITFM_RAM, "enable jam detection M10 GPS RAM", 300);
-            delay(750);
-            SEND_UBX_PACKET(0x06, 0x8A, _message_VALSET_ITFM_BBR, "enable jam detection M10 GPS BBR", 300);
-            delay(750);
-            // Here is where the init commands should go to do further M10 initialization.
-            SEND_UBX_PACKET(0x06, 0x8A, _message_VALSET_DISABLE_SBAS_RAM, "disable SBAS M10 GPS RAM", 300);
-            delay(750); // will cause a receiver restart so wait a bit
-            SEND_UBX_PACKET(0x06, 0x8A, _message_VALSET_DISABLE_SBAS_BBR, "disable SBAS M10 GPS BBR", 300);
-            delay(750); // will cause a receiver restart so wait a bit
-
-            // Done with initialization, Now enable wanted NMEA messages in BBR layer so they will survive a periodic
-            // sleep.
-            SEND_UBX_PACKET(0x06, 0x8A, _message_VALSET_ENABLE_NMEA_BBR, "enable messages for M10 GPS BBR", 300);
-            delay(750);
-            // Next enable wanted NMEA messages in RAM layer
-            SEND_UBX_PACKET(0x06, 0x8A, _message_VALSET_ENABLE_NMEA_RAM, "enable messages for M10 GPS RAM", 500);
-            delay(750);
-
-            // As the M10 has no flash, the best we can do to preserve the config is to set it in RAM and BBR.
-            // BBR will survive a restart, and power off for a while, but modules with small backup
-            // batteries or super caps will not retain the config for a long power off time.
-            msglen = makeUBXPacket(0x06, 0x09, sizeof(_message_SAVE_10), _message_SAVE_10);
-            _serial_gps->write(UBXscratch, msglen);
-            if (getACK(0x06, 0x09, 2000) != GNSS_RESPONSE_OK) {
-                LOG_WARN("Unable to save GNSS module config");
-            } else {
-                LOG_INFO("GNSS module configuration saved!");
-            }
+            // One command per call, so the settling time between them is handed back to the
+            // scheduler instead of burned in delay(). Returns false until the sequence finishes.
+            if (!configureUblox10Staged())
+                return false;
         } else if (gnssModel == GNSS_MODEL_CM121) {
             // only ask for RMC and GGA
             // enable GGA
@@ -1476,8 +1518,16 @@ int32_t GPS::runOnce()
             LOG_INFO("GPS set to not-present. Skip probe");
             return disable();
         }
-        if (!setup())
+        if (!setup()) {
+            // A staged init step asks to be resumed after the module's settling time; only a real
+            // failure gets the flat two-second retry.
+            if (setupResumeMs >= 0) {
+                const int32_t resumeMs = setupResumeMs;
+                setupResumeMs = -1;
+                return resumeMs;
+            }
             return currentDelay; // Setup failed, re-run in two seconds
+        }
 
         if (gnssModel == GNSS_MODEL_UNKNOWN) {
             LOG_WARN("GPS not detected; marked not present for this boot");

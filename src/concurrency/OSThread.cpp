@@ -85,7 +85,19 @@ void OSThread::run()
     auto heap = memGet.getFreeHeap();
 #endif
     currentThread = this;
+#ifdef DEBUG_THREAD_HOGS
+    const uint32_t hogStartUs = micros();
+#endif
     auto newDelay = runOnce();
+#ifdef DEBUG_THREAD_HOGS
+    // This scheduler is cooperative: a thread that overstays its slot starves every other one,
+    // the screen included, and the symptom shows up far from the cause - frames stop moving while
+    // wall-clock timers keep running. Name anything that blocks for longer than the threshold (ms)
+    // so the culprit is in the log rather than inferred.
+    const uint32_t hogUs = micros() - hogStartUs;
+    if (hogUs >= (uint32_t)(DEBUG_THREAD_HOGS)*1000UL)
+        LOG_WARN("Thread %s blocked for %u ms", ThreadName.c_str(), (unsigned)(hogUs / 1000));
+#endif
 #ifdef DEBUG_HEAP
     auto newHeap = memGet.getFreeHeap();
     if (newHeap < heap)

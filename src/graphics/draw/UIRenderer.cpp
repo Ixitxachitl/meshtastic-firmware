@@ -2017,19 +2017,29 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
 
 #ifdef USERPREFS_OEM_TEXT
 
+// Artwork authored at the display's native size wants drawing 1:1, but BASEUI_ICON_SCALE is
+// sized for the small shared icons and would double it off the edge of the panel. Let a board
+// opt out by pinning its own scale; everyone else keeps the icon scale they had before.
+#ifndef USERPREFS_OEM_IMAGE_SCALE
+#define USERPREFS_OEM_IMAGE_SCALE BASEUI_ICON_SCALE
+#endif
+
 void UIRenderer::drawOEMIconScreen(const char *upperMsg, OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     static const uint8_t xbm[] = USERPREFS_OEM_IMAGE_DATA;
-    const int oemW = USERPREFS_OEM_IMAGE_WIDTH * BASEUI_ICON_SCALE;
-    const int oemH = USERPREFS_OEM_IMAGE_HEIGHT * BASEUI_ICON_SCALE;
-    if (currentResolution == ScreenResolution::High) {
-        drawScaledXbm(display, x + (SCREEN_WIDTH - oemW) / 2, y + (SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM - oemH) / 2 + 2,
-                      USERPREFS_OEM_IMAGE_WIDTH, USERPREFS_OEM_IMAGE_HEIGHT, xbm);
-    } else {
+    const int oemW = USERPREFS_OEM_IMAGE_WIDTH * USERPREFS_OEM_IMAGE_SCALE;
+    const int oemH = USERPREFS_OEM_IMAGE_HEIGHT * USERPREFS_OEM_IMAGE_SCALE;
+    const int oemX = x + (SCREEN_WIDTH - oemW) / 2;
+    const int oemY = (currentResolution == ScreenResolution::High) ? y + (SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM - oemH) / 2 + 2
+                                                                   : y + (SCREEN_HEIGHT - oemH) / 2 + 2;
+    drawScaledXbm(display, oemX, oemY, USERPREFS_OEM_IMAGE_WIDTH, USERPREFS_OEM_IMAGE_HEIGHT, xbm, USERPREFS_OEM_IMAGE_SCALE);
 
-        drawScaledXbm(display, x + (SCREEN_WIDTH - oemW) / 2, y + (SCREEN_HEIGHT - oemH) / 2 + 2, USERPREFS_OEM_IMAGE_WIDTH,
-                      USERPREFS_OEM_IMAGE_HEIGHT, xbm);
-    }
+#if GRAPHICS_TFT_COLORING_ENABLED
+    // Paint the artwork in Meshtastic green instead of the theme's default foreground. Only the
+    // set pixels are remapped - the OFF colour stays the theme's own body background, so the image
+    // does not stamp a differently coloured block onto the splash under the lighter themes.
+    registerTFTColorRegionDirect(oemX, oemY, oemW, oemH, TFTPalette::MeshtasticGreen, getThemeBodyBg());
+#endif
 
     switch (USERPREFS_OEM_FONT_SIZE) {
     case 0:
@@ -2046,23 +2056,33 @@ void UIRenderer::drawOEMIconScreen(const char *upperMsg, OLEDDisplay *display, O
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     const char *title = USERPREFS_OEM_TEXT;
     if (currentResolution == ScreenResolution::High) {
-        display->drawString(x + getStringCenteredX(title), y + SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM, title);
+        // Lifted off the bottom edge by the same proportion the corner text below is pulled in,
+        // so the rounded bottom of the panel does not clip it. Matches drawIconScreen().
+        const int titleY =
+            y + SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM - 5 - (SCREEN_HEIGHT / 2) * BASEUI_SPLASH_CORNER_INSET_PCT / 100;
+        display->drawString(x + getStringCenteredX(title), titleY, title);
     }
     display->setFont(FONT_SMALL);
 
+    // Corner text sits diagonally inside the panel on rounded screens, which would otherwise clip
+    // the ends of these strings against the corner arc. Same inset as the stock boot screen.
+    const int cornerInset = 5 + (SCREEN_WIDTH / 2) * BASEUI_SPLASH_CORNER_INSET_PCT / 100;
+    const int cornerTop = y + cornerInset;
+
     // Draw region in upper left
     if (upperMsg)
-        display->drawString(x + 0, y + 0, upperMsg);
+        display->drawString(x + cornerInset, cornerTop, upperMsg);
 
     // Draw version and shortname in upper right
     const char *version = xstr(APP_VERSION_SHORT);
-    int versionX = x + SCREEN_WIDTH - display->getStringWidth(version);
-    display->drawString(versionX, y + 0, version);
+    int versionX = x + SCREEN_WIDTH - display->getStringWidth(version) - cornerInset;
+    display->drawString(versionX, cornerTop, version);
     if (owner.short_name[0]) {
         const char *shortName = owner.short_name;
         int shortNameW = UIRenderer::measureStringWithEmotes(display, shortName);
-        int shortNameX = x + SCREEN_WIDTH - shortNameW;
-        UIRenderer::drawStringWithEmotes(display, shortNameX, y + FONT_HEIGHT_SMALL, shortName, FONT_HEIGHT_SMALL, 1, false);
+        int shortNameX = x + SCREEN_WIDTH - shortNameW - cornerInset;
+        UIRenderer::drawStringWithEmotes(display, shortNameX, cornerTop + FONT_HEIGHT_SMALL, shortName, FONT_HEIGHT_SMALL, 1,
+                                         false);
     }
     screen->forceDisplay();
 
