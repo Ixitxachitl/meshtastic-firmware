@@ -51,13 +51,13 @@ class menuHandler
         ThrottleMessage,
         MessageResponseMenu,
         MessageViewModeMenu,
+        MessageOrderMenu,
         ReplyMenu,
         DeleteMessagesMenu,
         NodeNameLengthMenu,
         FrameToggles,
         DisplayUnits,
         MessageBubblesMenu,
-        MessageOrderMenu,
         ThemeMenu,
         HamModeConfirm,
         LicensedToNormalConfirm,
@@ -123,9 +123,9 @@ class menuHandler
     static void frameTogglesMenu();
     static void displayUnitsMenu();
     static void messageBubblesMenu();
-    static void messageOrderMenu();
     static void themeMenu();
     static void textMessageMenu();
+    static void messageOrderMenu();
     static void hamModeConfirmMenu();
     static void licensedToNormalConfirmMenu();
 #if BASEUI_HAS_MAP
