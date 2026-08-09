@@ -895,7 +895,12 @@ void Panel_sdl::sdl_create(monitor_t *m)
         }
 #endif
     }
-    m->renderer = SDL_CreateRenderer(m->window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    // No SDL_RENDERER_PRESENTVSYNC: this firmware's main loop calls SDL_RenderPresent()
+    // synchronously and cooperatively alongside mesh/radio processing (see
+    // TFTDisplay::sdlLoop()). A vsync-locked Present can block indefinitely on Windows when
+    // the window is minimized, the display sleeps, or the session locks/RDP-disconnects,
+    // freezing the entire firmware with it.
+    m->renderer = SDL_CreateRenderer(m->window, -1, SDL_RENDERER_ACCELERATED);
     m->texture =
         SDL_CreateTexture(m->renderer, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING, _cfg.panel_width, _cfg.panel_height);
     SDL_SetTextureBlendMode(m->texture, SDL_BLENDMODE_NONE);
@@ -919,8 +924,6 @@ void Panel_sdl::sdl_update(void)
     if (monitor.renderer == nullptr) {
         sdl_create(&monitor);
     }
-
-    bool step_exec = _in_step_exec;
 
     if (_texupdate_counter != _modified_counter) {
         pixelcopy_t pc(nullptr, color_depth_t::rgb888_3Byte, _write_depth, false);
@@ -962,9 +965,11 @@ void Panel_sdl::sdl_update(void)
     if (_invalidated || (_display_counter != _texupdate_counter)) {
         SDL_RendererInfo info;
         if (0 == SDL_GetRendererInfo(monitor.renderer, &info)) {
-            // ステップ実行中はVSYNCを待機しない
-            if (((bool)(info.flags & SDL_RENDERER_PRESENTVSYNC)) == step_exec) {
-                SDL_RenderSetVSync(monitor.renderer, !step_exec);
+            // VSync stays off: SDL_RenderPresent() runs synchronously on the same cooperative
+            // thread as mesh/radio processing (see TFTDisplay::sdlLoop()), so a vsync wait can
+            // stall the whole firmware if the display sleeps/locks or the window is minimized.
+            if (info.flags & SDL_RENDERER_PRESENTVSYNC) {
+                SDL_RenderSetVSync(monitor.renderer, 0);
             }
         }
         {
