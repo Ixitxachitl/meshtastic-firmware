@@ -1212,6 +1212,16 @@ static void screenDragUpdate(OLEDDisplayUi *ui, const InputEvent *event, int16_t
     sTransitionTicks = SCREEN_DRAG_TICKS;
 
     if (!dragTransitionActive) {
+        // Point the direction at where we are going before opening the transition.
+        // OLEDDisplayUi::nextFrame() fills transitionFrameTarget from getNextFrameNumber(),
+        // which reads frameTransitionDirection - and only sets that field afterwards. A
+        // transition opened straight after one going the other way (a spring-back, or a finger
+        // reversing past the anchor, both of which land here with the old direction still set)
+        // therefore targeted the frame on the wrong side. tick() recomputes it correctly when
+        // the transition completes, so the frame itself landed right; it was everything reading
+        // transitionFrameTarget mid-flight - the navigation bar especially - that was one out
+        // for the length of the gesture and then snapped straight.
+        ui->getUiState()->frameTransitionDirection = want;
         if (want > 0)
             ui->nextFrame();
         else
