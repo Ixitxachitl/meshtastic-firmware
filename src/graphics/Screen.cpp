@@ -455,7 +455,7 @@ static void drawModuleFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int
 {
     // state->currentFrame names the outgoing frame for the whole of a transition, so it can't be
     // used directly to pick the module - see frameIndexFor().
-    const uint8_t module_frame = graphics::frameIndexFor(state);
+    const uint8_t module_frame = graphics::frameIndexFor(state, screen ? screen->frameCount : 0);
 
     // moduleFrames is padded with nullptr up to the first module slot and ends before whatever
     // frames follow the module region, so an index that isn't a live module is both reachable and
@@ -676,12 +676,12 @@ void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
         if (on) {
             LOG_INFO("Turn on screen");
             powerMon->setState(meshtastic_PowerMon_State_Screen_On);
-#ifdef T_WATCH_S3
+#if defined(T_WATCH_S3) || defined(T_WATCH_ULTRA)
             PMU->enablePowerOutput(XPOWERS_ALDO2);
 #endif
 
 // some screens seem to need a kick in the pants to turn back on
-#if defined(MUZI_BASE) || defined(M5STACK_CARDPUTER_ADV)
+#if defined(MUZI_BASE) || defined(M5STACK_CARDPUTER_ADV) || defined(TFT_RESET_AFTER_SLEEP)
             dispdev->init();
             dispdev->setBrightness(brightness);
             dispdev->flipScreenVertically();
@@ -814,7 +814,7 @@ void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
 #endif
 #endif
 
-#ifdef T_WATCH_S3
+#if defined(T_WATCH_S3) // on T_WATCH_ULTRA, powering down this pin seems to goober the i2c bus.
             PMU->disablePowerOutput(XPOWERS_ALDO2);
 #endif
             enabled = false;
@@ -1133,6 +1133,25 @@ static bool isTouchSourced(const InputEvent *event)
 // rather than springing back.
 #define SCREEN_DRAG_COMMIT_FRACTION 0.35f
 
+// ...or this much absolute travel, whichever comes first. Matches the distance the touch layer
+// uses to call a gesture a swipe (TOUCH_THRESHOLD_X), so a short decisive flick pages the frame
+// exactly as it did before drag tracking existed. Without this, whether a flick paged depended on
+// whether it happened to last long enough to produce a drag sample: too quick and the release-time
+// swipe paged it, slow enough to track and it snapped back instead.
+#ifndef SCREEN_DRAG_COMMIT_PX
+#define SCREEN_DRAG_COMMIT_PX 30
+#endif
+
+// Denominator the nav bar animates its slide against. ticksPerTransition is private (see the
+// note above), so whoever pins the scale publishes it here; 0 means "not ours", and callers
+// should fall back to snapping rather than guessing.
+static uint16_t sTransitionTicks = 0;
+
+uint16_t frameTransitionTicks()
+{
+    return sTransitionTicks;
+}
+
 static uint16_t dragAnchorX = 0;
 static uint16_t dragAnchorY = 0;
 static bool dragAnchorValid = false;
@@ -1140,7 +1159,6 @@ static uint32_t dragAnchorMs = 0;
 static int8_t dragAxis = 0; // 0 undecided, 1 horizontal (ours), -1 vertical (not ours)
 static bool dragTransitionActive = false;
 static int8_t dragDirection = 0; // +1 advancing, -1 going back - latched with the transition
-static bool dragSuppressNextSwipe = false;
 
 // A drag we anchored can end somewhere we never see - a module can start intercepting input
 // mid-gesture - so treat a report arriving long after the previous one as a new gesture.
@@ -1193,8 +1211,19 @@ static void screenDragUpdate(OLEDDisplayUi *ui, const InputEvent *event, int16_t
     // count that the progress below is scaled against predictable.
     ui->setTargetFPS(SCREEN_TRANSITION_FRAMERATE);
     ui->setTimePerTransition(SCREEN_DRAG_HOLD_TIME);
+    sTransitionTicks = SCREEN_DRAG_TICKS;
 
     if (!dragTransitionActive) {
+        // Point the direction at where we are going before opening the transition.
+        // OLEDDisplayUi::nextFrame() fills transitionFrameTarget from getNextFrameNumber(),
+        // which reads frameTransitionDirection - and only sets that field afterwards. A
+        // transition opened straight after one going the other way (a spring-back, or a finger
+        // reversing past the anchor, both of which land here with the old direction still set)
+        // therefore targeted the frame on the wrong side. tick() recomputes it correctly when
+        // the transition completes, so the frame itself landed right; it was everything reading
+        // transitionFrameTarget mid-flight - the navigation bar especially - that was one out
+        // for the length of the gesture and then snapped straight.
+        ui->getUiState()->frameTransitionDirection = want;
         if (want > 0)
             ui->nextFrame();
         else
@@ -1223,17 +1252,14 @@ static void screenDragEnd(OLEDDisplayUi *ui, const InputEvent *event, int16_t fr
     if (!wasDriving)
         return; // never claimed this gesture (too short, or vertical) - leave it entirely alone
 
-    // We drove this one, so the swipe the touch layer classifies on release would page a second
-    // time on top of where we just settled. Swallow it.
-    dragSuppressNextSwipe = true;
-
     float progress = (frameWidth > 0) ? ((float)abs(dx) / (float)frameWidth) : 0.0f;
     ui->setTargetFPS(SCREEN_TRANSITION_FRAMERATE);
     ui->setTimePerTransition(SCREEN_TOUCH_TRANSITION_TIME);
 
-    if (progress >= SCREEN_DRAG_COMMIT_FRACTION) {
+    if (progress >= SCREEN_DRAG_COMMIT_FRACTION || abs(dx) > SCREEN_DRAG_COMMIT_PX) {
         // Carry on from where the finger left off rather than restarting the slide.
         const uint16_t ticks = SCREEN_TOUCH_TRANSITION_TIME / SCREEN_DRAG_UPDATE_INTERVAL;
+        sTransitionTicks = ticks;
         if (progress > 0.999f)
             progress = 0.999f;
         ui->getUiState()->ticksSinceLastStateSwitch = (uint16_t)(progress * ticks);
@@ -1245,10 +1271,154 @@ static void screenDragEnd(OLEDDisplayUi *ui, const InputEvent *event, int16_t fr
         ui->getUiState()->ticksSinceLastStateSwitch = 0;
     }
 }
+
+#if BASEUI_HAS_MAP
+// ---- Finger-tracked map panning ---------------------------------------------------------------
+//
+// Pan Mode moves the map with the finger instead of stepping a fixed fraction of the view per
+// classified swipe. Unlike the frame transitions above this never commits to an axis: panning is
+// two-dimensional, so both components of every drag report are used.
+//
+// Only the delta between consecutive reports is applied, never the offset from where the finger
+// landed. That keeps the map tracking the finger exactly even though the first report already
+// arrives some pixels into the gesture (TOUCH_DRAG_START_THRESHOLD), which an absolute offset
+// would show up as a jump on the first move.
+static bool mapPanAnchorValid = false;
+static uint16_t mapPanLastX = 0;
+static uint16_t mapPanLastY = 0;
+static uint32_t mapPanLastMs = 0;
+
+static void mapPanDragUpdate(const InputEvent *event)
+{
+    const uint32_t now = millis();
+    // Same staleness reasoning as the frame drag above - a gesture can end somewhere we never see.
+    if (!mapPanAnchorValid || (now - mapPanLastMs) > DRAG_ANCHOR_STALE_MS) {
+        mapPanAnchorValid = true;
+        mapPanLastX = event->touchX;
+        mapPanLastY = event->touchY;
+        mapPanLastMs = now;
+        return; // this report only establishes where the finger currently is
+    }
+
+    const float dx = (float)((int32_t)event->touchX - (int32_t)mapPanLastX);
+    const float dy = (float)((int32_t)event->touchY - (int32_t)mapPanLastY);
+    mapPanLastX = event->touchX;
+    mapPanLastY = event->touchY;
+    mapPanLastMs = now;
+
+    graphics::MapRenderer::panByFingerDelta(dx, dy);
+}
+
+static void mapPanDragEnd()
+{
+    mapPanAnchorValid = false;
+}
+#endif // BASEUI_HAS_MAP
+
+// ---- Finger-tracked message scrolling ---------------------------------------------------------
+//
+// Unlike the map, the message list shares its frame with normal left/right paging, so this has to
+// commit to an axis exactly as screenDragUpdate() does and claim only the vertical half. The two
+// are complementary: a drag locked vertical here is one screenDragUpdate() would drop anyway.
+static bool messageScrollAnchorValid = false;
+static uint16_t messageScrollAnchorX = 0;
+static uint16_t messageScrollAnchorY = 0;
+static uint16_t messageScrollLastY = 0;
+static uint32_t messageScrollLastMs = 0;
+static int8_t messageScrollAxis = 0; // 0 undecided, 1 vertical (ours), -1 horizontal (not ours)
+
+// Returns true if this report belongs to the list, false to leave it for the frame transition.
+static bool messageScrollDragUpdate(const InputEvent *event)
+{
+    const uint32_t now = millis();
+    if (!messageScrollAnchorValid || (now - messageScrollLastMs) > DRAG_ANCHOR_STALE_MS) {
+        messageScrollAnchorValid = true;
+        messageScrollAnchorX = event->touchX;
+        messageScrollAnchorY = event->touchY;
+        messageScrollLastY = event->touchY;
+        messageScrollLastMs = now;
+        messageScrollAxis = 0;
+        return false; // this report only establishes where the finger started
+    }
+    messageScrollLastMs = now;
+
+    if (messageScrollAxis == 0) {
+        const int32_t dx = (int32_t)event->touchX - (int32_t)messageScrollAnchorX;
+        const int32_t dy = (int32_t)event->touchY - (int32_t)messageScrollAnchorY;
+        if (abs(dx) < SCREEN_DRAG_AXIS_LOCK_PX && abs(dy) < SCREEN_DRAG_AXIS_LOCK_PX)
+            return false; // too early to tell which way this gesture is going
+        messageScrollAxis = (abs(dy) > abs(dx)) ? 1 : -1;
+    }
+    if (messageScrollAxis < 0)
+        return false; // horizontal: the frame transition owns it
+
+    const float dy = (float)((int32_t)event->touchY - (int32_t)messageScrollLastY);
+    messageScrollLastY = event->touchY;
+    graphics::MessageRenderer::scrollByFingerDelta(dy);
+    return true;
+}
+
+static bool messageScrollDragEnd()
+{
+    const bool claimed = messageScrollAnchorValid && messageScrollAxis > 0;
+    messageScrollAnchorValid = false;
+    messageScrollAxis = 0;
+    return claimed;
+}
+
+// True while a finger is steering something that owns the framerate - a frame transition, a map
+// pan, or the message list. runOnce() uses this to leave the framerate alone mid-gesture.
+//
+// Deliberately derived from how recently a drag report arrived, rather than from a flag set on drag
+// start and cleared on drag end. A gesture can end somewhere we never see - a module can begin
+// intercepting input mid-drag, which is why the anchors already carry a staleness timeout - and a
+// flag left stuck true would pin the screen at the transition framerate indefinitely. That is a
+// battery leak rather than a cosmetic bug, so this self-heals instead.
+static bool screenDragOwnsFramerate()
+{
+    const uint32_t now = millis();
+    if (dragAnchorValid && (now - dragAnchorMs) <= DRAG_ANCHOR_STALE_MS)
+        return true;
+#if BASEUI_HAS_MAP
+    // Panning never starts a frame transition, so frameState stays FIXED for the whole gesture and
+    // the demote in runOnce() would otherwise fire on every single drag report - dropping the
+    // framerate to idle between one report and the next.
+    if (mapPanAnchorValid && (now - mapPanLastMs) <= DRAG_ANCHOR_STALE_MS)
+        return true;
+#endif
+    // Scrolling the message list starts no transition either, so it needs the same protection.
+    if (messageScrollAnchorValid && (now - messageScrollLastMs) <= DRAG_ANCHOR_STALE_MS)
+        return true;
+    // As does the emote picker's grid, whose drag is driven from inside CannedMessageModule -
+    // a module sees input before the screen does, so that one cannot live here with the rest.
+    if (isEmoteScrollFingerSteering())
+        return true;
+    // Same for the on-screen keyboard's horizontal pan, which is driven from the same module.
+    if (isKeyboardPanFingerSteering())
+        return true;
+    return false;
+}
 #endif // BASEUI_HAS_TOUCH_DRAG
 
 int32_t Screen::runOnce()
 {
+#ifdef UI_PERF_DEBUG
+    // How often the scheduler actually gets here, against how often we ask it to. Paired with the
+    // frame count TFTDisplay reports, this separates "nothing is calling us" from "we are called
+    // but OLEDDisplayUi::update() declines to redraw" - the two have nothing in common as fixes.
+    {
+        static uint32_t calls = 0, lastReportMs = 0;
+        calls++;
+        const uint32_t now = millis();
+        if (now - lastReportMs >= 1000) {
+            LOG_INFO("Screen::runOnce: %u calls in %u ms, targetFps=%u frameState=%d", (unsigned)calls,
+                     (unsigned)(now - lastReportMs), (unsigned)targetFramerate, (int)ui->getUiState()->frameState);
+            calls = 0;
+            lastReportMs = now;
+        }
+    }
+#endif
+
     // If we don't have a screen, don't ever spend any CPU for us.
     if (!useDisplay) {
         enabled = false;
@@ -1416,7 +1586,18 @@ int32_t Screen::runOnce()
     }
 #endif
 
-    if (targetFramerate != desiredFramerate && ui->getUiState()->frameState == FIXED) {
+#if BASEUI_HAS_TOUCH_DRAG
+    // A finger steering a transition owns the framerate. Without this the reset below fires during
+    // the first few pixels of a drag - before SCREEN_DRAG_AXIS_LOCK_PX commits an axis there is no
+    // transition yet, so frameState is still FIXED - and it does more than slow the thread down:
+    // it calls setTargetFPS(), which OLEDDisplayUi turns into updateInterval, so update() then
+    // refuses to redraw at all until a full second has passed.
+    const bool dragOwnsFramerate = screenDragOwnsFramerate();
+#else
+    const bool dragOwnsFramerate = false;
+#endif
+
+    if (targetFramerate != desiredFramerate && ui->getUiState()->frameState == FIXED && !dragOwnsFramerate) {
         // oldFrameState = ui->getUiState()->frameState;
         targetFramerate = desiredFramerate;
 
@@ -2344,6 +2525,23 @@ int Screen::handleInputEvent(const InputEvent *event)
     }
     // UP/DOWN in message screen scrolls through message threads
     if (ui->getUiState()->currentFrame == framesetInfo.positions.textMessage) {
+#if BASEUI_HAS_TOUCH_DRAG
+        if (messageStore.hasVisibleMessages()) {
+            // Only swallowed when the list claimed it; a horizontal drag falls through to page.
+            if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG && messageScrollDragUpdate(event)) {
+                setFastFramerate();
+                return 0;
+            }
+            if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG_END && messageScrollDragEnd()) {
+                setFastFramerate();
+                return 0;
+            }
+            // The list is finger-tracked, so the swipe classified on release must not scroll a step
+            // on top of it - nor for a flick too quick to have produced any drag report.
+            if (isTouchSourced(event) && (event->inputEvent == INPUT_BROKER_UP || event->inputEvent == INPUT_BROKER_DOWN))
+                return 0;
+        }
+#endif
 
         if (event->inputEvent == INPUT_BROKER_UP) {
             if (!messageStore.hasVisibleMessages()) {
@@ -2392,7 +2590,43 @@ int Screen::handleInputEvent(const InputEvent *event)
     // screen" meaning further down instead.
 #if BASEUI_HAS_MAP
     if (framesetInfo.positions.map != 255 && ui->getUiState()->currentFrame == framesetInfo.positions.map) {
+#if BASEUI_HAS_TOUCH_DRAG
+        // Where the hardware reports a continuous drag, Pan Mode tracks the finger directly rather
+        // than waiting for a swipe to be classified and jumping a fixed fraction of the view.
         if (graphics::MapRenderer::isPanModeEnabled()) {
+            if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG) {
+                mapPanDragUpdate(event);
+                setFastFramerate();
+                return 0;
+            }
+            if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG_END) {
+                mapPanDragEnd();
+                setFastFramerate();
+                return 0;
+            }
+        }
+#endif
+        // A touch drag arrives as a continuous stream of reports alongside the swipe the touch
+        // layer still classifies on release. While Zoom Mode is held it is that swipe which zooms -
+        // there is no continuous equivalent of a zoom step - so the drag reports are neither a
+        // navigation command nor evidence the user did something else. Swallow them here, or the
+        // else-branches below read them as "not part of pan navigation" and drop out of the mode -
+        // which made any touch at all cancel it. Pan Mode only reaches this on builds without
+        // BASEUI_HAS_TOUCH_DRAG, where the swipe is still what pans.
+        if ((graphics::MapRenderer::isPanModeEnabled() || graphics::MapRenderer::isZoomModeEnabled()) &&
+            (event->inputEvent == INPUT_BROKER_TOUCH_DRAG || event->inputEvent == INPUT_BROKER_TOUCH_DRAG_END))
+            return 0;
+        if (graphics::MapRenderer::isPanModeEnabled()) {
+#if BASEUI_HAS_TOUCH_DRAG
+            // Panning is finger-tracked here, so the swipe classified on release must never also
+            // step the view - not after a drag we already applied, and not for a flick too quick to
+            // have produced any drag report at all. Swallowed rather than left to fall through,
+            // which the else-branch below would read as "not part of pan navigation" and use to drop
+            // out of Pan Mode.
+            if (isTouchSourced(event) && (event->inputEvent == INPUT_BROKER_UP || event->inputEvent == INPUT_BROKER_DOWN ||
+                                          event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_RIGHT))
+                return 0;
+#endif
             if (event->inputEvent == INPUT_BROKER_BACK || event->inputEvent == INPUT_BROKER_CANCEL) {
                 graphics::MapRenderer::setPanModeEnabled(false);
                 setFastFramerate();
@@ -2514,15 +2748,6 @@ int Screen::handleInputEvent(const InputEvent *event)
             }
 #endif
 #if BASEUI_HAS_TOUCH_DRAG
-            // A gesture we steered is followed by the touch layer's own swipe classification (see
-            // TouchScreenBase::runOnce, which reports both). Drop that one - we already settled the
-            // frame. Cleared on the first event after the drag whatever it turns out to be, so a
-            // gesture that ended below the swipe threshold cannot leave it armed.
-            if (dragSuppressNextSwipe) {
-                dragSuppressNextSwipe = false;
-                if (event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_RIGHT)
-                    return 0;
-            }
             if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG) {
                 screenDragUpdate(ui, event, displayWidth);
                 setFastFramerate();
@@ -2535,9 +2760,34 @@ int Screen::handleInputEvent(const InputEvent *event)
                 return 0;
             }
 #endif
-            if (event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_ALT_PRESS) {
+#if BASEUI_HAS_TOUCH_DRAG
+            const bool fromTouch = isTouchSourced(event);
+#else
+            const bool fromTouch = false;
+#endif
+            // A tap must not page the frame on a touchscreen: swiping is the deliberate gesture
+            // for that, and tap-to-advance turns any stray contact into a frame change. Keyed on
+            // the source, because INPUT_BROKER_USER_PRESS is also how single-button devices
+            // navigate - see i2cButton, SeesawRotary and InputBroker's singlePress config.
+            const bool tapFromTouchscreen = fromTouch && !BASEUI_TAP_ADVANCES_FRAME;
+
+            // Where a finger-tracked transition exists, it is the only thing that pages frames -
+            // the swipe the touch layer classifies on release never does, whether or not the drag
+            // handler claimed the gesture.
+            //
+            // The alternative was letting a flick too quick to produce a drag sample page via this
+            // path, which meant an identical-looking gesture behaved differently depending on how
+            // fast it happened, and needed its direction inverted here to agree with the drag (a
+            // flick left brings the NEXT frame in from the right, where INPUT_BROKER_LEFT has always
+            // meant "go back"). A gesture that produces no drag report at all now simply does
+            // nothing, which is the more predictable of the two. Physical directional input -
+            // keyboard, encoder, trackball - keeps its conventional meaning.
+            const bool wantsNext = !fromTouch && event->inputEvent == INPUT_BROKER_RIGHT;
+            const bool wantsPrevious = !fromTouch && event->inputEvent == INPUT_BROKER_LEFT;
+
+            if (wantsPrevious || event->inputEvent == INPUT_BROKER_ALT_PRESS) {
                 showFrame(FrameDirection::PREVIOUS);
-            } else if (event->inputEvent == INPUT_BROKER_RIGHT || event->inputEvent == INPUT_BROKER_USER_PRESS) {
+            } else if (wantsNext || (event->inputEvent == INPUT_BROKER_USER_PRESS && !tapFromTouchscreen)) {
                 showFrame(FrameDirection::NEXT);
             } else if (event->inputEvent == INPUT_BROKER_FN_F1) {
                 this->ui->switchToFrame(0);

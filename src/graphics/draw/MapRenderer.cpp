@@ -234,7 +234,9 @@ void ensureCenterInitialized()
 // through real-world meters let a distant known node (dragging auto-fit zoom down) or a sign bug
 // turn one press into a jump across the planet. Plain degrees-per-pixel can't do that - the worst
 // case at any zoom is still bounded to a fixed fraction of one screen.
-void panByScreenFraction(float dxFraction, float dyFraction)
+// Shared by both pan entry points below. Moves the viewport by an exact pixel offset, where +lngPx
+// is east and +latPx is north.
+static void panViewportByPixels(float lngPx, float latPx)
 {
     ensureCenterInitialized();
     if (!s_centerInitialized)
@@ -246,17 +248,21 @@ void panByScreenFraction(float dxFraction, float dyFraction)
     const float degPerPxLng = 360.0f / worldPxAtZoom;
     const float degPerPxLat = degPerPxLng * cosf(s_centerLat * DEG_TO_RAD);
 
-    constexpr float kPanFractionOfView = 0.15f;
-    const float stepPx = min(s_lastViewWidth, s_lastViewHeight) * kPanFractionOfView;
-
-    s_centerLat += dyFraction * stepPx * degPerPxLat;
-    s_centerLng += dxFraction * stepPx * degPerPxLng;
+    s_centerLat += latPx * degPerPxLat;
+    s_centerLng += lngPx * degPerPxLng;
 
     if (s_centerLat > 85.0f)
         s_centerLat = 85.0f;
     if (s_centerLat < -85.0f)
         s_centerLat = -85.0f;
     s_centerLng = fmodf(s_centerLng + 540.0f, 360.0f) - 180.0f; // Wrap to [-180, 180).
+}
+
+void panByScreenFraction(float dxFraction, float dyFraction)
+{
+    constexpr float kPanFractionOfView = 0.15f;
+    const float stepPx = min(s_lastViewWidth, s_lastViewHeight) * kPanFractionOfView;
+    panViewportByPixels(dxFraction * stepPx, dyFraction * stepPx);
 }
 
 #if defined(HAS_SDCARD)
@@ -407,9 +413,9 @@ void drawHaloXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t 
 {
     display->setColor(WHITE);
     for (auto &o : kHaloOffsets)
-        display->drawXbm(x + o[0], y + o[1], w, h, xbm);
+        graphics::drawScaledXbm(display, x + o[0] * BASEUI_ICON_SCALE, y + o[1] * BASEUI_ICON_SCALE, w, h, xbm);
     display->setColor(BLACK);
-    display->drawXbm(x, y, w, h, xbm);
+    graphics::drawScaledXbm(display, x, y, w, h, xbm);
 }
 
 void drawHaloString(OLEDDisplay *display, int16_t x, int16_t y, const char *text)
@@ -448,7 +454,8 @@ void tintMarkerCenter(int16_t centerX, int16_t centerY, int &budget)
 {
     if (budget <= 0)
         return;
-    registerTFTColorRegionDirect(centerX - 1, centerY - 1, 2, 2, TFTPalette::White, TFTPalette::Red);
+    registerTFTColorRegionDirect(centerX - BASEUI_ICON_SCALE, centerY - BASEUI_ICON_SCALE, 2 * BASEUI_ICON_SCALE,
+                                 2 * BASEUI_ICON_SCALE, TFTPalette::White, TFTPalette::Red);
     budget--;
 }
 #endif
@@ -485,6 +492,18 @@ void MapRenderer::panLeft()
 void MapRenderer::panRight()
 {
     panByScreenFraction(1.0f, 0.0f);
+}
+
+void MapRenderer::panByFingerDelta(float dxPx, float dyPx)
+{
+    // The map travels with the finger, so the viewport moves the opposite way: dragging the map
+    // rightwards reveals what was off the left edge, which is further west. Screen y grows
+    // downward, so dragging down already walks the viewport north - hence only the x term is
+    // negated.
+    //
+    // Deliberately the opposite sense to panLeft()/panRight() above: a joystick press means "move
+    // the view that way", where a finger means "move the map that way".
+    panViewportByPixels(-dxPx, dyPx);
 }
 
 bool MapRenderer::isFollowMeEnabled()
@@ -543,7 +562,7 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     ensureFileTileSourceInitialized();
 #endif
 
-    display->clear();
+    graphics::clearForFrame(display, state);
     // WHITE is the lit/visible pixel color on OLEDDisplay (unlike InkHUD's e-ink convention,
     // where BLACK means ink) - everything below needs to actually show up on real hardware.
     display->setColor(WHITE);
@@ -554,10 +573,12 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     // Shared battery/time header, same as every other BaseUI screen - reserve its height and
     // shift the map viewport down so tiles/markers/overlays never draw underneath it.
     // Matches drawCommonHeader's own internal footprint exactly (SharedUIDisplay.cpp: headerHeight
-    // = highlightHeight + 2, highlightHeight = FONT_HEIGHT_SMALL - 1, so FONT_HEIGHT_SMALL + 1) -
-    // NodeListRenderer's COMMON_HEADER_HEIGHT (FONT_HEIGHT_SMALL - 1) is 2px short of that, which
-    // left the map drawing over the header's bottom edge and XOR-inverting it.
-    const int16_t kHeaderHeight = FONT_HEIGHT_SMALL + 1;
+    // = highlightHeight + 2, highlightHeight = FONT_HEIGHT_SMALL - 1 + BASEUI_HEADER_MARGIN, so
+    // FONT_HEIGHT_SMALL + 1 + BASEUI_HEADER_MARGIN). Deliberately no added BASEUI_BELOW_HEADER_MARGIN
+    // gap here (unlike NodeListRenderer/UIRenderer) - the map should hug the header exactly, not
+    // leave list-style breathing room. BASEUI_HEADER_MARGIN is 0 on every board except the ones
+    // (like t-watch-ultra) that define it, so this is a no-op elsewhere.
+    const int16_t kHeaderHeight = FONT_HEIGHT_SMALL + 1 + BASEUI_HEADER_MARGIN;
     drawCommonHeader(display, x, y, "Map");
     display->setColor(WHITE); // drawCommonHeader leaves its own color state active
     y += kHeaderHeight;
@@ -616,8 +637,19 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         if (!s_basemapValid || !(s_basemapKey == basemapKey)) {
             memset(s_basemapBits, 0, (size_t)s_basemapStride * (size_t)viewHeight);
             BasemapPlotCtx basemapCtx{s_basemapBits, s_basemapStride, viewWidth, viewHeight};
+#ifdef UI_PERF_DEBUG
+            const uint32_t tileStartMs = millis();
+#endif
             NicheGraphics::MapTiles::drawTileBackground(centerLat, centerLng, zoom, metersToPx, viewWidth, viewHeight,
                                                         plotIntoBasemap, &basemapCtx);
+#ifdef UI_PERF_DEBUG
+            // Only logged on a basemap miss, which is every frame while panning - the key includes
+            // the centre, so any movement at all rebuilds the whole viewport from tiles.
+            uint32_t tileDecodes = 0, tileCacheHits = 0;
+            NicheGraphics::MapTiles::lastTileStats(&tileDecodes, &tileCacheHits);
+            LOG_INFO("map basemap rebuild: %u ms, z%d, %u tile decodes, %u cache hits", (unsigned)(millis() - tileStartMs), zoom,
+                     (unsigned)tileDecodes, (unsigned)tileCacheHits);
+#endif
             s_basemapKey = basemapKey;
             s_basemapValid = true;
         }
@@ -705,13 +737,13 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
             drawnCount++;
         }
 
-        drawHaloXbm(display, mx - 4, my - 4, 8, 8, icon_map_node);
+        drawHaloXbm(display, mx - 4 * BASEUI_ICON_SCALE, my - 4 * BASEUI_ICON_SCALE, 8, 8, icon_map_node);
 #if GRAPHICS_TFT_COLORING_ENABLED
         tintMarkerCenter(mx, my, nodeColorRegions);
 #endif
 
         if (node->short_name[0] != '\0') {
-            int16_t lx = mx + 5;
+            int16_t lx = mx + 5 * BASEUI_ICON_SCALE;
             int16_t ly = my - labelHeight / 2;
             int16_t lw = (int16_t)display->getStringWidth(node->short_name);
 
@@ -773,20 +805,29 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         }
     }
 
-    // Center coordinates, top-left - a concrete reference for "where am I", especially useful
+    // Center coordinates - a concrete reference for "where am I", especially useful
     // before any basemap tiles are baked in, or after panning away from every known node.
-    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    // Rounded panels clip their corners, so both labels are centred on those instead of
+    // being pinned to a corner.
     display->setFont(FONT_SMALL);
     char coordLabel[24];
     snprintf(coordLabel, sizeof(coordLabel), "%.4f,%.4f", centerLat, centerLng);
+    char statusLabel[24];
+    snprintf(statusLabel, sizeof(statusLabel), "z%d%s%s%s", zoom, s_panMode ? " PAN" : "", s_zoomMode ? " ZOOM" : "",
+             s_followMe ? " ME" : "");
+
+#if ROUNDED_SCREEN
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    drawHaloString(display, x + viewWidth / 2, y, coordLabel);
+    drawHaloString(display, x + viewWidth / 2, y + viewHeight - FONT_HEIGHT_SMALL - 1, statusLabel);
+#else
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
     drawHaloString(display, x + 1, y, coordLabel);
 
     // Status label, bottom-right corner: zoom level, plus mode/follow indicators.
     display->setTextAlignment(TEXT_ALIGN_RIGHT);
-    char statusLabel[24];
-    snprintf(statusLabel, sizeof(statusLabel), "z%d%s%s%s", zoom, s_panMode ? " PAN" : "", s_zoomMode ? " ZOOM" : "",
-             s_followMe ? " ME" : "");
     drawHaloString(display, x + viewWidth - 2, y + viewHeight - FONT_HEIGHT_SMALL - 1, statusLabel);
+#endif
 
     // Zoom ruler: shown only while Zoom Mode is active (entered from the menu, held until
     // Back/Cancel). A vertical gauge on the right edge, current level marked, so up/down's effect

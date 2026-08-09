@@ -996,9 +996,10 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
         int16_t textX = boxLeft + (boxWidth - lineWidths[i]) / 2;
         if (needs_bell && i == 0) {
             int fontHeight = thisLineHeight + 3;
-            int bellY = lineY + (fontHeight - 8) / 2;
-            display->drawXbm(textX - 10, bellY, 8, 8, bell_alert);
-            display->drawXbm(textX + lineWidths[i] + 2, bellY, 8, 8, bell_alert);
+            int bellY = lineY + (fontHeight - bell_alert_height * BASEUI_ICON_SCALE) / 2;
+            drawScaledXbm(display, textX - 2 - bell_alert_width * BASEUI_ICON_SCALE, bellY, bell_alert_width, bell_alert_height,
+                          bell_alert);
+            drawScaledXbm(display, textX + lineWidths[i] + 2, bellY, bell_alert_width, bell_alert_height, bell_alert);
         }
         char lineBuffer[lineLengths[i] + 1];
         strncpy(lineBuffer, renderLines[i], lineLengths[i]);

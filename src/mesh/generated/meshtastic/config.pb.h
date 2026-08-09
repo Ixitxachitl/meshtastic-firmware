@@ -233,6 +233,14 @@ typedef enum _meshtastic_Config_DisplayConfig_CompassOrientation {
     meshtastic_Config_DisplayConfig_CompassOrientation_DEGREES_270_INVERTED = 7
 } meshtastic_Config_DisplayConfig_CompassOrientation;
 
+/* Order messages are listed in on the message screen. */
+typedef enum _meshtastic_Config_DisplayConfig_MessageOrder {
+    /* Default. The newest message is at the top of the list, older messages follow below. */
+    meshtastic_Config_DisplayConfig_MessageOrder_NEWEST_FIRST = 0,
+    /* The newest message is at the bottom of the list, older messages are above it. */
+    meshtastic_Config_DisplayConfig_MessageOrder_NEWEST_LAST = 1
+} meshtastic_Config_DisplayConfig_MessageOrder;
+
 typedef enum _meshtastic_Config_LoRaConfig_RegionCode {
     /* Region is not set */
     meshtastic_Config_LoRaConfig_RegionCode_UNSET = 0,
@@ -592,6 +600,8 @@ typedef struct _meshtastic_Config_DisplayConfig {
     bool use_long_node_name;
     /* If true, the device will display message bubbles on screen. */
     bool enable_message_bubbles;
+    /* Whether the newest message appears at the top or the bottom of the message screen. */
+    meshtastic_Config_DisplayConfig_MessageOrder message_order;
 } meshtastic_Config_DisplayConfig;
 
 /* Lora Config */
@@ -781,6 +791,10 @@ extern "C" {
 #define _meshtastic_Config_DisplayConfig_CompassOrientation_MAX meshtastic_Config_DisplayConfig_CompassOrientation_DEGREES_270_INVERTED
 #define _meshtastic_Config_DisplayConfig_CompassOrientation_ARRAYSIZE ((meshtastic_Config_DisplayConfig_CompassOrientation)(meshtastic_Config_DisplayConfig_CompassOrientation_DEGREES_270_INVERTED+1))
 
+#define _meshtastic_Config_DisplayConfig_MessageOrder_MIN meshtastic_Config_DisplayConfig_MessageOrder_NEWEST_FIRST
+#define _meshtastic_Config_DisplayConfig_MessageOrder_MAX meshtastic_Config_DisplayConfig_MessageOrder_NEWEST_LAST
+#define _meshtastic_Config_DisplayConfig_MessageOrder_ARRAYSIZE ((meshtastic_Config_DisplayConfig_MessageOrder)(meshtastic_Config_DisplayConfig_MessageOrder_NEWEST_LAST+1))
+
 #define _meshtastic_Config_LoRaConfig_RegionCode_MIN meshtastic_Config_LoRaConfig_RegionCode_UNSET
 #define _meshtastic_Config_LoRaConfig_RegionCode_MAX meshtastic_Config_LoRaConfig_RegionCode_ITU2_125CM
 #define _meshtastic_Config_LoRaConfig_RegionCode_ARRAYSIZE ((meshtastic_Config_LoRaConfig_RegionCode)(meshtastic_Config_LoRaConfig_RegionCode_ITU2_125CM+1))
@@ -817,6 +831,7 @@ extern "C" {
 #define meshtastic_Config_DisplayConfig_oled_ENUMTYPE meshtastic_Config_DisplayConfig_OledType
 #define meshtastic_Config_DisplayConfig_displaymode_ENUMTYPE meshtastic_Config_DisplayConfig_DisplayMode
 #define meshtastic_Config_DisplayConfig_compass_orientation_ENUMTYPE meshtastic_Config_DisplayConfig_CompassOrientation
+#define meshtastic_Config_DisplayConfig_message_order_ENUMTYPE meshtastic_Config_DisplayConfig_MessageOrder
 
 #define meshtastic_Config_LoRaConfig_modem_preset_ENUMTYPE meshtastic_Config_LoRaConfig_ModemPreset
 #define meshtastic_Config_LoRaConfig_region_ENUMTYPE meshtastic_Config_LoRaConfig_RegionCode
@@ -835,7 +850,7 @@ extern "C" {
 #define meshtastic_Config_PowerConfig_init_default {0, 0, 0, 0, 0, 0, 0, 0, 0}
 #define meshtastic_Config_NetworkConfig_init_default {0, "", "", "", 0, _meshtastic_Config_NetworkConfig_AddressMode_MIN, false, meshtastic_Config_NetworkConfig_IpV4Config_init_default, "", 0, 0}
 #define meshtastic_Config_NetworkConfig_IpV4Config_init_default {0, 0, 0, 0}
-#define meshtastic_Config_DisplayConfig_init_default {0, _meshtastic_Config_DisplayConfig_DeprecatedGpsCoordinateFormat_MIN, 0, 0, 0, _meshtastic_Config_DisplayConfig_DisplayUnits_MIN, _meshtastic_Config_DisplayConfig_OledType_MIN, _meshtastic_Config_DisplayConfig_DisplayMode_MIN, 0, 0, _meshtastic_Config_DisplayConfig_CompassOrientation_MIN, 0, 0, 0}
+#define meshtastic_Config_DisplayConfig_init_default {0, _meshtastic_Config_DisplayConfig_DeprecatedGpsCoordinateFormat_MIN, 0, 0, 0, _meshtastic_Config_DisplayConfig_DisplayUnits_MIN, _meshtastic_Config_DisplayConfig_OledType_MIN, _meshtastic_Config_DisplayConfig_DisplayMode_MIN, 0, 0, _meshtastic_Config_DisplayConfig_CompassOrientation_MIN, 0, 0, 0, _meshtastic_Config_DisplayConfig_MessageOrder_MIN}
 #define meshtastic_Config_LoRaConfig_init_default {0, _meshtastic_Config_LoRaConfig_ModemPreset_MIN, 0, 0, 0, 0, _meshtastic_Config_LoRaConfig_RegionCode_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, 0, 0}, 0, 0, _meshtastic_Config_LoRaConfig_FEM_LNA_Mode_MIN, 0}
 #define meshtastic_Config_BluetoothConfig_init_default {0, _meshtastic_Config_BluetoothConfig_PairingMode_MIN, 0}
 #define meshtastic_Config_SecurityConfig_init_default {{0, {0}}, {0, {0}}, 0, {{0, {0}}, {0, {0}}, {0, {0}}}, 0, 0, 0, 0, _meshtastic_Config_SecurityConfig_PacketSignaturePolicy_MIN}
@@ -846,7 +861,7 @@ extern "C" {
 #define meshtastic_Config_PowerConfig_init_zero  {0, 0, 0, 0, 0, 0, 0, 0, 0}
 #define meshtastic_Config_NetworkConfig_init_zero {0, "", "", "", 0, _meshtastic_Config_NetworkConfig_AddressMode_MIN, false, meshtastic_Config_NetworkConfig_IpV4Config_init_zero, "", 0, 0}
 #define meshtastic_Config_NetworkConfig_IpV4Config_init_zero {0, 0, 0, 0}
-#define meshtastic_Config_DisplayConfig_init_zero {0, _meshtastic_Config_DisplayConfig_DeprecatedGpsCoordinateFormat_MIN, 0, 0, 0, _meshtastic_Config_DisplayConfig_DisplayUnits_MIN, _meshtastic_Config_DisplayConfig_OledType_MIN, _meshtastic_Config_DisplayConfig_DisplayMode_MIN, 0, 0, _meshtastic_Config_DisplayConfig_CompassOrientation_MIN, 0, 0, 0}
+#define meshtastic_Config_DisplayConfig_init_zero {0, _meshtastic_Config_DisplayConfig_DeprecatedGpsCoordinateFormat_MIN, 0, 0, 0, _meshtastic_Config_DisplayConfig_DisplayUnits_MIN, _meshtastic_Config_DisplayConfig_OledType_MIN, _meshtastic_Config_DisplayConfig_DisplayMode_MIN, 0, 0, _meshtastic_Config_DisplayConfig_CompassOrientation_MIN, 0, 0, 0, _meshtastic_Config_DisplayConfig_MessageOrder_MIN}
 #define meshtastic_Config_LoRaConfig_init_zero   {0, _meshtastic_Config_LoRaConfig_ModemPreset_MIN, 0, 0, 0, 0, _meshtastic_Config_LoRaConfig_RegionCode_MIN, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, 0, 0}, 0, 0, _meshtastic_Config_LoRaConfig_FEM_LNA_Mode_MIN, 0}
 #define meshtastic_Config_BluetoothConfig_init_zero {0, _meshtastic_Config_BluetoothConfig_PairingMode_MIN, 0}
 #define meshtastic_Config_SecurityConfig_init_zero {{0, {0}}, {0, {0}}, 0, {{0, {0}}, {0, {0}}, {0, {0}}}, 0, 0, 0, 0, _meshtastic_Config_SecurityConfig_PacketSignaturePolicy_MIN}
@@ -915,6 +930,7 @@ extern "C" {
 #define meshtastic_Config_DisplayConfig_use_12h_clock_tag 12
 #define meshtastic_Config_DisplayConfig_use_long_node_name_tag 13
 #define meshtastic_Config_DisplayConfig_enable_message_bubbles_tag 14
+#define meshtastic_Config_DisplayConfig_message_order_tag 15
 #define meshtastic_Config_LoRaConfig_use_preset_tag 1
 #define meshtastic_Config_LoRaConfig_modem_preset_tag 2
 #define meshtastic_Config_LoRaConfig_bandwidth_tag 3
@@ -1065,7 +1081,8 @@ X(a, STATIC,   SINGULAR, BOOL,     wake_on_tap_or_motion,  10) \
 X(a, STATIC,   SINGULAR, UENUM,    compass_orientation,  11) \
 X(a, STATIC,   SINGULAR, BOOL,     use_12h_clock,    12) \
 X(a, STATIC,   SINGULAR, BOOL,     use_long_node_name,  13) \
-X(a, STATIC,   SINGULAR, BOOL,     enable_message_bubbles,  14)
+X(a, STATIC,   SINGULAR, BOOL,     enable_message_bubbles,  14) \
+X(a, STATIC,   SINGULAR, UENUM,    message_order,    15)
 #define meshtastic_Config_DisplayConfig_CALLBACK NULL
 #define meshtastic_Config_DisplayConfig_DEFAULT NULL
 
@@ -1146,7 +1163,7 @@ extern const pb_msgdesc_t meshtastic_Config_SessionkeyConfig_msg;
 #define MESHTASTIC_MESHTASTIC_CONFIG_PB_H_MAX_SIZE meshtastic_Config_size
 #define meshtastic_Config_BluetoothConfig_size   10
 #define meshtastic_Config_DeviceConfig_size      100
-#define meshtastic_Config_DisplayConfig_size     36
+#define meshtastic_Config_DisplayConfig_size     38
 #define meshtastic_Config_LoRaConfig_size        91
 #define meshtastic_Config_NetworkConfig_IpV4Config_size 20
 #define meshtastic_Config_NetworkConfig_size     204

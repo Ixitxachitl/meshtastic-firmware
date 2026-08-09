@@ -23,7 +23,8 @@
 #include "graphics/emotes.h"
 #include "graphics/images.h"
 #include "input/SerialKeyboard.h"
-#include "main.h" // for cardkb_found
+#include "input/TouchScreenImpl1.h" // for BASEUI_HAS_TOUCH_DRAG
+#include "main.h"                   // for cardkb_found
 #include "mesh/generated/meshtastic/cannedmessages.pb.h"
 #include "modules/AdminModule.h"
 #include "modules/ExternalNotificationModule.h" // for buzzer control
@@ -49,6 +50,36 @@ extern MessageStore messageStore;
 
 // Remove Canned message screen if no action is taken for some milliseconds
 #define INACTIVATE_AFTER_MS 20000
+
+// Emote button drawn over the composer on devices that type on hardware keys but still have a
+// touchscreen - without it there is no way to reach the picker except a keyboard that has no emote
+// key. Sized from the artwork it holds, so it grows with the variant's icon scale.
+#define EMOTE_BUTTON_SIZE (24 * BASEUI_ICON_SCALE)
+#define EMOTE_BUTTON_MARGIN 2
+
+// Insets around the virtual keyboard, as a percentage of the display. Zero by default - fourteen
+// columns want every pixel they can get - but a display whose edges the user cannot comfortably
+// reach (rounded corners, a raised bezel, a watch strap in the way) needs the outer keys pulled in.
+// Expressed as percentages rather than pixels so a variant states the intent once, whatever its
+// resolution. Kept apart from BASEUI_BODY_LR_MARGIN: that insets text, this insets touch targets,
+// and a device can want very different amounts of each.
+// How wide the key grid is drawn, as a percentage of the space between the side insets. Above
+// 100 the keyboard is wider than the screen and pans horizontally with a finger drag, which buys
+// bigger keys on a small touchscreen. 100 keeps every existing board exactly as it was.
+#ifndef BASEUI_KEYBOARD_ZOOM_PCT
+#define BASEUI_KEYBOARD_ZOOM_PCT 100
+#endif
+// Key row height as a percentage of what the available space would otherwise give. Above 100 the
+// block grows upward from the bottom inset, taking room from the draft above it.
+#ifndef BASEUI_KEYBOARD_KEY_HEIGHT_PCT
+#define BASEUI_KEYBOARD_KEY_HEIGHT_PCT 100
+#endif
+#ifndef BASEUI_KEYBOARD_LR_MARGIN_PCT
+#define BASEUI_KEYBOARD_LR_MARGIN_PCT 0
+#endif
+#ifndef BASEUI_KEYBOARD_BOTTOM_MARGIN_PCT
+#define BASEUI_KEYBOARD_BOTTOM_MARGIN_PCT 0
+#endif
 
 namespace graphics
 {
@@ -214,10 +245,13 @@ void CannedMessageModule::drawHeader(OLEDDisplay *display, int16_t x, int16_t y,
         snprintf(header, sizeof(header), "To: @%s", getNodeName(this->dest));
     }
 
-    const int maxWidth = std::max(0, display->getWidth() - x);
+    // First row of text: inset horizontally by the header L/R margin and pushed down by the header margin
+    const int headerX = x + BASEUI_HEADER_LR_MARGIN;
+    const int headerY = y + BASEUI_HEADER_MARGIN;
+    const int maxWidth = std::max(0, display->getWidth() - headerX - BASEUI_HEADER_LR_MARGIN);
     char truncatedHeader[96];
     graphics::UIRenderer::truncateStringWithEmotes(display, header, truncatedHeader, sizeof(truncatedHeader), maxWidth);
-    graphics::UIRenderer::drawStringWithEmotes(display, x, y, truncatedHeader, FONT_HEIGHT_SMALL, 1, false);
+    graphics::UIRenderer::drawStringWithEmotes(display, headerX, headerY, truncatedHeader, FONT_HEIGHT_SMALL, 1, false);
 }
 
 void CannedMessageModule::resetSearch()
@@ -335,6 +369,97 @@ static size_t firstWrappedTokenLen(const char *text)
     return graphics::EmoteRenderer::utf8CharLen(static_cast<uint8_t>(text[0]));
 }
 
+#if defined(USE_VIRTUAL_KEYBOARD)
+// Rounded key caps. drawRect() reads as a grid of boxes at the sizes a full QWERTY layout forces;
+// rounding the corners is what lets a key still look like a key once it is only ~25px wide.
+static void fillRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r)
+{
+    r = std::min<int16_t>(r, std::min(w, h) / 2);
+    if (r < 1) {
+        display->fillRect(x, y, w, h);
+        return;
+    }
+
+    display->fillRect(x + r, y, w - r * 2, h);
+    display->fillRect(x, y + r, r, h - r * 2);
+    display->fillRect(x + w - r, y + r, r, h - r * 2);
+    display->fillCircle(x + r, y + r, r);
+    display->fillCircle(x + w - 1 - r, y + r, r);
+    display->fillCircle(x + r, y + h - 1 - r, r);
+    display->fillCircle(x + w - 1 - r, y + h - 1 - r, r);
+}
+
+static void drawRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r)
+{
+    r = std::min<int16_t>(r, std::min(w, h) / 2);
+    if (r < 1) {
+        display->drawRect(x, y, w, h);
+        return;
+    }
+
+    display->drawHorizontalLine(x + r, y, w - r * 2);
+    display->drawHorizontalLine(x + r, y + h - 1, w - r * 2);
+    display->drawVerticalLine(x, y + r, h - r * 2);
+    display->drawVerticalLine(x + w - 1, y + r, h - r * 2);
+    // Quadrant bitmask: 1 = top-right, 2 = top-left, 4 = bottom-left, 8 = bottom-right
+    display->drawCircleQuads(x + r, y + r, r, 2);
+    display->drawCircleQuads(x + w - 1 - r, y + r, r, 1);
+    display->drawCircleQuads(x + r, y + h - 1 - r, r, 4);
+    display->drawCircleQuads(x + w - 1 - r, y + h - 1 - r, r, 8);
+}
+
+// Second glyph a key produces while shift is held. Returns 0 for keys that only case-shift.
+static char shiftedSymbol(char c)
+{
+    switch (c) {
+    case '`':
+        return '~';
+    case '1':
+        return '!';
+    case '2':
+        return '@';
+    case '3':
+        return '#';
+    case '4':
+        return '$';
+    case '5':
+        return '%';
+    case '6':
+        return '^';
+    case '7':
+        return '&';
+    case '8':
+        return '*';
+    case '9':
+        return '(';
+    case '0':
+        return ')';
+    case '-':
+        return '_';
+    case '=':
+        return '+';
+    case '[':
+        return '{';
+    case ']':
+        return '}';
+    case '\\':
+        return '|';
+    case ';':
+        return ':';
+    case '\'':
+        return '"';
+    case ',':
+        return '<';
+    case '.':
+        return '>';
+    case '/':
+        return '?';
+    default:
+        return 0;
+    }
+}
+#endif // USE_VIRTUAL_KEYBOARD
+
 static void drawWrappedEmoteText(OLEDDisplay *display, int x, int y, const char *text, int maxWidth, int minimumRowHeight,
                                  int emoteSpacing = 2)
 {
@@ -392,6 +517,11 @@ static void drawWrappedEmoteText(OLEDDisplay *display, int x, int y, const char 
  * Routes keyboard/button/touch input to the correct handler based on the current runState.
  * Only one handler (per state) processes each event, eliminating redundancy.
  */
+#if BASEUI_HAS_TOUCH_DRAG
+static bool keyboardPanDragUpdate(const InputEvent *event, CannedMessageModule *module);
+static bool keyboardPanDragEnd();
+#endif
+
 int CannedMessageModule::handleInputEvent(const InputEvent *event)
 {
     // Block ALL input if an alert banner is active
@@ -472,6 +602,19 @@ int CannedMessageModule::handleInputEvent(const InputEvent *event)
 
 void CannedMessageModule::updateState(cannedMessageModuleRunState newState, bool shouldRequestFocus)
 {
+    // Opening the picker keeps the emote that was last chosen but drops where the grid was
+    // scrolled to; out of range is the signal for the next draw to recentre on the selection.
+    if (newState == CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER && runState != CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER)
+        emoteScrollOffset = -1;
+
+#if defined(USE_VIRTUAL_KEYBOARD)
+    // Shift is a property of the on-screen keyboard, so it must not outlive the composer.
+    // Leaving by anything other than the ESC key used to leave it latched, and it was then
+    // still latched - and still inverted - on the next visit.
+    if (newState != CANNED_MESSAGE_RUN_STATE_FREETEXT && runState == CANNED_MESSAGE_RUN_STATE_FREETEXT)
+        shift = false;
+#endif
+
     runState = newState;
     if (runState == CANNED_MESSAGE_RUN_STATE_FREETEXT) {
         inputBroker->menuMode =
@@ -486,16 +629,16 @@ void CannedMessageModule::updateState(cannedMessageModuleRunState newState, bool
 
 bool CannedMessageModule::isUpEvent(const InputEvent *event)
 {
+    // The emote picker is deliberately absent: it is a grid, so it reads the raw directions and
+    // needs LEFT to mean left rather than a second way to say up.
     return event->inputEvent == INPUT_BROKER_UP ||
-           ((runState == CANNED_MESSAGE_RUN_STATE_ACTIVE || runState == CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER ||
-             runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION) &&
+           ((runState == CANNED_MESSAGE_RUN_STATE_ACTIVE || runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION) &&
             (event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_ALT_PRESS));
 }
 bool CannedMessageModule::isDownEvent(const InputEvent *event)
 {
     return event->inputEvent == INPUT_BROKER_DOWN ||
-           ((runState == CANNED_MESSAGE_RUN_STATE_ACTIVE || runState == CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER ||
-             runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION) &&
+           ((runState == CANNED_MESSAGE_RUN_STATE_ACTIVE || runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION) &&
             (event->inputEvent == INPUT_BROKER_RIGHT || event->inputEvent == INPUT_BROKER_USER_PRESS));
 }
 bool CannedMessageModule::isSelectEvent(const InputEvent *event)
@@ -814,9 +957,28 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
     if (runState != CANNED_MESSAGE_RUN_STATE_FREETEXT)
         return false;
 
+#if HAS_TOUCHSCREEN
+    // Tapping the "To: ..." row opens the destination picker - the same thing Tab does on a
+    // hardware keyboard, and on a touch-only device the only way to reach it at all. Sits above
+    // both keyboard paths because the header is drawn the same way for each.
+    if ((event->touchX != 0 || event->touchY != 0) && event->touchY < BASEUI_HEADER_MARGIN + FONT_HEIGHT_SMALL) {
+        destIndex = 0;
+        scrollIndex = 0;
+        currentMessageIndex = -1;
+        updateDestinationSelectionList();
+        updateState(CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION, true);
+        screen->forceDisplay();
+        return true;
+    }
+#endif
+
 #if defined(USE_VIRTUAL_KEYBOARD)
-    // Cancel (dismiss freetext screen)
-    if (event->inputEvent == INPUT_BROKER_LEFT) {
+    // Cancel (dismiss freetext screen). A swipe classified by the touch layer arrives as
+    // INPUT_BROKER_LEFT too, so on a board whose keyboard pans horizontally that gesture would
+    // close the composer instead of sliding the keys. Only a physical left key cancels there;
+    // the touch route out is the ESC key, which is on the keyboard itself.
+    if (event->inputEvent == INPUT_BROKER_LEFT &&
+        !(BASEUI_KEYBOARD_ZOOM_PCT > 100 && event->source && strcmp(event->source, "touchscreen1") == 0)) {
         updateState(CANNED_MESSAGE_RUN_STATE_INACTIVE);
         freetext = "";
         cursor = 0;
@@ -830,34 +992,78 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
         screen->forceDisplay();
         return true;
     }
+#if BASEUI_HAS_TOUCH_DRAG
+    // Drag reports are swallowed whole while the composer is open, not just once the pan has
+    // committed to an axis. Screen's finger-tracked frame transition anchors on the same first
+    // report and locks its axis at the same 10px, so leaving the early reports to fall through
+    // let it start paging out from under the keyboard - and once this handler did claim the
+    // gesture, that half-run transition was left stranded mid-slide. Claiming from the first
+    // report means no frame transition can begin behind the keyboard at all.
+    //
+    // Panning itself still only happens on a horizontal gesture, and only when the grid is
+    // actually wider than the screen; a vertical drag is simply consumed and ignored.
+    if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG) {
+        if (keyboardPanDragUpdate(event, this))
+            // runNow() rather than forceDisplay(): the pan needs the transition framerate held
+            // for the whole gesture, not a single redraw per report. screenDragOwnsFramerate()
+            // keeps Screen from demoting it again while the finger is still steering.
+            screen->runNow();
+        return true;
+    }
+    if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG_END) {
+        keyboardPanDragEnd();
+        return true;
+    }
+#endif
+
     // Touch input (virtual keyboard) handling
     // Only handle if touch coordinates present (CardKB won't set these)
     if (event->touchX != 0 || event->touchY != 0) {
+        // A pan that ends over a key would otherwise be taken as a tap on it.
+        if (isKeyboardPanFingerSteering())
+            return true;
         String keyTapped = keyForCoordinates(event->touchX, event->touchY);
         bool valid = false;
 
+#ifndef EXCLUDE_EMOJI
+        if (keyTapped == "\U0001F60A") {
+            highlight = "";
+            payload = 0x00;
+            updateState(CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER, true);
+            screen->forceDisplay();
+            return true;
+        }
+#endif
         if (keyTapped == "⇧") {
-            highlight = -1;
+            highlight = "";
             payload = 0x00;
             shift = !shift;
             valid = true;
         } else if (keyTapped == "⌫") {
 #ifndef RAK14014
-            highlight = keyTapped[0];
+            highlight = keyTapped;
 #endif
             payload = 0x08;
             shift = false;
             valid = true;
-        } else if (keyTapped == "123" || keyTapped == "ABC") {
-            highlight = -1;
-            payload = 0x00;
-            charSet = (charSet == 0 ? 1 : 0);
-            valid = true;
-        } else if (keyTapped == " ") {
+        } else if (keyTapped == "ESC") {
+            updateState(CANNED_MESSAGE_RUN_STATE_INACTIVE);
+            freetext = "";
+            cursor = 0;
+            payload = 0;
+            currentMessageIndex = -1;
+            shift = false;
+
+            UIFrameEvent e;
+            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+            notifyObservers(&e);
+            screen->forceDisplay();
+            return true;
+        } else if (keyTapped == "SPACE" || keyTapped == " ") {
 #ifndef RAK14014
-            highlight = keyTapped[0];
+            highlight = keyTapped;
 #endif
-            payload = keyTapped[0];
+            payload = ' ';
             shift = false;
             valid = true;
         }
@@ -870,9 +1076,15 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
             valid = true;
         } else if (!(keyTapped == "")) {
 #ifndef RAK14014
-            highlight = keyTapped[0];
+            highlight = keyTapped;
 #endif
-            payload = shift ? keyTapped[0] : std::tolower(keyTapped[0]);
+            // Letters case-shift; punctuation and digits reach their second glyph instead
+            const char c = keyTapped[0];
+            const char shifted = shift ? shiftedSymbol(c) : 0;
+            if (shifted)
+                payload = shifted;
+            else
+                payload = shift ? c : std::tolower(c);
             shift = false;
             valid = true;
         }
@@ -883,8 +1095,29 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
             payload = 0;
             return true; // STOP: We handled a VKB touch
         }
+
+        // Touch landed in the gap between keys. Still ours: the keyboard covers the screen, so
+        // letting it through would page the frame or open a long-press menu behind the composer.
+        return true;
     }
 #endif // USE_VIRTUAL_KEYBOARD
+
+    // Devices that type on hardware keys but still have a touchscreen (T-Deck and friends). The
+    // composer is otherwise entirely keyboard-driven, so the emote button drawn in drawFrame() is
+    // the only touch target left below the header; everything else is swallowed rather than left to
+    // open a long-press menu over the draft.
+#if defined(HAS_PHYSICAL_KEYBOARD) && HAS_TOUCHSCREEN && !defined(USE_VIRTUAL_KEYBOARD)
+    if (event->touchX != 0 || event->touchY != 0) {
+        if (graphics::numEmotes > 0 && event->touchX >= displayWidth - EMOTE_BUTTON_SIZE - EMOTE_BUTTON_MARGIN &&
+            event->touchY >= displayHeight - EMOTE_BUTTON_SIZE - EMOTE_BUTTON_MARGIN) {
+            updateState(CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER, true);
+            screen->forceDisplay();
+            return true;
+        }
+
+        return true;
+    }
+#endif // HAS_PHYSICAL_KEYBOARD && HAS_TOUCHSCREEN && !USE_VIRTUAL_KEYBOARD
 
     // All hardware keys fall through to here (CardKB, physical, etc.)
 
@@ -973,43 +1206,344 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
     return false;
 }
 
+// emotes[] maps several Unicode labels onto one bitmap - seven hearts, two snowmen, two sunrises.
+// A list showing labels beside the artwork made that legible; a grid showing artwork alone just
+// looks like it repeats, so collapse to first occurrences. The table is const, so this runs once.
+static const std::vector<uint16_t> &uniqueEmoteIndices()
+{
+    static std::vector<uint16_t> unique;
+    static bool built = false;
+
+    if (!built) {
+        built = true;
+        for (int i = 0; i < graphics::numEmotes; ++i) {
+            bool duplicate = false;
+            for (uint16_t seen : unique) {
+                if (graphics::emotes[seen].bitmap == graphics::emotes[i].bitmap) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate)
+                unique.push_back((uint16_t)i);
+        }
+    }
+    return unique;
+}
+
+// Scroll offset (in rows) that puts `row` in the middle of the viewport, clamped to the grid's ends.
+static float emoteScrollToCenter(int row, int rows, int totalRows)
+{
+    const float offset = row - rows / 2.0f;
+    const float maxOffset = (float)std::max(0, totalRows - rows);
+    return std::min(std::max(offset, 0.0f), maxOffset);
+}
+
+// Touch scroll - moves the grid by an exact finger displacement in screen pixels, for hardware that
+// reports a continuous drag (BASEUI_HAS_TOUCH_DRAG). Pass the delta between consecutive drag
+// reports, not the offset from where the finger landed.
+//
+// The grid follows the finger, which is the opposite sense to the arrow keys: a press means "move
+// the selection that way", a finger means "drag the grid that way". Same as MapRenderer's pan and
+// the message list's scroll. Deliberately leaves the selection alone - scrolling past the
+// highlighted emote is normal, and it is the next tap that picks a different one.
+void CannedMessageModule::scrollEmotesByFingerDelta(float dyPx)
+{
+    if (dyPx == 0.0f || emoteCellSize <= 0 || emoteGridCols <= 0)
+        return;
+
+    const int numUnique = (int)uniqueEmoteIndices().size();
+    const int totalRows = (numUnique + emoteGridCols - 1) / emoteGridCols;
+    const float maxScrollOffset = (float)std::max(0, totalRows - emoteGridRows);
+
+    // Screen y grows downward, so dragging down (dyPx > 0) walks back towards the first row
+    const float next = emoteScrollOffset - dyPx / emoteCellSize;
+    emoteScrollOffset = std::min(std::max(next, 0.0f), maxScrollOffset);
+}
+
+void CannedMessageModule::panKeyboardByFingerDelta(float dxPx)
+{
+    if (dxPx == 0.0f || keyboardMinPanX >= 0)
+        return; // not zoomed: there is nothing off-screen to pan to
+
+    const float next = keyboardPanX + dxPx;
+    keyboardPanX = std::min(std::max(next, (float)keyboardMinPanX), 0.0f);
+}
+
+#if BASEUI_HAS_TOUCH_DRAG
+// ---- Finger-tracked keyboard panning -----------------------------------------------------------
+//
+// Same driver as the emote grid below, mirrored: the keyboard is wider than the screen rather than
+// taller, so this one claims the horizontal half. Only active when the grid is actually zoomed -
+// otherwise a horizontal drag still belongs to the frame transition, as it does everywhere else.
+static bool kbDragAnchorValid = false;
+static uint16_t kbDragAnchorX = 0;
+static uint16_t kbDragAnchorY = 0;
+static uint16_t kbDragLastX = 0;
+static uint32_t kbDragLastMs = 0;
+static int8_t kbDragAxis = 0; // 0 undecided, 1 horizontal (ours), -1 vertical (not ours)
+
+#define KB_DRAG_AXIS_LOCK_PX 10
+#define KB_DRAG_ANCHOR_STALE_MS 1000
+
+static bool keyboardPanDragUpdate(const InputEvent *event, CannedMessageModule *module)
+{
+    const uint32_t now = millis();
+    if (!kbDragAnchorValid || (now - kbDragLastMs) > KB_DRAG_ANCHOR_STALE_MS) {
+        kbDragAnchorValid = true;
+        kbDragAnchorX = event->touchX;
+        kbDragAnchorY = event->touchY;
+        kbDragLastX = event->touchX;
+        kbDragLastMs = now;
+        kbDragAxis = 0;
+        return false; // this report only establishes where the finger started
+    }
+    kbDragLastMs = now;
+
+    if (kbDragAxis == 0) {
+        const int32_t dx = (int32_t)event->touchX - (int32_t)kbDragAnchorX;
+        const int32_t dy = (int32_t)event->touchY - (int32_t)kbDragAnchorY;
+        if (abs(dx) < KB_DRAG_AXIS_LOCK_PX && abs(dy) < KB_DRAG_AXIS_LOCK_PX)
+            return false; // too early to tell which way this gesture is going
+        kbDragAxis = (abs(dx) > abs(dy)) ? 1 : -1;
+    }
+    if (kbDragAxis < 0)
+        return false; // vertical: not ours
+
+    const float dx = (float)((int32_t)event->touchX - (int32_t)kbDragLastX);
+    kbDragLastX = event->touchX;
+    module->panKeyboardByFingerDelta(dx);
+    return true;
+}
+
+// When the gesture that just ended was a pan. The touch layer still classifies a tap on release,
+// so without a window here letting go over a key typed it.
+static uint32_t kbPanEndedMs = 0;
+#define KB_PAN_TAP_SUPPRESS_MS 400
+
+static bool keyboardPanDragEnd()
+{
+    const bool claimed = kbDragAnchorValid && kbDragAxis > 0;
+    if (claimed)
+        kbPanEndedMs = millis();
+    kbDragAnchorValid = false;
+    kbDragAxis = 0;
+    return claimed;
+}
+#endif // BASEUI_HAS_TOUCH_DRAG
+
+bool isKeyboardPanFingerSteering()
+{
+#if BASEUI_HAS_TOUCH_DRAG
+    // Includes a short tail after the finger lifts: keyboardPanDragEnd() clears the anchor
+    // immediately, but the tap the touch layer classifies on release arrives after that.
+    if (kbPanEndedMs && (millis() - kbPanEndedMs) <= KB_PAN_TAP_SUPPRESS_MS)
+        return true;
+    return kbDragAnchorValid && (millis() - kbDragLastMs) <= KB_DRAG_ANCHOR_STALE_MS;
+#else
+    return false;
+#endif
+}
+
+#if BASEUI_HAS_TOUCH_DRAG
+// ---- Finger-tracked emote grid scrolling -------------------------------------------------------
+//
+// The same driver the map and the message list use (mapPanDragUpdate()/messageScrollDragUpdate() in
+// Screen.cpp): _TOUCH_DRAG reports an absolute position rather than a delta, so the first report
+// only anchors, the gesture commits to an axis before anything moves, and the grid is then fed the
+// displacement between consecutive reports. Like the message list it shares its frame with
+// left/right paging, so it claims only the vertical half and leaves horizontal to the transition.
+//
+// Lives here rather than beside the others in Screen.cpp purely because a module sees input first -
+// Screen is the last handler, and never sees a drag we have already claimed.
+//
+// Constants match Screen.cpp's SCREEN_DRAG_AXIS_LOCK_PX and DRAG_ANCHOR_STALE_MS: how far a finger
+// travels before a drag commits should not depend on which frame it lands on.
+#define EMOTE_DRAG_AXIS_LOCK_PX 10
+#define EMOTE_DRAG_ANCHOR_STALE_MS 1000
+
+static bool emoteDragAnchorValid = false;
+static uint16_t emoteDragAnchorX = 0;
+static uint16_t emoteDragAnchorY = 0;
+static uint16_t emoteDragLastY = 0;
+static uint32_t emoteDragLastMs = 0;
+static int8_t emoteDragAxis = 0; // 0 undecided, 1 vertical (ours), -1 horizontal (not ours)
+
+// Returns true if this report belongs to the grid, false to leave it for the frame transition.
+static bool emoteScrollDragUpdate(const InputEvent *event, CannedMessageModule *module)
+{
+    const uint32_t now = millis();
+    if (!emoteDragAnchorValid || (now - emoteDragLastMs) > EMOTE_DRAG_ANCHOR_STALE_MS) {
+        emoteDragAnchorValid = true;
+        emoteDragAnchorX = event->touchX;
+        emoteDragAnchorY = event->touchY;
+        emoteDragLastY = event->touchY;
+        emoteDragLastMs = now;
+        emoteDragAxis = 0;
+        return false; // this report only establishes where the finger started
+    }
+    emoteDragLastMs = now;
+
+    if (emoteDragAxis == 0) {
+        const int32_t dx = (int32_t)event->touchX - (int32_t)emoteDragAnchorX;
+        const int32_t dy = (int32_t)event->touchY - (int32_t)emoteDragAnchorY;
+        if (abs(dx) < EMOTE_DRAG_AXIS_LOCK_PX && abs(dy) < EMOTE_DRAG_AXIS_LOCK_PX)
+            return false; // too early to tell which way this gesture is going
+        emoteDragAxis = (abs(dy) > abs(dx)) ? 1 : -1;
+    }
+    if (emoteDragAxis < 0)
+        return false; // horizontal: the frame transition owns it
+
+    const float dy = (float)((int32_t)event->touchY - (int32_t)emoteDragLastY);
+    emoteDragLastY = event->touchY;
+    module->scrollEmotesByFingerDelta(dy);
+    return true;
+}
+
+static bool emoteScrollDragEnd()
+{
+    const bool claimed = emoteDragAnchorValid && emoteDragAxis > 0;
+    emoteDragAnchorValid = false;
+    emoteDragAxis = 0;
+    return claimed;
+}
+#endif // BASEUI_HAS_TOUCH_DRAG
+
+bool isEmoteScrollFingerSteering()
+{
+#if BASEUI_HAS_TOUCH_DRAG
+    // Derived from how recently a report arrived rather than a start/end flag, for the same reason
+    // Screen.cpp's own anchors are: a gesture can end somewhere we never see, and a flag left stuck
+    // true would pin the screen at the drag framerate indefinitely.
+    return emoteDragAnchorValid && (millis() - emoteDragLastMs) <= EMOTE_DRAG_ANCHOR_STALE_MS;
+#else
+    return false;
+#endif
+}
+
 int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
 {
-    int numEmotes = graphics::numEmotes;
-    if (numEmotes == 0) { // EXCLUDE_EMOJI: emotes[] is empty, any index would read out of bounds
+    const std::vector<uint16_t> &unique = uniqueEmoteIndices();
+    const int numUnique = (int)unique.size();
+    if (numUnique == 0) { // EXCLUDE_EMOJI: emotes[] is empty, any index would read out of bounds
         updateState(CANNED_MESSAGE_RUN_STATE_FREETEXT, true);
         screen->forceDisplay();
         return 1;
     }
 
-    // Override isDown and isSelect ONLY for emote picker behavior
-    bool isUp = isUpEvent(event);
-    bool isDown = isDownEvent(event);
-    bool isSelect = isSelectEvent(event);
-    if (runState == CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER) {
-        if (event->inputEvent == INPUT_BROKER_USER_PRESS) {
-            isDown = true;
-        } else if (event->inputEvent == INPUT_BROKER_SELECT) {
-            isSelect = true;
+    // The grid is laid out by drawEmotePickerScreen(); until it has run once - and normalised the
+    // scroll offset that opening the picker invalidated - there is nothing meaningful to navigate,
+    // and no touch can have landed on a cell that is not on screen yet.
+    if (emoteCellSize == 0 || emoteGridCols == 0 || emoteGridRows == 0 || emoteScrollOffset < 0)
+        return 0;
+
+    const int cols = emoteGridCols;
+    const int rows = emoteGridRows;
+    const int totalRows = (numUnique + cols - 1) / cols;
+
+    // The grid needs LEFT/RIGHT to mean left and right, so read the raw directions rather than
+    // isUpEvent()/isDownEvent() - those fold LEFT into "up" for the list-shaped screens.
+    const bool isUp = event->inputEvent == INPUT_BROKER_UP;
+    const bool isDown = event->inputEvent == INPUT_BROKER_DOWN;
+    const bool isLeft = event->inputEvent == INPUT_BROKER_LEFT;
+    const bool isRight = event->inputEvent == INPUT_BROKER_RIGHT;
+    const bool isSelect = isSelectEvent(event);
+    const bool hasTouch = event->touchX != 0 || event->touchY != 0;
+
+#if BASEUI_HAS_TOUCH_DRAG
+    // Only swallowed when the grid claimed it; a horizontal drag falls through to page the frame.
+    if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG && emoteScrollDragUpdate(event, this)) {
+        requestFocus();
+        screen->forceDisplay(true);
+        return 1;
+    }
+    if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG_END && emoteScrollDragEnd()) {
+        screen->forceDisplay(true);
+        return 1;
+    }
+    // The grid is finger-tracked, so the swipe classified on release must not scroll a step on top
+    // of it - nor for a flick too quick to have produced any drag report at all.
+    if (hasTouch && (isUp || isDown))
+        return 1;
+#endif
+
+    // Touch is two-stage: a tap moves the highlight, a long press on it commits. Insert-on-tap
+    // would put an emote in the draft every time a finger brushed the grid on the way to scrolling
+    // it, and the picker is full of targets barely wider than a fingertip.
+    int touchedIdx = -1;
+    if (hasTouch && (event->inputEvent == INPUT_BROKER_USER_PRESS || isSelect)) {
+        const int topRow = (int)emoteScrollOffset;
+        const int pixelOffset = (int)((emoteScrollOffset - topRow) * emoteCellSize);
+        const int col = (event->touchX - emoteGridX) / emoteCellSize;
+        const int row = (event->touchY - emoteGridTop + pixelOffset) / emoteCellSize;
+        if (event->touchX >= emoteGridX && col >= 0 && col < cols && event->touchY >= emoteGridTop &&
+            event->touchY < emoteGridBottom) {
+            const int idx = (topRow + row) * cols + col;
+            if (idx >= 0 && idx < numUnique)
+                touchedIdx = idx;
+        }
+        if (touchedIdx < 0)
+            return 1; // tap on the header or past the last emote: swallow it, don't page the frame
+
+        // Highlight only - and leave the scroll where the finger left it, rather than recentring
+        // and sliding the grid out from under a selection the user can already see.
+        if (!isSelect) {
+            if (touchedIdx != emotePickerIndex) {
+                emotePickerIndex = touchedIdx;
+                requestFocus();
+                screen->forceDisplay();
+            }
+            return 1;
         }
     }
 
-    // Scroll emote list
-    if (isUp && emotePickerIndex > 0) {
-        emotePickerIndex--;
-        screen->forceDisplay();
-        return 1;
-    }
-    if (isDown && emotePickerIndex < numEmotes - 1) {
-        emotePickerIndex++;
-        screen->forceDisplay();
+    // Single-button devices have no direction to give, so a short press steps to the next emote -
+    // the same meaning it carried in the list-shaped picker this grid replaced.
+    if (!hasTouch && event->inputEvent == INPUT_BROKER_USER_PRESS) {
+        if (emotePickerIndex < numUnique - 1) {
+            emotePickerIndex++;
+            emoteScrollOffset = emoteScrollToCenter(emotePickerIndex / cols, rows, totalRows);
+            requestFocus();
+            screen->forceDisplay();
+        }
         return 1;
     }
 
-    // Select emote: insert into freetext at cursor and return to freetext
+    // Directional events carrying touch coordinates are the swipe classified on release. The grid
+    // already followed the finger, so acting on them too would scroll a second time.
+    if (!hasTouch && (isUp || isDown || isLeft || isRight)) {
+        const int currentCol = emotePickerIndex % cols;
+        int target = emotePickerIndex;
+
+        if (isUp && emotePickerIndex >= cols) {
+            target = emotePickerIndex - cols;
+        } else if (isDown) {
+            // On the last row, fall to the final emote rather than refusing to move
+            const int below = emotePickerIndex + cols;
+            target = (below < numUnique) ? below : std::max(emotePickerIndex, numUnique - 1);
+        } else if (isLeft && currentCol > 0) {
+            target = emotePickerIndex - 1;
+        } else if (isRight && currentCol < cols - 1 && emotePickerIndex < numUnique - 1) {
+            target = emotePickerIndex + 1;
+        }
+
+        if (target != emotePickerIndex) {
+            emotePickerIndex = target;
+            emoteScrollOffset = emoteScrollToCenter(emotePickerIndex / cols, rows, totalRows);
+            requestFocus();
+            screen->forceDisplay();
+        }
+        return 1;
+    }
+
+    // Confirm: insert the selected emote's label at the cursor and return to the composer. Reached
+    // by a button press, or by a long press on the grid - which commits whatever it landed on, so
+    // one long press can both pick and confirm without a separate tap first.
     if (isSelect) {
-        String label = graphics::emotes[emotePickerIndex].label;
-        String emoteInsert = label; // Just the text label, e.g., ":thumbsup:"
+        if (touchedIdx >= 0)
+            emotePickerIndex = touchedIdx;
+
+        String emoteInsert = graphics::emotes[unique[emotePickerIndex]].label;
         if (cursor == freetext.length()) {
             freetext += emoteInsert;
         } else {
@@ -1021,8 +1555,9 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
         return 1;
     }
 
-    // Cancel returns to freetext
-    if (event->inputEvent == INPUT_BROKER_CANCEL || event->inputEvent == INPUT_BROKER_ALT_LONG) {
+    // Cancel or backspace returns to freetext
+    if (event->inputEvent == INPUT_BROKER_CANCEL || event->inputEvent == INPUT_BROKER_ALT_LONG ||
+        event->inputEvent == INPUT_BROKER_BACK) {
         updateState(CANNED_MESSAGE_RUN_STATE_FREETEXT, true);
         screen->forceDisplay();
         return 1;
@@ -1460,16 +1995,19 @@ int CannedMessageModule::getPrevIndex()
 
 String CannedMessageModule::keyForCoordinates(uint x, uint y)
 {
-    int outerSize = *(&this->keyboard[this->charSet] + 1) - this->keyboard[this->charSet];
+    int outerSize = *(&this->keyboard[0] + 1) - this->keyboard[0];
 
     for (int8_t outerIndex = 0; outerIndex < outerSize; outerIndex++) {
-        int innerSize = *(&this->keyboard[this->charSet][outerIndex] + 1) - this->keyboard[this->charSet][outerIndex];
+        int innerSize = *(&this->keyboard[0][outerIndex] + 1) - this->keyboard[0][outerIndex];
 
         for (int8_t innerIndex = 0; innerIndex < innerSize; innerIndex++) {
-            Letter letter = this->keyboard[this->charSet][outerIndex][innerIndex];
+            Letter letter = this->keyboard[0][outerIndex][innerIndex];
 
-            if (x > letter.rectX && x < (letter.rectX + letter.rectWidth) && y > letter.rectY &&
-                y < (letter.rectY + letter.rectHeight)) {
+            if (letter.character == "")
+                continue;
+
+            if (x > (uint)letter.rectX && x < (uint)(letter.rectX + letter.rectWidth) && y > (uint)letter.rectY &&
+                y < (uint)(letter.rectY + letter.rectHeight)) {
                 return letter.character;
             }
         }
@@ -1480,117 +2018,207 @@ String CannedMessageModule::keyForCoordinates(uint x, uint y)
 
 void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-    int outerSize = *(&this->keyboard[this->charSet] + 1) - this->keyboard[this->charSet];
-
-    int xOffset = 0;
-
-    int yOffset = 56;
-
-    display->setTextAlignment(TEXT_ALIGN_LEFT);
-
-    display->setFont(FONT_SMALL);
+    const int outerSize = *(&this->keyboard[0] + 1) - this->keyboard[0];
+    char buffer[50];
 
     display->setColor(OLEDDISPLAY_COLOR::WHITE);
+    display->setFont(FONT_SMALL);
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
 
-    display->drawStringMaxWidth(0, 0, display->getWidth(),
-                                cannedMessageModule->drawWithCursor(cannedMessageModule->freetext, cannedMessageModule->cursor));
+    // Destination and remaining characters, laid out like the hardware-keyboard composer
+    drawHeader(display, x, y, buffer);
+    const uint16_t charsLeft =
+        meshtastic_Constants_DATA_PAYLOAD_LEN - this->freetext.length() - (moduleConfig.canned_message.send_bell ? 1 : 0);
+    snprintf(buffer, sizeof(buffer), "%d left", charsLeft);
+    display->drawString(x + display->getWidth() - display->getStringWidth(buffer) - BASEUI_HEADER_LR_MARGIN,
+                        y + BASEUI_HEADER_MARGIN, buffer);
 
-    display->setFont(FONT_MEDIUM);
+    // Draft below the header, with any emotes already in it drawn as artwork
+    const int draftX = x + BASEUI_BODY_LR_MARGIN;
+    String draft = this->drawWithCursor(this->freetext, this->cursor);
+    drawWrappedEmoteText(display, draftX, y + FONT_HEIGHT_SMALL + BASEUI_HEADER_MARGIN, draft.c_str(),
+                         display->getWidth() - draftX - BASEUI_BODY_LR_MARGIN, FONT_HEIGHT_SMALL);
 
-    int cellHeight = round((display->height() - 64) / outerSize);
+    // Keys fill what is left below the draft, inset by whatever the variant asks for. The key grid
+    // deliberately ignores BASEUI_BODY_LR_MARGIN - that one insets text, and fourteen columns cannot
+    // spare it - so a device that needs its edges kept clear says so with the keyboard margins.
+    const int screenWidth = display->getWidth();
+    const int screenHeight = display->getHeight();
+    const int sideInset = screenWidth * BASEUI_KEYBOARD_LR_MARGIN_PCT / 100;
+    const int visibleKeyAreaWidth = screenWidth - sideInset * 2;
+    const int keyAreaWidth = visibleKeyAreaWidth * BASEUI_KEYBOARD_ZOOM_PCT / 100;
 
-    int yCorrection = 8;
+    // Publish the pan limit for the drag handler, and keep the current offset legal - the layout
+    // can change underneath it (rotation, a variant tweak) while a pan is held.
+    this->keyboardMinPanX = std::min(0, visibleKeyAreaWidth - keyAreaWidth);
+    if (this->keyboardPanX < (float)this->keyboardMinPanX)
+        this->keyboardPanX = (float)this->keyboardMinPanX;
+    if (this->keyboardPanX > 0.0f)
+        this->keyboardPanX = 0.0f;
+    const int panX = (int)lroundf(this->keyboardPanX);
+    const int keyAreaBottom = screenHeight - screenHeight * BASEUI_KEYBOARD_BOTTOM_MARGIN_PCT / 100;
+
+    int keyFontHeight;
+    if (screenWidth >= 400) {
+        display->setFont(FONT_MEDIUM);
+        keyFontHeight = FONT_HEIGHT_MEDIUM;
+    } else if (screenWidth >= 280) {
+        display->setFont(FONT_SMALL);
+        keyFontHeight = FONT_HEIGHT_SMALL;
+    } else {
+        display->setFont(FONT_SMALL_LOCAL);
+        keyFontHeight = _fontHeight(FONT_SMALL_LOCAL);
+    }
+
+    // Rows are sized to the space between the halfway mark and the bottom inset, then the block is
+    // anchored to that inset rather than grown downwards - so the padding is what the user sees, and
+    // any height the clamp leaves over goes to the draft above instead of a gap underneath.
+    const int baseCellHeight = std::min(45, std::max(20, (keyAreaBottom - screenHeight / 2 - 4) / outerSize));
+    // Clamp so a tall setting cannot push the rows up over the draft and header.
+    const int maxCellHeight = std::max(20, (keyAreaBottom - FONT_HEIGHT_SMALL * 3) / outerSize);
+    const int cellHeight = std::min(maxCellHeight, baseCellHeight * BASEUI_KEYBOARD_KEY_HEIGHT_PCT / 100);
+    int yOffset = y + keyAreaBottom - cellHeight * outerSize;
+    const int buttonPadding = 1;
+    const int buttonRadius = 7;
+
+    // Icon artwork is nominally 15x12; scale it with the screen the same way the font is picked
+    const float iconScale = (screenWidth >= 400) ? 1.2f : (screenWidth >= 280) ? 1.0f : 0.8f;
+    const float enterIconScale = iconScale * 1.4f;
+    const int iconWidth = (int)(15 * iconScale);
+    const int iconHeight = (int)(12 * iconScale);
 
     for (int8_t outerIndex = 0; outerIndex < outerSize; outerIndex++) {
         yOffset += outerIndex > 0 ? cellHeight : 0;
 
-        int innerSizeBound = *(&this->keyboard[this->charSet][outerIndex] + 1) - this->keyboard[this->charSet][outerIndex];
+        const int innerSizeBound = *(&this->keyboard[0][outerIndex] + 1) - this->keyboard[0][outerIndex];
 
         int innerSize = 0;
-
         for (int8_t innerIndex = 0; innerIndex < innerSizeBound; innerIndex++) {
-            if (this->keyboard[this->charSet][outerIndex][innerIndex].character != "") {
+            if (this->keyboard[0][outerIndex][innerIndex].character != "")
                 innerSize++;
-            }
         }
+        if (innerSize == 0)
+            continue;
 
-        int cellWidth = display->width() / innerSize;
+        const bool isBottomRow = outerIndex == outerSize - 1;
 
         for (int8_t innerIndex = 0; innerIndex < innerSize; innerIndex++) {
-            xOffset += innerIndex > 0 ? cellWidth : 0;
+            Letter letter = this->keyboard[0][outerIndex][innerIndex];
 
-            Letter letter = this->keyboard[this->charSet][outerIndex][innerIndex];
+            int xOffset;
+            int cellWidth;
+            if (isBottomRow) {
+                // Hand-laid: ESC and the emote key are fixed, space takes three quarters of what is
+                // left and enter the rest. An even split would make space no easier to hit than 'q'.
+                const int escWidth = std::max(30, keyAreaWidth / 5);
+                const int emoteWidth = graphics::numEmotes > 0 ? std::max(24, keyAreaWidth / 9) : 0;
+                const int remaining = keyAreaWidth - escWidth - emoteWidth;
+                const int spaceWidth = (remaining * 3) / 4;
+                // Index 1 is the emote key only while it exists; without it space moves up one slot
+                const int slot = (emoteWidth == 0 && innerIndex > 0) ? innerIndex + 1 : innerIndex;
+
+                switch (slot) {
+                case 0:
+                    xOffset = 0;
+                    cellWidth = escWidth;
+                    break;
+                case 1:
+                    xOffset = escWidth;
+                    cellWidth = emoteWidth;
+                    break;
+                case 2:
+                    xOffset = escWidth + emoteWidth;
+                    cellWidth = spaceWidth;
+                    break;
+                default:
+                    xOffset = escWidth + emoteWidth + spaceWidth;
+                    cellWidth = remaining - spaceWidth;
+                    break;
+                }
+                xOffset += x + sideInset + panX;
+            } else {
+                // Distribute from the running total rather than a fixed width, so rounding never
+                // leaves a gap at the right edge
+                const int startX = (innerIndex * keyAreaWidth) / innerSize;
+                const int endX = ((innerIndex + 1) * keyAreaWidth) / innerSize;
+                xOffset = x + sideInset + startX + panX;
+                cellWidth = endX - startX;
+            }
 
             Letter updatedLetter = {letter.character, letter.width, xOffset, yOffset, cellWidth, cellHeight};
-
 #ifdef RAK14014 // Optimize the touch range of the virtual keyboard in the bottom row
-            if (outerIndex == outerSize - 1) {
+            if (isBottomRow) {
                 updatedLetter.rectHeight = 240 - yOffset;
             }
 #endif
-            this->keyboard[this->charSet][outerIndex][innerIndex] = updatedLetter;
+            this->keyboard[0][outerIndex][innerIndex] = updatedLetter;
 
-            float characterOffset = ((cellWidth / 2) - (letter.width / 2));
+            const int capX = xOffset + buttonPadding;
+            const int capY = yOffset + buttonPadding;
+            const int capW = cellWidth - buttonPadding * 2;
+            const int capH = cellHeight - buttonPadding * 2;
+            const int centerX = xOffset + cellWidth / 2;
+            const int centerY = yOffset + cellHeight / 2;
+
+            // Shift latches, so it stays inverted; every other key inverts only for the frame after
+            // it was tapped, as feedback
+            const bool isShiftKey = (letter.character == "⇧");
+            const bool inverted =
+                isShiftKey ? this->shift : (this->highlight.length() > 0 && this->highlight == letter.character);
+            if (inverted) {
+                fillRoundedRect(display, capX, capY, capW, capH, buttonRadius);
+                display->setColor(OLEDDISPLAY_COLOR::BLACK);
+                // Only for the transient tap flash, which clears itself at the end of this
+                // function. Shift's inversion latches, so asking for an immediate redraw here
+                // re-armed a zero interval on every frame for as long as shift was on - the
+                // module then span runOnce(), regenerating the frameset continuously, and the
+                // UI stopped responding to touches.
+                if (!isShiftKey)
+                    setIntervalFromNow(0);
+            } else {
+                drawRoundedRect(display, capX, capY, capW, capH, buttonRadius);
+            }
 
             if (letter.character == "⇧") {
-                if (this->shift) {
-                    display->fillRect(xOffset, yOffset, cellWidth, cellHeight);
-
-                    display->setColor(OLEDDISPLAY_COLOR::BLACK);
-
-                    drawShiftIcon(display, xOffset + characterOffset, yOffset + yCorrection + 5, 1.2);
-
-                    display->setColor(OLEDDISPLAY_COLOR::WHITE);
-                } else {
-                    display->drawRect(xOffset, yOffset, cellWidth, cellHeight);
-
-                    drawShiftIcon(display, xOffset + characterOffset, yOffset + yCorrection + 5, 1.2);
-                }
+                drawShiftIcon(display, centerX - iconWidth / 2, centerY - iconHeight / 2, iconScale);
             } else if (letter.character == "⌫") {
-                if (this->highlight == letter.character[0]) {
-                    display->fillRect(xOffset, yOffset, cellWidth, cellHeight);
-
-                    display->setColor(OLEDDISPLAY_COLOR::BLACK);
-
-                    drawBackspaceIcon(display, xOffset + characterOffset, yOffset + yCorrection + 5, 1.2);
-
-                    display->setColor(OLEDDISPLAY_COLOR::WHITE);
-
-                    setIntervalFromNow(0);
-                } else {
-                    display->drawRect(xOffset, yOffset, cellWidth, cellHeight);
-
-                    drawBackspaceIcon(display, xOffset + characterOffset, yOffset + yCorrection + 5, 1.2);
-                }
+                drawBackspaceIcon(display, centerX - iconWidth / 2, centerY - iconHeight / 2, iconScale);
             } else if (letter.character == "↵") {
-                display->drawRect(xOffset, yOffset, cellWidth, cellHeight);
-
-                drawEnterIcon(display, xOffset + characterOffset, yOffset + yCorrection + 5, 1.7);
-            } else {
-                if (this->highlight == letter.character[0]) {
-                    display->fillRect(xOffset, yOffset, cellWidth, cellHeight);
-
-                    display->setColor(OLEDDISPLAY_COLOR::BLACK);
-
-                    display->drawString(xOffset + characterOffset, yOffset + yCorrection,
-                                        letter.character == " " ? "space" : letter.character);
-
-                    display->setColor(OLEDDISPLAY_COLOR::WHITE);
-
-                    setIntervalFromNow(0);
-                } else {
-                    display->drawRect(xOffset, yOffset, cellWidth, cellHeight);
-
-                    display->drawString(xOffset + characterOffset, yOffset + yCorrection,
-                                        letter.character == " " ? "space" : letter.character);
+                drawEnterIcon(display, centerX - (int)(15 * enterIconScale) / 2, centerY - (int)(12 * enterIconScale) / 2,
+                              enterIconScale);
+#ifndef EXCLUDE_EMOJI
+            } else if (letter.character == "\U0001F60A") {
+                const graphics::Emote *smiley = graphics::EmoteRenderer::findEmoteByLabel("\U0001F60A");
+                if (smiley) {
+                    graphics::drawScaledXbm(display, centerX - smiley->width * BASEUI_ICON_SCALE / 2,
+                                            centerY - smiley->height * BASEUI_ICON_SCALE / 2, smiley->width, smiley->height,
+                                            smiley->bitmap);
                 }
+#endif
+            } else {
+                String label = letter.character;
+                if (label != "ESC" && label != "SPACE") {
+                    const char c = letter.character[0];
+                    if (c >= 'A' && c <= 'Z') {
+                        label = this->shift ? String(c) : String((char)(c + 32));
+                    } else if (this->shift) {
+                        const char shifted = shiftedSymbol(c);
+                        if (shifted)
+                            label = String(shifted);
+                    }
+                }
+                display->setTextAlignment(TEXT_ALIGN_CENTER);
+                display->drawString(centerX, centerY - keyFontHeight / 2, label);
+                display->setTextAlignment(TEXT_ALIGN_LEFT);
             }
-        }
 
-        xOffset = 0;
+            if (inverted)
+                display->setColor(OLEDDISPLAY_COLOR::WHITE);
+        }
     }
 
-    this->highlight = 0x00;
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    this->highlight = "";
 }
 
 void CannedMessageModule::drawShiftIcon(OLEDDisplay *display, int x, int y, float scale)
@@ -1677,8 +2305,8 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
 
-    // Header
-    int titleY = 2;
+    // Header (first row): pushed down by the header margin; centered, so no L/R inset needed
+    int titleY = 2 + BASEUI_HEADER_MARGIN;
     String titleText = "Select Destination";
     titleText += searchQuery.length() > 0 ? " [" + searchQuery + "]" : " [ ]";
     display->setTextAlignment(TEXT_ALIGN_CENTER);
@@ -1730,7 +2358,7 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
                     }
                 }
 
-                int availWidth = display->getWidth() -
+                int availWidth = display->getWidth() - 2 * BASEUI_BODY_LR_MARGIN -
                                  ((graphics::currentResolution == graphics::ScreenResolution::High) ? 40 : 20) -
                                  ((nodeInfoLiteIsFavorite(node)) ? 10 : 0);
                 if (availWidth < 0)
@@ -1756,12 +2384,14 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
         // Highlight background (if selected)
         if (itemIndex == destIndex) {
             int scrollPadding = 8; // Reserve space for scrollbar
-            display->fillRect(0, yOffset + 2, display->getWidth() - scrollPadding, FONT_HEIGHT_SMALL - 5);
+            display->fillRect(BASEUI_BODY_LR_MARGIN, yOffset + 2, display->getWidth() - scrollPadding - 2 * BASEUI_BODY_LR_MARGIN,
+                              FONT_HEIGHT_SMALL - 5);
             display->setColor(BLACK);
         }
 
         // Draw entry text
-        graphics::UIRenderer::drawStringWithEmotes(display, xOffset + 2, yOffset, entryText.c_str(), FONT_HEIGHT_SMALL, 1, false);
+        graphics::UIRenderer::drawStringWithEmotes(display, xOffset + 2 + BASEUI_BODY_LR_MARGIN, yOffset, entryText.c_str(),
+                                                   FONT_HEIGHT_SMALL, 1, false);
         display->setColor(WHITE);
 
         // Draw key icon (after highlight)
@@ -1790,7 +2420,7 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
     if (totalEntries > visibleRows) {
         int scrollbarHeight = visibleRows * (FONT_HEIGHT_SMALL - 4);
         int totalScrollable = totalEntries;
-        int scrollTrackX = display->getWidth() - 6;
+        int scrollTrackX = display->getWidth() - 6 - BASEUI_BODY_LR_MARGIN;
         display->drawRect(scrollTrackX, rowYOffset, 4, scrollbarHeight);
         int scrollHeight = (scrollbarHeight * visibleRows) / totalScrollable;
         int scrollPos = rowYOffset + (scrollbarHeight * scrollIndex) / totalScrollable;
@@ -1798,89 +2428,152 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
     }
 }
 
+// Smallest cell a fingertip gets aimed at, and the ceiling on how far the artwork may be blown up to
+// reach it - past 4x a 16px emote is mostly staircase, and the grid holds too few to be worth
+// scrolling. Only consulted on touchscreen builds.
+#ifndef EMOTE_MIN_TOUCH_CELL_PX
+#define EMOTE_MIN_TOUCH_CELL_PX 44
+#endif
+// Cells are sized from maxEmoteHeight(), which already multiplies by BASEUI_ICON_SCALE, but the
+// artwork is drawn at emoteScale alone - so on a variant with an icon scale above 1 the glyph
+// only fills that fraction of its cell. Variants can boost the drawn scale to take up the space
+// without changing the grid. 1 leaves every existing board exactly as it was.
+#ifndef EMOTE_PICKER_SCALE_BOOST
+#define EMOTE_PICKER_SCALE_BOOST 1
+#endif
+#ifndef EMOTE_MAX_TOUCH_SCALE
+#define EMOTE_MAX_TOUCH_SCALE 4
+#endif
+
+// graphics::drawScaledXbm() with a vertical clip. Rows scroll under the picker's header, so a
+// partially visible emote has to stop at the grid's edge instead of painting over the title.
+static void drawClippedScaledXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm, int scale,
+                                 int16_t clipTop, int16_t clipBottom)
+{
+    const int16_t bytesPerRow = (w + 7) / 8;
+    for (int16_t row = 0; row < h; ++row) {
+        const int16_t rowY = y + row * scale;
+        const int16_t top = std::max<int16_t>(rowY, clipTop);
+        const int16_t bottom = std::min<int16_t>(rowY + scale, clipBottom);
+        if (bottom <= top)
+            continue;
+        const uint8_t *rowPtr = xbm + row * bytesPerRow;
+        for (int16_t col = 0; col < w; ++col) {
+            if (pgm_read_byte(rowPtr + (col >> 3)) & (1U << (col & 7))) // XBM is LSB-first
+                display->fillRect(x + col * scale, top, scale, bottom - top);
+        }
+    }
+}
+
 void CannedMessageModule::drawEmotePickerScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-    const int headerFontHeight = FONT_HEIGHT_SMALL; // Make sure this matches your actual small font height
-    const int headerMargin = 2;                     // Extra pixels below header
-    const int labelGap = 4;
-    const int bitmapGapX = 4;
+    const std::vector<uint16_t> &unique = uniqueEmoteIndices();
+    const int numUnique = (int)unique.size();
+    if (numUnique == 0)
+        return; // EXCLUDE_EMOJI: emotes[] is empty, there is nothing to pick from
 
-    const int maxEmoteHeight = graphics::EmoteRenderer::maxEmoteHeight();
-    const int rowHeight = maxEmoteHeight + 2;
+    const int headerFontHeight = FONT_HEIGHT_SMALL;
+    const int headerMargin = 2; // extra pixels below the header
+    const int cellPadding = 2;
 
-    // Place header at top, then compute start of emote list
-    int headerY = y;
-    int listTop = headerY + headerFontHeight + headerMargin;
+    // Artwork is drawn at the variant's icon scale, bumped further on a touchscreen until a cell is
+    // a target a fingertip can actually hit. Encoder and button navigation needs no such minimum.
+    const int emoteSize = graphics::EmoteRenderer::maxEmoteHeight();
+    int emoteScale = BASEUI_ICON_SCALE;
+#if HAS_TOUCHSCREEN
+    while (emoteScale < EMOTE_MAX_TOUCH_SCALE && emoteSize * emoteScale + 2 * cellPadding < EMOTE_MIN_TOUCH_CELL_PX)
+        emoteScale++;
+#endif
+    const int cellSize = emoteSize * emoteScale + cellPadding * 2;
+    // Grid geometry stays on emoteScale; only the artwork is boosted.
+    const int drawScale = emoteScale * EMOTE_PICKER_SCALE_BOOST;
 
-    int _visibleRows = (display->getHeight() - listTop - 2) / rowHeight;
-    int numEmotes = graphics::numEmotes;
+    const int headerY = y + BASEUI_HEADER_MARGIN;
+    const int gridX = x + BASEUI_BODY_LR_MARGIN;
+    const int gridTop = headerY + headerFontHeight + headerMargin;
+    const int availableHeight = display->getHeight() - gridTop - 2;
+    const int availableWidth = display->getWidth() - 2 * BASEUI_BODY_LR_MARGIN;
+    const int cols = std::max(1, availableWidth / cellSize);
+    const int rows = std::max(1, availableHeight / cellSize);
+    const int gridBottom = gridTop + rows * cellSize;
 
-    // keep member variable in sync
-    this->visibleRows = _visibleRows;
+    // Hand the layout to handleEmotePickerInput() rather than have it derive its own
+    emoteGridX = gridX;
+    emoteGridTop = gridTop;
+    emoteGridBottom = gridBottom;
+    emoteGridCols = cols;
+    emoteGridRows = rows;
+    emoteCellSize = cellSize;
 
-    // Clamp highlight index
     if (emotePickerIndex < 0)
         emotePickerIndex = 0;
-    if (emotePickerIndex >= numEmotes)
-        emotePickerIndex = numEmotes - 1;
+    if (emotePickerIndex >= numUnique)
+        emotePickerIndex = numUnique - 1;
 
-    // Determine which emote is at the top
-    int topIndex = emotePickerIndex - _visibleRows / 2;
-    if (topIndex < 0)
-        topIndex = 0;
-    if (topIndex > numEmotes - _visibleRows)
-        topIndex = std::max(0, numEmotes - _visibleRows);
+    const int totalRows = (numUnique + cols - 1) / cols;
+    const float maxScrollOffset = std::max(0, totalRows - rows);
 
-    // Draw header/title
-    display->setFont(FONT_SMALL);
-    display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->drawString(display->getWidth() / 2, headerY, "Select Emote");
+    // A finger drag owns the scroll position while it is in range; anything that leaves it out of
+    // bounds (a resize, a selection moved by the keys) falls back to centring the selection.
+    if (emoteScrollOffset < 0 || emoteScrollOffset > maxScrollOffset)
+        emoteScrollOffset = emoteScrollToCenter(emotePickerIndex / cols, rows, totalRows);
 
-    // Draw emote rows
-    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    const int topRow = (int)emoteScrollOffset;
+    const int pixelOffset = (int)((emoteScrollOffset - topRow) * cellSize);
 
-    for (int vis = 0; vis < _visibleRows; ++vis) {
-        int emoteIdx = topIndex + vis;
-        if (emoteIdx >= numEmotes)
-            break;
-        const graphics::Emote &emote = graphics::emotes[emoteIdx];
-        int rowY = listTop + vis * rowHeight;
+    // +1 row beyond the viewport so a partially scrolled row is drawn rather than popping in
+    for (int row = 0; row < rows + 1; ++row) {
+        for (int col = 0; col < cols; ++col) {
+            const int idx = (topRow + row) * cols + col;
+            if (idx >= numUnique)
+                break;
 
-        // Draw highlight box 2px taller than emote (1px margin above and below)
-        if (emoteIdx == emotePickerIndex) {
-            display->fillRect(x, rowY, display->getWidth() - 8, emote.height + 2);
-            display->setColor(BLACK);
+            const graphics::Emote &emote = graphics::emotes[unique[idx]];
+            const int cellX = gridX + col * cellSize;
+            const int cellY = gridTop + row * cellSize - pixelOffset;
+            if (cellY >= gridBottom || cellY + cellSize <= gridTop)
+                continue;
+
+            if (idx == emotePickerIndex) {
+                const int top = std::max(cellY, gridTop);
+                const int bottom = std::min(cellY + cellSize, gridBottom);
+                display->fillRect(cellX, top, cellSize, bottom - top);
+                display->setColor(BLACK);
+            }
+
+            drawClippedScaledXbm(display, cellX + (cellSize - emote.width * drawScale) / 2,
+                                 cellY + (cellSize - emote.height * drawScale) / 2, emote.width, emote.height, emote.bitmap,
+                                 drawScale, gridTop, gridBottom);
+
+            if (idx == emotePickerIndex)
+                display->setColor(WHITE);
         }
-
-        // Emote bitmap (left), centered inside the row
-        int labelStartX = x + bitmapGapX;
-        const int emoteY = rowY + ((rowHeight - emote.height) / 2);
-        display->drawXbm(labelStartX, emoteY, emote.width, emote.height, emote.bitmap);
-        labelStartX += emote.width;
-
-        // Emote label (right of bitmap)
-        display->setFont(FONT_MEDIUM);
-        int labelY = rowY + ((rowHeight - FONT_HEIGHT_MEDIUM) / 2);
-        display->drawString(labelStartX + labelGap, labelY, emote.label);
-
-        if (emoteIdx == emotePickerIndex)
-            display->setColor(WHITE);
     }
 
-    // Draw scrollbar if needed
-    if (numEmotes > _visibleRows) {
-        int scrollbarHeight = _visibleRows * rowHeight;
-        int scrollTrackX = display->getWidth() - 6;
-        display->drawRect(scrollTrackX, listTop, 4, scrollbarHeight);
-        int scrollBarLen = std::max(6, (scrollbarHeight * _visibleRows) / numEmotes);
-        int scrollBarPos = listTop + (scrollbarHeight * topIndex) / numEmotes;
+    // Header last, over its own background, so a row scrolling up passes behind the title
+    char headerText[32];
+    snprintf(headerText, sizeof(headerText), "Emotes (%d/%d)", emotePickerIndex + 1, numUnique);
+    display->setColor(BLACK);
+    display->fillRect(x, headerY, display->getWidth(), headerFontHeight);
+    display->setColor(WHITE);
+    display->setFont(FONT_SMALL);
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    display->drawString(x + display->getWidth() / 2, headerY, headerText);
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+
+    if (totalRows > rows) {
+        const int scrollTrackX = display->getWidth() - 6 - BASEUI_BODY_LR_MARGIN;
+        display->drawRect(scrollTrackX, gridTop, 4, availableHeight);
+        const int scrollBarLen = std::max(6, (availableHeight * rows) / totalRows);
+        const int scrollBarPos = gridTop + (int)((availableHeight * emoteScrollOffset) / totalRows);
         display->fillRect(scrollTrackX, scrollBarPos, 4, scrollBarLen);
     }
 }
 
 void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-    this->displayHeight = display->getHeight(); // Store display height for later use
+    this->displayWidth = display->getWidth();   // Store display size for later use
+    this->displayHeight = display->getHeight(); // (the touch hit tests below run without a display)
     char buffer[50];
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
@@ -1907,7 +2600,8 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
     if (this->runState == CANNED_MESSAGE_RUN_STATE_DISABLED) {
         display->setTextAlignment(TEXT_ALIGN_LEFT);
         display->setFont(FONT_SMALL);
-        display->drawString(10 + x, 0 + y + FONT_HEIGHT_SMALL, "Canned Message\nModule disabled.");
+        display->drawString(10 + x + BASEUI_BODY_LR_MARGIN, y + FONT_HEIGHT_SMALL + BASEUI_HEADER_MARGIN,
+                            "Canned Message\nModule disabled.");
         return;
     }
 
@@ -1921,7 +2615,7 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
         einkDisplay->enableUnlimitedFastMode();
 #endif
 #if defined(USE_VIRTUAL_KEYBOARD)
-        drawKeyboard(display, state, 0, 0);
+        drawKeyboard(display, state, x, y);
 #else
         display->setTextAlignment(TEXT_ALIGN_LEFT);
         display->setFont(FONT_SMALL);
@@ -1934,7 +2628,8 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
             uint16_t charsLeft =
                 meshtastic_Constants_DATA_PAYLOAD_LEN - this->freetext.length() - (moduleConfig.canned_message.send_bell ? 1 : 0);
             snprintf(buffer, sizeof(buffer), "%d left", charsLeft);
-            display->drawString(x + display->getWidth() - display->getStringWidth(buffer), y + 0, buffer);
+            display->drawString(x + display->getWidth() - display->getStringWidth(buffer) - BASEUI_HEADER_LR_MARGIN,
+                                y + BASEUI_HEADER_MARGIN, buffer);
         }
 
 #if INPUTBROKER_SERIAL_TYPE == 1
@@ -2021,10 +2716,30 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
         // Draw Free Text input with multi-emote support and proper line wrapping
         display->setColor(WHITE);
         {
-            int inputY = 0 + y + FONT_HEIGHT_SMALL;
+            int inputY = y + FONT_HEIGHT_SMALL + BASEUI_HEADER_MARGIN;
+            int inputX = x + BASEUI_BODY_LR_MARGIN;
             String msgWithCursor = this->drawWithCursor(this->freetext, this->cursor);
-            drawWrappedEmoteText(display, x, inputY, msgWithCursor.c_str(), display->getWidth() - x, FONT_HEIGHT_SMALL);
+            drawWrappedEmoteText(display, inputX, inputY, msgWithCursor.c_str(),
+                                 display->getWidth() - inputX - BASEUI_BODY_LR_MARGIN, FONT_HEIGHT_SMALL);
         }
+
+        // Emote button, bottom right. Only for hardware keyboards with a touchscreen: a virtual
+        // keyboard carries its own emote key, and without touch there is nothing to press.
+#if defined(HAS_PHYSICAL_KEYBOARD) && HAS_TOUCHSCREEN && !defined(EXCLUDE_EMOJI)
+        {
+            const int buttonX = x + display->getWidth() - EMOTE_BUTTON_SIZE - EMOTE_BUTTON_MARGIN;
+            const int buttonY = y + display->getHeight() - EMOTE_BUTTON_SIZE - EMOTE_BUTTON_MARGIN;
+            const graphics::Emote *smiley = graphics::EmoteRenderer::findEmoteByLabel("\U0001F60A");
+
+            display->setColor(WHITE);
+            display->drawRect(buttonX, buttonY, EMOTE_BUTTON_SIZE, EMOTE_BUTTON_SIZE);
+            if (smiley) {
+                graphics::drawScaledXbm(display, buttonX + (EMOTE_BUTTON_SIZE - smiley->width * BASEUI_ICON_SCALE) / 2,
+                                        buttonY + (EMOTE_BUTTON_SIZE - smiley->height * BASEUI_ICON_SCALE) / 2, smiley->width,
+                                        smiley->height, smiley->bitmap);
+            }
+        }
+#endif
 #endif
         return;
     }
@@ -2044,7 +2759,8 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
         drawHeader(display, x, y, buffer);
 
         // Shift message list upward by 3 pixels to reduce spacing between header and first message
-        const int listYOffset = y + FONT_HEIGHT_SMALL - 3;
+        // Push the list below the header margin so the body starts clear of the reserved top area
+        const int listYOffset = y + FONT_HEIGHT_SMALL - 3 + BASEUI_HEADER_MARGIN;
         _visibleRows = (display->getHeight() - listYOffset) / baseRowSpacing;
 
         // Figure out which messages are visible and their needed heights
@@ -2066,16 +2782,17 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
             int textYOffset = (rowHeight - FONT_HEIGHT_SMALL) / 2;
 
 #ifdef USE_EINK
-            int nextX = x + (_highlight ? 12 : 0);
+            int nextX = x + BASEUI_BODY_LR_MARGIN + (_highlight ? 12 : 0);
             if (_highlight)
-                display->drawString(x + 0, lineY + textYOffset, ">");
+                display->drawString(x + BASEUI_BODY_LR_MARGIN, lineY + textYOffset, ">");
 #else
             int scrollPadding = 8;
             if (_highlight) {
-                display->fillRect(x + 0, lineY, display->getWidth() - scrollPadding, rowHeight);
+                display->fillRect(x + BASEUI_BODY_LR_MARGIN, lineY,
+                                  display->getWidth() - scrollPadding - 2 * BASEUI_BODY_LR_MARGIN, rowHeight);
                 display->setColor(BLACK);
             }
-            int nextX = x + (_highlight ? 2 : 0);
+            int nextX = x + BASEUI_BODY_LR_MARGIN + (_highlight ? 2 : 0);
 #endif
 
             if (msg && *msg)
@@ -2091,7 +2808,7 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
         // Scrollbar
         if (messagesCount > _visibleRows) {
             int scrollHeight = display->getHeight() - listYOffset;
-            int scrollTrackX = display->getWidth() - 6;
+            int scrollTrackX = display->getWidth() - 6 - BASEUI_BODY_LR_MARGIN;
             display->drawRect(scrollTrackX, listYOffset, 4, scrollHeight);
             int barHeight = (scrollHeight * _visibleRows) / messagesCount;
             int scrollPos = listYOffset + (scrollHeight * topMsg) / messagesCount;

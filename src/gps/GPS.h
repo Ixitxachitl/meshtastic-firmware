@@ -186,6 +186,13 @@ class GPS : private concurrency::OSThread
     int32_t currentDelay = 2000;
     bool gotTime = false;
 
+    // Progress through the staged M10 configuration sequence: 0 = not started, then one past the
+    // index of the last command sent. See configureUblox10Staged().
+    uint8_t m10ConfigStep = 0;
+    // Set by setup() when it has more staged work to do and wants to be called back after this
+    // many ms, rather than the flat two-second retry a genuine setup failure gets. -1 = unset.
+    int32_t setupResumeMs = -1;
+
 #ifndef TINYGPS_OPTION_NO_CUSTOM_FIELDS
     // (20210908) TinyGps++ can only read the GPGSA "FIX TYPE" field
     // via optional feature "custom fields", currently disabled (bug #525)
@@ -237,6 +244,12 @@ class GPS : private concurrency::OSThread
 
     // Create a ublox packet for editing in memory
     uint8_t makeUBXPacket(uint8_t class_id, uint8_t msg_id, uint8_t payload_size, const uint8_t *msg);
+
+    /**
+     * Send one step of the u-blox M10 configuration sequence, then hand control back.
+     * @return true once the whole sequence (including the final save) has completed.
+     */
+    bool configureUblox10Staged();
     uint8_t makeCASPacket(uint8_t class_id, uint8_t msg_id, uint8_t payload_size, const uint8_t *msg);
 
     // scratch space for creating ublox packets

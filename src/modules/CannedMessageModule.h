@@ -79,6 +79,18 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
     int handleEmotePickerInput(const InputEvent *event);
     void drawEmotePickerScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
 
+    // Touch scroll - moves the emote grid by an exact finger displacement in screen pixels, for
+    // hardware that reports a continuous drag (BASEUI_HAS_TOUCH_DRAG). Pass the delta between
+    // consecutive drag reports, not the offset from where the finger landed.
+    //
+    // The grid follows the finger, which is the opposite sense to the arrow keys: a press means
+    // "move the selection that way", a finger means "drag the grid that way". Matches
+    // MapRenderer::panByFingerDelta() and MessageRenderer::scrollByFingerDelta().
+    void scrollEmotesByFingerDelta(float dyPx);
+    /// Slide the on-screen keyboard horizontally. Pass the delta between consecutive drag
+    /// reports; clamped so the grid can never be dragged away from the screen edges.
+    void panKeyboardByFingerDelta(float dxPx);
+
     // === Admin Handlers ===
     void handleGetCannedMessageModuleMessages(const meshtastic_MeshPacket &req, meshtastic_AdminMessage *response);
     void handleSetCannedMessageModuleMessages(const char *from_msg);
@@ -138,7 +150,26 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
         CallbackObserver<CannedMessageModule, const InputEvent *>(this, &CannedMessageModule::handleInputEvent);
 
     // === Display and UI ===
+    int displayWidth = 128;
     int displayHeight = 64;
+
+    // === Emote picker grid ===
+    // drawEmotePickerScreen() lays the grid out from the live display size and records it here;
+    // handleEmotePickerInput() reads it back instead of recomputing the layout, so the two can never
+    // disagree about which cell a touch landed in. All zero until the first draw.
+    int emoteGridX = 0;
+    int emoteGridTop = 0;
+    int emoteGridBottom = 0;
+    int emoteGridCols = 0;
+    int emoteGridRows = 0;
+    // On-screen keyboard horizontal pan, <= 0. Only meaningful when BASEUI_KEYBOARD_ZOOM_PCT
+    // draws the grid wider than the screen; keyboardMinPanX is published by drawKeyboard().
+    float keyboardPanX = 0;
+    int keyboardMinPanX = 0;
+
+    int emoteCellSize = 0;
+    float emoteScrollOffset = 0; // top of the viewport in rows; fractional while a finger is dragging
+
     int destIndex = 0;
     int scrollIndex = 0;
     int visibleRows = 0;
@@ -167,7 +198,10 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
 
     // === State Tracking ===
     cannedMessageModuleRunState runState = CANNED_MESSAGE_RUN_STATE_INACTIVE;
-    char highlight = 0x00;
+    // Key to flash inverted for one frame as tap feedback, empty for none. Holds the whole label
+    // rather than its first byte: ⌫, ↵ and ⇧ are all UTF-8 sequences starting 0xE2, so a single
+    // byte cannot tell them apart and tapping one lit up another.
+    String highlight;
     char payload = 0x00;
     unsigned int cursor = 0;
     unsigned long lastTouchMillis = 0;
@@ -178,7 +212,6 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
 
 #if defined(USE_VIRTUAL_KEYBOARD)
     bool shift = false;
-    int charSet = 0; // 0=ABC, 1=123
 #endif
 
     void updateState(cannedMessageModuleRunState, bool shouldRequestFocus = false);
@@ -192,7 +225,24 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
     bool handleFreeTextInput(const InputEvent *event);
 
 #if defined(USE_VIRTUAL_KEYBOARD)
-    Letter keyboard[2][4][10] = {{{{"Q", 20, 0, 0, 0, 0},
+    // Full QWERTY: one layer, with shift reaching the symbol row rather than a separate 123 page.
+    // Rows are padded to 14 with empty entries; drawKeyboard() sizes each row from how many are
+    // filled, and the bottom row is laid out by hand rather than evenly.
+    Letter keyboard[1][5][14] = {{{{"`", 8, 0, 0, 0, 0},
+                                   {"1", 12, 0, 0, 0, 0},
+                                   {"2", 13.5, 0, 0, 0, 0},
+                                   {"3", 12.5, 0, 0, 0, 0},
+                                   {"4", 14, 0, 0, 0, 0},
+                                   {"5", 14, 0, 0, 0, 0},
+                                   {"6", 14, 0, 0, 0, 0},
+                                   {"7", 13.5, 0, 0, 0, 0},
+                                   {"8", 14, 0, 0, 0, 0},
+                                   {"9", 14, 0, 0, 0, 0},
+                                   {"0", 14, 0, 0, 0, 0},
+                                   {"-", 8, 0, 0, 0, 0},
+                                   {"=", 10, 0, 0, 0, 0},
+                                   {"⌫", 20, 0, 0, 0, 0}},
+                                  {{"Q", 20, 0, 0, 0, 0},
                                    {"W", 22, 0, 0, 0, 0},
                                    {"E", 17, 0, 0, 0, 0},
                                    {"R", 16.5, 0, 0, 0, 0},
@@ -201,7 +251,11 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
                                    {"U", 16.5, 0, 0, 0, 0},
                                    {"I", 5, 0, 0, 0, 0},
                                    {"O", 19.5, 0, 0, 0, 0},
-                                   {"P", 15.5, 0, 0, 0, 0}},
+                                   {"P", 15.5, 0, 0, 0, 0},
+                                   {"[", 7, 0, 0, 0, 0},
+                                   {"]", 7, 0, 0, 0, 0},
+                                   {"\\", 8, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0}},
                                   {{"A", 14, 0, 0, 0, 0},
                                    {"S", 15, 0, 0, 0, 0},
                                    {"D", 16.5, 0, 0, 0, 0},
@@ -211,6 +265,10 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
                                    {"J", 12, 0, 0, 0, 0},
                                    {"K", 15.5, 0, 0, 0, 0},
                                    {"L", 14, 0, 0, 0, 0},
+                                   {";", 4.5, 0, 0, 0, 0},
+                                   {"'", 10, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
                                    {"", 0, 0, 0, 0, 0}},
                                   {{"⇧", 20, 0, 0, 0, 0},
                                    {"Z", 14, 0, 0, 0, 0},
@@ -220,47 +278,40 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
                                    {"B", 15, 0, 0, 0, 0},
                                    {"N", 15, 0, 0, 0, 0},
                                    {"M", 17, 0, 0, 0, 0},
-                                   {"⌫", 20, 0, 0, 0, 0},
-                                   {"", 0, 0, 0, 0, 0}},
-                                  {{"123", 42, 0, 0, 0, 0},
-                                   {" ", 64, 0, 0, 0, 0},
-                                   {"↵", 36, 0, 0, 0, 0},
-                                   {"", 0, 0, 0, 0, 0},
-                                   {"", 0, 0, 0, 0, 0},
-                                   {"", 0, 0, 0, 0, 0},
-                                   {"", 0, 0, 0, 0, 0},
-                                   {"", 0, 0, 0, 0, 0},
-                                   {"", 0, 0, 0, 0, 0},
-                                   {"", 0, 0, 0, 0, 0}}},
-                                 {{{"1", 12, 0, 0, 0, 0},
-                                   {"2", 13.5, 0, 0, 0, 0},
-                                   {"3", 12.5, 0, 0, 0, 0},
-                                   {"4", 14, 0, 0, 0, 0},
-                                   {"5", 14, 0, 0, 0, 0},
-                                   {"6", 14, 0, 0, 0, 0},
-                                   {"7", 13.5, 0, 0, 0, 0},
-                                   {"8", 14, 0, 0, 0, 0},
-                                   {"9", 14, 0, 0, 0, 0},
-                                   {"0", 14, 0, 0, 0, 0}},
-                                  {{"-", 8, 0, 0, 0, 0},
-                                   {"/", 8, 0, 0, 0, 0},
-                                   {":", 4.5, 0, 0, 0, 0},
-                                   {";", 4.5, 0, 0, 0, 0},
-                                   {"(", 7, 0, 0, 0, 0},
-                                   {")", 6.5, 0, 0, 0, 0},
-                                   {"$", 12.5, 0, 0, 0, 0},
-                                   {"&", 15, 0, 0, 0, 0},
-                                   {"@", 21.5, 0, 0, 0, 0},
-                                   {"\"", 8, 0, 0, 0, 0}},
-                                  {{".", 8, 0, 0, 0, 0},
                                    {",", 8, 0, 0, 0, 0},
-                                   {"?", 10, 0, 0, 0, 0},
-                                   {"!", 10, 0, 0, 0, 0},
-                                   {"'", 10, 0, 0, 0, 0},
-                                   {"⌫", 20, 0, 0, 0, 0}},
-                                  {{"ABC", 50, 0, 0, 0, 0}, {" ", 64, 0, 0, 0, 0}, {"↵", 36, 0, 0, 0, 0}}}};
+                                   {".", 8, 0, 0, 0, 0},
+                                   {"/", 8, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0}},
+                                  {{"ESC", 30, 0, 0, 0, 0},
+#ifndef EXCLUDE_EMOJI
+                                   // Drawn as artwork rather than text - the font has no glyph for
+                                   // it, and a touch-only device has no other way to reach the
+                                   // emote picker. .width is the bitmap's own width.
+                                   {"\U0001F60A", 16, 0, 0, 0, 0},
+#endif
+                                   {"SPACE", 38, 0, 0, 0, 0},
+                                   {"↵", 28, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0},
+                                   {"", 0, 0, 0, 0, 0}}}};
 #endif
 };
 
 extern CannedMessageModule *cannedMessageModule;
+
+// True while a finger is actively scrolling the emote grid. Screen::runOnce() consults this before
+// resetting the framerate, alongside the map pan and message list it already checks: the grid starts
+// no frame transition, so frameState stays FIXED for the whole gesture and the reset would otherwise
+// fire between one drag report and the next. Always false on builds without BASEUI_HAS_TOUCH_DRAG.
+//
+// Lives outside the class because the drag anchors do too - see the driver in CannedMessageModule.cpp.
+bool isEmoteScrollFingerSteering();
+bool isKeyboardPanFingerSteering();
 #endif

@@ -14,5 +14,6 @@
 ,
   "terminal.integrated.env.windows": {
     "PATH": "C:\\msys64\\ucrt64\\bin;C:\\msys64\\usr\\bin;${env:PATH}"
-  }
+  },
+  "idf.currentSetup": "C:\\Users\\krame\\esp\\v5.5.1\\esp-idf"
 }

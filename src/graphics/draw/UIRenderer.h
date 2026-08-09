@@ -43,6 +43,16 @@ class UIRenderer
                                    const char *mode = "line1");
     static void drawGpsAltitude(OLEDDisplay *display, int16_t x, int16_t y, const meshtastic::GPSStatus *gpsStatus);
 
+    // Compass placement/rendering shared by the favorite-node and waypoint screens, so the two
+    // stay laid out identically. computeBottomCompassPlacement() returns false when the content
+    // above leaves no room for a readable compass.
+    static bool computeBottomCompassPlacement(OLEDDisplay *display, int16_t xOffset, int16_t yBelowContent,
+                                              int16_t bottomReserved, int16_t margin, int16_t *compassX, int16_t *compassY,
+                                              int16_t *compassRadius);
+    static void drawBearingCompassOrStatus(OLEDDisplay *display, int16_t compassX, int16_t compassY, int16_t compassRadius,
+                                           bool showCompass, float myHeading, float bearing, const char *statusLine1,
+                                           const char *statusLine2, bool showRing = true);
+
     // Overlay and special screens
     static void drawFrameText(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y, const char *text);
 
@@ -51,6 +61,10 @@ class UIRenderer
     // Compact panels: called when the screen turns back on, so the intro splash replays even
     // though drawNavigationBar itself never ran while the screen (and its OSThread) was off.
     static void notifyScreenWoke();
+
+    // screen frames
+    // First two pointers are self explanatory
+    // x and y are the offset everything should be drawn at, to support sliding transitions between frames.
 
     static void drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
     // Compact panels: toggle between compass+distance view and status/telemetry view

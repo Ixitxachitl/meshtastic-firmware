@@ -59,6 +59,7 @@ void drawFrameWiFi(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, i
 
     // === Header ===
     graphics::drawCommonHeader(display, x, y, titleStr);
+    y += BASEUI_BELOW_HEADER_MARGIN;
 
     const char *wifiName = config.network.wifi_ssid;
 
@@ -144,9 +145,11 @@ void drawLoRaFocused(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x,
 
     // === Header ===
     graphics::drawCommonHeader(display, x, y, titleStr);
+    y += BASEUI_BELOW_HEADER_MARGIN;
 
     // === First Row: Region / BLE Name ===
-    graphics::UIRenderer::drawNodes(display, x, getTextPositions(display)[line] + 2, nodeStatus, 0, true, "");
+    graphics::UIRenderer::drawNodes(display, x + BASEUI_BODY_LR_MARGIN, getTextPositions(display)[line] + 2 + y, nodeStatus, 0,
+                                    true, "");
 
     uint8_t dmac[6];
     char shortnameble[35];
@@ -158,8 +161,8 @@ void drawLoRaFocused(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x,
         snprintf(shortnameble, sizeof(shortnameble), "BLE: %s", screen->ourId);
     }
     int textWidth = display->getStringWidth(shortnameble);
-    int nameX = x + (SCREEN_WIDTH - textWidth);
-    display->drawString(nameX, getTextPositions(display)[line++], shortnameble);
+    int nameX = x + (SCREEN_WIDTH - textWidth - BASEUI_BODY_LR_MARGIN);
+    display->drawString(nameX, getTextPositions(display)[line++] + y, shortnameble);
 
     if (!graphics::isCompactPanel(display)) {
         // === Second Row: Role ===
@@ -168,7 +171,7 @@ void drawLoRaFocused(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x,
         snprintf(device_role, sizeof(device_role), "Role: %s", role);
         textWidth = display->getStringWidth(device_role);
         nameX = x + (SCREEN_WIDTH - textWidth) / 2;
-        display->drawString(nameX, getTextPositions(display)[line++], device_role);
+        display->drawString(nameX, getTextPositions(display)[line++] + y, device_role);
     }
 
     // === Third Row: Radio Preset ===
@@ -194,7 +197,7 @@ void drawLoRaFocused(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x,
     }
     textWidth = display->getStringWidth(regionradiopreset);
     nameX = x + (SCREEN_WIDTH - textWidth) / 2;
-    display->drawString(nameX, getTextPositions(display)[line++], regionradiopreset);
+    display->drawString(nameX, getTextPositions(display)[line++] + y, regionradiopreset);
 
     // === Fourth Row: Frequency / ChanNum ===
     char frequencyslot[35];
@@ -220,7 +223,7 @@ void drawLoRaFocused(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x,
     }
     textWidth = display->getStringWidth(frequencyslot);
     nameX = x + (SCREEN_WIDTH - textWidth) / 2;
-    display->drawString(nameX, getTextPositions(display)[line++], frequencyslot);
+    display->drawString(nameX, getTextPositions(display)[line++] + y, frequencyslot);
 
 #if !defined(OLED_TINY)
     // === Fifth Row: Channel Utilization ===
@@ -230,7 +233,7 @@ void drawLoRaFocused(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x,
 
     int chUtil_x = (currentResolution == ScreenResolution::High) ? display->getStringWidth(chUtil) + 10
                                                                  : display->getStringWidth(chUtil) + 5;
-    int chUtil_y = getTextPositions(display)[line] + 3;
+    int chUtil_y = getTextPositions(display)[line] + 3 + y;
 
     int chutil_bar_width = (currentResolution == ScreenResolution::High) ? 100 : 50;
     int chutil_bar_max_fill = chutil_bar_width - 2; // Account for border
@@ -243,7 +246,7 @@ void drawLoRaFocused(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x,
     int total_line_content_width = (chUtil_x + chutil_bar_width + display->getStringWidth(chUtilPercentage) + extraoffset) / 2;
     int starting_position = centerofscreen - total_line_content_width;
 
-    display->drawString(starting_position, getTextPositions(display)[line], chUtil);
+    display->drawString(starting_position, getTextPositions(display)[line] + y, chUtil);
 
     // Force 61% or higher to show a full 100% bar, text would still show related percent.
     if (chutil_percent >= 61) {
@@ -290,7 +293,7 @@ void drawLoRaFocused(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x,
         display->fillRect(starting_position + chUtil_x + 1, chUtil_y + 1, fillRight, chutil_bar_height - 2);
     }
 
-    display->drawString(starting_position + chUtil_x + chutil_bar_width + extraoffset, getTextPositions(display)[line++],
+    display->drawString(starting_position + chUtil_x + chutil_bar_width + extraoffset, getTextPositions(display)[line++] + y,
                         chUtilPercentage);
 #endif
     graphics::drawCommonFooter(display, x, y);
@@ -310,11 +313,12 @@ void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x
 
     // === Header ===
     graphics::drawCommonHeader(display, x, y, titleStr);
+    y += BASEUI_BELOW_HEADER_MARGIN;
 
     // === Layout ===
     int line = 1;
     const int barHeight = 6;
-    const int labelX = x;
+    const int labelX = x + BASEUI_BODY_LR_MARGIN;
     int barsOffset = (currentResolution == ScreenResolution::High) ? 24 : 0;
 #ifdef USE_EINK
 #ifndef T_DECK_PRO
@@ -345,7 +349,11 @@ void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x
         }
 
         int textWidth = display->getStringWidth(combinedStr);
-        int adjustedBarWidth = x + SCREEN_WIDTH - barX - textWidth - 6;
+        int labelWidth = display->getStringWidth(label);
+        if (barX < x + BASEUI_BODY_LR_MARGIN + labelWidth) {
+            barX = x + BASEUI_BODY_LR_MARGIN + labelWidth;
+        }
+        int adjustedBarWidth = x + SCREEN_WIDTH - barX - textWidth - 6 - BASEUI_BODY_LR_MARGIN;
         if (adjustedBarWidth < 10)
             adjustedBarWidth = 10;
 
@@ -353,10 +361,10 @@ void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x
 
         // Label
         display->setTextAlignment(TEXT_ALIGN_LEFT);
-        display->drawString(labelX, getTextPositions(display)[line], label);
+        display->drawString(labelX, getTextPositions(display)[line] + y, label);
 #if !defined(OLED_TINY)
         // Bar
-        int barY = getTextPositions(display)[line] + (FONT_HEIGHT_SMALL - barHeight) / 2;
+        int barY = getTextPositions(display)[line] + y + (FONT_HEIGHT_SMALL - barHeight) / 2;
         display->setColor(WHITE);
         display->drawRect(barX, barY, adjustedBarWidth, barHeight);
 
@@ -376,7 +384,7 @@ void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x
 #endif
         // Value string
         display->setTextAlignment(TEXT_ALIGN_RIGHT);
-        display->drawString(x + SCREEN_WIDTH, getTextPositions(display)[line], combinedStr);
+        display->drawString(x + SCREEN_WIDTH - BASEUI_BODY_LR_MARGIN, getTextPositions(display)[line] + y, combinedStr);
     };
 
     // === Memory values ===
@@ -465,7 +473,7 @@ void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x
     int textWidth = display->getStringWidth(appversionstr);
     int nameX = x + (SCREEN_WIDTH - textWidth) / 2;
 
-    display->drawString(nameX, getTextPositions(display)[line++], appversionstr);
+    display->drawString(nameX, getTextPositions(display)[line++] + y, appversionstr);
 
     if (!graphics::isCompactPanel(display) &&
         (SCREEN_HEIGHT > 64 || (SCREEN_HEIGHT <= 64 && line <= 5))) { // Only show uptime if the screen can show it
@@ -473,7 +481,7 @@ void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x
         getUptimeStr(millis(), "Up: ", uptimeStr, sizeof(uptimeStr));
         textWidth = display->getStringWidth(uptimeStr);
         nameX = x + (SCREEN_WIDTH - textWidth) / 2;
-        display->drawString(nameX, getTextPositions(display)[line++], uptimeStr);
+        display->drawString(nameX, getTextPositions(display)[line++] + y, uptimeStr);
     }
 
     if (SCREEN_HEIGHT > 64 || (SCREEN_HEIGHT <= 64 && line <= 5)) { // Only show API state if the screen can show it
@@ -520,8 +528,8 @@ void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x
         }
 #endif
         if (api_state[0] != '\0') {
-            display->drawString(x + (SCREEN_WIDTH - display->getStringWidth(api_state)) / 2, getTextPositions(display)[line++],
-                                api_state);
+            display->drawString(x + (SCREEN_WIDTH - display->getStringWidth(api_state)) / 2,
+                                getTextPositions(display)[line++] + y, api_state);
         }
     }
 
@@ -537,30 +545,15 @@ void drawChirpy(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int1
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
     int line = 1;
-    int scale = 1;
-    int iconX = x + SCREEN_WIDTH - chirpy_width - (chirpy_width / 3);
-    int iconY = (SCREEN_HEIGHT - chirpy_height) / 2;
+    int scale = BASEUI_ICON_SCALE;
     int textX_offset = 10;
     if (currentResolution == ScreenResolution::High) {
         textX_offset = textX_offset * 4;
-        scale = 2;
-        iconX = x + SCREEN_WIDTH - (chirpy_width * 2) - ((chirpy_width * 2) / 3);
-        iconY = (SCREEN_HEIGHT - (chirpy_height * 2)) / 2;
-        const int bytesPerRow = (chirpy_width + 7) / 8;
-
-        for (int yy = 0; yy < chirpy_height; ++yy) {
-            const uint8_t *rowPtr = chirpy + yy * bytesPerRow;
-            for (int xx = 0; xx < chirpy_width; ++xx) {
-                const uint8_t byteVal = pgm_read_byte(rowPtr + (xx >> 3));
-                const uint8_t bitMask = 1U << (xx & 7); // XBM is LSB-first
-                if (byteVal & bitMask) {
-                    display->fillRect(iconX + xx * scale, iconY + yy * scale, scale, scale);
-                }
-            }
-        }
-    } else {
-        display->drawXbm(iconX, iconY, chirpy_width, chirpy_height, chirpy);
+        scale = 2 * BASEUI_ICON_SCALE;
     }
+    const int iconX = x + SCREEN_WIDTH - (chirpy_width * scale) - ((chirpy_width * scale) / 3);
+    const int iconY = (SCREEN_HEIGHT - (chirpy_height * scale)) / 2;
+    graphics::drawScaledXbm(display, iconX, iconY, chirpy_width, chirpy_height, chirpy, scale);
 
 #if GRAPHICS_TFT_COLORING_ENABLED
     // Colour Chirpy on colour displays. The glyph is a filled head silhouette whose eyes are holes

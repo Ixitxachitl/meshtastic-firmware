@@ -7,6 +7,10 @@
 #include "platform/portduino/PortduinoGlue.h"
 #endif
 
+#if defined(ARCH_ESP32)
+#include <esp_heap_caps.h> // heap_caps_malloc(), for DMA-reachable pixel buffers
+#endif
+
 #ifndef TFT_BACKLIGHT_ON
 #define TFT_BACKLIGHT_ON HIGH
 #endif
@@ -15,6 +19,92 @@
 #include <SparkFunSX1509.h>
 #include <Wire.h>
 extern SX1509 gpioExtender;
+#endif
+
+#ifdef TFT_MESH_OVERRIDE
+uint16_t TFT_MESH = TFT_MESH_OVERRIDE;
+#else
+uint16_t TFT_MESH = COLOR565(0x67, 0xEA, 0x94);
+#endif
+
+#if defined(CO5300_CS)
+#include <LovyanGFX.hpp> // Graphics and font library for AMOLED driver chip
+class LGFX : public lgfx::LGFX_Device
+{
+    lgfx::Panel_CO5300 _panel_instance;
+    lgfx::Bus_SPI _bus_instance;
+
+  public:
+    LGFX(void)
+    {
+        {
+            auto cfg = _bus_instance.config();
+
+            // configure SPI
+            cfg.spi_host = CO5300_SPI_HOST; // ESP32-S2,S3,C3 : SPI2_HOST or SPI3_HOST / ESP32 : VSPI_HOST or HSPI_HOST
+            cfg.spi_mode = SPI_MODE0;
+            cfg.freq_write = SPI_FREQUENCY; // SPI clock for transmission (up to 80MHz, rounded to the value obtained by dividing
+                                            // 80MHz by an integer)
+            cfg.freq_read = SPI_READ_FREQUENCY; // SPI clock when receiving
+            cfg.spi_3wire = false;              // Set to true if reception is done on the MOSI pin
+            cfg.use_lock = true;                // Set to true to use transaction locking
+            cfg.dma_channel = SPI_DMA_CH_AUTO;  // SPI_DMA_CH_AUTO; // Set DMA channel to use (0=not use DMA / 1=1ch / 2=ch /
+                                                // SPI_DMA_CH_AUTO=auto setting)
+            cfg.pin_sclk = CO5300_SCK;          // Set SPI SCLK pin number
+            cfg.pin_io0 = CO5300_IO0;
+            cfg.pin_io1 = CO5300_IO1;
+            cfg.pin_io2 = CO5300_IO2;
+            cfg.pin_io3 = CO5300_IO3;
+
+            _bus_instance.config(cfg);              // applies the set value to the bus.
+            _panel_instance.setBus(&_bus_instance); // set the bus on the panel.
+        }
+
+        {                                        // Set the display panel control.
+            auto cfg = _panel_instance.config(); // Gets a structure for display panel settings.
+
+            cfg.pin_cs = CO5300_CS;                    // Pin number where CS is connected (-1 = disable)
+            cfg.pin_rst = CO5300_RESET;                // Pin number where RST is connected  (-1 = disable)
+            cfg.panel_width = TFT_WIDTH;               // actual displayable width
+            cfg.panel_height = TFT_HEIGHT;             // actual displayable height
+            cfg.offset_rotation = TFT_OFFSET_ROTATION; // Rotation direction value offset 0~7 (4~7 is upside down)
+            cfg.offset_x = TFT_OFFSET_X;
+            cfg.offset_y = TFT_OFFSET_Y;
+            cfg.dummy_read_pixel = 8; // Number of bits for dummy read before pixel readout
+            cfg.dummy_read_bits = 1;  // Number of bits for dummy read before non-pixel data read
+            cfg.readable = true;      // Set to true if data can be read
+            cfg.invert = false;       // Set to true if the light/darkness of the panel is reversed
+            cfg.rgb_order = false;    // Set to true if the panel's red and blue are swapped
+            cfg.dlen_16bit = false;   // Set to true for panels that transmit data length in 16-bit units
+            cfg.bus_shared = true;    // If the bus is shared with the SD card, set to true (bus control with drawJpgFile etc.)
+
+            // Set the following only when the display is shifted with a driver with a variable number of pixels
+            cfg.memory_width = TFT_WIDTH;   // Maximum width supported by the driver IC
+            cfg.memory_height = TFT_HEIGHT; // Maximum height supported by the driver IC
+            _panel_instance.config(cfg);
+        }
+
+        setPanel(&_panel_instance);
+    }
+
+    bool init()
+    {
+#ifdef CO5300_RESET
+        LOG_DEBUG("LGFX_Panel_CO5300::init()");
+        lgfx::pinMode(CO5300_RESET, lgfx::pin_mode_t::output);
+        lgfx::gpio_hi(CO5300_RESET);
+        delay(20);
+        lgfx::gpio_lo(CO5300_RESET);
+        delay(30);
+        lgfx::gpio_hi(CO5300_RESET);
+        delay(20);
+#endif
+        return lgfx::LGFX_Device::init();
+    }
+};
+
+static LGFX *tft = nullptr;
+
 #endif
 
 #if defined(ST7735S)
@@ -1189,9 +1279,129 @@ extern unPhone unphone;
 
 GpioPin *TFTDisplay::backlightEnable = NULL;
 
+// TFT_eSPI's DMA API is a different shape entirely - it needs an explicit initDMA() and its own
+// push calls - so the DMA push below is for the LovyanGFX backends only.
+#if defined(ST7735_CS)
+#define TFT_HAS_LGFX_DMA_PUSH 0
+#else
+#define TFT_HAS_LGFX_DMA_PUSH 1
+#endif
+
+// -- CO5300 partial-repaint tunables ------------------------------------------------------------
+// The t-watch-ultra AMOLED repainted the whole panel every frame for a long time because the
+// diff-based partial path corrupted narrow updates - the clock's seconds digits came out as
+// scattered wrong-coloured pixels. Isolated on hardware: the corruption is not in the staging or
+// the row pairing, it is Bus_SPI::writeBytes() routing small transfers through the SPI FIFO
+// registers instead of DMA (see kSpiFifoThresholdBytes and the widening in display()). Keeping
+// every push above that threshold fixes it, so the partial path is on by default now.
+//
+// Two knobs remain, mostly for re-bisecting if this panel misbehaves again:
+//   -D CO5300_FORCE_FULL_REPAINT=1  go back to repainting the whole panel every frame.
+//   -D CO5300_ROWS_PER_PUSH=1       send single rows instead of row pairs.
+//
+// Row pairing is not a driver requirement - Panel_AMOLED enforces even x and width only, and writes
+// RASET unguarded - but single rows were observed to produce no visible update at all on this
+// panel, so 2 is the working default.
+#if defined(CO5300_CS)
+#ifndef CO5300_FORCE_FULL_REPAINT
+#define CO5300_FORCE_FULL_REPAINT 0
+#endif
+#ifndef CO5300_ROWS_PER_PUSH
+#define CO5300_ROWS_PER_PUSH 2
+#endif
+static_assert(CO5300_ROWS_PER_PUSH == 1 || CO5300_ROWS_PER_PUSH == 2,
+              "CO5300_ROWS_PER_PUSH must be 1 or 2: the change scan masks both rows of a push out of "
+              "one buffer byte, which only holds for a power-of-two run inside an 8-row page");
+
+// Transfers of this size or smaller go out through the SPI W0 registers rather than DMA - see the
+// `length <= 64` branch at the top of Bus_SPI::writeBytes(). Mirrored here because it is a property
+// of the bus driver we have to design around, not something we can ask it for.
+static constexpr uint32_t kSpiFifoThresholdBytes = 64;
+#endif
+
 namespace
 {
+#ifdef UI_PERF_DEBUG
+// Times display() and reports roughly once a second. Build with -D UI_PERF_DEBUG when a drag feels
+// laggy. Pairs with the touch-poll cadence reported by TouchScreenBase under the same flag.
+//
+// Splits the two things that keep frames off the screen, because they need opposite fixes: time
+// spent blocked on spiLock (the radio holds it across a transmit) versus time actually converting
+// and pushing pixels. Frames-per-report is the third number that matters - a low frame count with
+// both timings small means the thread is simply not being run.
+struct DisplayFrameTimer {
+    const uint32_t startMs = millis();
+    uint32_t lockedMs = 0;
+    void locked() { lockedMs = millis(); }
+    ~DisplayFrameTimer()
+    {
+        static uint32_t waitTotal = 0, drawTotal = 0, frames = 0, lastReportMs = 0;
+        const uint32_t now = millis();
+        if (lockedMs == 0)
+            lockedMs = startMs;
+        waitTotal += lockedMs - startMs;
+        drawTotal += now - lockedMs;
+        frames++;
+        if (now - lastReportMs >= 1000) {
+            LOG_INFO("TFT display(): %u frames in %u ms, %u ms draw, %u ms spiLock wait", (unsigned)frames,
+                     (unsigned)(now - lastReportMs), (unsigned)(drawTotal / frames), (unsigned)(waitTotal / frames));
+            waitTotal = 0;
+            drawTotal = 0;
+            frames = 0;
+            lastReportMs = now;
+        }
+    }
+};
+#define UI_PERF_TIME_FRAME() DisplayFrameTimer _uiPerfFrameTimer
+#define UI_PERF_FRAME_LOCKED() _uiPerfFrameTimer.locked()
+#else
+#define UI_PERF_TIME_FRAME() (void)0
+#define UI_PERF_FRAME_LOCKED() (void)0
+#endif
+
 static constexpr uint8_t kFullRepaintChunkRows = 8;
+
+// Chunk buffers the full repaint alternates between, so converting one chunk overlaps transferring
+// the previous one. Two is all the overlap there is to get; more would just cost RAM.
+static constexpr uint8_t kFullRepaintChunkSlots = 2;
+
+// Allocate a pixel buffer that SPI DMA can read from, reporting whether that succeeded.
+//
+// Plain malloc() will not reliably do on ESP32: main.cpp calls heap_caps_malloc_extmem_enable(),
+// which sends allocations past a small threshold to PSRAM. Buffers this size land there, which
+// both puts them out of easy reach of the DMA engine and makes the per-pixel fill loop pay bus
+// time on boards where PSRAM shares its SPI bus with flash.
+//
+// Falls back to malloc() so a board too tight on internal RAM still comes up - just without DMA,
+// which is exactly the behavior it had before.
+static uint16_t *tryAllocDmaPixelBuffer(size_t pixels)
+{
+#if defined(ARCH_ESP32)
+    // Leave the internal heap room to breathe. Drivers that come up after the display - the touch
+    // controller among them - need internal RAM too, and taking the last of it to make the repaint
+    // marginally faster is a bad trade.
+    static constexpr size_t kInternalHeapReserve = 24 * 1024;
+    const size_t bytes = pixels * sizeof(uint16_t);
+    if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < bytes + kInternalHeapReserve) {
+        return nullptr;
+    }
+    return static_cast<uint16_t *>(heap_caps_malloc(bytes, MALLOC_CAP_DMA | MALLOC_CAP_8BIT));
+#else
+    (void)pixels;
+    return nullptr;
+#endif
+}
+
+static uint16_t *allocPixelBuffer(size_t pixels, bool *dmaCapable)
+{
+    uint16_t *dmaBuf = tryAllocDmaPixelBuffer(pixels);
+    if (dmaBuf) {
+        *dmaCapable = true;
+        return dmaBuf;
+    }
+    *dmaCapable = false;
+    return static_cast<uint16_t *>(malloc(pixels * sizeof(uint16_t)));
+}
 
 static inline uint16_t getThemeDefaultOnColor()
 {
@@ -1258,17 +1468,68 @@ TFTDisplay::~TFTDisplay()
     memaudit::set("display", 0);
 }
 
+#if defined(HACKADAY_COMMUNICATOR)
+// Arduino_GFX backend: display() calls draw16bitBeRGBBitmap() directly and never routes through
+// here. These exist only to satisfy the declarations.
+void TFTDisplay::pushPixelBlock(int32_t, int32_t, int32_t, int32_t, uint16_t *) {}
+void TFTDisplay::beginPixelBatch() {}
+void TFTDisplay::endPixelBatch() {}
+#else
+// Hold the panel's bus transaction open across a run of pushPixelBlock() calls.
+//
+// Without this, each push ends its own transaction - and ending one waits for the bus to drain, so
+// the CPU would stall through every chunk's DMA before starting to build the next. Held open, a
+// push returns while its transfer is still in flight, and the caller's next round of pixel
+// conversion overlaps it. The panel driver re-issues CS and the address window on every push, so
+// batching them changes nothing the panel sees.
+//
+// Callers that batch must alternate between two source buffers, or they will overwrite the one
+// still being transferred.
+void TFTDisplay::beginPixelBatch()
+{
+    tft->startWrite();
+}
+
+void TFTDisplay::endPixelBatch()
+{
+    tft->endWrite(); // ends the transaction, which waits for the last transfer
+}
+
+// Send a block of pre-swapped RGB565 pixels to the panel.
+//
+// Worth going through here rather than calling tft->pushImage() directly: that overload defaults
+// to use_dma=false, and Bus_SPI only auto-promotes transfers under 1024 bytes to DMA. Every
+// full-width block we push is comfortably over that, so all of them would otherwise take the PIO
+// fallback, which walks the SPI FIFO 64 bytes at a time and busy-waits for each one to drain -
+// leaving the bus idle in between. Ask for DMA explicitly instead.
+//
+// Safe to reuse the source buffer as soon as this returns: pushImage() wraps the transfer in
+// startWrite()/endWrite(), and endWrite() ends the transaction, which waits on the bus.
+void TFTDisplay::pushPixelBlock(int32_t x, int32_t y, int32_t w, int32_t h, uint16_t *data)
+{
+#if TFT_HAS_LGFX_DMA_PUSH
+    if (pixelBuffersAreDmaCapable) {
+        tft->pushImageDMA(x, y, w, h, data);
+        return;
+    }
+#endif
+    tft->pushImage(x, y, w, h, data);
+}
+#endif
+
 // Write the buffer to the display memory
 void TFTDisplay::display(bool fromBlank)
 {
+    UI_PERF_TIME_FRAME(); // before the lock: waiting for it is exactly what we need to see
     concurrency::LockGuard g(spiLock);
+    UI_PERF_FRAME_LOCKED();
 
     uint32_t x, y;
     uint32_t y_byteIndex;
     uint8_t y_byteMask;
     uint32_t x_FirstPixelUpdate;
     uint32_t x_LastPixelUpdate;
-    bool isset, dblbuf_isset;
+    bool isset;
     uint16_t colorTftWhite, colorTftBlack;
     bool somethingChanged = false;
 
@@ -1294,19 +1555,36 @@ void TFTDisplay::display(bool fromBlank)
     static uint32_t lastColorFrameSignature = 0;
     const bool hasColorRegions = graphics::getTFTColorRegionCount() > 0;
     const uint32_t colorFrameSignature = graphics::getTFTColorFrameSignature();
+#if defined(CO5300_CS) && CO5300_FORCE_FULL_REPAINT
+    // Opt-in escape hatch: repaint the whole panel every frame on the t-watch-ultra AMOLED.
+    //
+    // This used to be unconditional, to work around narrow partial updates corrupting. That cause is
+    // understood and fixed now (see the widening in the partial path below), so this is off by
+    // default. Costs ~410 x 502 x 2 B over QSPI every frame, roughly 40-50 ms, whether one pixel
+    // changed or all of them.
+    const bool forceFullColorRepaint = true;
+#else
     const bool forceFullColorRepaint = forceFullRepaint || (colorFrameSignature != lastColorFrameSignature);
+#endif
 
     // When region roles/layout changed, color can differ even with identical monochrome glyph bits.
     // Repaint full frame only for those frames, then return to diff-based updates.
     if (forceFullColorRepaint) {
+        // Hold the bus open for the whole repaint and alternate between the two chunk slots, so
+        // each chunk's pixel conversion runs against the previous chunk's transfer rather than
+        // after it. See beginPixelBatch().
+        beginPixelBatch();
+        uint8_t chunkSlot = 0;
         for (uint32_t yStart = 0; yStart < displayHeight; yStart += kFullRepaintChunkRows) {
             const uint32_t rowsThisChunk = min<uint32_t>(kFullRepaintChunkRows, displayHeight - yStart);
+            uint16_t *const chunkBuffer = repaintChunkBuffer + ((size_t)chunkSlot * displayWidth * kFullRepaintChunkRows);
+            chunkSlot = (uint8_t)((chunkSlot + 1) % chunkBufferSlots);
             for (uint32_t row = 0; row < rowsThisChunk; row++) {
                 y = yStart + row;
                 y_byteIndex = (y / 8) * displayWidth;
                 y_byteMask = (1 << (y & 7));
 
-                uint16_t *chunkRow = repaintChunkBuffer + (row * displayWidth);
+                uint16_t *chunkRow = chunkBuffer + (row * displayWidth);
 
                 // Step 1: fill the whole row with the default colors. No per-pixel
                 // region scan, so background pixels (the bulk of the screen) are O(1).
@@ -1335,11 +1613,12 @@ void TFTDisplay::display(bool fromBlank)
                 }
             }
 #if defined(HACKADAY_COMMUNICATOR)
-            tft->draw16bitBeRGBBitmap(0, yStart, repaintChunkBuffer, displayWidth, rowsThisChunk);
+            tft->draw16bitBeRGBBitmap(0, yStart, chunkBuffer, displayWidth, rowsThisChunk);
 #else
-            tft->pushImage(0, yStart, displayWidth, rowsThisChunk, repaintChunkBuffer);
+            pushPixelBlock(0, yStart, displayWidth, rowsThisChunk, chunkBuffer);
 #endif
         }
+        endPixelBatch();
 
         memcpy(buffer_back, buffer, displayBufferSize);
         lastColorFrameSignature = colorFrameSignature;
@@ -1351,13 +1630,51 @@ void TFTDisplay::display(bool fromBlank)
     }
 #endif
 
+    // Rows sent per push. The CO5300 goes out a row pair at a time; every other panel pushes single
+    // rows. Pairing is not a driver requirement - Panel_AMOLED enforces even x and width only, and
+    // writes RASET unguarded - so CO5300_ROWS_PER_PUSH=1 is the control case when bisecting.
+    //
+    // The loop below steps by whole pushes rather than by single rows. That is what stops a changed
+    // pair being sent twice - scanning per row and pushing the pair containing it did the work, and
+    // paid the address-window setup, once for each row of the pair. It also makes the change scan
+    // cheaper: both rows of a pair always live in the same buffer byte, so one mask covers them.
+#if defined(CO5300_CS)
+    constexpr uint32_t kRowsPerPush = CO5300_ROWS_PER_PUSH;
+#else
+    constexpr uint32_t kRowsPerPush = 1;
+#endif
+    const uint8_t rowsPerPushBits = (uint8_t)((1U << kRowsPerPush) - 1U);
+
+#if defined(CO5300_CS)
+    // Narrowest push, in pixels, that still reaches the panel as a DMA transfer. Derived rather than
+    // hardcoded so it stays correct if kRowsPerPush changes: at two rows the floor is 18 px (72 B),
+    // at one row it is 34 px (68 B). Rounded up to even to preserve the even-width rule.
+    constexpr uint32_t kMinPushPixels = ((kSpiFifoThresholdBytes / (kRowsPerPush * sizeof(uint16_t))) + 2) & ~1U;
+    static_assert(kMinPushPixels * kRowsPerPush * sizeof(uint16_t) > kSpiFifoThresholdBytes,
+                  "widened span must exceed the FIFO threshold, or the push still bypasses DMA");
+#endif
+
+#if defined(CO5300_PARTIAL_DEBUG)
+    uint32_t dbgPushes = 0;
+    uint32_t dbgRejects = 0;
+    static bool dbgGeometryLogged = false;
+    if (!dbgGeometryLogged) {
+        dbgGeometryLogged = true;
+        // displayWidth/Height are OLEDDisplay's geometry; tft->width()/height() are the panel's own,
+        // after rotation and offsets. If they disagree, the even-x/even-w reasoning is built on the
+        // wrong bounds and the clip inside LGFXBase::pushImage() can shave w to an odd number.
+        LOG_DEBUG("CO5300 geometry: displayWidth=%u displayHeight=%u panelW=%d panelH=%d rowsPerPush=%u", (unsigned)displayWidth,
+                  (unsigned)displayHeight, (int)tft->width(), (int)tft->height(), (unsigned)kRowsPerPush);
+    }
+#endif
+
     y = 0;
     while (y < displayHeight) {
         y_byteIndex = (y / 8) * displayWidth;
-        y_byteMask = (1 << (y & 7));
+        y_byteMask = (uint8_t)(rowsPerPushBits << (y & 7)); // every row this push will cover
 
         // Step 1: Do a quick scan of 8 rows together. This allows fast-forwarding over unchanged screen areas.
-        if (y_byteMask == 1) {
+        if ((y & 7) == 0) {
             if (!forceFullRepaint) {
                 for (x = 0; x < displayWidth; x++) {
                     if (buffer[x + y_byteIndex] != buffer_back[x + y_byteIndex])
@@ -1376,33 +1693,33 @@ void TFTDisplay::display(bool fromBlank)
             }
         }
 
-        // Step 2: Scan this row for changed span (first and last changed pixel).
+        // Step 2: Scan the rows this push covers for the changed span (first and last changed
+        // pixel). Compares masked bytes rather than a single bit, so a change on any covered row
+        // counts - a bool would collapse "row 0 changed" and "row 1 changed" into the same value.
         uint32_t x_FirstChanged = 0;
         for (x_FirstChanged = 0; x_FirstChanged < displayWidth; x_FirstChanged++) {
-            isset = buffer[x_FirstChanged + y_byteIndex] & y_byteMask;
+            const uint8_t bits = buffer[x_FirstChanged + y_byteIndex] & y_byteMask;
 
             if (!forceFullRepaint) {
                 // get src pixel in the page based ordering the OLED lib uses
-                dblbuf_isset = buffer_back[x_FirstChanged + y_byteIndex] & y_byteMask;
-                if (isset != dblbuf_isset) {
+                if (bits != (buffer_back[x_FirstChanged + y_byteIndex] & y_byteMask)) {
                     break;
                 }
-            } else if (isset) {
+            } else if (bits) {
                 break;
             }
         }
 
-        // Did we find a pixel that needs updating on this row?
+        // Did we find a pixel that needs updating on these rows?
         if (x_FirstChanged < displayWidth) {
             uint32_t x_LastChanged = displayWidth - 1;
             while (x_LastChanged > x_FirstChanged) {
-                isset = buffer[x_LastChanged + y_byteIndex] & y_byteMask;
+                const uint8_t bits = buffer[x_LastChanged + y_byteIndex] & y_byteMask;
                 if (!forceFullRepaint) {
-                    dblbuf_isset = buffer_back[x_LastChanged + y_byteIndex] & y_byteMask;
-                    if (isset != dblbuf_isset) {
+                    if (bits != (buffer_back[x_LastChanged + y_byteIndex] & y_byteMask)) {
                         break;
                     }
-                } else if (isset) {
+                } else if (bits) {
                     break;
                 }
                 x_LastChanged--;
@@ -1416,36 +1733,96 @@ void TFTDisplay::display(bool fromBlank)
                 x_LastPixelUpdate = displayWidth - 1;
             }
 
-            // Step 3: Copy only the changed span into the pixel line buffer.
-#if GRAPHICS_TFT_COLORING_ENABLED
-            if (hasColorRegions)
-                graphics::beginTFTColorRow(static_cast<int16_t>(y));
-#endif
-            for (x = x_FirstPixelUpdate; x <= x_LastPixelUpdate; x++) {
-                isset = buffer[x + y_byteIndex] & y_byteMask;
-#if GRAPHICS_TFT_COLORING_ENABLED
-                if (hasColorRegions) {
-                    linePixelBuffer[x] =
-                        graphics::resolveTFTColorPixelRow(static_cast<int16_t>(x), isset, colorTftWhite, colorTftBlack);
-                } else {
-                    linePixelBuffer[x] = isset ? colorTftWhite : colorTftBlack;
-                }
-#else
-                linePixelBuffer[x] = isset ? colorTftWhite : colorTftBlack;
-#endif
+#if defined(CO5300_CS)
+            // Widen narrow spans so the transfer clears Bus_SPI's FIFO threshold.
+            //
+            // Bus_SPI::writeBytes() sends anything <= kSpiFifoThresholdBytes straight through the
+            // SPI W0 registers instead of setting up DMA. This panel does not render those writes:
+            // measured on hardware, a clock-seconds update pushed 4 to 48 bytes and came out as
+            // scattered wrong-coloured pixels, while the same content widened past the threshold
+            // renders correctly. The full-repaint path never hit this because its chunks are
+            // 6560 bytes and always take DMA - which is why repainting the whole panel every frame
+            // looked like the only option for so long.
+            //
+            // Widening is safe: the extra pixels are rendered from the live buffer below, exactly
+            // as the changed ones are, so they carry correct content rather than stale data. Cost
+            // is at most 72 bytes per push against 412 KB for a full repaint.
+            if ((x_LastPixelUpdate - x_FirstPixelUpdate + 1) < kMinPushPixels) {
+                uint32_t want = kMinPushPixels;
+                if (want > displayWidth)
+                    want = displayWidth;
+                // Grow right first, then take whatever is still missing from the left. Keeping the
+                // start even and the end odd preserves the even-x/even-width rule Panel_AMOLED
+                // enforces, and the 32-bit source alignment GDMA needs.
+                uint32_t last = x_FirstPixelUpdate + want - 1;
+                if (last > displayWidth - 1)
+                    last = displayWidth - 1;
+                uint32_t first = (last + 1 >= want) ? (last + 1 - want) : 0;
+                x_FirstPixelUpdate = first & ~1U;
+                x_LastPixelUpdate = last | 1U;
+                if (x_LastPixelUpdate >= displayWidth)
+                    x_LastPixelUpdate = displayWidth - 1;
             }
-#if defined(HACKADAY_COMMUNICATOR)
-            tft->draw16bitBeRGBBitmap(x_FirstPixelUpdate, y, &linePixelBuffer[x_FirstPixelUpdate],
-                                      (x_LastPixelUpdate - x_FirstPixelUpdate + 1), 1);
+#endif
+
+            const uint32_t spanWidth = x_LastPixelUpdate - x_FirstPixelUpdate + 1;
+
+            // Step 3: Copy the changed span of every covered row into the pixel line buffer, rows
+            // laid out back to back so the push below is one contiguous block.
+            for (uint32_t row = 0; row < kRowsPerPush; row++) {
+                const uint32_t rowY = y + row;
+                const uint32_t rowByteIndex = (rowY / 8) * displayWidth;
+                const uint8_t rowBitMask = (uint8_t)(1U << (rowY & 7));
+                uint16_t *const dst = &linePixelBuffer[x_FirstPixelUpdate + (row * spanWidth)];
+#if GRAPHICS_TFT_COLORING_ENABLED
+                // Re-cached per row: resolveTFTColorPixelRow() resolves against the regions cached
+                // for whichever row was last passed here, so colouring a second row off the first
+                // row's cache would pick the wrong regions wherever a region edge falls between the
+                // two.
+                if (hasColorRegions)
+                    graphics::beginTFTColorRow(static_cast<int16_t>(rowY));
+#endif
+                for (x = x_FirstPixelUpdate; x <= x_LastPixelUpdate; x++) {
+                    isset = buffer[x + rowByteIndex] & rowBitMask;
+#if GRAPHICS_TFT_COLORING_ENABLED
+                    if (hasColorRegions) {
+                        dst[x - x_FirstPixelUpdate] =
+                            graphics::resolveTFTColorPixelRow(static_cast<int16_t>(x), isset, colorTftWhite, colorTftBlack);
+                    } else {
+                        dst[x - x_FirstPixelUpdate] = isset ? colorTftWhite : colorTftBlack;
+                    }
 #else
-            // Step 4: Send the changed pixels on this line to the screen as a single block transfer.
+                    dst[x - x_FirstPixelUpdate] = isset ? colorTftWhite : colorTftBlack;
+#endif
+                }
+            }
+
+#if defined(HACKADAY_COMMUNICATOR)
+            tft->draw16bitBeRGBBitmap(x_FirstPixelUpdate, y, &linePixelBuffer[x_FirstPixelUpdate], spanWidth, kRowsPerPush);
+#else
+            // Step 4: Send the changed pixels on these rows to the screen as a single block transfer.
             // This function accepts pixel data MSB first so it can dump the memory straight out the SPI port.
-            tft->pushImage(x_FirstPixelUpdate, y, (x_LastPixelUpdate - x_FirstPixelUpdate + 1), 1,
-                           &linePixelBuffer[x_FirstPixelUpdate]);
+#if defined(CO5300_PARTIAL_DEBUG)
+            // Panel_AMOLED::writeImage() and ::setWindow() both silently return when x or w is odd,
+            // so log what they will actually see. dbgRejects counting above zero means the push never
+            // reached the panel - and because buffer_back is updated regardless, that pixel is lost
+            // until the next full repaint.
+            dbgPushes++;
+            if ((x_FirstPixelUpdate & 1U) || (spanWidth & 1U)) {
+                if (dbgRejects < 4)
+                    LOG_WARN("CO5300 odd push: x=%u y=%u w=%u h=%u (xF=%u xL=%u)", (unsigned)x_FirstPixelUpdate, (unsigned)y,
+                             (unsigned)spanWidth, (unsigned)kRowsPerPush, (unsigned)x_FirstChanged, (unsigned)x_LastChanged);
+                dbgRejects++;
+            } else if (dbgPushes <= 3) {
+                LOG_DEBUG("CO5300 push: x=%u y=%u w=%u h=%u", (unsigned)x_FirstPixelUpdate, (unsigned)y, (unsigned)spanWidth,
+                          (unsigned)kRowsPerPush);
+            }
+#endif
+            pushPixelBlock(x_FirstPixelUpdate, y, spanWidth, kRowsPerPush, &linePixelBuffer[x_FirstPixelUpdate]);
 #endif
             somethingChanged = true;
         }
-        y++;
+        y += kRowsPerPush;
     }
     // Copy the Buffer to the Back Buffer
     if (somethingChanged)
@@ -1584,7 +1961,7 @@ void TFTDisplay::sendCommand(uint8_t com)
     // handle display on/off directly
     switch (com) {
     case DISPLAYON: {
-        // LOG_DEBUG("Display on");
+        LOG_DEBUG("Display on");
         backlightEnable->set(true);
 #if ARCH_PORTDUINO
         display(true);
@@ -1612,7 +1989,7 @@ void TFTDisplay::sendCommand(uint8_t com)
         break;
     }
     case DISPLAYOFF: {
-        // LOG_DEBUG("Display off");
+        LOG_DEBUG("Display off");
         backlightEnable->set(false);
 #if ARCH_PORTDUINO
         tft->clear();
@@ -1719,8 +2096,8 @@ bool TFTDisplay::connect()
 #endif
     }
 
-    backlightEnable->set(true);
     LOG_INFO("Power to TFT Backlight");
+    backlightEnable->set(true);
 
 #ifdef UNPHONE
     unphone.backlight(true); // using unPhone library
@@ -1748,31 +2125,62 @@ bool TFTDisplay::connect()
     tft->setRotation(1); // T-Deck has the TFT in landscape
 #elif defined(T_WATCH_S3)
     tft->setRotation(2); // T-Watch S3 left-handed orientation
-#elif ARCH_PORTDUINO || defined(SENSECAP_INDICATOR) || defined(T_LORA_PAGER)
+#elif ARCH_PORTDUINO || defined(SENSECAP_INDICATOR) || defined(T_LORA_PAGER) || defined(T_WATCH_ULTRA)
     tft->setRotation(0); // use config.yaml to set rotation
 #else
     tft->setRotation(3); // Orient horizontal and wide underneath the silkscreen name label
 #endif
     tft->fillScreen(getThemeDefaultOffColor());
 
+    // Both buffers have to be DMA-reachable before display() can use the DMA push, so track the
+    // two allocations together.
+    bool allBuffersDmaCapable = true;
+    bool thisBufferDmaCapable = false;
+
     if (this->linePixelBuffer == NULL) {
-        this->linePixelBuffer = (uint16_t *)malloc(sizeof(uint16_t) * displayWidth);
+#if defined(CO5300_CS)
+        // One width per row in a push: this panel stages every row of the pair back to back, and the
+        // block starts at the span's x offset, so the staging can reach x + rowsPerPush * spanWidth.
+        // At the worst case (x = 0, full-width span) that is exactly rowsPerPush * displayWidth.
+        // Span widening can only grow a push rightwards to the panel edge, so x + rowsPerPush * span
+        // still tops out at rowsPerPush * displayWidth.
+        const size_t linePixels = (size_t)displayWidth * CO5300_ROWS_PER_PUSH;
+#else
+        const size_t linePixels = (size_t)displayWidth;
+#endif
+        this->linePixelBuffer = allocPixelBuffer(linePixels, &thisBufferDmaCapable);
 
         if (!this->linePixelBuffer) {
             LOG_ERROR("Not enough memory to create TFT line buffer\n");
             return false;
         }
-        memaudit::add("display", sizeof(uint16_t) * displayWidth);
+        allBuffersDmaCapable &= thisBufferDmaCapable;
+        memaudit::add("display", sizeof(uint16_t) * linePixels);
     }
     if (this->repaintChunkBuffer == NULL) {
-        this->repaintChunkBuffer = (uint16_t *)malloc(sizeof(uint16_t) * displayWidth * kFullRepaintChunkRows);
+        const size_t chunkPixels = (size_t)displayWidth * kFullRepaintChunkRows;
 
+        // Two slots let a chunk's pixel conversion overlap the previous chunk's transfer, but that
+        // is only worth having if the internal heap can spare it - so ask for the pair, and drop to
+        // a single slot rather than starving whatever initialises after us.
+        this->repaintChunkBuffer = tryAllocDmaPixelBuffer(chunkPixels * kFullRepaintChunkSlots);
+        this->chunkBufferSlots = kFullRepaintChunkSlots;
+        thisBufferDmaCapable = this->repaintChunkBuffer != nullptr;
+
+        if (!this->repaintChunkBuffer) {
+            this->chunkBufferSlots = 1;
+            this->repaintChunkBuffer = allocPixelBuffer(chunkPixels, &thisBufferDmaCapable);
+        }
         if (!this->repaintChunkBuffer) {
             LOG_ERROR("Not enough memory to create TFT repaint chunk buffer\n");
             return false;
         }
-        memaudit::add("display", sizeof(uint16_t) * displayWidth * kFullRepaintChunkRows);
+        allBuffersDmaCapable &= thisBufferDmaCapable;
+        memaudit::add("display", sizeof(uint16_t) * chunkPixels * this->chunkBufferSlots);
     }
+    LOG_DEBUG("TFT pixel buffers: dma=%d chunkSlots=%u", (int)allBuffersDmaCapable, (unsigned)this->chunkBufferSlots);
+
+    this->pixelBuffersAreDmaCapable = allBuffersDmaCapable;
     return true;
 }
 

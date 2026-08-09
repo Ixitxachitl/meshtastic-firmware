@@ -2,7 +2,12 @@
 #include "./MapTile.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
+
+#if defined(ARCH_ESP32)
+#include <esp_heap_caps.h> // heap_caps_malloc(), for the PSRAM tile cache slots
+#endif
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -22,18 +27,123 @@ constexpr uint8_t MAP_TILE_LAYOUT_GRID = 1;
 // Tiles are 1 bit/pixel, column-major: [bx=0..kTileSizePx/8-1][y=0..kTileSizePx-1], 8 px/byte.
 uint8_t s_tileCacheBuffer[NicheGraphics::MapTiles::kTileBufferBytes];
 
-// Which (source, tileIndex) is currently sitting in s_tileCacheBuffer, so blitTile can skip a
-// redundant decode (SD read + LZ4 decompress) when the exact same tile is needed again. A single
-// slot is enough for the common case that matters most: most Map-capable screens are far smaller
-// than a single tile, so a whole redraw - and, critically, most individual pan/zoom steps, which
-// usually don't even leave the current tile - needs only one tile. Without this, every such
-// redraw/step was re-reading and re-decompressing the exact same bytes from SD for no reason,
-// which is what actually made panning/zooming feel sluggish even after fixing the per-call file
-// reopen and bumping the SD SPI clock. nullptr is a valid source key (the compiled-in MapTile.h
-// path), distinct from "nothing cached" (kNoCachedTile).
+// Decoded-tile cache, keyed on (source, tileIndex), so blitTile can skip a redundant decode (SD
+// read + LZ4 decompress) when a tile is needed again.
+//
+// This used to be a single slot, on the reasoning that most Map-capable screens are smaller than
+// one tile so a whole redraw needs only one. A tile spans 256 world units, so that holds for a
+// 320x240 panel and fails badly for anything larger: a 410x502 screen straddles up to 3x3 tiles,
+// the single slot evicted itself on every one, and each pan frame re-read and re-decompressed all
+// nine from SD. Measured at 200-270 ms per frame with a 0% hit rate, against a 28 ms panel push.
+//
+// Slot 0 is the static buffer above, so a build with no PSRAM - or one where the allocation below
+// fails - still works exactly as it did before, just without the extra slots. nullptr is a valid
+// source key (the compiled-in MapTile.h path), distinct from "nothing cached" (kNoCachedTile).
 constexpr int kNoCachedTile = -1;
-NicheGraphics::MapTiles::TileSource *s_cachedTileSource = nullptr;
-int s_cachedTileIndex = kNoCachedTile;
+
+// 3x3 is the worst case for a viewport up to 512 world units on a side, which covers every panel
+// this runs on. At kTileBufferBytes (32KB) a slot each, the eight non-static ones are 256KB of
+// PSRAM - cheap next to what they save, but override this downwards for a tighter board.
+#ifndef MAP_TILE_CACHE_SLOTS
+#define MAP_TILE_CACHE_SLOTS 9
+#endif
+
+struct TileCacheSlot {
+    uint8_t *bits;
+    NicheGraphics::MapTiles::TileSource *source;
+    int index;
+    uint32_t lastUsed;
+};
+TileCacheSlot s_tileCache[MAP_TILE_CACHE_SLOTS];
+bool s_tileCacheReady = false;
+uint32_t s_tileCacheClock = 0;
+
+void tileCacheInit()
+{
+    if (s_tileCacheReady)
+        return;
+    s_tileCacheReady = true;
+
+    s_tileCache[0] = {s_tileCacheBuffer, nullptr, kNoCachedTile, 0};
+    for (int i = 1; i < MAP_TILE_CACHE_SLOTS; i++)
+        s_tileCache[i] = {nullptr, nullptr, kNoCachedTile, 0}; // A null buf never matches or wins eviction.
+
+        // Extra slots only where there is memory to spare for them. InkHUD's compiled-in tile path runs
+        // on nRF52 with a small screen, where one slot already covers the viewport and 32KB apiece would
+        // be hopeless - it keeps the static slot alone and behaves exactly as it always has.
+#if defined(ARCH_ESP32) || defined(ARCH_PORTDUINO)
+    for (int i = 1; i < MAP_TILE_CACHE_SLOTS; i++) {
+#if defined(ARCH_ESP32)
+        // Deliberately PSRAM: 32KB a slot would swallow the internal heap, and the alternative to a
+        // slot in slower RAM is an SD read plus an LZ4 decompress, which is far worse.
+        s_tileCache[i].bits = (uint8_t *)heap_caps_malloc(NicheGraphics::MapTiles::kTileBufferBytes, MALLOC_CAP_SPIRAM);
+#else
+        s_tileCache[i].bits = (uint8_t *)malloc(NicheGraphics::MapTiles::kTileBufferBytes);
+#endif
+        if (!s_tileCache[i].bits)
+            break; // Out of room - however many we got is what the cache gets to use.
+    }
+#endif
+}
+
+// The decoded tile for (source, index), or nullptr if it isn't cached.
+uint8_t *tileCacheFind(NicheGraphics::MapTiles::TileSource *source, int index)
+{
+    tileCacheInit();
+    for (int i = 0; i < MAP_TILE_CACHE_SLOTS; i++) {
+        if (s_tileCache[i].bits && s_tileCache[i].index == index && s_tileCache[i].source == source) {
+            s_tileCache[i].lastUsed = ++s_tileCacheClock;
+            return s_tileCache[i].bits;
+        }
+    }
+    return nullptr;
+}
+
+// A buffer to decode into, evicting whichever slot has gone longest unused. Left marked empty until
+// tileCacheCommit(), so a decode that fails partway can't be served back out as a later hit.
+uint8_t *tileCacheAcquire()
+{
+    tileCacheInit();
+    int victim = 0;
+    for (int i = 1; i < MAP_TILE_CACHE_SLOTS; i++) {
+        if (!s_tileCache[i].bits)
+            continue;
+        if (!s_tileCache[victim].bits || s_tileCache[i].lastUsed < s_tileCache[victim].lastUsed)
+            victim = i;
+    }
+    s_tileCache[victim].source = nullptr;
+    s_tileCache[victim].index = kNoCachedTile;
+    return s_tileCache[victim].bits;
+}
+
+void tileCacheCommit(uint8_t *bits, NicheGraphics::MapTiles::TileSource *source, int index)
+{
+    for (int i = 0; i < MAP_TILE_CACHE_SLOTS; i++) {
+        if (s_tileCache[i].bits == bits) {
+            s_tileCache[i].source = source;
+            s_tileCache[i].index = index;
+            s_tileCache[i].lastUsed = ++s_tileCacheClock;
+            return;
+        }
+    }
+}
+
+void tileCacheInvalidateAll()
+{
+    tileCacheInit();
+    for (int i = 0; i < MAP_TILE_CACHE_SLOTS; i++) {
+        s_tileCache[i].source = nullptr;
+        s_tileCache[i].index = kNoCachedTile;
+    }
+}
+
+#ifdef UI_PERF_DEBUG
+// Reset per drawTileBackground() call, so the caller can report how the cache above actually fares.
+// While panning, a healthy ratio is mostly hits: only tiles newly entering the viewport should need
+// decoding. Sustained decodes with no hits means the cache is too small for the viewport.
+uint32_t s_tileDecodes = 0;
+uint32_t s_tileCacheHits = 0;
+#endif
 
 // Shared compressed-payload scratch buffer - see tileCompressedScratchBuffer() in the header.
 // Only where a TileSource can exist; InkHUD's compiled-in path decodes straight from flash.
@@ -148,12 +258,10 @@ static_assert(map_tile_count == 0 || NicheGraphics::MapTiles::kTileSizePx == 256
               "compiled-in MapTile.h tiles are baked at 256px, but this build decodes tiles at 512px "
               "(BASEUI_HAS_MAP) - the two tile providers can't both be populated in one build");
 
-const uint8_t *decodeSparseTile(int tileIndex)
+bool decodeSparseTileInto(int tileIndex, uint8_t *outBuf)
 {
     const uint8_t *compressed = map_tile_data + map_tile_offsets[tileIndex];
-    bool ok = NicheGraphics::MapTiles::decodeTilePayload(map_tile_kinds[tileIndex], compressed, map_tile_sizes[tileIndex],
-                                                          s_tileCacheBuffer);
-    return ok ? s_tileCacheBuffer : nullptr;
+    return NicheGraphics::MapTiles::decodeTilePayload(map_tile_kinds[tileIndex], compressed, map_tile_sizes[tileIndex], outBuf);
 }
 
 NicheGraphics::MapTiles::TileSource *s_activeSource = nullptr;
@@ -168,7 +276,7 @@ int tileCountCompiledIn()
 void NicheGraphics::MapTiles::setTileSource(TileSource *source)
 {
     s_activeSource = source;
-    s_cachedTileIndex = kNoCachedTile; // The old cached tile's data no longer applies.
+    tileCacheInvalidateAll(); // The old cached tiles' data no longer applies.
 }
 
 bool NicheGraphics::MapTiles::decodeTilePayload(uint8_t kind, const uint8_t *compressed, int compressedSize, uint8_t *outBuf)
@@ -214,9 +322,23 @@ bool NicheGraphics::MapTiles::hasTiles()
 
 // Draw tiles centered on latCenter/lngCenter. Falls back to the nearest available zoom if
 // no tiles exist at exactly zoom (upsamples), enabling smooth zoom steps.
+#ifdef UI_PERF_DEBUG
+// Tile decodes vs single-slot cache hits during the most recent drawTileBackground() call.
+void NicheGraphics::MapTiles::lastTileStats(uint32_t *decodes, uint32_t *cacheHits)
+{
+    *decodes = s_tileDecodes;
+    *cacheHits = s_tileCacheHits;
+}
+#endif
+
 void NicheGraphics::MapTiles::drawTileBackground(float latCenter, float lngCenter, int zoom, float metersToPx, int16_t viewWidth,
                                                   int16_t viewHeight, PlotFn plot, void *ctx)
 {
+#ifdef UI_PERF_DEBUG
+    s_tileDecodes = 0;
+    s_tileCacheHits = 0;
+#endif
+
     const int tileCount = s_activeSource ? s_activeSource->tileCount() : tileCountCompiledIn();
     if (tileCount == 0 || metersToPx <= 0.0f)
         return;
@@ -282,23 +404,26 @@ void NicheGraphics::MapTiles::drawTileBackground(float latCenter, float lngCente
                 continue;
 
             if (!tile) { // Decode at most once per tile, regardless of how many copies are in view.
-                if (s_cachedTileSource == s_activeSource && s_cachedTileIndex == i) {
-                    tile = s_tileCacheBuffer; // Already sitting there from a previous call - reuse it.
-                } else if (s_activeSource) {
-                    tile = s_activeSource->decodeTile(i, s_tileCacheBuffer) ? s_tileCacheBuffer : nullptr;
+                tile = tileCacheFind(s_activeSource, i);
+                if (tile) {
+#ifdef UI_PERF_DEBUG
+                    s_tileCacheHits++;
+#endif
                 } else {
-                    tile = decodeSparseTile(i);
+#ifdef UI_PERF_DEBUG
+                    s_tileDecodes++;
+#endif
+                    uint8_t *dst = tileCacheAcquire();
+                    const bool ok = dst && (s_activeSource ? s_activeSource->decodeTile(i, dst) : decodeSparseTileInto(i, dst));
+                    if (!ok) {
+                        // A failed decode may have partially overwritten the slot (e.g. LZ4 erroring
+                        // out mid-decompress). tileCacheAcquire() already left it marked empty and
+                        // we don't commit it, so that garbage can never come back as a later hit.
+                        break;
+                    }
+                    tileCacheCommit(dst, s_activeSource, i);
+                    tile = dst;
                 }
-                if (!tile) {
-                    // A failed decode may have partially overwritten s_tileCacheBuffer (e.g. LZ4
-                    // erroring out mid-decompress) without this tile becoming the cached one -
-                    // invalidate rather than risk a later cache "hit" serving that garbage back
-                    // out under the previous (different) tile's index.
-                    s_cachedTileIndex = kNoCachedTile;
-                    break;
-                }
-                s_cachedTileSource = s_activeSource;
-                s_cachedTileIndex = i;
             }
 
             const int sxStart = (int)((tileMinWx - gpxX) / tileWorldPx + viewWidth * 0.5f);

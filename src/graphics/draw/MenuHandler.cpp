@@ -710,7 +710,7 @@ void menuHandler::clockMenu()
 }
 void menuHandler::messageResponseMenu()
 {
-    enum optionsNumbers { Back = 0, ViewMode, DeleteMenu, ReplyMenu, MuteChannel, Aloud, enumEnd };
+    enum optionsNumbers { Back = 0, ViewMode, MessageOrder, DeleteMenu, ReplyMenu, MuteChannel, Aloud, enumEnd };
 
     static const char *optionsArray[enumEnd];
     static int optionsEnumArray[enumEnd];
@@ -729,6 +729,9 @@ void menuHandler::messageResponseMenu()
     optionsArray[options] = "View Chats";
     optionsEnumArray[options++] = ViewMode;
 
+    optionsArray[options] = "Message Order";
+    optionsEnumArray[options++] = MessageOrder;
+
     // If viewing ALL chats, hide “Mute Chat”
     if (mode != graphics::MessageRenderer::ThreadMode::ALL && mode != graphics::MessageRenderer::ThreadMode::DIRECT) {
         const uint8_t chIndex = (threadChannel != 0) ? (uint8_t)threadChannel : channels.getPrimaryIndex();
@@ -742,7 +745,7 @@ void menuHandler::messageResponseMenu()
     optionsArray[options] = "Delete";
     optionsEnumArray[options++] = DeleteMenu;
 
-#ifdef HAS_I2S
+#ifdef MESHTASTIC_ENABLE_TTS
     optionsArray[options] = "Read Aloud";
     optionsEnumArray[options++] = Aloud;
 #endif
@@ -768,6 +771,10 @@ void menuHandler::messageResponseMenu()
             menuHandler::menuQueue = menuHandler::MessageViewModeMenu;
             screen->runNow();
 
+        } else if (selected == MessageOrder) {
+            menuHandler::menuQueue = menuHandler::MessageOrderMenu;
+            screen->runNow();
+
             // Reply submenu
         } else if (selected == ReplyMenu) {
             menuHandler::menuQueue = menuHandler::ReplyMenu;
@@ -785,7 +792,7 @@ void menuHandler::messageResponseMenu()
             menuHandler::menuQueue = menuHandler::DeleteMessagesMenu;
             screen->runNow();
 
-#ifdef HAS_I2S
+#ifdef MESHTASTIC_ENABLE_TTS
         } else if (selected == Aloud) {
             if (const StoredMessage *latest = getNewestMessageForActiveThread()) {
                 const char *msg = MessageStore::getText(*latest);
@@ -1189,6 +1196,39 @@ void menuHandler::homeBaseMenu()
 void menuHandler::textMessageMenu()
 {
     cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST);
+}
+
+// Flips which end of the message list the newest message lives at. The renderer keys its cached
+// layout on this, so it relaminates on the next draw; resetScrollState() re-anchors the view on the
+// newest message at whichever end that now is, rather than leaving it parked mid-history.
+void menuHandler::messageOrderMenu()
+{
+    enum optionsNumbers { Back, NewestFirst, NewestLast };
+
+    static const char *optionsArray[] = {"Back", "Newest on Top", "Newest on Bottom"};
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = "Message Order";
+    bannerOptions.optionsArrayPtr = optionsArray;
+    bannerOptions.optionsCount = 3;
+    bannerOptions.InitialSelected =
+        (config.display.message_order == meshtastic_Config_DisplayConfig_MessageOrder_NEWEST_LAST) ? 2 : 1;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        if (selected == NewestFirst) {
+            config.display.message_order = meshtastic_Config_DisplayConfig_MessageOrder_NEWEST_FIRST;
+            graphics::MessageRenderer::resetScrollState();
+            service->reloadConfig(SEGMENT_CONFIG);
+            LOG_INFO("Message order: newest first");
+        } else if (selected == NewestLast) {
+            config.display.message_order = meshtastic_Config_DisplayConfig_MessageOrder_NEWEST_LAST;
+            graphics::MessageRenderer::resetScrollState();
+            service->reloadConfig(SEGMENT_CONFIG);
+            LOG_INFO("Message order: newest last");
+        } else {
+            menuHandler::menuQueue = menuHandler::MessageResponseMenu;
+            screen->runNow();
+        }
+    };
+    screen->showOverlayBanner(bannerOptions);
 }
 
 void menuHandler::textMessageBaseMenu()
@@ -2370,7 +2410,7 @@ void menuHandler::traceRouteMenu()
 void menuHandler::testMenu()
 {
 
-    enum optionsNumbers { Back, NumberPicker, ShowChirpy, TestAnnounce };
+    enum optionsNumbers { Back, NumberPicker, ShowChirpy };
     static const char *optionsArray[5] = {"Back"};
     static int optionsEnumArray[5] = {Back};
     int options = 1;
@@ -2380,10 +2420,6 @@ void menuHandler::testMenu()
 
     optionsArray[options] = screen->isFrameHidden("chirpy") ? "Show Chirpy" : "Hide Chirpy";
     optionsEnumArray[options++] = ShowChirpy;
-#ifdef HAS_I2S
-    optionsArray[options] = "Test Announce";
-    optionsEnumArray[options++] = TestAnnounce;
-#endif
 
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = "Hidden Test Menu";
@@ -2398,10 +2434,6 @@ void menuHandler::testMenu()
             screen->toggleFrameVisibility("chirpy");
             screen->setFrames(Screen::FOCUS_SYSTEM);
 
-        } else if (selected == TestAnnounce) {
-#ifdef HAS_I2S
-            audioThread->readAloud("This is a test of the emergency broadcast system. This is only a test.");
-#endif
         } else {
             menuQueue = SystemBaseMenu;
             screen->runNow();
@@ -3001,6 +3033,9 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
         break;
     case MessageViewModeMenu:
         messageViewModeMenu();
+        break;
+    case MessageOrderMenu:
+        messageOrderMenu();
         break;
     case MessageBubblesMenu:
         messageBubblesMenu();

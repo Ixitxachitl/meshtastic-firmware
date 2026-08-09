@@ -319,6 +319,9 @@ __attribute__((weak, noinline)) bool loopCanSleep()
 void lateInitVariant() __attribute__((weak));
 void lateInitVariant() {}
 
+// NOTE: earlyInitVariant() runs before consoleInit(), so the logging subsystem isn't set
+// up yet. Calling a LOG_* macro here CRASHES the device -- it is not a silent no-op. Do
+// not use them in earlyInitVariant(); defer any logging to lateInitVariant() or later.
 void earlyInitVariant() __attribute__((weak));
 void earlyInitVariant() {}
 
@@ -869,6 +872,8 @@ void setup()
     router = new ReliableRouter();
 
     // only play start melody when role is not tracker or sensor
+    // On I2S boards audioThread does not exist yet, so buzz.cpp queues the melody
+    // and buzzOnAudioThreadReady() hands it over once the thread is up.
     if (config.power.is_power_saving == true &&
         IS_ONE_OF(config.device.role, meshtastic_Config_DeviceConfig_Role_TRACKER,
                   meshtastic_Config_DeviceConfig_Role_TAK_TRACKER, meshtastic_Config_DeviceConfig_Role_SENSOR))
@@ -1063,6 +1068,14 @@ void setup()
 #ifdef HAS_I2S
     LOG_DEBUG("Start audio thread");
     audioThread = new AudioThread();
+#if defined(ARDUINO_ARCH_ESP32)
+    // Not fatal: startFreeRTOSTask() leaves the thread on the ThreadController,
+    // so playback still works, just paced by the main loop.
+    if (audioThread->isFreeRTOSTask() && !audioThread->startFreeRTOSTask())
+        LOG_ERROR("AudioThread task create failed, falling back to cooperative scheduling");
+#endif
+    // Play the boot melody that setup() queued before we got here.
+    buzzOnAudioThreadReady();
 #endif
 
 #ifdef HAS_UDP_MULTICAST
@@ -1172,6 +1185,13 @@ void setup()
     auto rIf = initLoRa();
 
     lateInitVariant(); // Do board specific init (see extra_variants/README.md for documentation)
+
+#ifdef HAS_I2S
+    // Now that the audio thread exists and lateInitVariant() has configured the amp
+    // enable pin, play the boot melody that playStartMelody() asked for back at the top
+    // of setup(). No-op if nothing was queued.
+    buzzOnAudioThreadReady();
+#endif
 
 #if !MESHTASTIC_EXCLUDE_MQTT
     mqttInit();
