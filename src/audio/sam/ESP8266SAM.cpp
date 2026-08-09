@@ -16,6 +16,10 @@
 */
 
 
+// Meshtastic: compiled only on variants that opt in with -D MESHTASTIC_ENABLE_TTS.
+// See the note above the guard in src/audio/SamPcm.h for why.
+#ifdef MESHTASTIC_ENABLE_TTS
+
 #include <Arduino.h>
 #include "ESP8266SAM.h"
 
@@ -99,3 +103,5 @@ void ESP8266SAM::SetVoice(enum SAMVoice voice)
   }
 }
 
+
+#endif // MESHTASTIC_ENABLE_TTS

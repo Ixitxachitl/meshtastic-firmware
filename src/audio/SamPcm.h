@@ -2,6 +2,13 @@
 
 #include "configuration.h"
 
+// The vendored SAM sources under audio/sam/ carry a matching `#ifdef MESHTASTIC_ENABLE_TTS`
+// around each translation unit, because they do not compile off ESP32 at all: render.c and
+// the table headers `#include <pgmspace.h>`, which only resolves on the ESP32 core - nRF52,
+// RP2040 and Portduino ship it as <avr/pgmspace.h>. Their guard is the bare build flag and
+// not this fuller condition on purpose: they are C, so they cannot include configuration.h
+// to see HAS_I2S or ARCH_ESP32. That makes their condition a superset of this one, so the
+// SAM objects always exist wherever SamPcm below references them.
 #if defined(HAS_I2S) && defined(MESHTASTIC_ENABLE_TTS)
 
 #include <atomic>

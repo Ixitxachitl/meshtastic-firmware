@@ -1,3 +1,7 @@
+// Meshtastic: compiled only on variants that opt in with -D MESHTASTIC_ENABLE_TTS.
+// See the note above the guard in src/audio/SamPcm.h for why.
+#ifdef MESHTASTIC_ENABLE_TTS
+
 #include <stdio.h>
 #include <string.h>
 #include "reciter.h"
@@ -550,3 +554,5 @@ pos37485:
 	Y++;
 	goto pos37461;
 }
+
+#endif // MESHTASTIC_ENABLE_TTS

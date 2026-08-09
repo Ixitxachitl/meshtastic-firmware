@@ -1,3 +1,7 @@
+// Meshtastic: compiled only on variants that opt in with -D MESHTASTIC_ENABLE_TTS.
+// See the note above the guard in src/audio/SamPcm.h for why.
+#ifdef MESHTASTIC_ENABLE_TTS
+
 #include <stdio.h> // define printf()
 #include <string.h> // strlen()
 //#include <stdlib.h>
@@ -1475,3 +1479,5 @@ void Code47503(unsigned char mem52)
 	if ((mem50 & 128) != 0) mem53 = -mem53;
 
 }
+
+#endif // MESHTASTIC_ENABLE_TTS

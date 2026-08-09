@@ -1,3 +1,7 @@
+// Meshtastic: compiled only on variants that opt in with -D MESHTASTIC_ENABLE_TTS.
+// See the note above the guard in src/audio/SamPcm.h for why.
+#ifdef MESHTASTIC_ENABLE_TTS
+
 //#include <stdio.h>
 #include <string.h>
 #include <stdlib.h> // abs()
@@ -1059,3 +1063,5 @@ unsigned char trans(unsigned char mem39212, unsigned char mem39213)
 
 	return mem39215;
 }
+
+#endif // MESHTASTIC_ENABLE_TTS
