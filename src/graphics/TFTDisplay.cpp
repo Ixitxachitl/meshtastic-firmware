@@ -1264,6 +1264,38 @@ GpioPin *TFTDisplay::backlightEnable = NULL;
 #define TFT_HAS_LGFX_DMA_PUSH 1
 #endif
 
+// -- CO5300 partial-repaint tunables ------------------------------------------------------------
+// The t-watch-ultra AMOLED repainted the whole panel every frame for a long time because the
+// diff-based partial path corrupted narrow updates - the clock's seconds digits came out as
+// scattered wrong-coloured pixels. Isolated on hardware: the corruption is not in the staging or
+// the row pairing, it is Bus_SPI::writeBytes() routing small transfers through the SPI FIFO
+// registers instead of DMA (see kSpiFifoThresholdBytes and the widening in display()). Keeping
+// every push above that threshold fixes it, so the partial path is on by default now.
+//
+// Two knobs remain, mostly for re-bisecting if this panel misbehaves again:
+//   -D CO5300_FORCE_FULL_REPAINT=1  go back to repainting the whole panel every frame.
+//   -D CO5300_ROWS_PER_PUSH=1       send single rows instead of row pairs.
+//
+// Row pairing is not a driver requirement - Panel_AMOLED enforces even x and width only, and writes
+// RASET unguarded - but single rows were observed to produce no visible update at all on this
+// panel, so 2 is the working default.
+#if defined(CO5300_CS)
+#ifndef CO5300_FORCE_FULL_REPAINT
+#define CO5300_FORCE_FULL_REPAINT 0
+#endif
+#ifndef CO5300_ROWS_PER_PUSH
+#define CO5300_ROWS_PER_PUSH 2
+#endif
+static_assert(CO5300_ROWS_PER_PUSH == 1 || CO5300_ROWS_PER_PUSH == 2,
+              "CO5300_ROWS_PER_PUSH must be 1 or 2: the change scan masks both rows of a push out of "
+              "one buffer byte, which only holds for a power-of-two run inside an 8-row page");
+
+// Transfers of this size or smaller go out through the SPI W0 registers rather than DMA - see the
+// `length <= 64` branch at the top of Bus_SPI::writeBytes(). Mirrored here because it is a property
+// of the bus driver we have to design around, not something we can ask it for.
+static constexpr uint32_t kSpiFifoThresholdBytes = 64;
+#endif
+
 namespace
 {
 #ifdef UI_PERF_DEBUG
@@ -1496,19 +1528,13 @@ void TFTDisplay::display(bool fromBlank)
     static uint32_t lastColorFrameSignature = 0;
     const bool hasColorRegions = graphics::getTFTColorRegionCount() > 0;
     const uint32_t colorFrameSignature = graphics::getTFTColorFrameSignature();
-#if defined(CO5300_CS)
-    // CO5300 (t-watch-ultra AMOLED): always take the full-repaint path.
+#if defined(CO5300_CS) && CO5300_FORCE_FULL_REPAINT
+    // Opt-in escape hatch: repaint the whole panel every frame on the t-watch-ultra AMOLED.
     //
-    // The diff-based partial path below corrupts small changed spans on this panel - a narrow update
-    // such as the clock's seconds digits comes out as scattered wrong-coloured pixels rather than
-    // glyphs. The panel needs an even row start and an even row count (LovyanGFX's Panel_AMOLED
-    // enforces only the matching x/width rule), which the partial path hand-rolls by pushing row
-    // pairs; that pairing is what misrenders, and the root cause has not been isolated. The chunked
-    // repaint below is inherently even-aligned (8-row chunks, 502 rows, x=0, full 410 width) and
-    // renders correctly, so use it unconditionally here.
-    //
-    // Cost is acceptable: ~410 x 502 x 2 B over QSPI at 75 MHz is roughly 40-50 ms per frame against
-    // a ~1 fps UI budget. Revisit if the partial path is ever fixed for this panel.
+    // This used to be unconditional, to work around narrow partial updates corrupting. That cause is
+    // understood and fixed now (see the widening in the partial path below), so this is off by
+    // default. Costs ~410 x 502 x 2 B over QSPI every frame, roughly 40-50 ms, whether one pixel
+    // changed or all of them.
     const bool forceFullColorRepaint = true;
 #else
     const bool forceFullColorRepaint = forceFullRepaint || (colorFrameSignature != lastColorFrameSignature);
@@ -1577,19 +1603,43 @@ void TFTDisplay::display(bool fromBlank)
     }
 #endif
 
-    // Rows sent per push. The CO5300 needs an even row start and an even row count, so it goes out a
-    // row pair at a time; every other panel pushes single rows.
+    // Rows sent per push. The CO5300 goes out a row pair at a time; every other panel pushes single
+    // rows. Pairing is not a driver requirement - Panel_AMOLED enforces even x and width only, and
+    // writes RASET unguarded - so CO5300_ROWS_PER_PUSH=1 is the control case when bisecting.
     //
     // The loop below steps by whole pushes rather than by single rows. That is what stops a changed
     // pair being sent twice - scanning per row and pushing the pair containing it did the work, and
     // paid the address-window setup, once for each row of the pair. It also makes the change scan
     // cheaper: both rows of a pair always live in the same buffer byte, so one mask covers them.
 #if defined(CO5300_CS)
-    constexpr uint32_t kRowsPerPush = 2;
+    constexpr uint32_t kRowsPerPush = CO5300_ROWS_PER_PUSH;
 #else
     constexpr uint32_t kRowsPerPush = 1;
 #endif
     const uint8_t rowsPerPushBits = (uint8_t)((1U << kRowsPerPush) - 1U);
+
+#if defined(CO5300_CS)
+    // Narrowest push, in pixels, that still reaches the panel as a DMA transfer. Derived rather than
+    // hardcoded so it stays correct if kRowsPerPush changes: at two rows the floor is 18 px (72 B),
+    // at one row it is 34 px (68 B). Rounded up to even to preserve the even-width rule.
+    constexpr uint32_t kMinPushPixels = ((kSpiFifoThresholdBytes / (kRowsPerPush * sizeof(uint16_t))) + 2) & ~1U;
+    static_assert(kMinPushPixels * kRowsPerPush * sizeof(uint16_t) > kSpiFifoThresholdBytes,
+                  "widened span must exceed the FIFO threshold, or the push still bypasses DMA");
+#endif
+
+#if defined(CO5300_PARTIAL_DEBUG)
+    uint32_t dbgPushes = 0;
+    uint32_t dbgRejects = 0;
+    static bool dbgGeometryLogged = false;
+    if (!dbgGeometryLogged) {
+        dbgGeometryLogged = true;
+        // displayWidth/Height are OLEDDisplay's geometry; tft->width()/height() are the panel's own,
+        // after rotation and offsets. If they disagree, the even-x/even-w reasoning is built on the
+        // wrong bounds and the clip inside LGFXBase::pushImage() can shave w to an odd number.
+        LOG_DEBUG("CO5300 geometry: displayWidth=%u displayHeight=%u panelW=%d panelH=%d rowsPerPush=%u", (unsigned)displayWidth,
+                  (unsigned)displayHeight, (int)tft->width(), (int)tft->height(), (unsigned)kRowsPerPush);
+    }
+#endif
 
     y = 0;
     while (y < displayHeight) {
@@ -1656,6 +1706,38 @@ void TFTDisplay::display(bool fromBlank)
                 x_LastPixelUpdate = displayWidth - 1;
             }
 
+#if defined(CO5300_CS)
+            // Widen narrow spans so the transfer clears Bus_SPI's FIFO threshold.
+            //
+            // Bus_SPI::writeBytes() sends anything <= kSpiFifoThresholdBytes straight through the
+            // SPI W0 registers instead of setting up DMA. This panel does not render those writes:
+            // measured on hardware, a clock-seconds update pushed 4 to 48 bytes and came out as
+            // scattered wrong-coloured pixels, while the same content widened past the threshold
+            // renders correctly. The full-repaint path never hit this because its chunks are
+            // 6560 bytes and always take DMA - which is why repainting the whole panel every frame
+            // looked like the only option for so long.
+            //
+            // Widening is safe: the extra pixels are rendered from the live buffer below, exactly
+            // as the changed ones are, so they carry correct content rather than stale data. Cost
+            // is at most 72 bytes per push against 412 KB for a full repaint.
+            if ((x_LastPixelUpdate - x_FirstPixelUpdate + 1) < kMinPushPixels) {
+                uint32_t want = kMinPushPixels;
+                if (want > displayWidth)
+                    want = displayWidth;
+                // Grow right first, then take whatever is still missing from the left. Keeping the
+                // start even and the end odd preserves the even-x/even-width rule Panel_AMOLED
+                // enforces, and the 32-bit source alignment GDMA needs.
+                uint32_t last = x_FirstPixelUpdate + want - 1;
+                if (last > displayWidth - 1)
+                    last = displayWidth - 1;
+                uint32_t first = (last + 1 >= want) ? (last + 1 - want) : 0;
+                x_FirstPixelUpdate = first & ~1U;
+                x_LastPixelUpdate = last | 1U;
+                if (x_LastPixelUpdate >= displayWidth)
+                    x_LastPixelUpdate = displayWidth - 1;
+            }
+#endif
+
             const uint32_t spanWidth = x_LastPixelUpdate - x_FirstPixelUpdate + 1;
 
             // Step 3: Copy the changed span of every covered row into the pixel line buffer, rows
@@ -1693,6 +1775,22 @@ void TFTDisplay::display(bool fromBlank)
 #else
             // Step 4: Send the changed pixels on these rows to the screen as a single block transfer.
             // This function accepts pixel data MSB first so it can dump the memory straight out the SPI port.
+#if defined(CO5300_PARTIAL_DEBUG)
+            // Panel_AMOLED::writeImage() and ::setWindow() both silently return when x or w is odd,
+            // so log what they will actually see. dbgRejects counting above zero means the push never
+            // reached the panel - and because buffer_back is updated regardless, that pixel is lost
+            // until the next full repaint.
+            dbgPushes++;
+            if ((x_FirstPixelUpdate & 1U) || (spanWidth & 1U)) {
+                if (dbgRejects < 4)
+                    LOG_WARN("CO5300 odd push: x=%u y=%u w=%u h=%u (xF=%u xL=%u)", (unsigned)x_FirstPixelUpdate, (unsigned)y,
+                             (unsigned)spanWidth, (unsigned)kRowsPerPush, (unsigned)x_FirstChanged, (unsigned)x_LastChanged);
+                dbgRejects++;
+            } else if (dbgPushes <= 3) {
+                LOG_DEBUG("CO5300 push: x=%u y=%u w=%u h=%u", (unsigned)x_FirstPixelUpdate, (unsigned)y, (unsigned)spanWidth,
+                          (unsigned)kRowsPerPush);
+            }
+#endif
             pushPixelBlock(x_FirstPixelUpdate, y, spanWidth, kRowsPerPush, &linePixelBuffer[x_FirstPixelUpdate]);
 #endif
             somethingChanged = true;
@@ -1938,8 +2036,12 @@ bool TFTDisplay::connect()
 
     if (this->linePixelBuffer == NULL) {
 #if defined(CO5300_CS)
-        // Twice the width: this panel pushes row pairs, so the partner row is staged alongside.
-        const size_t linePixels = (size_t)displayWidth * 2;
+        // One width per row in a push: this panel stages every row of the pair back to back, and the
+        // block starts at the span's x offset, so the staging can reach x + rowsPerPush * spanWidth.
+        // At the worst case (x = 0, full-width span) that is exactly rowsPerPush * displayWidth.
+        // Span widening can only grow a push rightwards to the panel edge, so x + rowsPerPush * span
+        // still tops out at rowsPerPush * displayWidth.
+        const size_t linePixels = (size_t)displayWidth * CO5300_ROWS_PER_PUSH;
 #else
         const size_t linePixels = (size_t)displayWidth;
 #endif
