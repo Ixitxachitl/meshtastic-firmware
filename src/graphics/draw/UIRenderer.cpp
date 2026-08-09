@@ -2349,12 +2349,24 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
     const int innerLeft = rectX + 1;
     const int innerRight = rectX + rectWidth - 1;
 
-    // Every icon draws in WHITE and the highlight is an outline around the middle slot,
-    // drawn last. The earlier inverted chip meant a glyph straddling the chip edge had to
-    // pick one colour for its whole body, so half of it landed on matching background and
-    // vanished - it read as the box slicing icons in half.
+    // The middle slot is a filled chip and the glyph inverts inside it - but per pixel, not per
+    // glyph. Picking one colour for a whole icon made the half straddling the chip edge land on
+    // matching background and disappear, which read as the box slicing icons in two. Each icon is
+    // therefore blitted up to three times: clipped to the spans either side of the chip in white,
+    // and to the chip itself in black, so the inversion falls exactly on the edge.
     const int centerX = xStart + (int)centerSlot * step;
     const int activePadding = compactPanel ? 1 : 2;
+    const int chipLeft = centerX - activePadding;
+    const int chipRight = centerX + iconSize + activePadding;
+    const int chipClipL = chipLeft > innerLeft ? chipLeft : innerLeft;
+    const int chipClipR = chipRight < innerRight ? chipRight : innerRight;
+
+#if GRAPHICS_TFT_COLORING_ENABLED
+    registerTFTColorRegion(TFTColorRole::NavigationBar, chipLeft, y - activePadding, iconSize + activePadding * 2,
+                           iconSize + activePadding * 2);
+#endif
+    display->setColor(WHITE);
+    display->fillRect(chipLeft, y - activePadding, iconSize + activePadding * 2, iconSize + activePadding * 2);
 
     for (int slot = -1; slot <= (int)visibleCount; ++slot) {
         const size_t iconIndex = (anchorIndex + totalIcons * 2 + (size_t)(slot + (int)totalIcons) - centerSlot) % totalIcons;
@@ -2362,17 +2374,19 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
         if ((x + iconSize) <= innerLeft || x >= innerRight)
             continue; // entirely outside the bar
         const uint8_t *icon = screen->indicatorIcons[iconIndex];
-        // Clipped, so an icon entering or leaving the strip is revealed a column at a time
-        // rather than popping in whole once it happens to fit.
-        drawStretchedXbmClipped(display, x, y, 8, 8, icon, iconSize, iconSize, innerLeft, innerRight);
-    }
 
-#if GRAPHICS_TFT_COLORING_ENABLED
-    registerTFTColorRegion(TFTColorRole::NavigationBar, centerX - activePadding, y - activePadding, iconSize + activePadding * 2,
-                           iconSize + activePadding * 2);
-#endif
-    display->setColor(WHITE);
-    display->drawRect(centerX - activePadding, y - activePadding, iconSize + activePadding * 2, iconSize + activePadding * 2);
+        // Either side of the chip, in white. Clipped, so an icon entering or leaving the strip is
+        // revealed a column at a time rather than popping in whole once it happens to fit.
+        display->setColor(WHITE);
+        if (chipLeft > innerLeft)
+            drawStretchedXbmClipped(display, x, y, 8, 8, icon, iconSize, iconSize, innerLeft, chipClipL);
+        if (chipRight < innerRight)
+            drawStretchedXbmClipped(display, x, y, 8, 8, icon, iconSize, iconSize, chipClipR, innerRight);
+
+        // Over the chip, in black.
+        display->setColor(BLACK);
+        drawStretchedXbmClipped(display, x, y, 8, 8, icon, iconSize, iconSize, chipClipL, chipClipR);
+    }
     display->setColor(WHITE);
 #else
     for (size_t slot = 0; slot < visibleCount; ++slot) {
