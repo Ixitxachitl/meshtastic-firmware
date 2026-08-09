@@ -104,15 +104,33 @@ static inline bool isNewestLast()
 // raises this and drawTextMessageFrame() applies it once the layout is built.
 static bool pendingScrollToEnd = false;
 
+// Scroll geometry as drawTextMessageFrame() actually laid it out, published here so everything that
+// scrolls clamps against the same numbers the renderer draws with.
+//
+// Each scroll entry point used to estimate the viewport for itself - displayHeight minus one line
+// in nudgeScroll()/scrollByFingerDelta(), minus two in scrollDown() - but the real figure is
+// scrollBottom minus firstLineTop, and on variants with generous header and nav margins (t-watch
+// ultra reserves 15px above and below the header alone) those estimates run tens of pixels long.
+// A too-large viewport yields a too-small scroll limit, so the clamp stopped short of where the
+// list really rests. Newest-first hid it: it rests at the top, and the shortfall only cost you the
+// tail of the oldest message. Newest-last rests at the *bottom*, so the same shortfall meant a
+// finger could never get the newest message fully back on screen - it stayed clipped by the panel
+// edge, which is the one message that must always be readable.
+static int laidOutTotalHeight = 0;
+static int laidOutUsableHeight = 0;
+
 // Furthest the list is allowed to scroll from its resting position.
 //
 // Newest-first deliberately runs one line past the bottom: the auto-scroll sweep pauses there, and
 // the extra line is what lifts the final line clear of the panel edge. Newest-last has no such
 // slack to give - its resting position *is* the bottom - so overscrolling would park the newest
-// message off-screen, which is the one message that must always be visible.
-static int scrollLimit(int totalHeight, int usableHeight)
+// message off-screen.
+static int scrollLimit()
 {
-    int limit = totalHeight - usableHeight;
+    if (laidOutUsableHeight <= 0)
+        return 0; // Nothing laid out yet; the next draw sets the anchor.
+
+    int limit = laidOutTotalHeight - laidOutUsableHeight;
     if (!isNewestLast() && !cachedHeights.empty())
         limit += cachedHeights.back();
     return std::max(0, limit);
@@ -125,10 +143,7 @@ void scrollUp()
     if (isNewestLast() && graphics::isCompactPanel(screen->getDisplayDevice()) && scrollY <= 0) {
         // Compact panels: scrolling past the oldest message wraps back to the newest, mirroring the
         // wrap scrollDown() gives the default order.
-        int totalHeight = 0;
-        for (int h : cachedHeights)
-            totalHeight += h;
-        scrollY = (float)scrollLimit(totalHeight, screen->getHeight() - (FONT_HEIGHT_SMALL * 2));
+        scrollY = (float)scrollLimit();
         return;
     }
 
@@ -141,14 +156,7 @@ void scrollDown()
 {
     manualScrolling = true;
 
-    int totalHeight = 0;
-    for (int h : cachedHeights)
-        totalHeight += h;
-
-    int visibleHeight = screen->getHeight() - (FONT_HEIGHT_SMALL * 2);
-    int maxScroll = totalHeight - visibleHeight;
-    if (maxScroll < 0)
-        maxScroll = 0;
+    const int maxScroll = scrollLimit();
 
     // Newest-last already wraps at the other end (see scrollUp), so it must not wrap here too.
     if (!isNewestLast() && graphics::isCompactPanel(screen->getDisplayDevice()) && scrollY >= maxScroll) {
@@ -190,22 +198,13 @@ void nudgeScroll(int8_t direction)
         return;
     }
 
-    OLEDDisplay *display = (screen != nullptr) ? screen->getDisplayDevice() : nullptr;
-    const int displayHeight = display ? display->getHeight() : 64;
-    const int navHeight = FONT_HEIGHT_SMALL;
-    const int usableHeight = std::max(0, displayHeight - navHeight);
-
-    int totalHeight = 0;
-    for (int h : cachedHeights)
-        totalHeight += h;
-
-    if (totalHeight <= usableHeight) {
+    const int scrollStop = scrollLimit();
+    if (scrollStop <= 0) {
         scrollY = 0.0f;
         return;
     }
 
-    const int scrollStop = scrollLimit(totalHeight, usableHeight);
-    const int step = std::max(FONT_HEIGHT_SMALL, usableHeight / 3);
+    const int step = std::max(FONT_HEIGHT_SMALL, laidOutUsableHeight / 3);
 
     float newScroll = scrollY + static_cast<float>(direction) * static_cast<float>(step);
     if (newScroll < 0.0f)
@@ -228,23 +227,15 @@ void scrollByFingerDelta(float dyPx)
     if (dyPx == 0.0f || cachedHeights.empty())
         return;
 
-    OLEDDisplay *display = (screen != nullptr) ? screen->getDisplayDevice() : nullptr;
-    const int displayHeight = display ? display->getHeight() : 64;
-    const int usableHeight = std::max(0, displayHeight - FONT_HEIGHT_SMALL);
-
-    int totalHeight = 0;
-    for (int h : cachedHeights)
-        totalHeight += h;
-
     manualScrolling = true; // Claim the view from the auto-scroll animation, as nudgeScroll does.
-    if (totalHeight <= usableHeight) {
-        scrollY = 0.0f;
-        return;
-    }
 
     // The text follows the finger, so dragging down (dyPx > 0, screen y grows downward) walks back
     // towards the top of the list. Same sense as the map pan, opposite to a scroll-down button.
-    const int scrollStop = scrollLimit(totalHeight, usableHeight);
+    const int scrollStop = scrollLimit();
+    if (scrollStop <= 0) {
+        scrollY = 0.0f;
+        return;
+    }
     float newScroll = scrollY - dyPx;
     if (newScroll < 0.0f)
         newScroll = 0.0f;
@@ -272,6 +263,8 @@ void clearMessageCache()
     std::vector<AckStatus>().swap(cachedAckForLine);
     std::vector<MessageBlock>().swap(cachedBlocks);
     cachedLayoutKey = MessageLayoutKey{}; // Its sentinel count can't collide with a real rebuild.
+    laidOutTotalHeight = 0;
+    laidOutUsableHeight = 0; // Nothing to clamp against until the next draw republishes it.
 
     // Reset scroll so we rebuild cleanly next time we enter the screen
     resetScrollState();
@@ -976,7 +969,13 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     for (size_t i = 0; i < cachedHeights.size(); ++i)
         totalHeight += cachedHeights[i];
     int usableScrollHeight = usableHeight;
-    int scrollStop = scrollLimit(totalHeight, usableScrollHeight);
+
+    // Publish the geometry the scroll handlers clamp against, so a finger can land the list exactly
+    // where the renderer rests it instead of on its own estimate of the viewport.
+    laidOutTotalHeight = totalHeight;
+    laidOutUsableHeight = usableScrollHeight;
+
+    int scrollStop = scrollLimit();
 
     // Where the list sits at rest, and which way the auto-scroll sweep then walks away from it.
     // Newest-first rests at the top and sweeps down through history; newest-last rests at the
