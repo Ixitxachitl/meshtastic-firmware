@@ -57,6 +57,7 @@ class menuHandler
         FrameToggles,
         DisplayUnits,
         MessageBubblesMenu,
+        MessageOrderMenu,
         ThemeMenu,
         HamModeConfirm,
         LicensedToNormalConfirm,
@@ -122,6 +123,7 @@ class menuHandler
     static void frameTogglesMenu();
     static void displayUnitsMenu();
     static void messageBubblesMenu();
+    static void messageOrderMenu();
     static void themeMenu();
     static void textMessageMenu();
     static void hamModeConfirmMenu();

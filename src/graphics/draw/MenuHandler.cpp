@@ -2469,9 +2469,9 @@ void menuHandler::screenOptionsMenu()
     bool hasSupportBrightness = false;
 #endif
 
-    enum optionsNumbers { Back, Brightness, FrameToggles, DisplayUnits, MessageBubbles, Theme };
-    static const char *optionsArray[7] = {"Back"};
-    static int optionsEnumArray[7] = {Back};
+    enum optionsNumbers { Back, Brightness, FrameToggles, DisplayUnits, MessageBubbles, MessageOrder, Theme };
+    static const char *optionsArray[8] = {"Back"};
+    static int optionsEnumArray[8] = {Back};
     int options = 1;
 
     // Only show brightness for B&W displays
@@ -2488,6 +2488,9 @@ void menuHandler::screenOptionsMenu()
 
     optionsArray[options] = "Message Bubbles";
     optionsEnumArray[options++] = MessageBubbles;
+
+    optionsArray[options] = "Message Order";
+    optionsEnumArray[options++] = MessageOrder;
 
 #if GRAPHICS_TFT_COLORING_ENABLED
     optionsArray[options] = "Theme";
@@ -2511,6 +2514,9 @@ void menuHandler::screenOptionsMenu()
             screen->runNow();
         } else if (selected == MessageBubbles) {
             menuHandler::menuQueue = menuHandler::MessageBubblesMenu;
+            screen->runNow();
+        } else if (selected == MessageOrder) {
+            menuHandler::menuQueue = menuHandler::MessageOrderMenu;
             screen->runNow();
         } else if (selected == Theme) {
             menuHandler::menuQueue = menuHandler::ThemeMenu;
@@ -2797,6 +2803,39 @@ void menuHandler::messageBubblesMenu()
     screen->showOverlayBanner(bannerOptions);
 }
 
+// Flips which end of the message list the newest message lives at. The renderer keys its cached
+// layout on this, so it relaminates on the next draw; resetScrollState() re-anchors the view on the
+// newest message at whichever end that now is, rather than leaving it parked mid-history.
+void menuHandler::messageOrderMenu()
+{
+    enum optionsNumbers { Back, NewestFirst, NewestLast };
+
+    static const char *optionsArray[] = {"Back", "Newest on Top", "Newest on Bottom"};
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = "Message Order";
+    bannerOptions.optionsArrayPtr = optionsArray;
+    bannerOptions.optionsCount = 3;
+    bannerOptions.InitialSelected =
+        (config.display.message_order == meshtastic_Config_DisplayConfig_MessageOrder_NEWEST_LAST) ? 2 : 1;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        if (selected == NewestFirst) {
+            config.display.message_order = meshtastic_Config_DisplayConfig_MessageOrder_NEWEST_FIRST;
+            graphics::MessageRenderer::resetScrollState();
+            service->reloadConfig(SEGMENT_CONFIG);
+            LOG_INFO("Message order: newest first");
+        } else if (selected == NewestLast) {
+            config.display.message_order = meshtastic_Config_DisplayConfig_MessageOrder_NEWEST_LAST;
+            graphics::MessageRenderer::resetScrollState();
+            service->reloadConfig(SEGMENT_CONFIG);
+            LOG_INFO("Message order: newest last");
+        } else {
+            menuHandler::menuQueue = menuHandler::ScreenOptionsMenu;
+            screen->runNow();
+        }
+    };
+    screen->showOverlayBanner(bannerOptions);
+}
+
 void menuHandler::themeMenu()
 {
     // Build menu dynamically from the theme table.
@@ -2996,6 +3035,9 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
         break;
     case MessageBubblesMenu:
         messageBubblesMenu();
+        break;
+    case MessageOrderMenu:
+        messageOrderMenu();
         break;
     case ThemeMenu:
         themeMenu();
