@@ -1451,7 +1451,10 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
     const int numUnique = (int)unique.size();
     if (numUnique == 0) { // EXCLUDE_EMOJI: emotes[] is empty, any index would read out of bounds
         updateState(CANNED_MESSAGE_RUN_STATE_FREETEXT, true);
-        screen->forceDisplay();
+        // forceDisplay() without the flag is a no-op on non-eink, and the picker returns 1 for every
+        // event it handles - so Screen, a later observer on the same broker, never sees the input and
+        // never speeds itself up. Without this the redraw waits for the 1fps idle tick.
+        screen->forceDisplay(true);
         return 1;
     }
 
@@ -1515,7 +1518,7 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
             if (touchedIdx != emotePickerIndex) {
                 emotePickerIndex = touchedIdx;
                 requestFocus();
-                screen->forceDisplay();
+                screen->forceDisplay(true);
             }
             return 1;
         }
@@ -1528,7 +1531,7 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
             emotePickerIndex++;
             emoteScrollOffset = emoteScrollToCenter(emotePickerIndex / cols, rows, totalRows);
             requestFocus();
-            screen->forceDisplay();
+            screen->forceDisplay(true);
         }
         return 1;
     }
@@ -1555,7 +1558,7 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
             emotePickerIndex = target;
             emoteScrollOffset = emoteScrollToCenter(emotePickerIndex / cols, rows, totalRows);
             requestFocus();
-            screen->forceDisplay();
+            screen->forceDisplay(true);
         }
         return 1;
     }
@@ -1575,7 +1578,7 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
         }
         cursor += emoteInsert.length();
         updateState(CANNED_MESSAGE_RUN_STATE_FREETEXT, true);
-        screen->forceDisplay();
+        screen->forceDisplay(true);
         return 1;
     }
 
@@ -1583,7 +1586,7 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
     if (event->inputEvent == INPUT_BROKER_CANCEL || event->inputEvent == INPUT_BROKER_ALT_LONG ||
         event->inputEvent == INPUT_BROKER_BACK) {
         updateState(CANNED_MESSAGE_RUN_STATE_FREETEXT, true);
-        screen->forceDisplay();
+        screen->forceDisplay(true);
         return 1;
     }
 
