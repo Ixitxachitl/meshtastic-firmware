@@ -7,6 +7,7 @@
 // All functions are thread-safe and lazily open the audio device on first use, so callers
 // don't have to worry about init ordering. Playback is non-blocking: tones are queued and
 // play back FIFO in the background.
+#include <cstddef>
 #include <cstdint>
 
 #if defined(USE_SDL_AUDIO)
@@ -18,6 +19,11 @@ void tone(uint16_t freqHz, uint16_t durationMs);
 // Parse an RTTTL ("Nokia ringtone") string and queue all of its notes. Uses the same
 // octave convention as the firmware's rtttl library (octave 4 A = 440 Hz).
 void beginRtttl(const char *song);
+
+// Queue raw mono 16-bit PCM already at kSampleRate (e.g. rendered SAM speech). Unlike
+// tone()/beginRtttl(), the caller does its own framing/fades - this just appends to the
+// device's play queue.
+void queuePcm(const int16_t *samples, size_t count);
 
 // True while there is still queued audio to play.
 bool isPlaying();

@@ -19,7 +19,11 @@ namespace portduino_audio
 {
 namespace
 {
-constexpr int kSampleRate = 44100;
+// Fixed at SAM's native output rate (see ESP8266SAM::Say(), which hardcodes SetRate(22050))
+// rather than a conventional 44.1kHz, so speech can be queued straight to the device with
+// no resampling. Square-wave tones/RTTTL are synthesized in software at whatever rate the
+// device runs, so sharing this rate with speech costs them nothing audible.
+constexpr int kSampleRate = 22050;
 constexpr int16_t kAmplitude = 6000; // well below full scale; raw square waves are harsh
 constexpr int kFadeSamples = 96;     // ~2ms linear attack/release to soften clicks
 
@@ -106,6 +110,15 @@ void tone(uint16_t freqHz, uint16_t durationMs)
         return;
     SDL_LockMutex(g_mutex);
     queueTone(freqHz, durationMs);
+    SDL_UnlockMutex(g_mutex);
+}
+
+void queuePcm(const int16_t *samples, size_t count)
+{
+    if (!samples || !count || !ensureInit())
+        return;
+    SDL_LockMutex(g_mutex);
+    SDL_QueueAudio(g_dev, samples, (Uint32)(count * sizeof(int16_t)));
     SDL_UnlockMutex(g_mutex);
 }
 

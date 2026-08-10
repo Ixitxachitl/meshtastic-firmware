@@ -31,6 +31,9 @@
 #include "modules/Telemetry/EnvironmentTelemetry.h"
 #endif
 #include "modules/TraceRouteModule.h"
+#if defined(USE_SDL_AUDIO) && defined(MESHTASTIC_ENABLE_TTS)
+#include "platform/portduino/SamPlayback.h"
+#endif
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -797,7 +800,11 @@ void menuHandler::messageResponseMenu()
             if (const StoredMessage *latest = getNewestMessageForActiveThread()) {
                 const char *msg = MessageStore::getText(*latest);
                 if (msg && msg[0]) {
+#if defined(HAS_I2S)
                     audioThread->readAloud(msg);
+#elif defined(USE_SDL_AUDIO)
+                    portduino_audio::readAloud(msg);
+#endif
                 }
             }
 #endif
