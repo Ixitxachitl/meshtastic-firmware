@@ -186,6 +186,8 @@ bool FileTileSource::decodeTile(int tileIndex, uint8_t *outBuf)
         return false;
 
     uint8_t *compressed = tileCompressedScratchBuffer();
+    if (!compressed) // scratch buffer could not be allocated - treat as an unreadable tile
+        return false;
     file_.seek(payloadStart_ + e.offset);
     if (file_.read(compressed, e.size) != e.size)
         return false;

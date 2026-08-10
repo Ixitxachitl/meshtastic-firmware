@@ -93,12 +93,19 @@ constexpr uint8_t kTileKindBlack = 2; // no payload - tile is entirely set (0xFF
 // same LZ4 raw-block decoder as the compiled-in path, rather than duplicating it.
 bool decodeTilePayload(uint8_t kind, const uint8_t *compressed, int compressedSize, uint8_t *outBuf);
 
-// A static, kTileBufferBytes-sized scratch buffer for TileSource implementations to read a
+// A shared, kTileBufferBytes-sized scratch buffer for TileSource implementations to read a
 // compressed tile payload into before calling decodeTilePayload() above - kept here (like
 // s_tileCacheBuffer for the decoded output) rather than as a local in each TileSource, since
 // kTileBufferBytes is 32KB: far too large to put on the stack of the task that ends up calling
 // decodeTile() (e.g. the ESP32 "tft" render task, a 16KB stack). Only one TileSource is ever
 // actively decoding at a time, so sharing this one buffer across all of them is safe.
+//
+// Allocated on first call - PSRAM where there is any - rather than living in .bss, so a build
+// that can show a map no longer pays 32KB of internal DRAM just for being able to. See the
+// definition for why that mattered.
+//
+// RETURNS NULL if the allocation fails. Callers must treat that as an unreadable tile rather
+// than dereferencing it.
 //
 // Only exists where a TileSource can: the compiled-in InkHUD path decodes straight from a flash
 // pointer and never needs it, so InkHUD builds don't carry the 32KB.

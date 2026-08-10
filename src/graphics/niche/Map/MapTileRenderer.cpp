@@ -147,8 +147,20 @@ uint32_t s_tileCacheHits = 0;
 
 // Shared compressed-payload scratch buffer - see tileCompressedScratchBuffer() in the header.
 // Only where a TileSource can exist; InkHUD's compiled-in path decodes straight from flash.
+//
+// Allocated on first use rather than declared as an array, because as .bss at kTileBufferBytes
+// (32KB with BASEUI_HAS_MAP's 512px tiles) this was the single largest internal-DRAM object in
+// the firmware - and it was paid at link time on every build that can show a map, whether or not
+// the map was ever opened. On a t-watch-ultra that mattered: internal DRAM sat around 45KB free,
+// so this one buffer was most of the missing headroom, and an I2S DMA ring failing to allocate
+// mid-session is the sort of thing it caused.
+//
+// PSRAM first: this holds an SD read destination and an LZ4 input, both streamed through once
+// per decode rather than random-accessed, so the slower memory costs little. Internal is the
+// fallback, which keeps boards without PSRAM working - and even there this is now paid only if
+// a map is actually opened.
 #if BASEUI_HAS_MAP
-uint8_t s_tileCompressedScratchBuffer[NicheGraphics::MapTiles::kTileBufferBytes];
+uint8_t *s_tileCompressedScratchBuffer = nullptr;
 #endif
 
 // A baked tile always covers the same geographic span regardless of storage resolution: the
@@ -295,6 +307,16 @@ bool NicheGraphics::MapTiles::decodeTilePayload(uint8_t kind, const uint8_t *com
 #if BASEUI_HAS_MAP
 uint8_t *NicheGraphics::MapTiles::tileCompressedScratchBuffer()
 {
+    if (!s_tileCompressedScratchBuffer) {
+#if defined(ARCH_ESP32)
+        s_tileCompressedScratchBuffer = (uint8_t *)heap_caps_malloc(kTileBufferBytes, MALLOC_CAP_SPIRAM);
+#endif
+        if (!s_tileCompressedScratchBuffer)
+            s_tileCompressedScratchBuffer = (uint8_t *)malloc(kTileBufferBytes);
+    }
+    // May still be null: callers treat that as a failed decode, which is what the renderer
+    // already does with any tile it cannot read, so a map simply draws blank rather than
+    // taking the device down. Deliberately not logged - this file has no logging dependency.
     return s_tileCompressedScratchBuffer;
 }
 #endif
