@@ -305,7 +305,6 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define DS248X_ADDR_ALT7 0x1F // same as BBQ10_KB_ADDR
 #define HM330X_ADDR 0x40
 
-
 // -----------------------------------------------------------------------------
 // ACCELEROMETER
 // -----------------------------------------------------------------------------
@@ -514,6 +513,26 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #endif
 #ifndef USE_TFTDISPLAY
 #define USE_TFTDISPLAY 0
+#endif
+
+// True when the touch panel is driven by LovyanGFX through TFTDisplay's LGFX class, which is what
+// makes runtime touch calibration possible: LGFX can sample the raw controller readings at the four
+// panel corners and rebuild its own mapping from them. The parameters live in
+// uiconfig.calibration_data, the same field device-ui writes from its calibration screen, so a
+// calibration performed in either UI carries over to the other.
+//
+// Ruled out here: boards whose panel is TFT_eSPI (RAK14014, the Heltec Mesh Nodes) or Arduino_GFX
+// (Hackaday Communicator), M5Stack (no touch at all), and variants that bypass TFTDisplay's touch
+// path with their own driver (VARIANT_TOUCHSCREEN, e.g. T-Watch Ultra and T-Beam). Portduino is
+// included because its LGFX carries a real touch instance (or Touch_sdl for the desktop window).
+#ifndef BASEUI_HAS_TOUCH_CALIBRATION
+#if USE_TFTDISPLAY && (HAS_TOUCHSCREEN || defined(ARCH_PORTDUINO)) && !VARIANT_TOUCHSCREEN && !defined(USE_EINK) &&              \
+    !defined(RAK14014) && !defined(HELTEC_MESH_NODE_T096) && !defined(HELTEC_MESH_NODE_T1) && !defined(HACKADAY_COMMUNICATOR) && \
+    !defined(M5STACK)
+#define BASEUI_HAS_TOUCH_CALIBRATION 1
+#else
+#define BASEUI_HAS_TOUCH_CALIBRATION 0
+#endif
 #endif
 
 #ifndef HW_VENDOR

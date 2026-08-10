@@ -59,6 +59,10 @@ class menuHandler
         DisplayUnits,
         MessageBubblesMenu,
         ThemeMenu,
+#if BASEUI_HAS_TOUCH_CALIBRATION
+        TouchCalibrationMenu,
+        RunTouchCalibration,
+#endif
         HamModeConfirm,
         LicensedToNormalConfirm,
 #if BASEUI_HAS_MAP
@@ -124,6 +128,10 @@ class menuHandler
     static void displayUnitsMenu();
     static void messageBubblesMenu();
     static void themeMenu();
+#if BASEUI_HAS_TOUCH_CALIBRATION
+    static void touchCalibrationMenu();
+    static void runTouchCalibration();
+#endif
     static void textMessageMenu();
     static void messageOrderMenu();
     static void hamModeConfirmMenu();
