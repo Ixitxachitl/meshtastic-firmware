@@ -1021,7 +1021,10 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
             highlight = "";
             payload = 0x00;
             updateState(CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER, true);
-            screen->forceDisplay();
+            // The flag is what wakes the screen: without it forceDisplay() does nothing at all on
+            // non-eink, and this path returns before the runOnce() below that would otherwise have
+            // asked for the redraw - so the picker only appeared on the next 1fps idle tick.
+            screen->forceDisplay(true);
             return true;
         }
 #endif
@@ -1048,7 +1051,7 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
             UIFrameEvent e;
             e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
             notifyObservers(&e);
-            screen->forceDisplay();
+            screen->forceDisplay(true);
             return true;
         } else if (keyTapped == "SPACE" || keyTapped == " ") {
 #ifndef RAK14014
@@ -1102,7 +1105,7 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
         if (graphics::numEmotes > 0 && event->touchX >= displayWidth - EMOTE_BUTTON_SIZE - EMOTE_BUTTON_MARGIN &&
             event->touchY >= displayHeight - EMOTE_BUTTON_SIZE - EMOTE_BUTTON_MARGIN) {
             updateState(CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER, true);
-            screen->forceDisplay();
+            screen->forceDisplay(true);
             return true;
         }
 
@@ -1115,7 +1118,7 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
     if (event->kbchar == INPUT_BROKER_MSG_EMOTE_LIST) {
         if (graphics::numEmotes > 0) { // no picker on EXCLUDE_EMOJI builds (empty emotes[])
             updateState(CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER);
-            screen->forceDisplay();
+            screen->forceDisplay(true);
         }
         return true;
     }
