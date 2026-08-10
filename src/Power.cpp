@@ -32,6 +32,7 @@
 #include <esp_adc/adc_cali_scheme.h>
 #include <esp_adc/adc_oneshot.h>
 #include <esp_err.h>
+#include <esp_heap_caps.h> // heap_caps_get_largest_free_block(), for the heap trend line
 #endif
 
 #if defined(ARCH_PORTDUINO)
@@ -1102,11 +1103,27 @@ void Power::logHeapUsage()
     const int32_t delta = lastHeapLogTime ? (int32_t)(heapFree - lastHeapLogFree) : 0;
 
     const uint32_t psramTotal = memGet.getPsramSize();
+#ifdef ARCH_ESP32
+    // Internal free and the largest DMA-capable block, separately from the pooled total above.
+    // Peripherals that allocate DMA buffers - I2S audio being the one that fails loudest - can
+    // only use internal DRAM, and take it in several separate buffers rather than one block. So
+    // they can fail with the pooled total still looking healthy, either because PSRAM is
+    // flattering it or because internal DRAM has fragmented. Neither is visible without these.
+    const uint32_t internalFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    const uint32_t largestDma = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    if (psramTotal)
+        LOG_INFO("Heap: %u/%u bytes free (%d since last), internal %u (largest DMA blk %u), PSRAM: %u/%u bytes free", heapFree,
+                 heapTotal, delta, internalFree, largestDma, memGet.getFreePsram(), psramTotal);
+    else
+        LOG_INFO("Heap: %u/%u bytes free (%d since last), internal %u (largest DMA blk %u)", heapFree, heapTotal, delta,
+                 internalFree, largestDma);
+#else
     if (psramTotal)
         LOG_INFO("Heap: %u/%u bytes free (%d since last), PSRAM: %u/%u bytes free", heapFree, heapTotal, delta,
                  memGet.getFreePsram(), psramTotal);
     else
         LOG_INFO("Heap: %u/%u bytes free (%d since last)", heapFree, heapTotal, delta);
+#endif
 
     lastHeapLogFree = heapFree;
     lastHeapLogTime = millis();

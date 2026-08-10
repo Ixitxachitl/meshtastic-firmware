@@ -228,6 +228,8 @@ bool SDCardTileSource::decodeTile(int tileIndex, uint8_t *outBuf)
             if ((uint64_t)e.offset + e.size > payloadBytes_)
                 return false;
             compressed = tileCompressedScratchBuffer();
+            if (!compressed) // scratch buffer could not be allocated - treat as an unreadable tile
+                return false;
             if (!file_.seekSet(payloadStart_ + e.offset))
                 return false;
             if (file_.read(compressed, e.size) != (int)e.size)

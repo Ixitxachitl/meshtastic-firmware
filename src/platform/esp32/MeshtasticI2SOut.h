@@ -82,29 +82,7 @@ class MeshtasticI2SOut : public ESP32I2SAudio
         if (_running || _tx_handle)
             return false;
 
-        i2s_chan_config_t chanCfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
-        chanCfg.dma_desc_num = _buffers;
-        chanCfg.dma_frame_num = _bufferWords;
-        chanCfg.auto_clear = true; // send zeros, not the last buffer, when we stop feeding
-
-        esp_err_t err = i2s_new_channel(&chanCfg, &_tx_handle, nullptr);
-        if (err == ESP_ERR_NO_MEM && (_buffers != kDmaBuffersFallback || _bufferWords != kDmaFramesFallback)) {
-            LOG_WARN("I2S: no DMA memory for %ux%u ring, falling back to %ux%u", (unsigned)_buffers, (unsigned)_bufferWords,
-                     (unsigned)kDmaBuffersFallback, (unsigned)kDmaFramesFallback);
-            _buffers = kDmaBuffersFallback;
-            _bufferWords = kDmaFramesFallback;
-            chanCfg.dma_desc_num = _buffers;
-            chanCfg.dma_frame_num = _bufferWords;
-            _tx_handle = nullptr;
-            err = i2s_new_channel(&chanCfg, &_tx_handle, nullptr);
-        }
-        if (err != ESP_OK) {
-            LOG_ERROR("I2S: i2s_new_channel failed: %d", err);
-            _tx_handle = nullptr;
-            return false;
-        }
-
-        i2s_std_config_t stdCfg = {
+        const i2s_std_config_t stdCfg = {
             .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG((uint32_t)_sampleRate),
             .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
             .gpio_cfg =
@@ -122,10 +100,21 @@ class MeshtasticI2SOut : public ESP32I2SAudio
                         },
                 },
         };
-        err = i2s_channel_init_std_mode(_tx_handle, &stdCfg);
+        esp_err_t err = openChannel(stdCfg);
+        if (err == ESP_ERR_NO_MEM && (_buffers != kDmaBuffersFallback || _bufferWords != kDmaFramesFallback)) {
+            LOG_WARN("I2S: no DMA memory for %ux%u ring, falling back to %ux%u", (unsigned)_buffers, (unsigned)_bufferWords,
+                     (unsigned)kDmaBuffersFallback, (unsigned)kDmaFramesFallback);
+            _buffers = kDmaBuffersFallback;
+            _bufferWords = kDmaFramesFallback;
+            err = openChannel(stdCfg);
+        }
         if (err != ESP_OK) {
-            LOG_ERROR("I2S: i2s_channel_init_std_mode failed: %d", err);
-            releaseChannel();
+            LOG_ERROR("I2S: could not open channel: %d", err);
+            // Even the fallback ring failed. Restore the full geometry for the same reason
+            // releaseChannel() does: the shortage may be transient, and the next playback
+            // should get to ask for the good ring rather than inherit this one's defeat.
+            _buffers = kDmaBuffers;
+            _bufferWords = kDmaFrames;
             return false;
         }
 
@@ -267,6 +256,45 @@ class MeshtasticI2SOut : public ESP32I2SAudio
 
   private:
     static constexpr size_t kBytesPerFrame = 4; // 16-bit stereo
+
+    /**
+     * One create-and-configure attempt at the current _buffers/_bufferWords geometry,
+     * leaving _tx_handle null on any failure so the caller can simply retry.
+     *
+     * Both IDF calls have to live in here for the geometry retry above to mean anything.
+     * i2s_new_channel only allocates the channel object and the descriptor pointer array
+     * - the DMA buffers themselves come from i2s_alloc_dma_desc, which runs later, inside
+     * i2s_channel_init_std_mode -> i2s_std_set_slot. A ring that does not fit in internal
+     * DMA-capable RAM therefore reports ESP_ERR_NO_MEM from the *second* call, so a retry
+     * wrapped around only the first one can never recover from it.
+     *
+     * Deliberately does not use releaseChannel() on the failure path: that resets the
+     * geometry back to the full ring, which would undo the fallback the caller just
+     * selected. Nothing it clears has been set yet at this point anyway.
+     */
+    esp_err_t openChannel(const i2s_std_config_t &stdCfg)
+    {
+        i2s_chan_config_t chanCfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
+        chanCfg.dma_desc_num = _buffers;
+        chanCfg.dma_frame_num = _bufferWords;
+        chanCfg.auto_clear = true; // send zeros, not the last buffer, when we stop feeding
+
+        _tx_handle = nullptr;
+        esp_err_t err = i2s_new_channel(&chanCfg, &_tx_handle, nullptr);
+        if (err != ESP_OK) {
+            LOG_ERROR("I2S: i2s_new_channel failed: %d", err);
+            _tx_handle = nullptr;
+            return err;
+        }
+
+        err = i2s_channel_init_std_mode(_tx_handle, &stdCfg);
+        if (err != ESP_OK) {
+            LOG_ERROR("I2S: i2s_channel_init_std_mode failed: %d", err);
+            i2s_del_channel(_tx_handle);
+            _tx_handle = nullptr;
+        }
+        return err;
+    }
 
     /// Delete the channel and reset the state upstream forgets to, so a later begin()
     /// starts clean. Upstream never nulls _tx_handle and never resets these counters,

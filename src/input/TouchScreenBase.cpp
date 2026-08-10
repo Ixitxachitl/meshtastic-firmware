@@ -1,6 +1,10 @@
 #include "TouchScreenBase.h"
 #include "main.h"
 
+#if defined(UI_PERF_DEBUG) && defined(ARCH_ESP32)
+#include <esp_heap_caps.h> // heap_caps_get_free_size(), for the per-gesture heap probe
+#endif
+
 #if defined(RAK14014) && !defined(MESHTASTIC_EXCLUDE_CANNEDMESSAGES)
 #include "modules/CannedMessageModule.h"
 #endif
@@ -233,6 +237,47 @@ int32_t TouchScreenBase::runOnce()
             worstMs = 0;
         }
     }
+
+#ifdef ARCH_ESP32
+    // Per-gesture heap accounting, tracking the low-water mark *during* the gesture rather
+    // than only the resting value after it. The transient trough is the number that matters:
+    // a touch both spikes allocation and synchronously starts audio - beginTones() for click
+    // feedback, readAloud() from a menu tap - so AudioThread::startPlayback() runs at the
+    // worst moment the heap ever sees. That is why the original failure logged from the
+    // [touchscreen1] thread rather than from an audio thread.
+    //
+    // Only the INTERNAL figures can explain it: i2s_alloc_dma_desc() takes DMA-capable
+    // internal DRAM, which PSRAM cannot back, so PSRAM movement is irrelevant here no
+    // matter how much it flatters the pooled total. The largest DMA-capable block is
+    // reported separately from the free total because the ring is dma_desc_num separate
+    // buffers - fragmentation can starve it while free bytes still look ample.
+    {
+        static uint32_t prevInternal = 0;
+        static uint32_t minInternal = UINT32_MAX, minDma = UINT32_MAX;
+
+        if (touched) {
+            // Sampled at the touch poll cadence, so a spike shorter than one poll can still
+            // slip through - treat the trough as an upper bound on what is actually free.
+            uint32_t f = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+            uint32_t b = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+            if (f < minInternal)
+                minInternal = f;
+            if (b < minDma)
+                minDma = b;
+        } else if (_touchedOld) { // finger just lifted: one line per completed gesture
+            uint32_t internalFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+            uint32_t largestDma = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+            LOG_INFO("gesture heap: internal %u (%+d, low %u), largest DMA blk %u (low %u), spiram %u", (unsigned)internalFree,
+                     prevInternal ? (int)(internalFree - prevInternal) : 0,
+                     (unsigned)(minInternal == UINT32_MAX ? internalFree : minInternal), (unsigned)largestDma,
+                     (unsigned)(minDma == UINT32_MAX ? largestDma : minDma),
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+            prevInternal = internalFree;
+            minInternal = UINT32_MAX;
+            minDma = UINT32_MAX;
+        }
+    }
+#endif
 #endif
 
     _touchedOld = touched;
