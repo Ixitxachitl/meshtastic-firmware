@@ -56,6 +56,21 @@ extern MessageStore messageStore;
 // key. Sized from the artwork it holds, so it grows with the variant's icon scale.
 #define EMOTE_BUTTON_SIZE (24 * BASEUI_ICON_SCALE)
 #define EMOTE_BUTTON_MARGIN 2
+#define EMOTE_BUTTON_RADIUS (6 * BASEUI_ICON_SCALE)
+
+// One condition for the button's artwork and its hit box, so the two can't disagree about whether
+// it exists. A virtual keyboard carries its own emote key, EXCLUDE_EMOJI builds have no artwork to
+// show, and without a pointer there is nothing to press. ARCH_PORTDUINO joins the hardware-keyboard
+// boards because the native/SDL build types on the host keyboard and reports mouse input as touch -
+// the same shape as a T-Deck, and the same TouchScreenImpl1.h gate BASEUI_HAS_TOUCH_DRAG uses.
+#ifndef CANNED_MESSAGE_HAS_EMOTE_BUTTON
+#if !defined(EXCLUDE_EMOJI) && !defined(USE_VIRTUAL_KEYBOARD) &&                                                                 \
+    ((defined(HAS_PHYSICAL_KEYBOARD) && HAS_TOUCHSCREEN) || defined(ARCH_PORTDUINO))
+#define CANNED_MESSAGE_HAS_EMOTE_BUTTON 1
+#else
+#define CANNED_MESSAGE_HAS_EMOTE_BUTTON 0
+#endif
+#endif
 
 // Insets around the virtual keyboard, as a percentage of the display. Zero by default - fourteen
 // columns want every pixel they can get - but a display whose edges the user cannot comfortably
@@ -369,26 +384,10 @@ static size_t firstWrappedTokenLen(const char *text)
     return graphics::EmoteRenderer::utf8CharLen(static_cast<uint8_t>(text[0]));
 }
 
-#if defined(USE_VIRTUAL_KEYBOARD)
+#if defined(USE_VIRTUAL_KEYBOARD) || CANNED_MESSAGE_HAS_EMOTE_BUTTON
 // Rounded key caps. drawRect() reads as a grid of boxes at the sizes a full QWERTY layout forces;
-// rounding the corners is what lets a key still look like a key once it is only ~25px wide.
-static void fillRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r)
-{
-    r = std::min<int16_t>(r, std::min(w, h) / 2);
-    if (r < 1) {
-        display->fillRect(x, y, w, h);
-        return;
-    }
-
-    display->fillRect(x + r, y, w - r * 2, h);
-    display->fillRect(x, y + r, r, h - r * 2);
-    display->fillRect(x + w - r, y + r, r, h - r * 2);
-    display->fillCircle(x + r, y + r, r);
-    display->fillCircle(x + w - 1 - r, y + r, r);
-    display->fillCircle(x + r, y + h - 1 - r, r);
-    display->fillCircle(x + w - 1 - r, y + h - 1 - r, r);
-}
-
+// rounding the corners is what lets a key still look like a key once it is only ~25px wide. The
+// emote button borrows the same outline so a lone button still reads as one of these key caps.
 static void drawRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r)
 {
     r = std::min<int16_t>(r, std::min(w, h) / 2);
@@ -406,6 +405,26 @@ static void drawRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t 
     display->drawCircleQuads(x + w - 1 - r, y + r, r, 1);
     display->drawCircleQuads(x + r, y + h - 1 - r, r, 4);
     display->drawCircleQuads(x + w - 1 - r, y + h - 1 - r, r, 8);
+}
+#endif // USE_VIRTUAL_KEYBOARD || CANNED_MESSAGE_HAS_EMOTE_BUTTON
+
+#if defined(USE_VIRTUAL_KEYBOARD)
+// Filled counterpart, for the cap under the finger. Only the keyboard highlights a key this way.
+static void fillRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r)
+{
+    r = std::min<int16_t>(r, std::min(w, h) / 2);
+    if (r < 1) {
+        display->fillRect(x, y, w, h);
+        return;
+    }
+
+    display->fillRect(x + r, y, w - r * 2, h);
+    display->fillRect(x, y + r, r, h - r * 2);
+    display->fillRect(x + w - r, y + r, r, h - r * 2);
+    display->fillCircle(x + r, y + r, r);
+    display->fillCircle(x + w - 1 - r, y + r, r);
+    display->fillCircle(x + r, y + h - 1 - r, r);
+    display->fillCircle(x + w - 1 - r, y + h - 1 - r, r);
 }
 
 // Second glyph a key produces while shift is held. Returns 0 for keys that only case-shift.
@@ -1102,11 +1121,11 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
     }
 #endif // USE_VIRTUAL_KEYBOARD
 
-    // Devices that type on hardware keys but still have a touchscreen (T-Deck and friends). The
-    // composer is otherwise entirely keyboard-driven, so the emote button drawn in drawFrame() is
-    // the only touch target left below the header; everything else is swallowed rather than left to
-    // open a long-press menu over the draft.
-#if defined(HAS_PHYSICAL_KEYBOARD) && HAS_TOUCHSCREEN && !defined(USE_VIRTUAL_KEYBOARD)
+    // Devices that type on hardware keys but still have a pointer (T-Deck and friends, plus the
+    // native/SDL build). The composer is otherwise entirely keyboard-driven, so the emote button
+    // drawn in drawFrame() is the only touch target left below the header; everything else is
+    // swallowed rather than left to open a long-press menu over the draft.
+#if CANNED_MESSAGE_HAS_EMOTE_BUTTON
     if (event->touchX != 0 || event->touchY != 0) {
         if (graphics::numEmotes > 0 && event->touchX >= displayWidth - EMOTE_BUTTON_SIZE - EMOTE_BUTTON_MARGIN &&
             event->touchY >= displayHeight - EMOTE_BUTTON_SIZE - EMOTE_BUTTON_MARGIN) {
@@ -1117,7 +1136,7 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
 
         return true;
     }
-#endif // HAS_PHYSICAL_KEYBOARD && HAS_TOUCHSCREEN && !USE_VIRTUAL_KEYBOARD
+#endif // CANNED_MESSAGE_HAS_EMOTE_BUTTON
 
     // All hardware keys fall through to here (CardKB, physical, etc.)
 
@@ -2723,16 +2742,16 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
                                  display->getWidth() - inputX - BASEUI_BODY_LR_MARGIN, FONT_HEIGHT_SMALL);
         }
 
-        // Emote button, bottom right. Only for hardware keyboards with a touchscreen: a virtual
-        // keyboard carries its own emote key, and without touch there is nothing to press.
-#if defined(HAS_PHYSICAL_KEYBOARD) && HAS_TOUCHSCREEN && !defined(EXCLUDE_EMOJI)
+        // Emote button, bottom right. Matched to the hit box handleFreeTextInput() tests, and drawn
+        // with the keyboard's rounded cap so it reads as a key rather than a stray box.
+#if CANNED_MESSAGE_HAS_EMOTE_BUTTON
         {
             const int buttonX = x + display->getWidth() - EMOTE_BUTTON_SIZE - EMOTE_BUTTON_MARGIN;
             const int buttonY = y + display->getHeight() - EMOTE_BUTTON_SIZE - EMOTE_BUTTON_MARGIN;
             const graphics::Emote *smiley = graphics::EmoteRenderer::findEmoteByLabel("\U0001F60A");
 
             display->setColor(WHITE);
-            display->drawRect(buttonX, buttonY, EMOTE_BUTTON_SIZE, EMOTE_BUTTON_SIZE);
+            drawRoundedRect(display, buttonX, buttonY, EMOTE_BUTTON_SIZE, EMOTE_BUTTON_SIZE, EMOTE_BUTTON_RADIUS);
             if (smiley) {
                 graphics::drawScaledXbm(display, buttonX + (EMOTE_BUTTON_SIZE - smiley->width * BASEUI_ICON_SCALE) / 2,
                                         buttonY + (EMOTE_BUTTON_SIZE - smiley->height * BASEUI_ICON_SCALE) / 2, smiley->width,
