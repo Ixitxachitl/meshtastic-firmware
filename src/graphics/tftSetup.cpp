@@ -436,7 +436,7 @@ void tftSetup(void)
             lgfx::Panel_sdl::initKeyboardIndev();
 #endif
     } else {
-        LOG_INFO("Running without TFT display!");
+        LOG_INFO("Running without TFT display");
     }
 #endif
 

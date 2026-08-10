@@ -941,7 +941,7 @@ class LGFX : public lgfx::LGFX_Device
 #endif
         else {
             _panel_instance = new lgfx::Panel_NULL;
-            LOG_ERROR("Unknown display panel configured!");
+            LOG_ERROR("Unknown display panel configured");
         }
 
         auto buscfg = _bus_instance.config();
@@ -1420,7 +1420,7 @@ static inline uint16_t getThemeDefaultOffColor()
 
 TFTDisplay::TFTDisplay(uint8_t address, int sda, int scl, OLEDDISPLAY_GEOMETRY geometry, HW_I2C i2cBus)
 {
-    LOG_DEBUG("TFTDisplay!");
+    LOG_DEBUG("TFTDisplay");
 
 #ifdef TFT_BL
     GpioPin *p = new GpioHwPin(TFT_BL);
@@ -1845,7 +1845,7 @@ void TFTDisplay::sdlLoop()
     if (portduino_config.displayPanel == sdl) {
         lgfx::Panel_sdl *sdl_panel_ = (lgfx::Panel_sdl *)tft->_panel_instance;
         if (sdl_panel_->loop() && !shuttingDown) {
-            LOG_WARN("Window Closed!");
+            LOG_WARN("Window Closed");
             shuttingDown = true;
             InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_SHUTDOWN, .kbchar = 0, .touchX = 0, .touchY = 0};
             inputBroker->injectInputEvent(&event);
@@ -2105,9 +2105,9 @@ bool TFTDisplay::connect()
 #ifdef HACKADAY_COMMUNICATOR
     bool beginStatus = tft->begin();
     if (beginStatus)
-        LOG_DEBUG("TFT Success!");
+        LOG_DEBUG("TFT Success");
     else
-        LOG_ERROR("TFT Fail!");
+        LOG_ERROR("TFT Fail");
 #else
     tft->init();
 #endif
@@ -2151,7 +2151,7 @@ bool TFTDisplay::connect()
         this->linePixelBuffer = allocPixelBuffer(linePixels, &thisBufferDmaCapable);
 
         if (!this->linePixelBuffer) {
-            LOG_ERROR("Not enough memory to create TFT line buffer\n");
+            LOG_ERROR("Not enough memory to create TFT line buffer");
             return false;
         }
         allBuffersDmaCapable &= thisBufferDmaCapable;
@@ -2172,7 +2172,7 @@ bool TFTDisplay::connect()
             this->repaintChunkBuffer = allocPixelBuffer(chunkPixels, &thisBufferDmaCapable);
         }
         if (!this->repaintChunkBuffer) {
-            LOG_ERROR("Not enough memory to create TFT repaint chunk buffer\n");
+            LOG_ERROR("Not enough memory to create TFT repaint chunk buffer");
             return false;
         }
         allBuffersDmaCapable &= thisBufferDmaCapable;
