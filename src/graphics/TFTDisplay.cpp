@@ -2154,6 +2154,17 @@ bool TFTDisplay::calibrateTouch(uint16_t parameters[8])
     const uint_fast8_t panelRot = tft->panel()->config().offset_rotation;
     const uint_fast8_t touchRot = tft->touch()->config().offset_rotation;
 
+    // The prompt goes down first, while the panel is still in the orientation the user holds the
+    // device in - on a landscape board like the T-Deck the sampling orientation below is portrait,
+    // and text drawn there comes out sideways. Nothing clears the panel afterwards, so it stays put
+    // and stays readable while the corners are tapped.
+    tft->fillScreen(bg);
+    tft->setTextColor(fg, bg);
+    tft->setTextSize(1);
+    tft->setTextDatum(lgfx::textdatum_t::middle_center);
+    tft->drawString("Tap the centre of each marker", tft->width() >> 1, tft->height() >> 1);
+    tft->setTextDatum(lgfx::textdatum_t::top_left);
+
     // Cancel both rotation offsets so the corners are sampled in the controller's own orientation,
     // which is the frame setCalibrate() below expects to read them back in.
     tft->setRotation(((touchRot ^ panelRot) & 4) | (-(touchRot + panelRot) & 3));
@@ -2161,13 +2172,6 @@ bool TFTDisplay::calibrateTouch(uint16_t parameters[8])
     const int32_t width = tft->width();
     const int32_t height = tft->height();
     const int32_t markerRadius = std::max<int32_t>(4, std::max(width, height) >> 4);
-
-    tft->fillScreen(bg);
-    tft->setTextColor(fg, bg);
-    tft->setTextSize(1);
-    tft->setTextDatum(lgfx::textdatum_t::middle_center);
-    tft->drawString("Tap the centre of each marker", width >> 1, height >> 1);
-    tft->setTextDatum(lgfx::textdatum_t::top_left);
 
     uint16_t sampled[8] = {0};
     bool ok = true;
