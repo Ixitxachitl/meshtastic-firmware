@@ -580,13 +580,21 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     // room for the bubble's own top padding so the clamp further down is a no-op.
     const int contentTop = FONT_HEIGHT_SMALL + 1 + BASEUI_HEADER_MARGIN;
     const int firstLineTop = contentTop + 1 + BUBBLE_PAD_TOP_HEADER;
-    const int usableHeight = scrollBottom - firstLineTop;
 #else
     // Compact panels draw no header, so content starts at the very top of the panel.
     const int contentTop = navHeight;
     const int firstLineTop = compactPanel ? 0 : getTextPositions(display)[1];
-    const int usableHeight = scrollBottom;
 #endif
+
+    // The viewport is the band actually drawn into: firstLineTop down to scrollBottom. Deliberately
+    // shared by both branches above - this used to be scrollBottom alone wherever
+    // BASEUI_BELOW_HEADER_MARGIN was 0, which overstated it by the header offset on every board
+    // that leaves the margin at its default (t-deck among them). An overstated viewport understates
+    // scrollLimit(), and since newest-last *rests* at that limit, the newest message - the one that
+    // must always be readable - sat clipped by the panel edge by exactly the header offset. Compact
+    // panels are unaffected either way: their firstLineTop is 0, so this is the same scrollBottom
+    // they always got.
+    const int usableHeight = scrollBottom - firstLineTop;
 
     // Check if bubbles are enabled
     const bool showBubbles = config.display.enable_message_bubbles && !compactPanel;
