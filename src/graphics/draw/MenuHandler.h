@@ -65,8 +65,11 @@ class menuHandler
 #endif
         HamModeConfirm,
         LicensedToNormalConfirm,
+#if HAS_LORA_FEM
+        LoraFemLnaToggleMenu
+#endif,
 #if BASEUI_HAS_MAP
-        MapBaseMenu,
+            MapBaseMenu,
         MapFollowMeMenu,
         MapZoomLevelMenu,
         MapPanMenu,
@@ -142,6 +145,9 @@ class menuHandler
     static void mapZoomLevelMenu();
     static void mapPanMenu();
 #endif
+#if HAS_LORA_FEM
+    static void LoRaFEMLNAToggleMenu();
+#endif
 
     // Lifted out of its banner-callback lambda so it is reachable without a Screen. The lambda only
     // ever runs via screen->showOverlayBanner(), which is why nothing here was unit-testable.
@@ -183,6 +189,9 @@ using ManageNodeOption = MenuOption<int>;
 using ClockFaceOption = MenuOption<bool>;
 using MapMenuOption = MenuOption<int>;
 using MapToggleOption = MenuOption<bool>;
+#if HAS_LORA_FEM
+using LoRaFEMLNAToggleOption = MenuOption<meshtastic_Config_LoRaConfig_FEM_LNA_Mode>;
+#endif
 
 } // namespace graphics
 #endif
