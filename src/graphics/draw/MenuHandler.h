@@ -66,10 +66,10 @@ class menuHandler
         HamModeConfirm,
         LicensedToNormalConfirm,
 #if HAS_LORA_FEM
-        LoraFemLnaToggleMenu
-#endif,
+        LoraFemLnaToggleMenu,
+#endif
 #if BASEUI_HAS_MAP
-            MapBaseMenu,
+        MapBaseMenu,
         MapFollowMeMenu,
         MapZoomLevelMenu,
         MapPanMenu,

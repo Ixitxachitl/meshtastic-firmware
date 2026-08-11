@@ -16,6 +16,13 @@
 */
 
 
+// Speech synthesis is opt-in per variant. Without this guard the vendored SAM
+// engine compiles into every target, and its tables include <pgmspace.h>, which
+// the nRF52/STM32 cores do not provide. The gate is MESHTASTIC_ENABLE_TTS rather
+// than HAS_I2S because these files never include variant.h and so only ever see
+// -D build flags.
+#ifdef MESHTASTIC_ENABLE_TTS
+
 #include <Arduino.h>
 #include "ESP8266SAM.h"
 
@@ -99,3 +106,5 @@ void ESP8266SAM::SetVoice(enum SAMVoice voice)
   }
 }
 
+
+#endif // MESHTASTIC_ENABLE_TTS

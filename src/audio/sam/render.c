@@ -1,3 +1,6 @@
+// Gated on MESHTASTIC_ENABLE_TTS; see ESP8266SAM.cpp for why.
+#ifdef MESHTASTIC_ENABLE_TTS
+
 //#include <stdio.h>
 #include <string.h>
 #include <stdlib.h> // abs()
@@ -1059,3 +1062,5 @@ unsigned char trans(unsigned char mem39212, unsigned char mem39213)
 
 	return mem39215;
 }
+
+#endif // MESHTASTIC_ENABLE_TTS

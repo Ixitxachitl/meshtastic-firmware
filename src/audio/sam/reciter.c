@@ -1,3 +1,6 @@
+// Gated on MESHTASTIC_ENABLE_TTS; see ESP8266SAM.cpp for why.
+#ifdef MESHTASTIC_ENABLE_TTS
+
 #include <stdio.h>
 #include <string.h>
 #include "reciter.h"
@@ -550,3 +553,5 @@ pos37485:
 	Y++;
 	goto pos37461;
 }
+
+#endif // MESHTASTIC_ENABLE_TTS

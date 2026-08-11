@@ -1,3 +1,6 @@
+// Gated on MESHTASTIC_ENABLE_TTS; see ESP8266SAM.cpp for why.
+#ifdef MESHTASTIC_ENABLE_TTS
+
 #include<stdio.h>
 
 extern unsigned char signInputTable1[];
@@ -72,3 +75,5 @@ void PrintRule(int offset)
 	} while ((A&128)==0);
 	printf("\n");
 }
+
+#endif // MESHTASTIC_ENABLE_TTS

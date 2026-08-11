@@ -1085,6 +1085,13 @@ void Screen::forceDisplay(bool forceUiUpdate)
 
 static uint32_t lastScreenTransition;
 
+// Framerate used while a transition is running. Kept outside the touch-drag block below: the drag
+// driver calls setTargetFPS() with it, but so does setFastFramerate() further down, which every
+// screen build compiles. A variant may override it in variant.h.
+#ifndef SCREEN_TRANSITION_FRAMERATE
+#define SCREEN_TRANSITION_FRAMERATE 30 // fps
+#endif
+
 #if BASEUI_HAS_TOUCH_DRAG
 // Nominal transition length for touch-initiated frame changes. Not milliseconds on screen:
 // ticksPerTransition = time / updateInterval, updateInterval starts at 33ms but drops to 16ms once
@@ -1101,13 +1108,6 @@ static bool isTouchSourced(const InputEvent *event)
 {
     return event && event->source && strcmp(event->source, "touchscreen1") == 0;
 }
-
-// Framerate used while a transition is running. Defined here rather than beside setFastFramerate()
-// further down because the drag driver below calls setTargetFPS() with it, and a macro has to be
-// defined before the line that uses it.
-#ifndef SCREEN_TRANSITION_FRAMERATE
-#define SCREEN_TRANSITION_FRAMERATE 30 // fps
-#endif
 
 // ---- Finger-following frame transitions -------------------------------------------------------
 //
@@ -1397,6 +1397,14 @@ static bool screenDragOwnsFramerate()
     if (isKeyboardPanFingerSteering())
         return true;
     return false;
+}
+#else
+// Without a drag driver no transition is ever finger-scaled, but frameTransitionProgress() in
+// SharedUIDisplay.h calls this unconditionally, so the symbol has to exist for every screen build.
+// 0 is the header's documented "scale unknown", which makes callers snap instead of animate.
+uint16_t frameTransitionTicks()
+{
+    return 0;
 }
 #endif // BASEUI_HAS_TOUCH_DRAG
 
