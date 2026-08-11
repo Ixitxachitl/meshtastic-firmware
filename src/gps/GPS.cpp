@@ -26,6 +26,9 @@
 
 #ifdef ARCH_PORTDUINO
 #include "GpsdSerial.h"
+#ifdef _WIN32
+#include "platform/portduino/windows/WindowsLocationSerial.h"
+#endif
 #include "PortduinoGlue.h"
 #include "meshUtils.h"
 #include <algorithm>
@@ -2006,6 +2009,11 @@ std::unique_ptr<GPS> GPS::createGps()
             gpsdSerial.setAddress(portduino_config.gpsd_host, portduino_config.gpsd_port);
             _serial_gps = &gpsdSerial;
         }
+#ifdef _WIN32
+        else if (portduino_config.use_windows_location) {
+            _serial_gps = &windowsLocationSerial;
+        }
+#endif
     } else
         return nullptr;
 #endif
@@ -2024,9 +2032,13 @@ std::unique_ptr<GPS> GPS::createGps()
     new_gps->rx_gpio = _rx_gpio;
     new_gps->tx_gpio = _tx_gpio;
 #ifdef ARCH_PORTDUINO
-    // Skip chip-specific probing for gpsd - it's a generic NMEA stream.
+    // Skip chip-specific probing for gpsd/Windows Location - both are generic NMEA streams.
     if (!portduino_config.gpsd_host.empty())
         new_gps->gnssModel = GNSS_MODEL_GENERIC_NMEA;
+#ifdef _WIN32
+    else if (portduino_config.use_windows_location)
+        new_gps->gnssModel = GNSS_MODEL_GENERIC_NMEA;
+#endif
 #endif
 
     GpioVirtPin *virtPin = new GpioVirtPin();

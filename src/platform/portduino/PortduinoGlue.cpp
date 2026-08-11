@@ -1140,6 +1140,16 @@ bool loadConfig(const char *configPath)
                     portduino_config.has_gps = 1;
                 }
             }
+#ifdef _WIN32
+            bool useWindowsLocation = yamlConfig["GPS"]["WindowsLocation"].as<bool>(false);
+            if (useWindowsLocation) {
+                if (portduino_config.has_gps) {
+                    LOG_WARN("GPS config: WindowsLocation is set alongside another GPS source; WindowsLocation takes priority");
+                }
+                portduino_config.use_windows_location = true;
+                portduino_config.has_gps = 1;
+            }
+#endif
         }
         if (yamlConfig["GPIO"]["ExtraPins"]) {
             for (auto extra_pin : yamlConfig["GPIO"]["ExtraPins"]) {
