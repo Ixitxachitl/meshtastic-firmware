@@ -1,6 +1,8 @@
 #include "NextHopRouter.h"
 #include "Default.h"
 #include "MeshTypes.h"
+#include "Throttle.h"
+#include "UptimeClock.h"
 #include "meshUtils.h"
 #if !MESHTASTIC_EXCLUDE_TRACEROUTE
 #include "modules/TraceRouteModule.h"
@@ -67,7 +69,7 @@ ErrorCode NextHopRouter::send(meshtastic_MeshPacket *p)
     wasSeenRecently(p);                                         // FIXME, move this to a sniffSent method
 
     p->next_hop = getNextHop(p->to, p->relay_node).value_or(NO_NEXT_HOP_PREFERENCE); // set the next hop
-    LOG_DEBUG("Set next hop for dest 0x%08x to 0x%x", p->to, p->next_hop);
+    LOG_TRACE("Set next hop for dest 0x%08x to 0x%x", p->to, p->next_hop);
 
     // If it's from us, ReliableRouter already handles retransmissions if want_ack is set. If a next hop is set and hop limit is
     // not 0 or want_ack is set, start retransmissions
@@ -314,7 +316,7 @@ std::optional<uint8_t> NextHopRouter::getNextHop(NodeNum to, uint8_t relay_node)
             }
             ResolvedNode r = nodeDB->resolveLastByte(hint, /*requireDirectNeighbor=*/true);
             if (r.status == LastByteResolution::Unique) {
-                LOG_DEBUG("Next hop for 0x%08x is 0x%x (TMM cache)", to, hint);
+                LOG_TRACE("Next hop for 0x%08x is 0x%x (TMM cache)", to, hint);
                 return hint;
             }
             LOG_WARN("TMM next hop 0x%x for 0x%08x %s; set no pref", hint, to,
@@ -403,7 +405,9 @@ PendingPacket *NextHopRouter::startRetransmission(meshtastic_MeshPacket *p, uint
  */
 int32_t NextHopRouter::doRetransmissions()
 {
-    uint32_t now = millis();
+    // Same clock Throttle reads, so setNextTx() deadlines and this test can't diverge under an
+    // injected test clock.
+    uint32_t now = Time::getMillis();
     int32_t d = INT32_MAX;
 
     // FIXME, we should use a better datastructure rather than walking through this map.
@@ -414,8 +418,9 @@ int32_t NextHopRouter::doRetransmissions()
 
         bool stillValid = true; // assume we'll keep this record around
 
-        // FIXME, handle 51 day rolloever here!!!
-        if (p.nextTxMsec <= now) {
+        // Judged against the snapshot above, so one pass sees one instant and the 49.7 day wrap
+        // can't stall retransmission.
+        if (Throttle::deadlinePassedAt(now, p.nextTxMsec)) {
             if (p.numRetransmissions == 0) {
                 if (isFromUs(p.packet)) {
                     LOG_DEBUG("Reliable send failed, return nak fr=0x%08x,to=0x%08x,id=0x%08x", p.packet->from, p.packet->to,
@@ -511,8 +516,8 @@ void NextHopRouter::setNextTx(PendingPacket *pending)
 {
     assert(iface);
     auto d = iface->getRetransmissionMsec(pending->packet);
-    pending->nextTxMsec = millis() + d;
-    LOG_DEBUG("Next retransmission in %u msecs", d);
+    pending->nextTxMsec = Time::getMillis() + d;
+    LOG_TRACE("Next retransmission in %u msecs", d);
     printPacket("", pending->packet);
     setReceivedMessage(); // Run ASAP, so we can figure out our correct sleep time
 }

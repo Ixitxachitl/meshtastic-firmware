@@ -607,7 +607,7 @@ class AnalogBatteryLevel : public HasBatteryLevel
             // get current flow from INA sensor - negative value means power flowing
             // into the battery default assuming  BATTERY+  <--> INA_VIN+ <--> SHUNT
             // RESISTOR <--> INA_VIN- <--> LOAD
-            LOG_DEBUG("Using INA on I2C addr 0x%x for charging detection", config.power.device_battery_ina_address);
+            LOG_TRACE("Using INA on I2C addr 0x%x for charging detection", config.power.device_battery_ina_address);
 #if defined(INA_CHARGING_DETECTION_INVERT)
             return getINACurrent() > 0;
 #else
@@ -838,12 +838,13 @@ bool Power::setup()
 
 void Power::powerCommandsCheck()
 {
-    if (rebootAtMsec && millis() > rebootAtMsec) {
+    // 0 means "not scheduled" for both, and reads as long expired - test it first.
+    if (rebootAtMsec && Throttle::deadlinePassed(rebootAtMsec)) {
         LOG_INFO("Rebooting");
         reboot();
     }
 
-    if (shutdownAtMsec && millis() > shutdownAtMsec) {
+    if (shutdownAtMsec && Throttle::deadlinePassed(shutdownAtMsec)) {
         shutdownAtMsec = 0;
         shutdown();
     }
@@ -885,9 +886,10 @@ void Power::reboot()
 #elif defined(ARCH_STM32)
     HAL_NVIC_SystemReset();
 #else
-    rebootAtMsec = -1;
-    LOG_WARN("FIXME implement reboot for this platform; some settings "
-             "need restart to apply");
+    // 0 disarms; UINT32_MAX would read as long expired and reboot-loop.
+    rebootAtMsec = 0;
+    LOG_WARN("FIXME implement reboot for this platform. Note that some settings "
+             "require a restart to be applied");
 #endif
 }
 
@@ -1942,10 +1944,10 @@ class LipoCharger : public HasBatteryLevel
         bool isCharging = PPM->isCharging();
         if (bq) {
             if (isCharging) {
-                LOG_DEBUG("BQ27220 time to full charge: %d min", bq->getTimeToFull());
+                LOG_TRACE("BQ27220 time to full charge: %d min", bq->getTimeToFull());
             } else {
                 if (!PPM->isVbusIn()) {
-                    LOG_DEBUG("BQ27220 time to empty: %d min (%d mAh)", bq->getTimeToEmpty(), bq->getRemainingCapacity());
+                    LOG_TRACE("BQ27220 time to empty: %d min (%d mAh)", bq->getTimeToEmpty(), bq->getRemainingCapacity());
                 }
             }
         }

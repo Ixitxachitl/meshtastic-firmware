@@ -16,6 +16,7 @@
 #include "RadioLibInterface.h"
 #include "ReliableRouter.h"
 #include "TransmitHistory.h"
+#include "UptimeClock.h"
 #include "airtime.h"
 #include "buzz.h"
 #include "power/PowerHAL.h"
@@ -316,14 +317,13 @@ __attribute__((weak, noinline)) bool loopCanSleep()
 
 // Weak empty variant initialization function.
 // May be redefined by variant files.
-void lateInitVariant() __attribute__((weak));
-void lateInitVariant() {}
+// noinline: weak default and call site share this TU, so LTO would inline the empty body and
+// never link the variant's strong override. nrf52_lto.py's _VARIANT_OVERRIDES guards this.
+__attribute__((noinline)) void lateInitVariant() __attribute__((weak));
+__attribute__((noinline)) void lateInitVariant() {}
 
-// NOTE: earlyInitVariant() runs before consoleInit(), so the logging subsystem isn't set
-// up yet. Calling a LOG_* macro here CRASHES the device -- it is not a silent no-op. Do
-// not use them in earlyInitVariant(); defer any logging to lateInitVariant() or later.
-void earlyInitVariant() __attribute__((weak));
-void earlyInitVariant() {}
+__attribute__((noinline)) void earlyInitVariant() __attribute__((weak));
+__attribute__((noinline)) void earlyInitVariant() {}
 
 // NRF52 (and probably other platforms) can report when system is in power failure mode
 // (eg. too low battery voltage) and operating it is unsafe (data corruption, bootloops, etc).
@@ -1101,7 +1101,7 @@ void setup()
         kb_found = true;
 #endif
 
-    // Set osk_found for trackball/encoder devices BEFORE setupModules so CannedMessageModule can detect it
+        // Set osk_found for trackball/encoder devices BEFORE setupModules so CannedMessageModule can detect it
 #if defined(HAS_TRACKBALL) || (defined(INPUTDRIVER_ENCODER_TYPE) && INPUTDRIVER_ENCODER_TYPE == 2)
 #ifndef HAS_PHYSICAL_KEYBOARD
     osk_found = true;
@@ -1386,6 +1386,9 @@ void scannerToSensorsMap(const std::unique_ptr<ScanI2CTwoWire> &i2cScanner, Scan
 void loop()
 {
     runASAP = false;
+
+    // The single writer of the monotonic wrap carry; every other caller only reads it.
+    Time::serviceMonotonic();
 
 #if defined(MESHTASTIC_ENCRYPTED_STORAGE) && defined(MESHTASTIC_PHONEAPI_ACCESS_CONTROL)
     if (lockdownDisablePending) {
