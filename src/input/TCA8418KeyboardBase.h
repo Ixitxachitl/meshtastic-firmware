@@ -61,6 +61,9 @@ class TCA8418KeyboardBase
         return false;
     }
 
+    // Public so owners (KbI2cBase's unique_ptr) can destroy through the base
+    virtual ~TCA8418KeyboardBase() {}
+
   protected:
     enum KeyState { Init, Idle, Held, Busy };
 
@@ -140,8 +143,6 @@ class TCA8418KeyboardBase
     virtual void released(void);
 
     virtual void queueEvent(char);
-
-    virtual ~TCA8418KeyboardBase() {}
 
   protected:
     // Set the size of the keypad matrix
