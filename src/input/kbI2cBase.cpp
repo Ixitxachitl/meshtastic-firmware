@@ -558,7 +558,7 @@ int32_t KbI2cBase::runOnce()
 
 bool KbI2cBase::isNavKeyHeld(bool &left, bool &right) const
 {
-    return TCAKeyboard.isNavKeyHeld(left, right);
+    return TCAKeyboard->isNavKeyHeld(left, right);
 }
 
 void KbI2cBase::toggleBacklight(bool on)
