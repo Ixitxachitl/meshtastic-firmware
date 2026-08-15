@@ -1244,8 +1244,8 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 if (isMine[i]) {
                     // right-aligned inside the box, leaving room for the ACK mark to its left
                     headerX = boxRight - innerPad - w;
-                    if (headerX < LEFT_MARGIN)
-                        headerX = LEFT_MARGIN;
+                    if (headerX < contentLeft)
+                        headerX = contentLeft;
                 } else {
                     headerX = boxLeft + innerPad;
                 }
@@ -1292,8 +1292,8 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                     // Calculate actual rendered width including emotes
                     int renderedWidth = getRenderedLineWidth(display, cachedLines[i], emotes, numEmotes);
                     int rightX = boxRight - innerPad - renderedWidth;
-                    if (rightX < LEFT_MARGIN)
-                        rightX = LEFT_MARGIN;
+                    if (rightX < contentLeft)
+                        rightX = contentLeft;
 
                     drawStringWithEmotes(display, rightX, lineY, cachedLines[i], emotes, numEmotes);
                 } else {
