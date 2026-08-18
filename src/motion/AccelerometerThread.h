@@ -21,6 +21,7 @@
 #include "LSM6DS3Sensor.h"
 #include "MPU6050Sensor.h"
 #include "MotionSensor.h"
+#include "QMI8658Sensor.h"
 
 #include <memory>
 #ifdef HAS_QMA6100P
@@ -153,6 +154,11 @@ class AccelerometerThread : public concurrency::OSThread
 #ifdef HAS_BHI260AP
         case ScanI2C::DeviceType::BHI260AP:
             sensor.reset(new BHI260APSensor(device));
+            break;
+#endif
+#if __has_include(<SensorQMI8658.hpp>)
+        case ScanI2C::DeviceType::QMI8658:
+            sensor.reset(new QMI8658Sensor(device));
             break;
 #endif
         default:
