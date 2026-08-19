@@ -611,6 +611,10 @@ void RadioLibInterface::handleReceiveInterrupt()
     // Condition?
     if (!isReceiving) {
         LOG_ERROR("handleReceiveInterrupt called while not in rx mode");
+        // Nobody will read this packet, so drop the chip's IRQ status too: on boards whose DIO1 is
+        // a level-sensed expander pin, a flag left set here keeps DIO1 asserted and every re-arm
+        // re-fires it, with an empty buffer, forever (SenseCAP Indicator).
+        iface->clearIrqFlags(0xFFFF); // raw chip mask: all IRQ bits
         return;
     }
 

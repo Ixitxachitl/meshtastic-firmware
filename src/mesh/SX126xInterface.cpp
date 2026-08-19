@@ -179,6 +179,25 @@ template <typename T> bool SX126xInterface<T>::init()
     if (res == RADIOLIB_ERR_NONE)
         startReceive(); // start receiving
 
+#ifdef LORA_DIO1_EXTENDED_IO
+    // DIO1 lives on an I2C IO expander here, and its pinMode() is a bus write that can fail under
+    // contention (the expander driver logs "Write direction reg failed" and returns void). A pin
+    // left un-configured reads a constant high, which the level-based interrupt emulation then
+    // fires on forever: CAD "completes" instantly with err=-1, and every re-arm yields a phantom
+    // zero-length RX. Verify the line is low at rest with no IRQ pending, else re-apply the mode.
+    for (int attempt = 0; attempt < 5; attempt++) {
+        lora.clearIrqFlags(0xFFFF);
+        delay(5);
+        if (!module.hal->digitalRead(module.getIrq()))
+            break;
+        LOG_WARN("SX126x DIO1 stuck high at rest (attempt %d), re-applying pinMode on expander pin", attempt);
+        module.hal->pinMode(module.getIrq(), module.hal->GpioModeInput);
+        delay(20);
+    }
+    if (module.hal->digitalRead(module.getIrq()))
+        LOG_ERROR("SX126x DIO1 still high with irq clear; radio interrupts will be unreliable");
+#endif
+
     return res == RADIOLIB_ERR_NONE;
 }
 
