@@ -52,7 +52,7 @@ template <typename T, std::size_t N> std::size_t array_count(const T (&)[N])
 UARTProxy *GPS::_serial_gps = nullptr; // assigned in createGps(), see there
 #elif defined(ARCH_NRF52)
 Uart *GPS::_serial_gps = &GPS_SERIAL_PORT;
-#elif defined(ARCH_ESP32) || defined(ARCH_PORTDUINO) || defined(ARCH_STM32)
+#elif defined(ARCH_ESP32) || defined(ARCH_PORTDUINO) || defined(ARCH_STM32) || defined(ARCH_SIFLI)
 HardwareSerial *GPS::_serial_gps = &GPS_SERIAL_PORT;
 #elif defined(ARCH_RP2040)
 SerialUART *GPS::_serial_gps = &GPS_SERIAL_PORT;
@@ -2039,6 +2039,9 @@ std::unique_ptr<GPS> GPS::createGps()
         _serial_gps->begin(GPS_BAUDRATE);
 #elif defined(ARCH_PORTDUINO)
         // Portduino can't set the GPS pins directly.
+        _serial_gps->begin(GPS_BAUDRATE);
+#elif defined(ARCH_SIFLI)
+        // Pin routing comes from the board devicetree.
         _serial_gps->begin(GPS_BAUDRATE);
 #else
 #error Unsupported architecture!

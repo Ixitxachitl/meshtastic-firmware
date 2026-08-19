@@ -683,29 +683,61 @@ inline String Stream::readStringUntil(char)
 }
 
 // ── HardwareSerial ───────────────────────────────────────────────────────────
+//
+// Backed by a Zephyr UART device. Ports that were constructed without one -
+// or before their device is ready - swallow writes and report no input, so
+// callers do not need to know which ports a board actually wires up.
+//
+// Receive runs off the interrupt-driven UART API into the ring buffer below;
+// the buffer is deliberately a plain array rather than Zephyr's ring_buf so
+// this header stays free of Zephyr includes.
+struct device;
+
 class HardwareSerial : public Stream
 {
   public:
-    void begin(unsigned long) {}
-    void begin(unsigned long, uint16_t) {}
-    void end() {}
+    HardwareSerial() = default;
+    // The device pointer is resolved from devicetree in sifli_arduino.cpp.
+    explicit HardwareSerial(const struct device *dev) : _dev(dev) {}
+
+    void begin(unsigned long baud);
+    void begin(unsigned long baud, uint16_t) { begin(baud); }
+    void begin(unsigned long baud, uint32_t, int8_t = -1, int8_t = -1, bool = false) { begin(baud); }
+    void end();
+    unsigned long baudRate() const { return _baud; }
+    void updateBaudRate(unsigned long baud) { begin(baud); }
+
+    // Pin selection lives in the board devicetree, not in calling code.
     void setPins(int rx, int tx) {}
     void setPinout(int tx, int rx) {}
     void setFIFOSize(size_t) {}
     void setRxBufferSize(size_t) {}
-    void begin(unsigned long baud, uint32_t config, int8_t rx = -1, int8_t tx = -1, bool invert = false) {}
-    int available() override { return 0; }
-    int read() override { return -1; }
-    int peek() override { return -1; }
+
+    int available() override;
+    int read() override;
+    int peek() override;
     size_t write(uint8_t c) override;
     size_t write(const uint8_t *buf, size_t n) override;
     using Print::write; // un-hide base class write(const char*)
-    size_t readBytes(uint8_t *buf, size_t len) { return 0; }
-    size_t readBytes(char *buf, size_t len) { return 0; }
-    operator bool() const { return true; }
+    size_t readBytes(uint8_t *buf, size_t len) override;
+    size_t readBytes(char *buf, size_t len) { return readBytes((uint8_t *)buf, len); }
+    operator bool() const { return _dev != nullptr; }
     void flush() override {}
-    String readString() { return String(); }
-    String readStringUntil(char) { return String(); }
+    String readString();
+    String readStringUntil(char terminator);
+
+    // Called from the UART ISR; public only so the C callback can reach it.
+    void rxPush(uint8_t c);
+
+  private:
+    static constexpr uint16_t RX_SIZE = 256;
+
+    const struct device *_dev = nullptr;
+    unsigned long _baud = 0;
+    bool _started = false;
+    volatile uint16_t _head = 0;
+    volatile uint16_t _tail = 0;
+    uint8_t _rx[RX_SIZE] = {};
 };
 
 // Uart - nRF52 BSP alias for HardwareSerial (used by GPS.h when ARCH_NRF52)

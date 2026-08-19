@@ -13,8 +13,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/spi.h>
+#include <zephyr/drivers/uart.h>
 #include <zephyr/kernel.h>
 // ── Bluefruit singleton stub (satisfies NodeDB.cpp ARCH_NRF52 path) ──────────
 #include "bluefruit.h"
@@ -32,8 +34,11 @@ TwoWire Wire;
 TwoWire Wire1;
 
 // ── HardwareSerial singletons ────────────────────────────────────────────────
-HardwareSerial Serial;
-HardwareSerial Serial1;
+// Serial is the CH343P debug console on usart1; Serial1 is the keyboard
+// expansion port on usart2, which reaches either the L76K GNSS or the ESP32-C6
+// depending on how the module's MOD_SEL mux is set. Serial2 has no device.
+HardwareSerial Serial(DEVICE_DT_GET(DT_CHOSEN(zephyr_console)));
+HardwareSerial Serial1(DEVICE_DT_GET(DT_NODELABEL(usart2)));
 HardwareSerial Serial2;
 
 // ── Timing functions - C linkage to match extern "C" declarations ────────────
@@ -69,19 +74,124 @@ extern "C" void NVIC_SystemReset(void)
 }
 #pragma pop_macro("NVIC_SystemReset")
 
-// ── HardwareSerial::write ─────────────────────────────────────────────────────
+// ── HardwareSerial ───────────────────────────────────────────────────────────
+
+void HardwareSerial::rxPush(uint8_t c)
+{
+    const uint16_t next = (uint16_t)((_head + 1) % RX_SIZE);
+    if (next == _tail)
+        return; // full: drop the oldest-arriving byte rather than overwrite
+    _rx[_head] = c;
+    _head = next;
+}
+
+static void sifli_uart_isr(const struct device *dev, void *user_data)
+{
+    auto *port = static_cast<HardwareSerial *>(user_data);
+
+    while (uart_irq_update(dev) && uart_irq_is_pending(dev)) {
+        if (!uart_irq_rx_ready(dev))
+            continue;
+        uint8_t c;
+        while (uart_fifo_read(dev, &c, 1) == 1) {
+            port->rxPush(c);
+        }
+    }
+}
+
+void HardwareSerial::begin(unsigned long baud)
+{
+    if (!_dev || !device_is_ready(_dev)) {
+        _dev = nullptr;
+        return;
+    }
+
+    struct uart_config cfg;
+    if (uart_config_get(_dev, &cfg) == 0 && cfg.baudrate != baud) {
+        cfg.baudrate = (uint32_t)baud;
+        uart_configure(_dev, &cfg);
+    }
+
+    uart_irq_callback_user_data_set(_dev, sifli_uart_isr, this);
+    uart_irq_rx_enable(_dev);
+    _baud = baud;
+    _started = true;
+}
+
+void HardwareSerial::end()
+{
+    if (_dev && _started) {
+        uart_irq_rx_disable(_dev);
+        _started = false;
+    }
+}
+
+int HardwareSerial::available()
+{
+    return (int)((RX_SIZE + _head - _tail) % RX_SIZE);
+}
+
+int HardwareSerial::read()
+{
+    if (_head == _tail)
+        return -1;
+    const uint8_t c = _rx[_tail];
+    _tail = (uint16_t)((_tail + 1) % RX_SIZE);
+    return c;
+}
+
+int HardwareSerial::peek()
+{
+    return _head == _tail ? -1 : _rx[_tail];
+}
+
+size_t HardwareSerial::readBytes(uint8_t *buf, size_t len)
+{
+    size_t n = 0;
+    while (n < len) {
+        const int c = read();
+        if (c < 0)
+            break;
+        buf[n++] = (uint8_t)c;
+    }
+    return n;
+}
+
+String HardwareSerial::readString()
+{
+    String out;
+    int c;
+    while ((c = read()) >= 0) {
+        out += (char)c;
+    }
+    return out;
+}
+
+String HardwareSerial::readStringUntil(char terminator)
+{
+    String out;
+    int c;
+    while ((c = read()) >= 0 && (char)c != terminator) {
+        out += (char)c;
+    }
+    return out;
+}
+
 size_t HardwareSerial::write(uint8_t c)
 {
-    // TODO(sifli): route through Zephyr UART / USB-CDC console
-    // For now use printk so we at least get something over RTT/UART0
-    printk("%c", (char)c);
+    if (!_dev) {
+        printk("%c", (char)c); // no device bound: keep debug output visible
+        return 1;
+    }
+    uart_poll_out(_dev, c);
     return 1;
 }
 
 size_t HardwareSerial::write(const uint8_t *buf, size_t n)
 {
-    for (size_t i = 0; i < n; i++)
-        printk("%c", (char)buf[i]);
+    for (size_t i = 0; i < n; i++) {
+        write(buf[i]);
+    }
     return n;
 }
 
