@@ -24,6 +24,10 @@ extern NRF52Bluetooth *nrf52Bluetooth;
 #include "NRF54L15Bluetooth.h"
 extern NRF54L15Bluetooth *nrf54l15Bluetooth;
 #endif
+#ifdef ARCH_SIFLI
+#include "SiFliBluetooth.h"
+extern SiFliBluetooth *sifliBluetooth;
+#endif
 #if !MESHTASTIC_EXCLUDE_I2C
 #include "detect/ScanI2CTwoWire.h"
 #endif

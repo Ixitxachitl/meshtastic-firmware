@@ -56,6 +56,14 @@ using namespace Adafruit_LittleFS_Namespace;
 using namespace Adafruit_LittleFS_Namespace;
 #endif
 
+#if defined(ARCH_SIFLI)
+// SF32LB52x - Zephyr LittleFS on the storage partition in external QSPI NOR
+#include "InternalFileSystem.h"
+#define FSCom InternalFS
+#define FSBegin() FSCom.begin()
+using namespace Adafruit_LittleFS_Namespace;
+#endif
+
 // Filesystem capacity, in bytes. Only ESP32's LittleFS and the nRF54L15 wrapper expose totalBytes()/usedBytes()
 // directly; the other backends need per-platform work (littlefs v1 traversal, FSInfo, statvfs), so callers must
 // use these helpers rather than reaching into FSCom.
