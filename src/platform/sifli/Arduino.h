@@ -309,6 +309,18 @@ class Stream : public Print
     virtual int peek() = 0;
     virtual void setTimeout(unsigned long) {}
     virtual bool find(const char *) { return false; }
+    virtual size_t readBytes(uint8_t *buffer, size_t length)
+    {
+        size_t n = 0;
+        while (n < length) {
+            int c = read();
+            if (c < 0)
+                break;
+            buffer[n++] = (uint8_t)c;
+        }
+        return n;
+    }
+    size_t readBytes(char *buffer, size_t length) { return readBytes((uint8_t *)buffer, length); }
     String readString();
     String readStringUntil(char terminator);
 };
@@ -817,5 +829,12 @@ static inline char toLowerCase(char c)
 #define constrain(x, l, h) ((x) < (l) ? (l) : ((x) > (h) ? (h) : (x)))
 #define round(x) ((x) >= 0 ? (long)((x) + 0.5) : (long)((x)-0.5))
 #endif /* __cplusplus */
+
+// LovyanGFX's generic Arduino platform expects Arduino.h to have defined the
+// SPI bus class by the time it is included. Pulled in last so SPI.h sees the
+// rest of this header; the include guards make the cycle a no-op.
+#ifdef __cplusplus
+#include "SPI.h"
+#endif
 
 #endif /* Arduino_h */

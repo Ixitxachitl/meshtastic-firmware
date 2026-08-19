@@ -36,6 +36,10 @@ struct SPISettings {
 class SPIClass
 {
   public:
+    SPIClass() = default;
+    // LovyanGFX's generic Arduino bus constructs its bus object with a host id.
+    explicit SPIClass(int host) : _host(host) {}
+
     void begin() {}
     void begin(uint8_t sck, uint8_t miso, uint8_t mosi, uint8_t ss = 0xFF) {}
     void end() {}
@@ -56,6 +60,9 @@ class SPIClass
         transferBytes(&tx, rx, count);
         return rx ? rx[0] : 0;
     }
+
+  private:
+    int _host = 0;
 };
 
 // The SoC's CMSIS register.h defines SPI1/SPI2 as register-block pointers,
@@ -63,6 +70,9 @@ class SPIClass
 // touches the raw blocks - the Zephyr drivers do.
 #undef SPI1
 #undef SPI2
+
+// Name used by cores that expose the bus as HardwareSPI; LovyanGFX expects it.
+using HardwareSPI = SPIClass;
 
 extern SPIClass SPI;
 extern SPIClass SPI1;

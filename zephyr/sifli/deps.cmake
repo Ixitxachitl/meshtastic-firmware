@@ -27,6 +27,7 @@ mt_declare(tinygpsplus  https://github.com/meshtastic/TinyGPSPlus/archive/71a82d
 mt_declare(erriezcrc32  https://github.com/Erriez/ErriezCRC32/archive/refs/tags/1.0.1.zip)
 mt_declare(rtttl        https://github.com/end2endzone/NonBlockingRTTTL/archive/refs/tags/1.4.0.zip)
 mt_declare(ssd1306      https://github.com/meshtastic/esp8266-oled-ssd1306/archive/ace0fcbc108d357e1801cc24a45ba8a80e160c9b.zip)
+mt_declare(lovyangfx    https://github.com/lovyan03/LovyanGFX/archive/refs/tags/1.2.26.zip)
 
 # Header search paths. Libraries that ship a src/ subdirectory expose it,
 # the rest are flat.
@@ -40,6 +41,7 @@ set(MT_DEP_INCLUDES
   ${erriezcrc32_SOURCE_DIR}/src
   ${rtttl_SOURCE_DIR}/src
   ${ssd1306_SOURCE_DIR}/src
+  ${lovyangfx_SOURCE_DIR}/src
 )
 
 # Sources compiled into the image. RadioLib and Crypto are globbed whole; the
@@ -54,4 +56,12 @@ file(GLOB MT_MISC_SRC
   ${erriezcrc32_SOURCE_DIR}/src/*.c
   ${rtttl_SOURCE_DIR}/src/*.cpp
 )
-set(MT_DEP_SOURCES ${MT_RADIOLIB_SRC} ${MT_CRYPTO_SRC} ${MT_MISC_SRC})
+# LovyanGFX picks its platform layer from ARDUINO being defined, so the whole
+# src/ tree compiles against our shim; per-platform files guard themselves.
+file(GLOB_RECURSE MT_LGFX_SRC ${lovyangfx_SOURCE_DIR}/src/*.cpp)
+# Its generic Arduino SPI bus drives the panel over an Arduino SPI object. This
+# board's panel hangs off the LCDC instead, and the bus wants transfer variants
+# the shim does not implement, so drop the file rather than carry dead code.
+list(FILTER MT_LGFX_SRC EXCLUDE REGEX "arduino_default/Bus_SPI.cpp")
+
+set(MT_DEP_SOURCES ${MT_RADIOLIB_SRC} ${MT_CRYPTO_SRC} ${MT_MISC_SRC} ${MT_LGFX_SRC})
