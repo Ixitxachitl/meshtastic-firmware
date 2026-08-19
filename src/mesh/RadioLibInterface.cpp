@@ -602,6 +602,8 @@ void RadioLibInterface::handleReceiveInterrupt()
     // Condition?
     if (!isReceiving) {
         LOG_ERROR("handleReceiveInterrupt called while not in rx mode");
+        // Nobody will read this packet: leaving the flag set holds a level-sensed DIO1 asserted.
+        iface->clearIrqFlags(0xFFFF); // raw chip mask: all IRQ bits
         return;
     }
 

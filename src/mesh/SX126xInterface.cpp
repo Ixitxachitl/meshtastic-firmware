@@ -200,6 +200,23 @@ template <typename T> bool SX126xInterface<T>::reinitChip()
 
     if (res != RADIOLIB_ERR_NONE)
         LOG_ERROR("SX126x re-init failed %s%d", radioLibErr, res);
+
+#ifdef LORA_DIO1_EXTENDED_IO
+    // DIO1 is an expander pin whose pinMode() is a bus write that can silently fail; an
+    // unconfigured input reads constant high and fires the level-based emulation forever.
+    for (int attempt = 0; attempt < 2; attempt++) {
+        lora.clearIrqFlags(0xFFFF);
+        delay(5);
+        if (!module.hal->digitalRead(module.getIrq()))
+            break;
+        LOG_WARN("SX126x DIO1 stuck high at rest (attempt %d), re-applying pinMode on expander pin", attempt);
+        module.hal->pinMode(module.getIrq(), module.hal->GpioModeInput);
+        delay(20);
+    }
+    if (module.hal->digitalRead(module.getIrq()))
+        LOG_ERROR("SX126x DIO1 still high with irq clear; radio interrupts will be unreliable");
+#endif
+
     return res == RADIOLIB_ERR_NONE;
 }
 
