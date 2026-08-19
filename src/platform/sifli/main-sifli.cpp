@@ -214,17 +214,12 @@ void sifli_bt_preinit();
 
 void sifliSetup()
 {
-    // nRF54L15 power peripheral layout differs from nRF52; RESETREAS not present here.
-    // TODO(Phase 3): use zephyr/drivers/hwinfo.h hwinfo_get_reset_cause()
-    LOG_DEBUG("Reset reason: (nRF54L15 power peripheral differs from nRF52, skipped)");
+    uint32_t reset_cause = 0;
+    hwinfo_get_reset_cause(&reset_cause);
+    LOG_DEBUG("Reset cause: 0x%08x", reset_cause);
 
-    // TODO(sifli): init SAADC, watchdog, and random seed via nrfx or Zephyr
-    // For now seed with a fixed value; replace with hardware entropy source.
-#if defined(NRF_FICR)
-    randomSeed(analogRead(0) ^ (uint32_t)NRF_FICR->DEVICEADDR[0]);
-#else
+    // TODO(sifli): seed from the TRNG once the entropy driver is wired up.
     randomSeed(analogRead(0));
-#endif
 
     // Pre-initialize BT stack here on the main thread (CONFIG_MAIN_STACK_SIZE=8192).
     // bt_enable() overflows the smaller PowerFSMThread stack when called later.

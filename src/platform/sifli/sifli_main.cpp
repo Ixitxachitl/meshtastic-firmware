@@ -15,6 +15,12 @@
 void setup();
 void loop();
 
+// Arduino cores call initVariant() before setup() so board power rails are up
+// before anything probes them. Zephyr has no Arduino core, so main() does it.
+// Boards with no board-level init get the weak no-op.
+void initVariant() __attribute__((weak));
+void initVariant() {}
+
 // ── Crash info saved to noinit RAM (survives soft reset) ─────────────────────
 // Zephyr's arch_esf does not expose the faulting SP directly; we capture PSP
 // at entry to the fatal handler (the exception-basic frame lives there) and
@@ -111,6 +117,8 @@ int main(void)
     }
 
     printk("[sifli] A: main() entry\n");
+    initVariant();
+
     printk("[sifli] B: calling setup()\n");
     setup();
     printk("[sifli] C: setup() returned\n");

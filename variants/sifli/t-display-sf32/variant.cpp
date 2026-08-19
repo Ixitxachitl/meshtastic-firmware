@@ -1,5 +1,7 @@
 #include "variant.h"
 #include "configuration.h"
+#include "keyboard_module.h"
+#include <Wire.h>
 
 void initVariant()
 {
@@ -15,4 +17,9 @@ void initVariant()
     pinMode(LCD_VCI_EN, OUTPUT);
     digitalWrite(LCD_VCI_EN, HIGH);
     delay(10);
+
+    // Powers up the keyboard module if one is attached, so the I2C scan that
+    // follows sees its devices and the GNSS is already out of reset.
+    Wire.begin();
+    keyboardModule.begin();
 }
