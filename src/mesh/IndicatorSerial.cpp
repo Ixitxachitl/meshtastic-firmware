@@ -324,6 +324,14 @@ bool SensecapIndicator::wait_ready(uint32_t timeout_ms)
     return link_compatible;
 }
 
+bool SensecapIndicator::beep(uint32_t duration_ms)
+{
+    meshtastic_InterdeviceMessage msg = meshtastic_InterdeviceMessage_init_zero;
+    msg.which_data = meshtastic_InterdeviceMessage_beep_tag;
+    msg.data.beep = duration_ms;
+    return send_uplink(msg);
+}
+
 bool SensecapIndicator::send_uplink(const meshtastic_InterdeviceMessage &message)
 {
     InFlight busy(requests_in_flight);
