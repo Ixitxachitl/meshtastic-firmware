@@ -76,6 +76,7 @@
 #define TOUCH_RST 0
 #define TOUCH_INT 1
 #define TOUCH_I2C_ADDR 0x5A
+#define SCREEN_TOUCH_INT TOUCH_INT
 
 // ── Keyboard module ─────────────────────────────────────────────────────────
 #define KEYBOARD_INT 11

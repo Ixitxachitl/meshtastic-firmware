@@ -1,6 +1,8 @@
 #include "variant.h"
 #include "configuration.h"
+#include "input/TouchScreenImpl1.h"
 #include "keyboard_module.h"
+#include "touch_cst9220.h"
 #include <Wire.h>
 
 void initVariant()
@@ -22,4 +24,14 @@ void initVariant()
     // follows sees its devices and the GNSS is already out of reset.
     Wire.begin();
     keyboardModule.begin();
+}
+
+// Runs late in setup(), once the screen exists. LovyanGFX has no CST9220
+// driver, so the touchscreen is built here from the variant's own reader
+// rather than from the panel - see VARIANT_TOUCHSCREEN in the build flags.
+void lateInitVariant()
+{
+    touchInit();
+    touchScreenImpl1 = new TouchScreenImpl1(TFT_WIDTH, TFT_HEIGHT, readTouch);
+    touchScreenImpl1->init();
 }
