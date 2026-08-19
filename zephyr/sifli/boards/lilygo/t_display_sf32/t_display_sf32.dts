@@ -182,6 +182,18 @@
 	cs-gpios = <&gpioa_32_44 12 GPIO_ACTIVE_LOW>;
 };
 
+/* The CO5300 is driven through the vendor LCDC HAL from
+ * src/platform/sifli/LGFX_Bus_LCDC.cpp, because Zephyr's mipi_dbi driver has
+ * no quad mode. Both nodes stay disabled so that driver does not claim the
+ * controller; the pin state and clock are still described here.
+ */
+&lcdc {
+	lcdc_dbi: mipi-dbi {
+		pinctrl-0 = <&lcdc_qspi_default>;
+		pinctrl-names = "default";
+	};
+};
+
 &wdt {
 	status = "okay";
 };
