@@ -34,7 +34,9 @@
 #define TFT_WIDTH 480
 #define TFT_OFFSET_X 0
 #define TFT_OFFSET_Y 0
-#define TFT_OFFSET_ROTATION 0
+// Only the BaseUI touch config in TFTDisplay.cpp reads this (the panel does not, and MUI has its
+// own LGFX_INDICATOR touch setup). 2 = 180 degrees: mirrors both axes so touch matches the panel.
+#define TFT_OFFSET_ROTATION 2
 #define TFT_BL 45
 #define SCREEN_ROTATE
 #define SCREEN_TRANSITION_FRAMERATE 30 // fps
@@ -45,6 +47,14 @@
 #define SCREEN_TOUCH_RST (7 | IO_EXPANDER)
 #define TOUCH_I2C_PORT 0
 #define TOUCH_SLAVE_ADDRESS 0x48
+
+// Custom boot splash, shown for the second half of the boot screen. Same 216x300 artwork as the
+// t-watch-ultra, drawn 1:1 (2x would be 432x600 and clip this 480x480 panel). No
+// BASEUI_SPLASH_CORNER_INSET_PCT here: that pulls the text in for round panels; this one is square.
+#define USERPREFS_OEM_TEXT "Ixitxachitl Build"
+#define USERPREFS_OEM_FONT_SIZE 1
+#define USERPREFS_OEM_IMAGE_SCALE 1
+#include "../t-watch-ultra/oem_splash.h"
 
 #define GPS_DEFAULT_NOT_PRESENT 1
 #define HAS_GPS 1
