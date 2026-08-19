@@ -16,6 +16,9 @@
 #if defined(HAS_SDCARD)
 #include "graphics/niche/Map/MapTileSourceSD.h"
 #endif
+#if defined(SENSECAP_INDICATOR)
+#include "graphics/niche/Map/MapTileSourceIndicator.h"
+#endif
 
 #include <math.h>
 #include <stdlib.h>
@@ -285,6 +288,25 @@ bool ensureSDTileSourceInitialized()
 }
 #endif
 
+#if defined(SENSECAP_INDICATOR)
+// SenseCAP Indicator: the SD card is on the RP2040 co-processor, read over the interdevice link.
+// Same MAP.BIN, same precedence over LittleFS as a directly-attached card.
+bool ensureIndicatorTileSourceInitialized()
+{
+    static bool attempted = false;
+    static bool succeeded = false;
+    static NicheGraphics::MapTiles::IndicatorTileSource source;
+    if (!attempted) {
+        attempted = true;
+        if (source.begin("/MAP.BIN")) {
+            NicheGraphics::MapTiles::setTileSource(&source);
+            succeeded = true;
+        }
+    }
+    return succeeded;
+}
+#endif
+
 #if defined(ARCH_PORTDUINO) || defined(ARCH_ESP32)
 // On platforms with a filesystem that has room to spare (ESP32's LittleFS, or portduino's host
 // filesystem passthrough), the basemap is just a normal file. Attempted once, lazily, on first
@@ -295,6 +317,10 @@ void ensureFileTileSourceInitialized()
 #if defined(HAS_SDCARD)
     if (ensureSDTileSourceInitialized())
         return; // Card present and readable - don't also compete for LittleFS space.
+#endif
+#if defined(SENSECAP_INDICATOR)
+    if (ensureIndicatorTileSourceInitialized())
+        return; // Same, for the co-processor's card.
 #endif
     static bool attempted = false;
     static NicheGraphics::MapTiles::FileTileSource source;
