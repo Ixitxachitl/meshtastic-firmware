@@ -27,6 +27,10 @@ class SensecapIndicator : public concurrency::OSThread
     // serialize the shared TX buffer against the request methods
     bool send_uplink(const meshtastic_InterdeviceMessage &message);
 
+    // Drive the RP2040's buzzer: beep for duration_ms (fixed pitch on the stock co-processor
+    // firmware), 0 stops an in-progress beep. Fire-and-forget, no response expected.
+    bool beep(uint32_t duration_ms);
+
     // Run one tunneled I2C transaction: an optional write of wlen bytes
     // followed by an optional read of rlen bytes with repeated start. The
     // request is staged under the link lock, so callers need no locking.

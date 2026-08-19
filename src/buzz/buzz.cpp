@@ -22,6 +22,11 @@
 #include "platform/nrf52/NRF52I2SOutput.h"
 #endif
 
+#if defined(SENSECAP_INDICATOR)
+#include "mesh/IndicatorSerial.h"
+extern SensecapIndicator *sensecapIndicator;
+#endif
+
 #if !defined(ARCH_PORTDUINO)
 extern "C" void delay(uint32_t dwMs);
 #endif
@@ -135,6 +140,20 @@ void playTones(const ToneDuration *tone_durations, int size)
     digitalWrite(SPEAKER_EN_2, LOW);
 #endif
     return;
+#endif
+#if defined(SENSECAP_INDICATOR)
+    // The buzzer hangs off the RP2040 co-processor, driven over the interdevice link. The stock
+    // co-processor firmware beeps at a fixed pitch, so a melody plays as rhythm only: one beep per
+    // note, rests for silent notes. Same blocking note spacing as the GPIO path below.
+    if (sensecapIndicator) {
+        for (int i = 0; i < size; i++) {
+            const auto &t = tone_durations[i];
+            if (t.frequency_khz > NOTE_SILENT)
+                sensecapIndicator->beep(t.duration_ms);
+            delay(1.3 * t.duration_ms);
+        }
+        return;
+    }
 #endif
 #if defined(PIN_BUZZER)
     if (!config.device.buzzer_gpio)
