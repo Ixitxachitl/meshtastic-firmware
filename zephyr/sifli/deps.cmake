@@ -48,6 +48,10 @@ set(MT_DEP_INCLUDES
 # rest are small enough that their entire src/ is safe to build.
 file(GLOB_RECURSE MT_RADIOLIB_SRC ${radiolib_SOURCE_DIR}/src/*.cpp)
 file(GLOB_RECURSE MT_CRYPTO_SRC ${mt_crypto_SOURCE_DIR}/*.cpp)
+# TFTDisplay derives from this library's OLEDDisplay, so the BaseUI path needs
+# it compiled in, not just on the include path.
+file(GLOB MT_OLED_SRC ${ssd1306_SOURCE_DIR}/src/*.cpp)
+
 file(GLOB MT_MISC_SRC
   ${arduinothread_SOURCE_DIR}/*.cpp
   ${arduinofsm_SOURCE_DIR}/*.cpp
@@ -64,4 +68,4 @@ file(GLOB_RECURSE MT_LGFX_SRC ${lovyangfx_SOURCE_DIR}/src/*.cpp)
 # the shim does not implement, so drop the file rather than carry dead code.
 list(FILTER MT_LGFX_SRC EXCLUDE REGEX "arduino_default/Bus_SPI.cpp")
 
-set(MT_DEP_SOURCES ${MT_RADIOLIB_SRC} ${MT_CRYPTO_SRC} ${MT_MISC_SRC} ${MT_LGFX_SRC})
+set(MT_DEP_SOURCES ${MT_RADIOLIB_SRC} ${MT_CRYPTO_SRC} ${MT_MISC_SRC} ${MT_OLED_SRC} ${MT_LGFX_SRC})

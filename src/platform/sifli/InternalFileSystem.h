@@ -86,6 +86,13 @@ class File
         return n < 0 ? -1 : (int)n;
     }
 
+    // Arduino's Stream-style name, used by MessageStore.
+    size_t readBytes(char *buf, size_t nbyte)
+    {
+        int n = read(buf, (uint16_t)nbyte);
+        return n > 0 ? (size_t)n : 0;
+    }
+
     int read()
     {
         uint8_t b;
