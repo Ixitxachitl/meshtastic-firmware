@@ -28,6 +28,10 @@ mt_declare(erriezcrc32  https://github.com/Erriez/ErriezCRC32/archive/refs/tags/
 mt_declare(rtttl        https://github.com/end2endzone/NonBlockingRTTTL/archive/refs/tags/1.4.0.zip)
 mt_declare(ssd1306      https://github.com/meshtastic/esp8266-oled-ssd1306/archive/ace0fcbc108d357e1801cc24a45ba8a80e160c9b.zip)
 mt_declare(lovyangfx    https://github.com/lovyan03/LovyanGFX/archive/refs/tags/1.2.26.zip)
+# Environmental telemetry: the keyboard module carries a BME280.
+mt_declare(ada_busio    https://github.com/adafruit/Adafruit_BusIO/archive/refs/tags/1.17.4.zip)
+mt_declare(ada_sensor   https://github.com/adafruit/Adafruit_Sensor/archive/refs/tags/1.1.15.zip)
+mt_declare(ada_bme280   https://github.com/adafruit/Adafruit_BME280_Library/archive/refs/tags/2.3.0.zip)
 
 # Header search paths. Libraries that ship a src/ subdirectory expose it,
 # the rest are flat.
@@ -42,6 +46,9 @@ set(MT_DEP_INCLUDES
   ${rtttl_SOURCE_DIR}/src
   ${ssd1306_SOURCE_DIR}/src
   ${lovyangfx_SOURCE_DIR}/src
+  ${ada_busio_SOURCE_DIR}
+  ${ada_sensor_SOURCE_DIR}
+  ${ada_bme280_SOURCE_DIR}
 )
 
 # Sources compiled into the image. RadioLib and Crypto are globbed whole; the
@@ -51,6 +58,12 @@ file(GLOB_RECURSE MT_CRYPTO_SRC ${mt_crypto_SOURCE_DIR}/*.cpp)
 # TFTDisplay derives from this library's OLEDDisplay, so the BaseUI path needs
 # it compiled in, not just on the include path.
 file(GLOB MT_OLED_SRC ${ssd1306_SOURCE_DIR}/src/*.cpp)
+
+file(GLOB MT_SENSOR_SRC
+  ${ada_busio_SOURCE_DIR}/*.cpp
+  ${ada_sensor_SOURCE_DIR}/*.cpp
+  ${ada_bme280_SOURCE_DIR}/*.cpp
+)
 
 file(GLOB MT_MISC_SRC
   ${arduinothread_SOURCE_DIR}/*.cpp
@@ -68,4 +81,5 @@ file(GLOB_RECURSE MT_LGFX_SRC ${lovyangfx_SOURCE_DIR}/src/*.cpp)
 # the shim does not implement, so drop the file rather than carry dead code.
 list(FILTER MT_LGFX_SRC EXCLUDE REGEX "arduino_default/Bus_SPI.cpp")
 
-set(MT_DEP_SOURCES ${MT_RADIOLIB_SRC} ${MT_CRYPTO_SRC} ${MT_MISC_SRC} ${MT_OLED_SRC} ${MT_LGFX_SRC})
+set(MT_DEP_SOURCES ${MT_RADIOLIB_SRC} ${MT_CRYPTO_SRC} ${MT_MISC_SRC} ${MT_OLED_SRC} ${MT_SENSOR_SRC}
+    ${MT_LGFX_SRC})
