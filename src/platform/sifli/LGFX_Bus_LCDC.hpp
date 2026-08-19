@@ -3,15 +3,16 @@
 // LovyanGFX bus that drives a QSPI panel through the SF32LB LCDC.
 //
 // The CO5300 on this board is wired CS/CLK/D0-D3, which the controller calls
-// LCDC_INTF_SPI_NODCX_4DATA: one command frame carrying an 8- or 32-bit
-// address, then data on all four lines. Zephyr's mipi_dbi_sf32lb driver only
-// implements 8080 and 3/4-wire SPI, and the MIPI-DBI API has no quad mode to
-// express this through, so the transfers go straight to the vendor HAL.
+// LCDC_INTF_SPI_NODCX_4DATA: a command frame carrying a 32-bit header, then
+// parameters or pixels on all four lines. Zephyr's mipi_dbi_sf32lb driver
+// implements only 8080 and 3/4-wire SPI, and the MIPI-DBI API has no quad mode
+// to express this through, so transfers go straight to the vendor HAL.
 //
-// LovyanGFX splits a transfer into writeCommand() followed by writeData() /
-// writeBytes(), while HAL_LCDC_WriteDatas() takes address and payload
-// together. Commands are therefore staged until the payload arrives or the
-// transaction ends.
+// Framing: Panel_AMOLED emits a command as four writeCommand(byte, 8) calls -
+// 0x02/0x32, 0x00, cmd, 0x00 - followed by parameters through the same call,
+// and ends the frame with wait(). HAL_LCDC_WriteDatas() instead wants the
+// header and payload together, so bytes accumulate here and go out as one
+// frame when a bulk payload arrives or the panel waits.
 
 #include <lgfx/v1/Bus.hpp>
 #include <lgfx/v1/misc/pixelcopy.hpp>
@@ -35,8 +36,8 @@ class Bus_SF32LB_LCDC : public IBus
         uint32_t freq_read = 4000000;
         uint16_t panel_width = 480;
         uint16_t panel_height = 480;
-        // TE (tearing effect) input, wired on this board but only used once
-        // the panel is driven from a framebuffer.
+        // TE input, wired on this board but only useful once frames are pushed
+        // from a layer buffer rather than written synchronously.
         bool use_te = false;
     };
 
@@ -77,19 +78,22 @@ class Bus_SF32LB_LCDC : public IBus
     void readPixels(void *dst, pixelcopy_t *pc, uint32_t length) override;
 
   private:
-    // Staging for the pending command frame. 32 bytes covers every parameter
-    // list the panel sends inline; pixel payloads bypass it via writeBytes().
-    static constexpr size_t STAGE_SIZE = 32;
+    // Header is 4 bytes; the rest holds inline parameters. Panels send at most
+    // a handful (the 4-byte column/row windows are the longest), and bulk
+    // pixel data never lands here.
+    static constexpr size_t FRAME_SIZE = 32;
+    static constexpr size_t HEADER_SIZE = 4;
 
-    void stage(const uint8_t *data, size_t length);
+    void append(const uint8_t *data, size_t length);
+    // Splits the accumulated bytes into the HAL's address plus payload and
+    // sends them, optionally followed by a bulk buffer.
+    void send(const uint8_t *payload, uint32_t payload_len);
 
     config_t _cfg;
     LCDC_HandleTypeDef _lcdc = {};
     FlipBuffer _flip_buffer;
-    uint32_t _addr = 0;
-    uint8_t _addr_len = 0;
-    uint8_t _stage[STAGE_SIZE] = {};
-    size_t _stage_len = 0;
+    uint8_t _frame[FRAME_SIZE] = {};
+    size_t _frame_len = 0;
     bool _initialized = false;
 };
 

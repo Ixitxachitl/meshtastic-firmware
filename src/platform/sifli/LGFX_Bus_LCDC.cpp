@@ -71,8 +71,7 @@ void Bus_SF32LB_LCDC::release()
 
 void Bus_SF32LB_LCDC::beginTransaction()
 {
-    _addr_len = 0;
-    _stage_len = 0;
+    _frame_len = 0;
 }
 
 void Bus_SF32LB_LCDC::endTransaction()
@@ -99,46 +98,69 @@ void Bus_SF32LB_LCDC::setClock(uint32_t freq)
         HAL_LCDC_SetFreq(&_lcdc, freq);
 }
 
-void Bus_SF32LB_LCDC::flush()
+void Bus_SF32LB_LCDC::send(const uint8_t *payload, uint32_t payload_len)
 {
-    if (_addr_len == 0)
+    if (_frame_len == 0)
         return;
 
-    HAL_LCDC_WriteDatas(&_lcdc, _addr, _addr_len, _stage_len ? _stage : nullptr, _stage_len);
-    _addr_len = 0;
-    _stage_len = 0;
+    // The HAL sends the address most significant byte first, so pack the
+    // header in the order the panel put it on the wire.
+    const size_t addr_len = _frame_len < HEADER_SIZE ? _frame_len : HEADER_SIZE;
+    uint32_t addr = 0;
+    for (size_t i = 0; i < addr_len; i++) {
+        addr = (addr << 8) | _frame[i];
+    }
+
+    const size_t inline_len = _frame_len - addr_len;
+    if (inline_len && payload_len) {
+        // Inline parameters and a bulk payload never occur together: a command
+        // frame carries one or the other.
+        HAL_LCDC_WriteDatas(&_lcdc, addr, addr_len, _frame + addr_len, inline_len);
+    } else if (payload_len) {
+        HAL_LCDC_WriteDatas(&_lcdc, addr, addr_len, const_cast<uint8_t *>(payload), payload_len);
+    } else {
+        HAL_LCDC_WriteDatas(&_lcdc, addr, addr_len, inline_len ? _frame + addr_len : nullptr, inline_len);
+    }
+
+    _frame_len = 0;
 }
 
-void Bus_SF32LB_LCDC::stage(const uint8_t *data, size_t length)
+void Bus_SF32LB_LCDC::flush()
 {
-    // Overflowing the staging buffer would silently drop panel parameters, so
-    // send what is held and start a fresh frame with the same address.
-    if (_stage_len + length > STAGE_SIZE) {
+    send(nullptr, 0);
+}
+
+void Bus_SF32LB_LCDC::append(const uint8_t *data, size_t length)
+{
+    // Dropping bytes here would corrupt a command frame, so send what is held
+    // and start a new one rather than overrun.
+    if (_frame_len + length > FRAME_SIZE) {
         flush();
-        return;
     }
-    memcpy(_stage + _stage_len, data, length);
-    _stage_len += length;
+    if (length > FRAME_SIZE)
+        length = FRAME_SIZE;
+    memcpy(_frame + _frame_len, data, length);
+    _frame_len += length;
 }
 
 bool Bus_SF32LB_LCDC::writeCommand(uint32_t data, uint_fast8_t bit_length)
 {
-    flush();
-    _addr = data;
-    _addr_len = bit_length >> 3;
+    // Bytes arrive least significant first, matching how LovyanGFX packs a
+    // command word, and go on the wire in that order.
+    append(reinterpret_cast<const uint8_t *>(&data), bit_length >> 3);
     return true;
 }
 
 void Bus_SF32LB_LCDC::writeData(uint32_t data, uint_fast8_t bit_length)
 {
-    stage(reinterpret_cast<const uint8_t *>(&data), bit_length >> 3);
+    append(reinterpret_cast<const uint8_t *>(&data), bit_length >> 3);
 }
 
 void Bus_SF32LB_LCDC::writeDataRepeat(uint32_t data, uint_fast8_t bit_length, uint32_t count)
 {
     const size_t bytes = bit_length >> 3;
-    uint8_t buf[STAGE_SIZE];
-    const size_t per_pass = STAGE_SIZE / bytes;
+    uint8_t buf[64];
+    const size_t per_pass = sizeof(buf) / bytes;
 
     while (count) {
         const size_t n = count < per_pass ? count : per_pass;
@@ -153,8 +175,8 @@ void Bus_SF32LB_LCDC::writeDataRepeat(uint32_t data, uint_fast8_t bit_length, ui
 void Bus_SF32LB_LCDC::writePixels(pixelcopy_t *pc, uint32_t length)
 {
     const size_t bytes = pc->dst_bits >> 3;
-    uint8_t buf[STAGE_SIZE];
-    const size_t per_pass = STAGE_SIZE / bytes;
+    uint8_t buf[64];
+    const size_t per_pass = sizeof(buf) / bytes;
 
     while (length) {
         const size_t n = length < per_pass ? length : per_pass;
@@ -169,16 +191,14 @@ void Bus_SF32LB_LCDC::writeBytes(const uint8_t *data, uint32_t length, bool dc, 
     (void)dc;
     (void)use_dma;
 
-    // Anything already staged belongs in front of this payload, and the HAL
-    // takes address and payload in one call, so short writes join the stage
-    // and longer ones go out with whatever address is pending.
-    if (_stage_len + length <= STAGE_SIZE) {
-        stage(data, length);
+    if (_frame_len == 0) {
+        // No header pending: this continues the pixel stream the panel opened
+        // with 0x2C, so repeat the frame the LCDC is already set up for.
+        HAL_LCDC_WriteDatas(&_lcdc, 0x32002C00, HEADER_SIZE, const_cast<uint8_t *>(data), length);
         return;
     }
 
-    flush();
-    HAL_LCDC_WriteDatas(&_lcdc, _addr, _addr_len, const_cast<uint8_t *>(data), length);
+    send(data, length);
 }
 
 uint32_t Bus_SF32LB_LCDC::readData(uint_fast8_t bit_length)
@@ -191,14 +211,22 @@ uint32_t Bus_SF32LB_LCDC::readData(uint_fast8_t bit_length)
 bool Bus_SF32LB_LCDC::readBytes(uint8_t *dst, uint32_t length, bool use_dma)
 {
     (void)use_dma;
-    return HAL_LCDC_ReadDatas(&_lcdc, _addr, _addr_len, dst, length) == HAL_OK;
+
+    const size_t addr_len = _frame_len < HEADER_SIZE ? _frame_len : HEADER_SIZE;
+    uint32_t addr = 0;
+    for (size_t i = 0; i < addr_len; i++) {
+        addr = (addr << 8) | _frame[i];
+    }
+    _frame_len = 0;
+
+    return HAL_LCDC_ReadDatas(&_lcdc, addr, addr_len, dst, length) == HAL_OK;
 }
 
 void Bus_SF32LB_LCDC::readPixels(void *dst, pixelcopy_t *pc, uint32_t length)
 {
     const size_t bytes = pc->src_bits >> 3;
-    uint8_t buf[STAGE_SIZE];
-    const size_t per_pass = STAGE_SIZE / bytes;
+    uint8_t buf[64];
+    const size_t per_pass = sizeof(buf) / bytes;
     int32_t dstindex = 0;
 
     while (length) {
