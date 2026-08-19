@@ -1,0 +1,6 @@
+board:
+  name: t_display_sf32
+  full_name: LilyGo T-Display SF32
+  vendor: lilygo
+  socs:
+    - name: sf32lb525uc6

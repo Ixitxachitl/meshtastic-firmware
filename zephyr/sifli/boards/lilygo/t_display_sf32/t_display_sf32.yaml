@@ -1,0 +1,17 @@
+identifier: t_display_sf32
+name: LilyGo T-Display SF32
+type: mcu
+arch: arm
+ram: 512
+flash: 8128
+toolchain:
+  - zephyr
+supported:
+  - uart
+  - gpio
+  - spi
+  - i2c
+  - watchdog
+  - bluetooth
+  - rtc
+vendor: lilygo

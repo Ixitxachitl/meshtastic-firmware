@@ -1,0 +1,78 @@
+/*
+ * Derived from boards/sifli/sf32lb52_devkit_lcd (Copyright (c) 2025 Core Devices LLC)
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <zephyr/dt-bindings/pinctrl/sf32lb52x-pinctrl.h>
+
+&pinctrl {
+	/* Debug console on the CH343P USB-UART bridge. */
+	usart1_default: usart1_default {
+		group1 {
+			pinmux = <PA19_USART1_TXD>;
+		};
+
+		group2 {
+			pinmux = <PA18_USART1_RXD>;
+			input-enable;
+			bias-pull-up;
+		};
+	};
+
+	/* Keyboard expansion port: L76K GNSS or ESP32-C6, selected by MOD_SEL
+	 * on the module's XL9555 expander. Only one is on the bus at a time.
+	 */
+	usart2_default: usart2_default {
+		group1 {
+			pinmux = <PA40_USART2_TXD>;
+		};
+
+		group2 {
+			pinmux = <PA39_USART2_RXD>;
+			input-enable;
+			bias-pull-up;
+		};
+	};
+
+	/* Shared 3V3 bus: CST9220 touch (0x5A, via the 1V8 level shifter on the
+	 * display FPC), QWIIC header, and every device on the keyboard module.
+	 */
+	i2c1_default: i2c1_default {
+		group1 {
+			pinmux = <PA37_I2C1_SDA>, <PA38_I2C1_SCL>;
+			input-enable;
+		};
+	};
+
+	/* SX1262 and the TF card share this bus; both chip selects are GPIOs. */
+	spi1_default: spi1_default {
+		group1 {
+			pinmux = <PA24_SPI1_DIO>, <PA28_SPI1_CLK>;
+			input-enable;
+			input-schmitt-enable;
+		};
+
+		group2 {
+			pinmux = <PA25_SPI1_DI>;
+			input-enable;
+			input-schmitt-enable;
+			bias-pull-down;
+		};
+	};
+
+	/* CO5300 AMOLED in QSPI mode. Unused until the LCDC driver grows a quad
+	 * mode; LCD_RST (PA9) is a plain GPIO, the controller has no RSTB here.
+	 */
+	lcdc_qspi_default: lcdc_qspi_default {
+		group1 {
+			pinmux = <PA03_LCDC1_SPI_CS>, <PA04_LCDC1_SPI_CLK>,
+				 <PA05_LCDC1_SPI_DIO0>, <PA06_LCDC1_SPI_DIO1>,
+				 <PA07_LCDC1_SPI_DIO2>, <PA08_LCDC1_SPI_DIO3>;
+		};
+
+		group2 {
+			pinmux = <PA02_LCDC1_SPI_TE>;
+			input-enable;
+		};
+	};
+};

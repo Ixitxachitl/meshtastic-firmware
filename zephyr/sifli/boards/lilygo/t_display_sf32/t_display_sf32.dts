@@ -1,0 +1,207 @@
+/*
+ * LilyGo T-Display SF32 (SF32LB525UC6)
+ *
+ * Derived from boards/sifli/sf32lb52_devkit_lcd (Copyright (c) 2025 Core Devices LLC)
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/dts-v1/;
+
+#include <sifli/sf32lb52x.dtsi>
+#include <sifli/sf32lb52x-ram012.dtsi>
+#include <zephyr/dt-bindings/dma/sf32lb52x-dma.h>
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/i2c/i2c.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+
+#include "t_display_sf32-pinctrl.dtsi"
+
+/ {
+	model = "LilyGo T-Display SF32";
+	compatible = "lilygo,t-display-sf32";
+
+	chosen {
+		zephyr,flash = &w25q128;
+		zephyr,flash-controller = &mpi2;
+		zephyr,code-partition = &code;
+		zephyr,console = &usart1;
+		zephyr,shell-uart = &usart1;
+		zephyr,crc = &crc;
+		zephyr,entropy = &trng;
+		zephyr,bt-hci = &mailbox;
+	};
+
+	/* Side buttons on the 6-pin KEY FPC. Pin assignment follows LilyGo's pin
+	 * map; polarity is unverified until hardware is in hand.
+	 */
+	buttons {
+		compatible = "gpio-keys";
+
+		key1: key1 {
+			label = "KEY1";
+			gpios = <&gpioa_32_44 1 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+			zephyr,code = <INPUT_KEY_1>;
+		};
+
+		key2: key2 {
+			label = "KEY2";
+			gpios = <&gpioa_32_44 2 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+			zephyr,code = <INPUT_KEY_2>;
+		};
+
+		key3: key3 {
+			label = "KEY3";
+			gpios = <&gpioa_32_44 3 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+			zephyr,code = <INPUT_KEY_3>;
+		};
+	};
+
+	aliases {
+		sw0 = &key1;
+		sw1 = &key2;
+		sw2 = &key3;
+		rtc = &rtc;
+		watchdog0 = &wdt;
+	};
+};
+
+&cpu0 {
+	clock-frequency = <DT_FREQ_M(240)>;
+};
+
+&hxt48 {
+	status = "okay";
+};
+
+&rcc_clk {
+	status = "okay";
+
+	sifli,hdiv = <1>;
+	sifli,pdiv1 = <1>;
+	sifli,pdiv2 = <6>;
+	sifli,sys-clk-src = "dll1";
+
+	dll1 {
+		status = "okay";
+		clock-frequency = <DT_FREQ_M(240)>;
+	};
+};
+
+&rcc_rst {
+	status = "okay";
+};
+
+&gpioa_00_31 {
+	status = "okay";
+};
+
+&gpioa_32_44 {
+	status = "okay";
+};
+
+&dmac {
+	status = "okay";
+};
+
+&pinctrl {
+	status = "okay";
+};
+
+/* W25Q128JV, 16 MB. The ptable/code split matches the SiFli bootloader's
+ * expectations; the tail is a LittleFS storage partition for NodeDB/config.
+ */
+&mpi2 {
+	compatible = "sifli,sf32lb-mpi-qspi-nor";
+	dmas = <&dmac 0 SF32LB52X_DMA_REQ_MPI2 SF32LB_DMA_PL_MEDIUM>;
+	sifli,psclr = <0>;
+	sifli,lines = <4>;
+	status = "okay";
+
+	/* The MPI controller is the flash device; this child only carries the
+	 * chip's parameters. Tagging it soc-nv-flash as well makes flash_map
+	 * resolve partitions to the controller instead of to this node, which
+	 * has no driver of its own.
+	 */
+	w25q128: flash@0 {
+		compatible = "jedec,qspi-nor", "soc-nv-flash";
+		reg = <0x0>;
+		size = <DT_SIZE_M(128)>;
+		quad-enable-requirements = "S2B1v1";
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			ptable: partition@0 {
+				label = "ptable";
+				reg = <0x0 DT_SIZE_K(64)>;
+			};
+
+			code: partition@10000 {
+				label = "code";
+				reg = <0x10000 DT_SIZE_K(8128)>;
+			};
+
+			storage_partition: partition@800000 {
+				label = "storage";
+				reg = <0x800000 DT_SIZE_K(8192)>;
+			};
+		};
+	};
+};
+
+&usart1 {
+	status = "okay";
+	current-speed = <115200>;
+	pinctrl-0 = <&usart1_default>;
+	pinctrl-names = "default";
+};
+
+&usart2 {
+	status = "okay";
+	current-speed = <9600>;
+	pinctrl-0 = <&usart2_default>;
+	pinctrl-names = "default";
+};
+
+&i2c1 {
+	status = "okay";
+	pinctrl-0 = <&i2c1_default>;
+	pinctrl-names = "default";
+	clock-frequency = <I2C_BITRATE_FAST>;
+};
+
+/* SX1262 CS (PA29) is driven by RadioLib through the Arduino shim, so only the
+ * TF card's CS (PA44) is registered here.
+ */
+&spi1 {
+	status = "okay";
+	pinctrl-0 = <&spi1_default>;
+	pinctrl-names = "default";
+	cs-gpios = <&gpioa_32_44 12 GPIO_ACTIVE_LOW>;
+};
+
+&wdt {
+	status = "okay";
+};
+
+&rtc {
+	status = "okay";
+};
+
+&crc {
+	status = "okay";
+};
+
+&crypto {
+	status = "okay";
+};
+
+&trng {
+	status = "okay";
+};
+
+&mailbox {
+	status = "okay";
+};
