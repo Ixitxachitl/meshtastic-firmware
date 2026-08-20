@@ -1221,6 +1221,10 @@ static bool screenDragOwnsFramerate()
     // gesture and the demote in runOnce() would otherwise fire on every drag report.
     if (messageScrollAnchorValid && (now - messageScrollLastMs) <= DRAG_ANCHOR_STALE_MS)
         return true;
+    // As does the emote picker's grid, whose drag is driven from inside CannedMessageModule - a
+    // module sees input before the screen does, so that one cannot live here with the rest.
+    if (isEmoteScrollFingerSteering())
+        return true;
     return false;
 }
 
