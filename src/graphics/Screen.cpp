@@ -2479,9 +2479,28 @@ int Screen::handleInputEvent(const InputEvent *event)
                 return 0;
             }
 #endif
-            if (event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_ALT_PRESS) {
+#if BASEUI_HAS_TOUCH_DRAG
+            const bool fromTouch = isTouchSourced(event);
+#else
+            const bool fromTouch = false;
+#endif
+            // Where a finger-tracked transition exists, it is the only thing that pages frames -
+            // the swipe the touch layer classifies on release never does, whether or not the drag
+            // handler claimed the gesture.
+            //
+            // The alternative was letting a flick too quick to produce a drag sample page via this
+            // path, which meant an identical-looking gesture behaved differently depending on how
+            // fast it happened, and needed its direction inverted here to agree with the drag (a
+            // flick left brings the NEXT frame in from the right, where INPUT_BROKER_LEFT has always
+            // meant "go back"). A gesture that produces no drag report at all now simply does
+            // nothing, which is the more predictable of the two. Physical directional input -
+            // keyboard, encoder, trackball - keeps its conventional meaning.
+            const bool wantsNext = !fromTouch && event->inputEvent == INPUT_BROKER_RIGHT;
+            const bool wantsPrevious = !fromTouch && event->inputEvent == INPUT_BROKER_LEFT;
+
+            if (wantsPrevious || event->inputEvent == INPUT_BROKER_ALT_PRESS) {
                 showFrame(FrameDirection::PREVIOUS);
-            } else if (event->inputEvent == INPUT_BROKER_RIGHT || event->inputEvent == INPUT_BROKER_USER_PRESS) {
+            } else if (wantsNext || event->inputEvent == INPUT_BROKER_USER_PRESS) {
                 showFrame(FrameDirection::NEXT);
             } else if (event->inputEvent == INPUT_BROKER_FN_F1) {
                 this->ui->switchToFrame(0);
