@@ -51,6 +51,30 @@ namespace graphics
 #ifndef ROUNDED_SCREEN
 #define ROUNDED_SCREEN false
 #endif
+// Fixed number of frame icons the navigation bar shows per page. 0 fits as many as
+// the usable width allows.
+#ifndef BASEUI_NAV_ICONS_PER_PAGE
+#define BASEUI_NAV_ICONS_PER_PAGE 0
+#endif
+// Navigation bar icon size as a percentage of what BASEUI_ICON_SCALE would otherwise
+// give it, for variants that want the bar lighter than the rest of the artwork.
+#ifndef BASEUI_NAV_ICON_SIZE_PCT
+#define BASEUI_NAV_ICON_SIZE_PCT 100
+#endif
+// Trims (negative) or grows (positive) how many entry rows the node list screens fit.
+#ifndef BASEUI_NODE_LIST_ROW_ADJUST
+#define BASEUI_NODE_LIST_ROW_ADJUST 0
+#endif
+// When set, the favorite-node compass is sized from the full text budget instead of the
+// rows a given node happens to fill, so it stays the same size across favorites.
+#ifndef BASEUI_FIXED_COMPASS_SIZE
+#define BASEUI_FIXED_COMPASS_SIZE 0
+#endif
+// Pulls the splash screen's corner text (region, version, short name) toward the centre
+// by this percentage of the half-width, for screens whose rounded corners clip them.
+#ifndef BASEUI_SPLASH_CORNER_INSET_PCT
+#define BASEUI_SPLASH_CORNER_INSET_PCT 0
+#endif
 // Multiplier applied to every embedded bitmap (status icons, emotes, node/GPS
 // glyphs, nav bar, logos) and to the layout offsets around them. Variants with a
 // display far larger than the artwork was drawn for bump this up.
@@ -78,6 +102,12 @@ void drawRoundedHighlight(OLEDDisplay *display, int16_t x, int16_t y, int16_t w,
 // drawn area is w*scale by h*scale.
 void drawScaledXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm,
                    int scale = BASEUI_ICON_SCALE);
+
+// Nearest-neighbour XBM blit into an arbitrary destination box, for target sizes that
+// aren't an integer multiple of the source. Identical output to drawScaledXbm() when
+// destW/destH happen to be exact multiples of w/h.
+void drawStretchedXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm, int16_t destW,
+                      int16_t destH);
 
 // Shared battery/time/mail header
 void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *titleStr = "", bool force_no_invert = false,
