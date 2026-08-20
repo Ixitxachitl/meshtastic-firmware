@@ -8,6 +8,7 @@
 
 #include "LGFX_Bus_LCDC.hpp"
 #include "lgfx_amoled/Panel_CO5300.hpp"
+#include "variant.h" // TFT_WIDTH / TFT_HEIGHT
 #include <LovyanGFX.hpp>
 
 // LovyanGFX's stock Panel_CO5300 is sized for the T-Watch Ultra's 502x410
@@ -49,6 +50,11 @@ class LGFX : public lgfx::LGFX_Device
 {
   public:
     LGFX();
+
+    // device-ui's LGFXDriver reads these off the board's display class.
+    uint16_t screenWidth = TFT_WIDTH;
+    uint16_t screenHeight = TFT_HEIGHT;
+    bool hasButton() { return false; }
 
   private:
     Panel_CO5300_TDisplaySF32 _panel_instance;

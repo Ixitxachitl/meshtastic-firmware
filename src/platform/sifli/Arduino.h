@@ -160,12 +160,29 @@ void yield(void);
 using std::max;
 using std::min;
 
-// ── Arduino math helpers (macros safe for mixed-type / C calls) ──────────────
-#ifndef abs
-#define abs(x) ((x) >= 0 ? (x) : -(x))
-#endif
-#define constrain(x, l, h) ((x) < (l) ? (l) : ((x) > (h) ? (h) : (x)))
-#define round(x) ((x) >= 0 ? (long)((x) + 0.5) : (long)((x)-0.5))
+// ── Arduino math helpers ─────────────────────────────────────────────────────
+// Templates, not macros, for the same reason as min/max above: as macros these
+// names follow every later #include, and <chrono> declares its own abs() and
+// round() over durations. That collision only shows up once a translation unit
+// pulls in both Arduino.h and the standard library.
+// round() is left to the libc: <cmath> already provides overloads for every
+// arithmetic type, and adding another would make every integer argument
+// ambiguous. Arduino's version returns long, the libc's returns double, which
+// callers convert on assignment either way.
+#undef abs
+#undef constrain
+#undef round
+#include <cmath>
+using std::round;
+
+template <class T> constexpr T abs(const T &x)
+{
+    return x >= 0 ? x : -x;
+}
+template <class T, class L, class H> constexpr T constrain(const T &x, const L &l, const H &h)
+{
+    return x < (T)l ? (T)l : (x > (T)h ? (T)h : x);
+}
 #define radians(d) ((d)*DEG_TO_RAD)
 #define degrees(r) ((r)*RAD_TO_DEG)
 #define sq(x) ((x) * (x))
@@ -769,6 +786,22 @@ static inline unsigned long pulseIn(uint8_t, uint8_t, unsigned long = 1000000UL)
 {
     return 0;
 }
+
+// ── strcasestr - GNU extension picolibc does not provide ────────────────────
+#ifndef STRCASESTR
+#define STRCASESTR
+static inline char *strcasestr(const char *haystack, const char *needle)
+{
+    const size_t n = strlen(needle);
+    if (n == 0)
+        return (char *)haystack;
+    for (; *haystack; haystack++) {
+        if (strncasecmp(haystack, needle, n) == 0)
+            return (char *)haystack;
+    }
+    return nullptr;
+}
+#endif
 
 // ── strnstr - BSD extension not in Zephyr libc; defined in meshUtils.cpp ─────
 // Declare here so callers (GPS.cpp etc.) don't need ARCH_PORTDUINO.

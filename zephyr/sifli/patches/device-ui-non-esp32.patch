@@ -1,0 +1,70 @@
+From a70da4e0635a2f743033ca50aa2352f35d5e516b Mon Sep 17 00:00:00 2001
+From: Ixitxachitl <kramerfm@gmail.com>
+Date: Thu, 20 Aug 2026 05:32:03 +0000
+Subject: [PATCH] fix: build on platforms that are neither ESP32 nor Portduino
+
+LGFXConfig's parallel bus and PWM backlight come from LovyanGFX's ESP32
+platform layer, and the map panel's fallback tile source is built on the
+ESP32 HTTPClient. All three were reached unconditionally on any non-Portduino
+target, so a board using the generic Arduino platform could not compile.
+
+Guards them on ESP_PLATFORM/ARDUINO_ARCH_ESP32 and gives the map a
+no-tile-service fallback.
+---
+ include/graphics/LGFX/LGFXConfig.h      | 7 ++++++-
+ source/graphics/TFT/TFTView_320x240.cpp | 6 +++++-
+ 2 files changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/include/graphics/LGFX/LGFXConfig.h b/include/graphics/LGFX/LGFXConfig.h
+index 75f32a3..648a711 100644
+--- a/include/graphics/LGFX/LGFXConfig.h
++++ b/include/graphics/LGFX/LGFXConfig.h
+@@ -90,7 +90,9 @@ class LGFXConfig : public lgfx::LGFX_Device
+         }
+ 
+         { // configure bus settings
+-#ifndef ARCH_PORTDUINO
++// Bus_Parallel8 only exists in LovyanGFX's ESP32 platform layer; other
++// platforms have no parallel bus to configure.
++#if !defined(ARCH_PORTDUINO) && defined(ESP_PLATFORM)
+             if (config._bus.parallel.pin_d0 > 0) {
+                 lgfx::Bus_Parallel8 *bus = new lgfx::Bus_Parallel8;
+                 auto cfg = bus->config();
+@@ -187,6 +189,8 @@ class LGFXConfig : public lgfx::LGFX_Device
+         }
+ 
+         { // configure TFT backlight
++// Light_PWM likewise comes from the ESP32 platform layer.
++#if defined(ARCH_PORTDUINO) || defined(ESP_PLATFORM)
+             if (config._light.pin_bl != -1) {
+ #ifdef ARCH_PORTDUINO
+                 auto light = new portduino::Light_PWM;
+@@ -206,6 +210,7 @@ class LGFXConfig : public lgfx::LGFX_Device
+                 _panel_instance->setLight(light);
+                 _light_instance = light;
+             }
++#endif
+         }
+ 
+         setPanel(_panel_instance);
+diff --git a/source/graphics/TFT/TFTView_320x240.cpp b/source/graphics/TFT/TFTView_320x240.cpp
+index a05d711..280414f 100644
+--- a/source/graphics/TFT/TFTView_320x240.cpp
++++ b/source/graphics/TFT/TFTView_320x240.cpp
+@@ -2590,8 +2590,12 @@ void TFTView_320x240::loadMap(void)
+         map = new MapPanel(objects.raw_map_panel, tileService); // TODO: LinuxFileSystemService
+         map->setBackupService(new AsyncTileService(new CURLService(
+             [tileService](const char *name, void *img, size_t len) { return tileService->save(name, img, len); })));
+-#else
++#elif defined(ARDUINO_ARCH_ESP32)
+         map = new MapPanel(objects.raw_map_panel, new AsyncTileService(new URLService()));
++#else
++        // URLService is built on the ESP32 HTTPClient, so a platform without
++        // it gets a map with no tile source rather than no build.
++        map = new MapPanel(objects.raw_map_panel);
+ #endif
+         map->setHomeLocationImage(objects.home_location_image);
+         lv_obj_add_flag(objects.home_location_image, LV_OBJ_FLAG_CLICKABLE);
+-- 
+2.51.1
+

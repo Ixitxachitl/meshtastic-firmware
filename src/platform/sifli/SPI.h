@@ -65,12 +65,6 @@ class SPIClass
     int _host = 0;
 };
 
-// The SoC's CMSIS register.h defines SPI1/SPI2 as register-block pointers,
-// which collide with the Arduino bus instance names. Nothing in the firmware
-// touches the raw blocks - the Zephyr drivers do.
-#undef SPI1
-#undef SPI2
-
 // Name used by cores that expose the bus as HardwareSPI; LovyanGFX expects it.
 using HardwareSPI = SPIClass;
 

@@ -15,6 +15,7 @@
 
 #pragma once
 
+#include "Arduino.h" // String
 #include <memory>
 #include <stddef.h>
 #include <stdint.h>
@@ -149,6 +150,22 @@ class File
         }
     }
 
+    // Arduino's two-argument form; SeekMode values match FS_SEEK_*.
+    bool seek(uint32_t pos, int mode)
+    {
+        if (!_s || !_s->valid)
+            return false;
+        return fs_seek(&_s->file, (off_t)pos, mode) == 0;
+    }
+
+    uint32_t position()
+    {
+        if (!_s || !_s->valid)
+            return 0;
+        const off_t p = fs_tell(&_s->file);
+        return p < 0 ? 0 : (uint32_t)p;
+    }
+
     bool seek(uint32_t pos)
     {
         if (!_s || !_s->valid || _s->is_dir)
@@ -191,6 +208,19 @@ class InternalFileSystem
     bool rename(const char *from, const char *to);
     bool mkdir(const char *path);
     bool rmdir(const char *path);
+
+    // Arduino's FS takes String as readily as const char*, and libraries
+    // written against it pass one or the other interchangeably.
+    // Arduino's single-argument open() defaults to reading, which is how
+    // callers open a directory to iterate it.
+    File open(const char *path) { return open(path, "r"); }
+    File open(const String &path, const char *mode) { return open(path.c_str(), mode); }
+    File open(const String &path) { return open(path.c_str(), "r"); }
+    bool exists(const String &path) { return exists(path.c_str()); }
+    bool remove(const String &path) { return remove(path.c_str()); }
+    bool rename(const String &from, const String &to) { return rename(from.c_str(), to.c_str()); }
+    bool mkdir(const String &path) { return mkdir(path.c_str()); }
+    bool rmdir(const String &path) { return rmdir(path.c_str()); }
     bool rmdir_r(const char *path); // recursive delete (used by FSCommon rmDir)
     uint32_t usedBytes()
     {

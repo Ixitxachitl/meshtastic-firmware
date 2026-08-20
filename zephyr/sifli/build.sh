@@ -5,6 +5,11 @@
 #   WEST        the west executable
 #   BOARD       Zephyr board name
 #   BUILD_DIR   cmake build directory
+#   WEST_ARGS   extra flags for west itself, e.g. "-p always"
+#
+# Arguments are passed through to CMake, which is how a dependency gets pointed
+# at a working copy:
+#   ./build.sh -DFETCHCONTENT_SOURCE_DIR_DEVICE_UI=/workspaces/device-ui
 #
 # Flashing needs sftool over the board's CH343P USB-UART: `west flash -d <dir>`.
 set -euo pipefail
@@ -18,4 +23,4 @@ BUILD_DIR="${BUILD_DIR:-/tmp/mt-build}"
 export ZEPHYR_BASE="${SIFLI_WS}/zephyr"
 
 exec "${WEST}" build -b "${BOARD}" "${REPO_ROOT}/zephyr/sifli" -d "${BUILD_DIR}" \
-	"$@" -- -DBOARD_ROOT="${REPO_ROOT}/zephyr/sifli"
+	${WEST_ARGS-} -- -DBOARD_ROOT="${REPO_ROOT}/zephyr/sifli" "$@"
