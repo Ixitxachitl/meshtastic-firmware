@@ -56,7 +56,11 @@ extern MessageStore messageStore;
 // key. Sized from the artwork it holds, so it grows with the variant's icon scale.
 #define EMOTE_BUTTON_SIZE (24 * BASEUI_ICON_SCALE)
 #define EMOTE_BUTTON_MARGIN 2
-#define EMOTE_BUTTON_RADIUS (6 * BASEUI_ICON_SCALE)
+// A third of the box. drawRoundedRect() draws a Bresenham arc, which degenerates into a flat 45
+// degree chamfer once the radius is small next to the box - at 24px a radius of 6 has no curvature
+// left at all. A third is where the corner starts reading as round. Scaled alongside the box so the
+// ratio holds at any BASEUI_ICON_SCALE.
+#define EMOTE_BUTTON_RADIUS (8 * BASEUI_ICON_SCALE)
 
 // One condition for the button's artwork and its hit box, so the two can't disagree about whether
 // it exists. A virtual keyboard carries its own emote key, EXCLUDE_EMOJI builds have no artwork to
