@@ -537,7 +537,7 @@ void UIRenderer::drawGps(OLEDDisplay *display, int16_t x, int16_t y, const mesht
         snprintf(textString, sizeof(textString), "%u sats", gps->getNumSatellites());
     }
 
-    const int textOffset = (currentResolution == ScreenResolution::High) ? 18 : 11;
+    const int textOffset = (currentResolution == ScreenResolution::High) ? 18 * BASEUI_ICON_SCALE : 11;
     if (center) {
         int contentWidth = textOffset + display->getStringWidth(textString);
         x = (SCREEN_WIDTH - contentWidth) / 2;
@@ -711,7 +711,8 @@ void UIRenderer::drawNodes(OLEDDisplay *display, int16_t x, int16_t y, const mes
         snprintf(usersString, sizeof(usersString), "%d/%d %s", nodes_online, nodes_total, additional_words);
     }
 
-    int string_offset = (currentResolution == ScreenResolution::High) ? 9 : 0;
+    // The high-res glyph is 16px wide before BASEUI_ICON_SCALE; push the text past whatever it grew to.
+    int string_offset = (currentResolution == ScreenResolution::High) ? 9 + 16 * (BASEUI_ICON_SCALE - 1) : 0;
     if (center) {
         int contentWidth = 10 + string_offset + display->getStringWidth(usersString);
         x = (SCREEN_WIDTH - contentWidth) / 2;
@@ -961,7 +962,7 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
                 graphics::NodeListRenderer::drawScaledXBitmap16x16(x + 2, getTextPositions(display)[line] + 1,
                                                                    xeddsa_shield_width, xeddsa_shield_height, xeddsa_shield,
                                                                    display);
-                username_buffer = (xeddsa_shield_width * 2) + 4;
+                username_buffer = (xeddsa_shield_width * 2 * BASEUI_ICON_SCALE) + 4;
             } else {
                 display->drawXbm(x, getTextPositions(display)[line] + 3, xeddsa_shield_width, xeddsa_shield_height,
                                  xeddsa_shield);
@@ -1125,9 +1126,9 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
             display->drawString(curX, yPos, hopCount);
             curX += display->getStringWidth(hopCount) + 2;
 
-            const int iconY = yPos + (FONT_HEIGHT_SMALL - hop_height) / 2;
-            display->drawXbm(curX, iconY, hop_width, hop_height, imghop);
-            curX += hop_width + 1;
+            const int iconY = yPos + (FONT_HEIGHT_SMALL - hop_height * BASEUI_ICON_SCALE) / 2;
+            drawScaledXbm(display, curX, iconY, hop_width, hop_height, imghop);
+            curX += hop_width * BASEUI_ICON_SCALE + 1;
         }
     }
 
@@ -1705,9 +1706,9 @@ void UIRenderer::drawIconScreen(const char *upperMsg, OLEDDisplay *display, OLED
 #if defined(BICOLOR_OLED_DISPLAY)
     additionalYOffset += 5;
 #endif
-    display->drawXbm(x + (SCREEN_WIDTH - icon_width) / 2,
-                     y + (SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM - icon_height) / 2 + additionalYOffset, icon_width, icon_height,
-                     icon_bits);
+    drawScaledXbm(display, x + (SCREEN_WIDTH - icon_width * BASEUI_ICON_SCALE) / 2,
+                  y + (SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM - icon_height * BASEUI_ICON_SCALE) / 2 + additionalYOffset, icon_width,
+                  icon_height, icon_bits);
 
     display->setFont(FONT_MEDIUM);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
@@ -2017,15 +2018,15 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
 void UIRenderer::drawOEMIconScreen(const char *upperMsg, OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     static const uint8_t xbm[] = USERPREFS_OEM_IMAGE_DATA;
+    const int oemW = USERPREFS_OEM_IMAGE_WIDTH * BASEUI_ICON_SCALE;
+    const int oemH = USERPREFS_OEM_IMAGE_HEIGHT * BASEUI_ICON_SCALE;
     if (currentResolution == ScreenResolution::High) {
-        display->drawXbm(x + (SCREEN_WIDTH - USERPREFS_OEM_IMAGE_WIDTH) / 2,
-                         y + (SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM - USERPREFS_OEM_IMAGE_HEIGHT) / 2 + 2, USERPREFS_OEM_IMAGE_WIDTH,
-                         USERPREFS_OEM_IMAGE_HEIGHT, xbm);
+        drawScaledXbm(display, x + (SCREEN_WIDTH - oemW) / 2, y + (SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM - oemH) / 2 + 2,
+                      USERPREFS_OEM_IMAGE_WIDTH, USERPREFS_OEM_IMAGE_HEIGHT, xbm);
     } else {
 
-        display->drawXbm(x + (SCREEN_WIDTH - USERPREFS_OEM_IMAGE_WIDTH) / 2,
-                         y + (SCREEN_HEIGHT - USERPREFS_OEM_IMAGE_HEIGHT) / 2 + 2, USERPREFS_OEM_IMAGE_WIDTH,
-                         USERPREFS_OEM_IMAGE_HEIGHT, xbm);
+        drawScaledXbm(display, x + (SCREEN_WIDTH - oemW) / 2, y + (SCREEN_HEIGHT - oemH) / 2 + 2, USERPREFS_OEM_IMAGE_WIDTH,
+                      USERPREFS_OEM_IMAGE_HEIGHT, xbm);
     }
 
     switch (USERPREFS_OEM_FONT_SIZE) {
@@ -2106,12 +2107,13 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
         lastFrameIndex = frameToHighlight;
         lastFrameChangeTime = millis();
     }
-
+    // Indicator glyphs are all 8x8; everything below is expressed as a multiple of that.
 #ifdef OLED_HUGE
-    const int iconSize = 24;
+    const int iconScale = 3 * BASEUI_ICON_SCALE;
 #else
-    const int iconSize = (currentResolution == ScreenResolution::High) ? 16 : 8;
+    const int iconScale = ((currentResolution == ScreenResolution::High) ? 2 : 1) * BASEUI_ICON_SCALE;
 #endif
+    const int iconSize = 8 * iconScale;
     const int spacing = (currentResolution == ScreenResolution::High) ? 8 : 4;
     const int bigOffset = (currentResolution == ScreenResolution::High) ? 1 : 0;
     const bool compactPanel = graphics::isCompactPanel(display);
@@ -2283,15 +2285,7 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
             display->setColor(BLACK);
 #endif
         }
-#ifdef OLED_HUGE
-        NodeListRenderer::drawScaledXBitmap3x(x, y, 8, 8, icon, display);
-#else
-        if (currentResolution == ScreenResolution::High) {
-            NodeListRenderer::drawScaledXBitmap16x16(x, y, 8, 8, icon, display);
-        } else {
-            display->drawXbm(x, y, iconSize, iconSize, icon);
-        }
-#endif
+        drawScaledXbm(display, x, y, 8, 8, icon, iconScale);
 
         if (isActive) {
             display->setColor(WHITE);
@@ -2305,7 +2299,7 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
     const int top = rectY + (rectHeight - halfH) / 2;
     const int bottom = top + halfH - 1;
     const int midY = top + (halfH / 2);
-    const int maxW = 4;
+    const int maxW = 4 * BASEUI_ICON_SCALE;
 
     auto drawArrow = [&](bool rightSide) {
         int baseX = rightSide ? (rectX + rectWidth + offset) : (rectX - offset - 1);

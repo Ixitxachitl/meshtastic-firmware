@@ -222,36 +222,44 @@ static int centerYForRow(int y, int size)
 }
 
 // Helpers for drawing status marks (thickened strokes)
+// The marks were drawn for an 8px box with a 2px stroke; both the stroke and the
+// glyph's internal details scale with `size` so they stay legible when enlarged.
+static inline int markStroke(int size)
+{
+    return std::max(1, size / 8);
+}
+
 static void drawCheckMark(OLEDDisplay *display, int x, int y, int size)
 {
     int topY = centerYForRow(y, size);
     display->setColor(WHITE);
-    display->drawLine(x, topY + size / 2, x + size / 3, topY + size);
-    display->drawLine(x, topY + size / 2 + 1, x + size / 3, topY + size + 1);
-    display->drawLine(x + size / 3, topY + size, x + size, topY);
-    display->drawLine(x + size / 3, topY + size + 1, x + size, topY + 1);
+    for (int t = 0; t <= markStroke(size); ++t) {
+        display->drawLine(x, topY + size / 2 + t, x + size / 3, topY + size + t);
+        display->drawLine(x + size / 3, topY + size + t, x + size, topY + t);
+    }
 }
 
 static void drawXMark(OLEDDisplay *display, int x, int y, int size = 8)
 {
     int topY = centerYForRow(y, size);
     display->setColor(WHITE);
-    display->drawLine(x, topY, x + size, topY + size);
-    display->drawLine(x, topY + 1, x + size, topY + size + 1);
-    display->drawLine(x + size, topY, x, topY + size);
-    display->drawLine(x + size, topY + 1, x, topY + size + 1);
+    for (int t = 0; t <= markStroke(size); ++t) {
+        display->drawLine(x, topY + t, x + size, topY + size + t);
+        display->drawLine(x + size, topY + t, x, topY + size + t);
+    }
 }
 
 static void drawRelayMark(OLEDDisplay *display, int x, int y, int size = 8)
 {
     int r = size / 2;
+    int u = markStroke(size);
     int centerY = centerYForRow(y, size) + r;
     int centerX = x + r;
     display->setColor(WHITE);
     display->drawCircle(centerX, centerY, r);
-    display->drawLine(centerX, centerY - 2, centerX, centerY);
-    display->setPixel(centerX, centerY + 2);
-    display->drawLine(centerX - 1, centerY - 4, centerX + 1, centerY - 4);
+    display->fillRect(centerX, centerY - 2 * u, u, 2 * u);
+    display->fillRect(centerX, centerY + 2 * u, u, u);
+    display->fillRect(centerX - u, centerY - 4 * u, 3 * u, u);
 }
 
 static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &line, const Emote *emotes, int emoteCount)
@@ -447,6 +455,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     constexpr int SCROLLBAR_WIDTH = 3;
     constexpr int BUBBLE_PAD_X = 3;
     constexpr int BUBBLE_PAD_Y = 4;
+    constexpr int BUBBLE_PAD_TOP_HEADER = 1;
     constexpr int BUBBLE_RADIUS = 4;
     constexpr int BUBBLE_MIN_W = 24;
     constexpr int BUBBLE_TEXT_INDENT = 2;
@@ -815,7 +824,6 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             int topY;
             if (isHeader[b.start]) {
                 // Header start
-                constexpr int BUBBLE_PAD_TOP_HEADER = 1; // try 1 or 2
                 topY = visualTop - BUBBLE_PAD_TOP_HEADER;
             } else {
                 // Body start
@@ -862,7 +870,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 if (isHeader[i]) {
                     w = graphics::UIRenderer::measureStringWithEmotes(display, cachedLines[i].c_str());
                     if (b.mine)
-                        w += 12; // room for ACK/NACK/relay mark
+                        w += 12 * BASEUI_ICON_SCALE; // room for ACK/NACK/relay mark
                 } else {
                     w = getRenderedLineWidth(display, cachedLines[i], emotes, numEmotes);
                 }
@@ -979,17 +987,18 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 
                 // Draw ACK/NACK mark for our own messages
                 if (isMine[i]) {
-                    int markX = headerX - 10;
+                    constexpr int markSize = 8 * BASEUI_ICON_SCALE;
+                    int markX = headerX - (markSize + 2);
                     int markY = lineY;
                     if (ackForLine[i] == AckStatus::ACKED) {
                         // Destination ACK
-                        drawCheckMark(display, markX, markY, 8);
+                        drawCheckMark(display, markX, markY, markSize);
                     } else if (ackForLine[i] == AckStatus::NACKED || ackForLine[i] == AckStatus::TIMEOUT) {
                         // Failure or timeout
-                        drawXMark(display, markX, markY, 8);
+                        drawXMark(display, markX, markY, markSize);
                     } else if (ackForLine[i] == AckStatus::RELAYED) {
                         // Relay ACK
-                        drawRelayMark(display, markX, markY, 8);
+                        drawRelayMark(display, markX, markY, markSize);
                     }
                     // AckStatus::NONE → show nothing
                 }

@@ -98,6 +98,28 @@ void drawRoundedHighlight(OLEDDisplay *display, int16_t x, int16_t y, int16_t w,
     display->fillCircle(x + w - r - 1, y + h - r - 1, r); // bottom-right
 }
 
+// ***********************
+// * Scaled bitmap blit  *
+// ***********************
+void drawScaledXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm, int scale)
+{
+    if (scale <= 1) {
+        display->drawXbm(x, y, w, h, xbm);
+        return;
+    }
+
+    const int16_t bytesPerRow = (w + 7) / 8;
+    for (int16_t row = 0; row < h; ++row) {
+        const uint8_t *rowPtr = xbm + row * bytesPerRow;
+        for (int16_t col = 0; col < w; ++col) {
+            const uint8_t byteVal = pgm_read_byte(rowPtr + (col >> 3));
+            if (byteVal & (1U << (col & 7))) { // XBM is LSB-first
+                display->fillRect(x + col * scale, y + row * scale, scale, scale);
+            }
+        }
+    }
+}
+
 // *************************
 // * Common Header Drawing *
 // *************************
@@ -250,6 +272,7 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
     }
 #endif
 
+    constexpr int iconScale = BASEUI_ICON_SCALE;
     int batteryX = x + 1 + BASEUI_HEADER_LR_MARGIN;
     int batteryY = HEADER_OFFSET_Y + 1 + BASEUI_HEADER_MARGIN / 2;
 #if !defined(OLED_TINY)
@@ -258,59 +281,60 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
         batteryX += 1;
         batteryY += 2;
         if (currentResolution == ScreenResolution::High) {
-            display->drawXbm(batteryX, batteryY, 19, 12, imgUSB_HighResolution);
-            batteryX += 20; // Icon + 1 pixel
+            drawScaledXbm(display, batteryX, batteryY, 19, 12, imgUSB_HighResolution, iconScale);
+            batteryX += 19 * iconScale + 1; // Icon + 1 pixel
         } else {
-            display->drawXbm(batteryX, batteryY, 10, 8, imgUSB);
-            batteryX += 11; // Icon + 1 pixel
+            drawScaledXbm(display, batteryX, batteryY, 10, 8, imgUSB, iconScale);
+            batteryX += 10 * iconScale + 1; // Icon + 1 pixel
         }
     } else {
         if (useHorizontalBattery) {
             batteryX += 1;
             batteryY += 2;
-            display->drawXbm(batteryX, batteryY, 9, 13, batteryBitmap_h_bottom);
-            display->drawXbm(batteryX + 9, batteryY, 9, 13, batteryBitmap_h_top);
+            drawScaledXbm(display, batteryX, batteryY, 9, 13, batteryBitmap_h_bottom, iconScale);
+            drawScaledXbm(display, batteryX + 9 * iconScale, batteryY, 9, 13, batteryBitmap_h_top, iconScale);
             if (isCharging && isBoltVisibleShared)
-                display->drawXbm(batteryX + 4, batteryY, 9, 13, lightning_bolt_h);
+                drawScaledXbm(display, batteryX + 4 * iconScale, batteryY, 9, 13, lightning_bolt_h, iconScale);
             else {
-                display->drawLine(batteryX + 5, batteryY, batteryX + 10, batteryY);
-                display->drawLine(batteryX + 5, batteryY + 12, batteryX + 10, batteryY + 12);
-                int fillWidth = 14 * chargePercent / 100;
-                display->fillRect(batteryX + 1, batteryY + 1, fillWidth, 11);
+                // Caps on the open ends of the two half-bitmaps; one bitmap pixel thick.
+                display->fillRect(batteryX + 5 * iconScale, batteryY, 6 * iconScale, iconScale);
+                display->fillRect(batteryX + 5 * iconScale, batteryY + 12 * iconScale, 6 * iconScale, iconScale);
+                int fillWidth = 14 * iconScale * chargePercent / 100;
+                display->fillRect(batteryX + iconScale, batteryY + iconScale, fillWidth, 11 * iconScale);
 #if GRAPHICS_TFT_COLORING_ENABLED
                 if (fillWidth > 0) {
                     hasBatteryFillRegion = true;
-                    batteryFillRegionX = batteryX + 1;
-                    batteryFillRegionY = batteryY + 1;
+                    batteryFillRegionX = batteryX + iconScale;
+                    batteryFillRegionY = batteryY + iconScale;
                     batteryFillRegionW = fillWidth;
-                    batteryFillRegionH = 11;
+                    batteryFillRegionH = 11 * iconScale;
                 }
 #endif
             }
-            batteryX += 18; // Icon + 2 pixels
+            batteryX += 18 * iconScale; // Icon + 2 pixels
         } else {
 #ifdef USE_EINK
             batteryY += 2;
 #endif
-            display->drawXbm(batteryX, batteryY, 7, 11, batteryBitmap_v);
+            drawScaledXbm(display, batteryX, batteryY, 7, 11, batteryBitmap_v, iconScale);
             if (isCharging && isBoltVisibleShared)
-                display->drawXbm(batteryX + 1, batteryY + 3, 5, 5, lightning_bolt_v);
+                drawScaledXbm(display, batteryX + iconScale, batteryY + 3 * iconScale, 5, 5, lightning_bolt_v, iconScale);
             else {
-                display->drawXbm(batteryX - 1, batteryY + 4, 8, 3, batteryBitmap_sidegaps_v);
-                int fillHeight = 8 * chargePercent / 100;
+                drawScaledXbm(display, batteryX - iconScale, batteryY + 4 * iconScale, 8, 3, batteryBitmap_sidegaps_v, iconScale);
+                int fillHeight = 8 * iconScale * chargePercent / 100;
                 int fillY = batteryY - fillHeight;
-                display->fillRect(batteryX + 1, fillY + 10, 5, fillHeight);
+                display->fillRect(batteryX + iconScale, fillY + 10 * iconScale, 5 * iconScale, fillHeight);
 #if GRAPHICS_TFT_COLORING_ENABLED
                 if (fillHeight > 0) {
                     hasBatteryFillRegion = true;
-                    batteryFillRegionX = batteryX + 1;
-                    batteryFillRegionY = fillY + 10;
-                    batteryFillRegionW = 5;
+                    batteryFillRegionX = batteryX + iconScale;
+                    batteryFillRegionY = fillY + 10 * iconScale;
+                    batteryFillRegionW = 5 * iconScale;
                     batteryFillRegionH = fillHeight;
                 }
 #endif
             }
-            batteryX += 9; // Icon + 2 pixels
+            batteryX += 9 * iconScale; // Icon + 2 pixels
         }
     }
 #if GRAPHICS_TFT_COLORING_ENABLED
@@ -380,7 +404,7 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
         }
         timeX = screenW - xOffset - timeStrWidth + 3;
 #if GRAPHICS_TFT_COLORING_ENABLED
-        statusRightStartX = timeX - (useHorizontalBattery ? 22 : 16);
+        statusRightStartX = timeX - (useHorizontalBattery ? 22 : 16) * iconScale;
 #endif
 
         // === Show Mail or Mute Icon to the Left of Time ===
@@ -404,7 +428,7 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
 
         if (showMail) {
             if (useHorizontalBattery) {
-                int iconW = 16, iconH = 12;
+                int iconW = 16 * iconScale, iconH = 12 * iconScale;
                 int iconX = iconRightEdge - iconW;
                 int iconY = textY + (FONT_HEIGHT_SMALL - iconH) / 2 - 1;
                 if (useInvertedHeaderStyle) {
@@ -417,51 +441,54 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
                     display->setColor(WHITE);
                 }
                 display->drawRect(iconX, iconY, iconW + 1, iconH);
-                display->drawLine(iconX, iconY, iconX + iconW / 2, iconY + iconH - 4);
-                display->drawLine(iconX + iconW, iconY, iconX + iconW / 2, iconY + iconH - 4);
+                display->drawLine(iconX, iconY, iconX + iconW / 2, iconY + iconH - 4 * iconScale);
+                display->drawLine(iconX + iconW, iconY, iconX + iconW / 2, iconY + iconH - 4 * iconScale);
             } else {
-                int iconX = iconRightEdge - (mail_width - 2);
-                int iconY = textY + (FONT_HEIGHT_SMALL - mail_height) / 2;
+                const int iconW = mail_width * iconScale, iconH = mail_height * iconScale;
+                int iconX = iconRightEdge - (iconW - 2);
+                int iconY = textY + (FONT_HEIGHT_SMALL - iconH) / 2;
                 if (useInvertedHeaderStyle) {
                     display->setColor(WHITE);
-                    display->fillRect(iconX - 1, iconY - 1, mail_width + 2, mail_height + 2);
+                    display->fillRect(iconX - 1, iconY - 1, iconW + 2, iconH + 2);
                     display->setColor(BLACK);
                 } else {
                     display->setColor(BLACK);
-                    display->fillRect(iconX - 1, iconY - 1, mail_width + 2, mail_height + 2);
+                    display->fillRect(iconX - 1, iconY - 1, iconW + 2, iconH + 2);
                     display->setColor(WHITE);
                 }
-                display->drawXbm(iconX, iconY, mail_width, mail_height, mail);
+                drawScaledXbm(display, iconX, iconY, mail_width, mail_height, mail, iconScale);
             }
         } else if (externalNotificationModule->getMute()) {
             if (currentResolution == ScreenResolution::High) {
-                int iconX = iconRightEdge - mute_symbol_big_width;
-                int iconY = textY + (FONT_HEIGHT_SMALL - mute_symbol_big_height) / 2;
+                const int iconW = mute_symbol_big_width * iconScale, iconH = mute_symbol_big_height * iconScale;
+                int iconX = iconRightEdge - iconW;
+                int iconY = textY + (FONT_HEIGHT_SMALL - iconH) / 2;
 
                 if (useInvertedHeaderStyle) {
                     display->setColor(WHITE);
-                    display->fillRect(iconX - 1, iconY - 1, mute_symbol_big_width + 2, mute_symbol_big_height + 2);
+                    display->fillRect(iconX - 1, iconY - 1, iconW + 2, iconH + 2);
                     display->setColor(BLACK);
                 } else {
                     display->setColor(BLACK);
-                    display->fillRect(iconX - 1, iconY - 1, mute_symbol_big_width + 2, mute_symbol_big_height + 2);
+                    display->fillRect(iconX - 1, iconY - 1, iconW + 2, iconH + 2);
                     display->setColor(WHITE);
                 }
-                display->drawXbm(iconX, iconY, mute_symbol_big_width, mute_symbol_big_height, mute_symbol_big);
+                drawScaledXbm(display, iconX, iconY, mute_symbol_big_width, mute_symbol_big_height, mute_symbol_big, iconScale);
             } else {
-                int iconX = iconRightEdge - mute_symbol_width;
-                int iconY = textY + (FONT_HEIGHT_SMALL - mail_height) / 2;
+                const int iconW = mute_symbol_width * iconScale, iconH = mute_symbol_height * iconScale;
+                int iconX = iconRightEdge - iconW;
+                int iconY = textY + (FONT_HEIGHT_SMALL - mail_height * iconScale) / 2;
 
                 if (useInvertedHeaderStyle) {
                     display->setColor(WHITE);
-                    display->fillRect(iconX - 1, iconY - 1, mute_symbol_width + 2, mute_symbol_height + 2);
+                    display->fillRect(iconX - 1, iconY - 1, iconW + 2, iconH + 2);
                     display->setColor(BLACK);
                 } else {
                     display->setColor(BLACK);
-                    display->fillRect(iconX - 1, iconY - 1, mute_symbol_width + 2, mute_symbol_height + 2);
+                    display->fillRect(iconX - 1, iconY - 1, iconW + 2, iconH + 2);
                     display->setColor(WHITE);
                 }
-                display->drawXbm(iconX, iconY, mute_symbol_width, mute_symbol_height, mute_symbol);
+                drawScaledXbm(display, iconX, iconY, mute_symbol_width, mute_symbol_height, mute_symbol, iconScale);
             }
         }
 
@@ -501,26 +528,26 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
 
         if (showMail) {
             if (useHorizontalBattery) {
-                int iconW = 16, iconH = 12;
+                int iconW = 16 * iconScale, iconH = 12 * iconScale;
                 int iconX = iconRightEdge - iconW;
                 int iconY = textY + (FONT_HEIGHT_SMALL - iconH) / 2 - 1;
                 display->drawRect(iconX, iconY, iconW + 1, iconH);
-                display->drawLine(iconX, iconY, iconX + iconW / 2, iconY + iconH - 4);
-                display->drawLine(iconX + iconW, iconY, iconX + iconW / 2, iconY + iconH - 4);
+                display->drawLine(iconX, iconY, iconX + iconW / 2, iconY + iconH - 4 * iconScale);
+                display->drawLine(iconX + iconW, iconY, iconX + iconW / 2, iconY + iconH - 4 * iconScale);
             } else {
-                int iconX = iconRightEdge - mail_width;
-                int iconY = textY + (FONT_HEIGHT_SMALL - mail_height) / 2;
-                display->drawXbm(iconX, iconY, mail_width, mail_height, mail);
+                int iconX = iconRightEdge - mail_width * iconScale;
+                int iconY = textY + (FONT_HEIGHT_SMALL - mail_height * iconScale) / 2;
+                drawScaledXbm(display, iconX, iconY, mail_width, mail_height, mail, iconScale);
             }
         } else if (externalNotificationModule->getMute()) {
             if (currentResolution == ScreenResolution::High) {
-                int iconX = iconRightEdge - mute_symbol_big_width;
-                int iconY = textY + (FONT_HEIGHT_SMALL - mute_symbol_big_height) / 2;
-                display->drawXbm(iconX, iconY, mute_symbol_big_width, mute_symbol_big_height, mute_symbol_big);
+                int iconX = iconRightEdge - mute_symbol_big_width * iconScale;
+                int iconY = textY + (FONT_HEIGHT_SMALL - mute_symbol_big_height * iconScale) / 2;
+                drawScaledXbm(display, iconX, iconY, mute_symbol_big_width, mute_symbol_big_height, mute_symbol_big, iconScale);
             } else {
-                int iconX = iconRightEdge - mute_symbol_width;
-                int iconY = textY + (FONT_HEIGHT_SMALL - mail_height) / 2;
-                display->drawXbm(iconX, iconY, mute_symbol_width, mute_symbol_height, mute_symbol);
+                int iconX = iconRightEdge - mute_symbol_width * iconScale;
+                int iconY = textY + (FONT_HEIGHT_SMALL - mail_height * iconScale) / 2;
+                drawScaledXbm(display, iconX, iconY, mute_symbol_width, mute_symbol_height, mute_symbol, iconScale);
             }
         }
     }
@@ -581,7 +608,7 @@ void drawCommonFooter(OLEDDisplay *display, int16_t x, int16_t y)
     if (!isAPIConnected(service->api_state))
         return;
 
-    const int scale = (currentResolution == ScreenResolution::High) ? 2 : 1;
+    const int scale = ((currentResolution == ScreenResolution::High) ? 2 : 1) * BASEUI_ICON_SCALE;
     const int footerY = SCREEN_HEIGHT - (1 * scale) - (connection_icon_height * scale);
     const int footerH = (connection_icon_height * scale) + (2 * scale);
     const int iconX = 0;
@@ -601,23 +628,7 @@ void drawCommonFooter(OLEDDisplay *display, int16_t x, int16_t y)
     display->fillRect(0, footerY, connection_icon_width + 1, footerH);
 #endif
     display->setColor(WHITE);
-    if (currentResolution == ScreenResolution::High) {
-        const int bytesPerRow = (connection_icon_width + 7) / 8;
-
-        for (int yy = 0; yy < connection_icon_height; ++yy) {
-            const uint8_t *rowPtr = connection_icon + yy * bytesPerRow;
-            for (int xx = 0; xx < connection_icon_width; ++xx) {
-                const uint8_t byteVal = pgm_read_byte(rowPtr + (xx >> 3));
-                const uint8_t bitMask = 1U << (xx & 7); // XBM is LSB-first
-                if (byteVal & bitMask) {
-                    display->fillRect(iconX + xx * scale, iconY + yy * scale, scale, scale);
-                }
-            }
-        }
-
-    } else {
-        display->drawXbm(iconX, iconY, connection_icon_width, connection_icon_height, connection_icon);
-    }
+    drawScaledXbm(display, iconX, iconY, connection_icon_width, connection_icon_height, connection_icon, scale);
 }
 
 bool isAllowedPunctuation(char c)
