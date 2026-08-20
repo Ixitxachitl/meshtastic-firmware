@@ -54,6 +54,15 @@ void resetScrollState();
 // Manual scroll control for encoder-style inputs
 void nudgeScroll(int8_t direction);
 
+// Touch scroll - moves the list by an exact finger displacement in screen pixels, for hardware that
+// reports a continuous drag (BASEUI_HAS_TOUCH_DRAG). Pass the delta between consecutive drag
+// reports, not the offset from where the finger landed.
+//
+// The text follows the finger, which is the opposite sense to scrollDown(): a button means "move
+// the view down the list", a finger means "drag the list down". Also claims the view from the
+// auto-scroll animation, as nudgeScroll() does.
+void scrollByFingerDelta(float dyPx);
+
 // Helper to auto-select the correct thread mode from a message
 void setThreadFor(const StoredMessage &sm, const meshtastic_MeshPacket &packet);
 

@@ -99,6 +99,44 @@ void resetScrollState()
     didReset = false;
 }
 
+void scrollByFingerDelta(float dyPx)
+{
+    if (dyPx == 0.0f || cachedHeights.empty())
+        return;
+
+    OLEDDisplay *display = (screen != nullptr) ? screen->getDisplayDevice() : nullptr;
+    const int displayHeight = display ? display->getHeight() : 64;
+    const int usableHeight = std::max(0, displayHeight - FONT_HEIGHT_SMALL);
+
+    int totalHeight = 0;
+    for (int h : cachedHeights)
+        totalHeight += h;
+
+    manualScrolling = true; // Claim the view from the auto-scroll animation, as nudgeScroll does.
+    if (totalHeight <= usableHeight) {
+        scrollY = 0.0f;
+        return;
+    }
+
+    // The text follows the finger, so dragging down (dyPx > 0, screen y grows downward) walks back
+    // towards the top of the list. Opposite sense to a scroll-down button.
+    const int scrollStop = std::max(0, totalHeight - usableHeight + cachedHeights.back());
+    float newScroll = scrollY - dyPx;
+    if (newScroll < 0.0f)
+        newScroll = 0.0f;
+    if (newScroll > (float)scrollStop)
+        newScroll = (float)scrollStop;
+
+    if (newScroll != scrollY) {
+        scrollY = newScroll;
+        // Don't let the auto-scroll's reset-to-top timer fire under a finger that is still moving.
+        waitingToReset = false;
+        scrollStarted = false;
+        scrollStartDelay = millis();
+        lastTime = millis();
+    }
+}
+
 void nudgeScroll(int8_t direction)
 {
     if (direction == 0)
