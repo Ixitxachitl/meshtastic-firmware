@@ -1140,6 +1140,16 @@ static bool isTouchSourced(const InputEvent *event)
 #define SCREEN_DRAG_COMMIT_PX 30
 #endif
 
+// Denominator the nav bar animates its slide against. ticksPerTransition is private (see the
+// note above), so whoever pins the scale publishes it here; 0 means "not ours", and callers
+// should fall back to snapping rather than guessing.
+static uint16_t sTransitionTicks = 0;
+
+uint16_t frameTransitionTicks()
+{
+    return sTransitionTicks;
+}
+
 static uint16_t dragAnchorX = 0;
 static uint16_t dragAnchorY = 0;
 static bool dragAnchorValid = false;
@@ -1278,6 +1288,7 @@ static void screenDragUpdate(OLEDDisplayUi *ui, const InputEvent *event, int16_t
     // count that the progress below is scaled against predictable.
     ui->setTargetFPS(SCREEN_TRANSITION_FRAMERATE);
     ui->setTimePerTransition(SCREEN_DRAG_HOLD_TIME);
+    sTransitionTicks = SCREEN_DRAG_TICKS;
 
     if (!dragTransitionActive) {
         // Point the direction at where we are going before opening the transition.
@@ -1329,6 +1340,7 @@ static void screenDragEnd(OLEDDisplayUi *ui, const InputEvent *event, int16_t fr
     if (progress >= SCREEN_DRAG_COMMIT_FRACTION || abs(dx) > SCREEN_DRAG_COMMIT_PX) {
         // Carry on from where the finger left off rather than restarting the slide.
         const uint16_t ticks = SCREEN_TOUCH_TRANSITION_TIME / SCREEN_DRAG_UPDATE_INTERVAL;
+        sTransitionTicks = ticks;
         if (progress > 0.999f)
             progress = 0.999f;
         ui->getUiState()->ticksSinceLastStateSwitch = (uint16_t)(progress * ticks);

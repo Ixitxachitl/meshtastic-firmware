@@ -70,6 +70,13 @@ namespace graphics
 #ifndef BASEUI_NAV_ICON_SIZE_PCT
 #define BASEUI_NAV_ICON_SIZE_PCT 100
 #endif
+// Navigation bar as a continuously scrolling strip instead of fixed pages: the middle
+// slot is always the current frame and the others wrap past it. Suits swipe-driven
+// boards, where paging makes the highlight appear to jump whenever the current frame
+// crosses a page boundary. Off by default - it changes the look of the bar.
+#ifndef BASEUI_NAV_INFINITE_SCROLL
+#define BASEUI_NAV_INFINITE_SCROLL 0
+#endif
 // Trims (negative) or grows (positive) how many entry rows the node list screens fit.
 #ifndef BASEUI_NODE_LIST_ROW_ADJUST
 #define BASEUI_NODE_LIST_ROW_ADJUST 0
@@ -115,6 +122,11 @@ void drawScaledXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_
 // Nearest-neighbour XBM blit into an arbitrary destination box, for target sizes that
 // aren't an integer multiple of the source. Identical output to drawScaledXbm() when
 // destW/destH happen to be exact multiples of w/h.
+// As drawStretchedXbm(), but drops columns outside [clipLeft, clipRight). Lets a glyph slide
+// in or out of a bounded strip a column at a time instead of appearing whole.
+void drawStretchedXbmClipped(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm, int16_t destW,
+                             int16_t destH, int16_t clipLeft, int16_t clipRight);
+
 void drawStretchedXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm, int16_t destW,
                       int16_t destH);
 
@@ -169,6 +181,28 @@ static inline uint8_t frameIndexFor(const OLEDDisplayUiState *state, size_t fram
         return state->transitionFrameTarget;
     }
     return state->currentFrame;
+}
+
+// Ticks a frame transition is scaled against, published by the drag driver in Screen.cpp
+// because OLEDDisplayUi::ticksPerTransition is private. 0 means the current transition was
+// not started by a drag, so its progress cannot be derived and callers should not animate.
+uint16_t frameTransitionTicks();
+
+// Progress through the current frame transition, 0..1. Returns 0 when nothing is sliding or
+// when the scale is unknown, which reads as "sitting on the current frame".
+static inline float frameTransitionProgress(const OLEDDisplayUiState *state)
+{
+    if (!state || state->frameState != IN_TRANSITION)
+        return 0.0f;
+    const uint16_t ticks = frameTransitionTicks();
+    if (!ticks)
+        return 0.0f;
+    float p = (float)state->ticksSinceLastStateSwitch / (float)ticks;
+    if (p < 0.0f)
+        p = 0.0f;
+    if (p > 1.0f)
+        p = 1.0f;
+    return p;
 }
 
 // Inline so non-compact boards fold this to a constant false at every call site, cost-free.
