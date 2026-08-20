@@ -1,0 +1,35 @@
+# Out-of-tree binding: Zephyr describes only QSPI NOR on the MPI controllers
+# (sifli,sf32lb-mpi-qspi-nor), and the SoC dtsi deliberately leaves each
+# controller's compatible to the board, because it depends on what is attached.
+
+description: |
+  SiFli SF32LB MPI controller driving PSRAM.
+
+  The memory appears at its own aperture rather than the controller's NOR
+  window, and is described by a separate node labelled `psram` - not a child,
+  because the controller declares #size-cells = <0> for its flash children:
+
+      &mpi1 {
+              compatible = "sifli,sf32lb-mpi-psram";
+              status = "okay";
+      };
+
+      psram: memory@60000000 {
+              compatible = "zephyr,memory-region", "mmio-sram";
+              reg = <0x60000000 DT_SIZE_M(8)>;
+              zephyr,memory-region = "PSRAM";
+      };
+
+compatible: "sifli,sf32lb-mpi-psram"
+
+include: base.yaml
+
+properties:
+  reg:
+    required: true
+
+  reg-names:
+    required: true
+
+  clocks:
+    required: true

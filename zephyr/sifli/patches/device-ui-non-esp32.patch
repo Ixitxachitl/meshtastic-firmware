@@ -1,7 +1,8 @@
 From a70da4e0635a2f743033ca50aa2352f35d5e516b Mon Sep 17 00:00:00 2001
 From: Ixitxachitl <kramerfm@gmail.com>
 Date: Thu, 20 Aug 2026 05:32:03 +0000
-Subject: [PATCH] fix: build on platforms that are neither ESP32 nor Portduino
+Subject: [PATCH 1/2] fix: build on platforms that are neither ESP32 nor
+ Portduino
 
 LGFXConfig's parallel bus and PWM backlight come from LovyanGFX's ESP32
 platform layer, and the map panel's fallback tile source is built on the
@@ -65,6 +66,36 @@ index a05d711..280414f 100644
  #endif
          map->setHomeLocationImage(objects.home_location_image);
          lv_obj_add_flag(objects.home_location_image, LV_OBJ_FLAG_CLICKABLE);
+-- 
+2.51.1
+
+
+From c1c49ec613464a6a1cb8ec0dddc91bfa9d1981fc Mon Sep 17 00:00:00 2001
+From: Ixitxachitl <kramerfm@gmail.com>
+Date: Thu, 20 Aug 2026 09:18:03 +0000
+Subject: [PATCH 2/2] fix: let the build override LV_MEM_ADR
+
+RAM_SIZE and LV_CACHE_DEF_SIZE are already overridable; LV_MEM_ADR is not,
+so a board with external RAM cannot put the LVGL pool there without editing
+this file.
+---
+ include/lv_conf.h | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/include/lv_conf.h b/include/lv_conf.h
+index 295545b..e056349 100644
+--- a/include/lv_conf.h
++++ b/include/lv_conf.h
+@@ -65,7 +65,9 @@
+     #define LV_MEM_POOL_EXPAND_SIZE 0
+ 
+     /*Set an address for the memory pool instead of allocating it as a normal array. Can be in external SRAM too.*/
++    #ifndef LV_MEM_ADR
+     #define LV_MEM_ADR 0     /*0: unused*/
++    #endif
+     /*Instead of an address give a memory allocator that will be called to get a memory pool for LVGL. E.g. my_malloc*/
+     #if LV_MEM_ADR == 0
+         #if defined BOARD_HAS_PSRAM
 -- 
 2.51.1
 

@@ -10,6 +10,7 @@
 #include <sifli/sf32lb52x.dtsi>
 #include <sifli/sf32lb52x-ram012.dtsi>
 #include <zephyr/dt-bindings/dma/sf32lb52x-dma.h>
+#include <zephyr/dt-bindings/memory-attr/memory-attr-arm.h>
 #include <zephyr/dt-bindings/gpio/gpio.h>
 #include <zephyr/dt-bindings/i2c/i2c.h>
 #include <zephyr/dt-bindings/input/input-event-codes.h>
@@ -53,6 +54,19 @@
 			label = "KEY3";
 			gpios = <&gpioa_32_44 3 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
 			zephyr,code = <INPUT_KEY_3>;
+		};
+	};
+
+	soc {
+		/* Lives here rather than under &mpi1, which declares
+		 * #size-cells = <0> for its flash children.
+		 */
+		psram: memory@60000000 {
+			compatible = "zephyr,memory-region", "mmio-sram";
+			reg = <0x60000000 DT_SIZE_M(8)>;
+			device_type = "memory";
+			zephyr,memory-region = "PSRAM";
+			zephyr,memory-attr = <DT_MEM_ARM(ATTR_MPU_RAM)>;
 		};
 	};
 
@@ -149,6 +163,16 @@
 			};
 		};
 	};
+};
+
+/* MPI1 drives the 8 MB of in-package OPI PSRAM; the memory itself appears at
+ * its own aperture, not MPI1's NOR window. Brought up by
+ * zephyr/sifli/drivers/psram_sf32lb.c, since Zephyr's SiFli support describes
+ * only QSPI NOR on the MPI controllers.
+ */
+&mpi1 {
+	compatible = "sifli,sf32lb-mpi-psram";
+	status = "okay";
 };
 
 &usart1 {
