@@ -2,6 +2,7 @@
 #if HAS_SCREEN
 
 #include "graphics/EmoteRenderer.h"
+#include "graphics/SharedUIDisplay.h"
 #include <algorithm>
 #include <cstring>
 
@@ -215,9 +216,9 @@ static LineMetrics analyzeLineInternal(OLEDDisplay *display, const char *line, s
         const Emote *matched = findEmoteAt(line, lineLen, i, matchLen, emoteSet, emoteCount);
         if (matched) {
             metrics.hasEmote = true;
-            metrics.tallestHeight = std::max(metrics.tallestHeight, matched->height);
+            metrics.tallestHeight = std::max(metrics.tallestHeight, matched->height * BASEUI_ICON_SCALE);
             if (display)
-                metrics.width += matched->width + emoteSpacing;
+                metrics.width += matched->width * BASEUI_ICON_SCALE + emoteSpacing;
             i += matchLen;
             continue;
         }
@@ -248,7 +249,7 @@ int maxEmoteHeight(const Emote *emoteSet, int emoteCount)
     int tallest = 0;
     for (int i = 0; i < emoteCount; ++i) {
         if (emoteSet[i].label && *emoteSet[i].label)
-            tallest = std::max(tallest, emoteSet[i].height);
+            tallest = std::max(tallest, emoteSet[i].height * BASEUI_ICON_SCALE);
     }
     return tallest;
 }
@@ -334,7 +335,7 @@ size_t truncateToWidth(OLEDDisplay *display, const char *line, char *out, size_t
             size_t matchLen = 0;
             const Emote *matched = findEmoteAt(line, lineLen, i, matchLen, emoteSet, emoteCount);
             if (matched) {
-                tokenWidth = matched->width + emoteSpacing;
+                tokenWidth = matched->width * BASEUI_ICON_SCALE + emoteSpacing;
                 advance = matchLen;
             }
         }
@@ -416,9 +417,9 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const char *line, 
         size_t matchLen = 0;
         const Emote *matched = findEmoteAt(line, lineLen, i, matchLen, emoteSet, emoteCount);
         if (matched) {
-            const int iconY = y + (lineHeight - matched->height) / 2;
-            display->drawXbm(cursorX, iconY, matched->width, matched->height, matched->bitmap);
-            cursorX += matched->width + emoteSpacing;
+            const int iconY = y + (lineHeight - matched->height * BASEUI_ICON_SCALE) / 2;
+            drawScaledXbm(display, cursorX, iconY, matched->width, matched->height, matched->bitmap);
+            cursorX += matched->width * BASEUI_ICON_SCALE + emoteSpacing;
             i += matchLen;
             continue;
         }

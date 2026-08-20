@@ -553,30 +553,15 @@ void drawChirpy(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int1
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
     int line = 1;
-    int scale = 1;
-    int iconX = x + SCREEN_WIDTH - chirpy_width - (chirpy_width / 3);
-    int iconY = (SCREEN_HEIGHT - chirpy_height) / 2;
+    int scale = BASEUI_ICON_SCALE;
     int textX_offset = 10;
     if (currentResolution == ScreenResolution::High) {
         textX_offset = textX_offset * 4;
-        scale = 2;
-        iconX = x + SCREEN_WIDTH - (chirpy_width * 2) - ((chirpy_width * 2) / 3);
-        iconY = (SCREEN_HEIGHT - (chirpy_height * 2)) / 2;
-        const int bytesPerRow = (chirpy_width + 7) / 8;
-
-        for (int yy = 0; yy < chirpy_height; ++yy) {
-            const uint8_t *rowPtr = chirpy + yy * bytesPerRow;
-            for (int xx = 0; xx < chirpy_width; ++xx) {
-                const uint8_t byteVal = pgm_read_byte(rowPtr + (xx >> 3));
-                const uint8_t bitMask = 1U << (xx & 7); // XBM is LSB-first
-                if (byteVal & bitMask) {
-                    display->fillRect(iconX + xx * scale, iconY + yy * scale, scale, scale);
-                }
-            }
-        }
-    } else {
-        display->drawXbm(iconX, iconY, chirpy_width, chirpy_height, chirpy);
+        scale = 2 * BASEUI_ICON_SCALE;
     }
+    const int iconX = x + SCREEN_WIDTH - (chirpy_width * scale) - ((chirpy_width * scale) / 3);
+    const int iconY = (SCREEN_HEIGHT - (chirpy_height * scale)) / 2;
+    graphics::drawScaledXbm(display, iconX, iconY, chirpy_width, chirpy_height, chirpy, scale);
 
 #if GRAPHICS_TFT_COLORING_ENABLED
     // Colour Chirpy on colour displays. The glyph is a filled head silhouette whose eyes are holes
