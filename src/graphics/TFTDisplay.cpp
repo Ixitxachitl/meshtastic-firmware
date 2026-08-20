@@ -1248,6 +1248,15 @@ static LGFX *tft = nullptr;
 #include "TFTDisplay.h"
 #include "TFTPalette.h"
 #include <SPI.h>
+#include <algorithm>
+#include <cstdlib>
+
+#if BASEUI_HAS_TOUCH_CALIBRATION
+#include "NodeDB.h" // uiconfig.calibration_data, shared with device-ui
+#if defined(ARCH_ESP32)
+#include <esp_task_wdt.h> // fed from the blocking waits in calibrateTouch()
+#endif
+#endif
 
 #ifdef UNPHONE
 #include "unPhone.h"
@@ -1747,6 +1756,197 @@ bool TFTDisplay::getTouch(int16_t *x, int16_t *y)
 #endif
 }
 
+#if BASEUI_HAS_TOUCH_CALIBRATION
+
+// -- Touch calibration --------------------------------------------------------------------------
+// A reimplementation of LovyanGFX's LGFX_Device::calibrate_touch(), which is what device-ui runs
+// from its calibration screen. Two reasons not to just call it:
+//
+//  1. It waits for four taps with no upper bound. device-ui can afford that because it calibrates
+//     from the LVGL task while the mesh loop keeps running; BaseUI has no such split - menu
+//     callbacks run on the main cooperative thread, so an unbounded wait there stalls the 90s ESP32
+//     app watchdog and reboots the device out from under the user.
+//  2. Its prompt is drawn by the library. Doing our own leaves room to say which corner is next.
+//
+// The sampling geometry is kept identical - the rotation cancellation, the corner order, the paired
+// -read noise filter - because that is what makes the resulting parameters interchangeable with the
+// ones device-ui stores in the very same uiconfig field.
+
+// Consecutive raw readings this far apart are treated as noise from a finger still settling.
+static constexpr int32_t kCalibrationRawError = 20;
+
+// How long a single corner waits for a usable tap before the run is abandoned. Long enough not to
+// rush anyone, short enough that a half-finished calibration recovers on its own rather than
+// sitting on the watchdog's doorstep.
+static constexpr uint32_t kCalibrationCornerTimeoutMs = 25000;
+
+// Nothing else services the ESP32 app watchdog while these loops block, so do it here.
+static void calibrationDelay(uint32_t ms)
+{
+    delay(ms);
+#ifdef ARCH_ESP32
+    esp_task_wdt_reset();
+#endif
+}
+
+// Waits for the panel to report a touch (or the absence of one). False on timeout.
+static bool waitForRawTouch(bool wantTouch, uint32_t deadline, lgfx::touch_point_t *tp)
+{
+    lgfx::touch_point_t scratch;
+    while ((int32_t)(millis() - deadline) < 0) {
+        const bool touched = tft->getTouchRaw(tp ? tp : &scratch, 1) != 0;
+        if (touched == wantTouch)
+            return true;
+        calibrationDelay(2);
+    }
+    return false;
+}
+
+// The crosshair the user is asked to tap. LovyanGFX draws its own, but draw_calibrate_point() is
+// protected, so this rebuilds the same shape out of public primitives.
+static void drawCalibrationTarget(int32_t x, int32_t y, int32_t r, uint16_t fg, uint16_t bg)
+{
+    tft->fillRect(x - r, y - r, r * 2 + 1, r * 2 + 1, bg);
+    if (fg == bg)
+        return;
+    const int32_t w = std::max<int32_t>(1, r >> 3);
+    tft->fillRect(x - w, y - r, w * 2 + 1, r * 2 + 1, fg);
+    tft->fillRect(x - r, y - w, r * 2 + 1, w * 2 + 1, fg);
+}
+
+bool TFTDisplay::calibrateTouch(uint16_t parameters[8])
+{
+    if (!tft || !hasTouch() || !parameters)
+        return false;
+
+    // Held for the whole run, as device-ui does: the routine drives the panel and the touch
+    // controller directly, outside the framebuffer flush that normally owns this lock.
+    concurrency::LockGuard g(spiLock);
+
+    // uint16_t, not uint32_t: LovyanGFX picks its colour conversion off the argument's type, and a
+    // 565 value handed over as uint32_t would be read back as RGB888.
+    const uint16_t bg = tft->color565(0, 0, 0);
+    const uint16_t fg = tft->color565(0xFF, 0xFF, 0xFF);
+
+    const uint_fast8_t rot = tft->getRotation();
+    const uint_fast8_t panelRot = tft->panel()->config().offset_rotation;
+    const uint_fast8_t touchRot = tft->touch()->config().offset_rotation;
+
+    // The prompt goes down first, while the panel is still in the orientation the user holds the
+    // device in - on a landscape board like the T-Deck the sampling orientation below is portrait,
+    // and text drawn there comes out sideways. Nothing clears the panel afterwards, so it stays put
+    // and stays readable while the corners are tapped.
+    tft->fillScreen(bg);
+    tft->setTextColor(fg, bg);
+    tft->setTextSize(1);
+    tft->setTextDatum(lgfx::textdatum_t::middle_center);
+    tft->drawString("Tap the centre of each marker", tft->width() >> 1, tft->height() >> 1);
+    tft->setTextDatum(lgfx::textdatum_t::top_left);
+
+    // Cancel both rotation offsets so the corners are sampled in the controller's own orientation,
+    // which is the frame setCalibrate() below expects to read them back in.
+    tft->setRotation(((touchRot ^ panelRot) & 4) | (-(touchRot + panelRot) & 3));
+
+    const int32_t width = tft->width();
+    const int32_t height = tft->height();
+    const int32_t markerRadius = std::max<int32_t>(4, std::max(width, height) >> 4);
+
+    uint16_t sampled[8] = {0};
+    bool ok = true;
+
+    for (int i = 0; i < 4 && ok; ++i) {
+        const int32_t px = (width - 1) * ((i >> 1) & 1);
+        const int32_t py = (height - 1) * (i & 1);
+        drawCalibrationTarget(px, py, markerRadius, fg, bg);
+
+        const uint32_t deadline = millis() + kCalibrationCornerTimeoutMs;
+
+        // Whatever is still under the finger from the previous corner is not a tap on this one.
+        ok = waitForRawTouch(false, deadline, nullptr);
+
+        // Sixteen readings, taken as eight agreeing pairs, averaged. The pairing is what rejects
+        // the smeared coordinates a capacitive controller reports while a finger is still landing.
+        int32_t sumX = 0, sumY = 0;
+        for (int j = 0; j < 8 && ok; ++j) {
+            lgfx::touch_point_t tp, tp2;
+            for (;;) {
+                if (!waitForRawTouch(true, deadline, &tp)) {
+                    ok = false;
+                    break;
+                }
+                calibrationDelay(10);
+                if (tft->getTouchRaw(&tp2, 1) && std::abs(tp.x - tp2.x) <= kCalibrationRawError &&
+                    std::abs(tp.y - tp2.y) <= kCalibrationRawError)
+                    break;
+                if ((int32_t)(millis() - deadline) >= 0) {
+                    ok = false;
+                    break;
+                }
+            }
+            sumX += tp.x + tp2.x;
+            sumY += tp.y + tp2.y;
+        }
+
+        sampled[i * 2] = sumX >> 4;
+        sampled[i * 2 + 1] = sumY >> 4;
+        drawCalibrationTarget(px, py, markerRadius, bg, bg);
+    }
+
+    // Four taps that all landed in much the same place would produce a mapping that makes the panel
+    // unusable - and on a touch-only board there would then be no way back into this menu to redo
+    // it. Raw units are not panel pixels (resistive controllers count to 4095), so this is only a
+    // floor against the degenerate case, not a real accuracy check.
+    if (ok) {
+        const auto cornerGap = [&sampled](int a, int b) {
+            const int32_t dx = (int32_t)sampled[a * 2] - (int32_t)sampled[b * 2];
+            const int32_t dy = (int32_t)sampled[a * 2 + 1] - (int32_t)sampled[b * 2 + 1];
+            return dx * dx + dy * dy;
+        };
+        const int32_t minGap = std::min(width, height) / 4;
+        if (cornerGap(0, 1) < minGap * minGap || cornerGap(0, 2) < minGap * minGap) {
+            LOG_WARN("Touch calibration rejected: corners too close together");
+            ok = false;
+        }
+    }
+
+    tft->setRotation(rot);
+
+    if (!ok) {
+        LOG_WARN("Touch calibration abandoned, keeping previous settings");
+        return false;
+    }
+
+    tft->setTouchCalibrate(sampled);
+    memcpy(parameters, sampled, sizeof(sampled));
+    LOG_INFO("Touch calibration: {%u, %u, %u, %u, %u, %u, %u, %u}", sampled[0], sampled[1], sampled[2], sampled[3], sampled[4],
+             sampled[5], sampled[6], sampled[7]);
+    return true;
+}
+
+void TFTDisplay::applyTouchCalibration(const uint16_t parameters[8])
+{
+    if (!tft || !hasTouch() || !parameters)
+        return;
+
+    // setTouchCalibrate() only recomputes the panel's affine transform - no bus traffic, so no lock
+    // needed, which is what lets connect() call this while already holding spiLock.
+    uint16_t writable[8];
+    memcpy(writable, parameters, sizeof(writable));
+    tft->setTouchCalibrate(writable);
+}
+
+void TFTDisplay::clearTouchCalibration(void)
+{
+    if (!tft || !hasTouch())
+        return;
+
+    // Rebuilds the mapping from the touch driver's configured x/y range, i.e. exactly what the panel
+    // had at boot before any stored calibration was applied.
+    tft->panel()->touchCalibrate();
+}
+
+#endif // BASEUI_HAS_TOUCH_CALIBRATION
+
 void TFTDisplay::setDetected(uint8_t detected)
 {
     (void)detected;
@@ -1807,6 +2007,22 @@ bool TFTDisplay::connect()
 #else
     tft->setRotation(3); // Orient horizontal and wide underneath the silkscreen name label
 #endif
+
+#if BASEUI_HAS_TOUCH_CALIBRATION
+    // Restore whatever was calibrated last, from the field device-ui also writes - so a calibration
+    // done in either UI carries over to the other. NodeDB (and with it uiconfig) is loaded well
+    // before Screen::setup() reaches us. An all-zero blob means "never calibrated"; the size check
+    // and the first/last-parameter test mirror device-ui's own guard.
+    if (uiconfig.calibration_data.size == sizeof(uint16_t) * 8) {
+        uint16_t stored[8];
+        memcpy(stored, uiconfig.calibration_data.bytes, sizeof(stored));
+        if (stored[0] || stored[7]) {
+            applyTouchCalibration(stored);
+            LOG_INFO("Applied stored touch calibration");
+        }
+    }
+#endif
+
     tft->fillScreen(getThemeDefaultOffColor());
 
     if (this->linePixelBuffer == NULL) {

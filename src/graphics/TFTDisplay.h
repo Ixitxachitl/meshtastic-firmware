@@ -1,5 +1,6 @@
 #pragma once
 
+#include "configuration.h" // BASEUI_HAS_TOUCH_CALIBRATION
 #include <GpioLogic.h>
 #include <OLEDDisplay.h>
 
@@ -34,6 +35,24 @@ class TFTDisplay : public OLEDDisplay
     // Touch screen (static handlers)
     static bool hasTouch(void);
     static bool getTouch(int16_t *x, int16_t *y);
+
+#if BASEUI_HAS_TOUCH_CALIBRATION
+    // Touch calibration, mirroring what device-ui does from its calibration screen. `parameters` is
+    // the raw controller reading at each of the four panel corners (x,y per corner, in the order
+    // top-left, bottom-left, top-right, bottom-right) - the same eight uint16 values device-ui
+    // stores in uiconfig.calibration_data, so the two UIs can read each other's calibration.
+
+    // Runs the interactive four-corner routine, applies the result, and writes it to `parameters`.
+    // Blocks the calling thread until every corner has been tapped. Returns false (leaving the
+    // previous calibration in place) if the user gave up or the taps were too degenerate to use.
+    static bool calibrateTouch(uint16_t parameters[8]);
+
+    // Apply a previously stored set of parameters without asking the user for anything.
+    static void applyTouchCalibration(const uint16_t parameters[8]);
+
+    // Drop back to the driver's built-in mapping, as if nothing had ever been calibrated.
+    static void clearTouchCalibration(void);
+#endif
 
     // Functions for changing display brightness
     void setDisplayBrightness(uint8_t);

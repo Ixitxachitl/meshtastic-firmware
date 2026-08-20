@@ -496,6 +496,20 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define USE_TFTDISPLAY 0
 #endif
 
+// Runtime touch calibration, opt-in per variant. Needs a panel driven by LovyanGFX through
+// TFTDisplay's LGFX class: LGFX can sample the raw controller readings at the four panel corners
+// and rebuild its own mapping from them. The parameters live in uiconfig.calibration_data, the same
+// field device-ui writes from its calibration screen, so a calibration done in either UI carries
+// over to the other.
+//
+// Off by default rather than inferred from the panel type: a board only wants this if its touch
+// mapping is actually off, and the menu entry is dead weight otherwise. Boards using TFT_eSPI or
+// Arduino_GFX, or bypassing TFTDisplay's touch path with their own driver (VARIANT_TOUCHSCREEN),
+// cannot support it at all.
+#ifndef BASEUI_HAS_TOUCH_CALIBRATION
+#define BASEUI_HAS_TOUCH_CALIBRATION 0
+#endif
+
 #ifndef HW_VENDOR
 #error HW_VENDOR must be defined
 #endif

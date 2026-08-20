@@ -2538,9 +2538,9 @@ void menuHandler::screenOptionsMenu()
     bool hasSupportBrightness = false;
 #endif
 
-    enum optionsNumbers { Back, Brightness, FrameToggles, DisplayUnits, MessageBubbles, Theme };
-    static const char *optionsArray[7] = {"Back"};
-    static int optionsEnumArray[7] = {Back};
+    enum optionsNumbers { Back, Brightness, FrameToggles, DisplayUnits, MessageBubbles, Theme, CalibrateTouch };
+    static const char *optionsArray[8] = {"Back"};
+    static int optionsEnumArray[8] = {Back};
     int options = 1;
 
     // Only show brightness for B&W displays
@@ -2561,6 +2561,15 @@ void menuHandler::screenOptionsMenu()
 #if GRAPHICS_TFT_COLORING_ENABLED
     optionsArray[options] = "Theme";
     optionsEnumArray[options++] = Theme;
+#endif
+
+#if BASEUI_HAS_TOUCH_CALIBRATION
+    // Runtime-gated as well as compile-gated: a variant can be built for a panel with touch and
+    // then run on a unit that has none, in which case there is nothing to calibrate.
+    if (TFTDisplay::hasTouch()) {
+        optionsArray[options] = "Touch Calibration";
+        optionsEnumArray[options++] = CalibrateTouch;
+    }
 #endif
 
     BannerOverlayOptions bannerOptions;
@@ -2584,6 +2593,11 @@ void menuHandler::screenOptionsMenu()
         } else if (selected == Theme) {
             menuHandler::menuQueue = menuHandler::ThemeMenu;
             screen->runNow();
+#if BASEUI_HAS_TOUCH_CALIBRATION
+        } else if (selected == CalibrateTouch) {
+            menuHandler::menuQueue = menuHandler::TouchCalibrationMenu;
+            screen->runNow();
+#endif
         } else {
             menuQueue = SystemBaseMenu;
             screen->runNow();
@@ -2591,6 +2605,62 @@ void menuHandler::screenOptionsMenu()
     };
     screen->showOverlayBanner(bannerOptions);
 }
+
+#if BASEUI_HAS_TOUCH_CALIBRATION
+void menuHandler::touchCalibrationMenu()
+{
+    enum optionsNumbers { Back, Calibrate, Reset };
+    static const char *optionsArray[] = {"Back", "Calibrate", "Reset"};
+    static int optionsEnumArray[] = {Back, Calibrate, Reset};
+
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = "Touch Calibration";
+    bannerOptions.optionsArrayPtr = optionsArray;
+    bannerOptions.optionsCount = 3;
+    bannerOptions.optionsEnumPtr = optionsEnumArray;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        if (selected == Calibrate) {
+            // Deferred rather than run from here: this callback fires from inside the overlay's
+            // draw pass, and the calibration takes over the panel directly for as long as it takes
+            // the user to tap four corners.
+            menuHandler::menuQueue = menuHandler::RunTouchCalibration;
+            screen->runNow();
+        } else if (selected == Reset) {
+            uiconfig.calibration_data.size = 0;
+            memset(uiconfig.calibration_data.bytes, 0, sizeof(uiconfig.calibration_data.bytes));
+            saveUIConfig();
+            TFTDisplay::clearTouchCalibration();
+            screen->showSimpleBanner("Touch Calibration\nReset", 3000);
+        } else {
+            menuQueue = ScreenOptionsMenu;
+            screen->runNow();
+        }
+    };
+    screen->showOverlayBanner(bannerOptions);
+}
+
+void menuHandler::runTouchCalibration()
+{
+    uint16_t parameters[8] = {0};
+
+    // Blocks until all four corners have been tapped, or until it gives up. Everything else on this
+    // thread - the mesh loop included - is stopped for the duration, the same trade device-ui makes.
+    const bool done = TFTDisplay::calibrateTouch(parameters);
+
+    if (done) {
+        // Same field, same layout device-ui uses, so this calibration is picked up by MUI too.
+        static_assert(sizeof(parameters) <= sizeof(uiconfig.calibration_data.bytes),
+                      "DeviceUIConfig.calibration_data is too small for 8 calibration parameters");
+        memcpy(uiconfig.calibration_data.bytes, parameters, sizeof(parameters));
+        uiconfig.calibration_data.size = sizeof(parameters);
+        saveUIConfig();
+    }
+
+    // The routine drew straight to the panel, bypassing the framebuffer, so force a full repaint.
+    screen->forceDisplay(true);
+    screen->showSimpleBanner(done ? "Touch Calibration\nSaved" : "Touch Calibration\nCancelled", 3000);
+}
+#endif
 
 void menuHandler::powerMenu()
 {
@@ -3115,6 +3185,14 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
     case ThemeMenu:
         themeMenu();
         break;
+#if BASEUI_HAS_TOUCH_CALIBRATION
+    case TouchCalibrationMenu:
+        touchCalibrationMenu();
+        break;
+    case RunTouchCalibration:
+        runTouchCalibration();
+        break;
+#endif
     case HamModeConfirm:
         hamModeConfirmMenu();
         break;
