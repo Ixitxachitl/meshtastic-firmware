@@ -28,6 +28,14 @@
 #define TOUCH_POLL_INTERVAL_ACTIVE_FAST TOUCH_POLL_INTERVAL_ACTIVE
 #endif
 
+// Hard floor on how often runOnce() will actually sample the panel, guarding against the scheduler
+// calling back faster than the bus can usefully be read. This is also a ceiling on finger tracking:
+// any TOUCH_POLL_INTERVAL_* below it is silently ignored, so a board that wants faster tracking has
+// to lower this too.
+#ifndef TOUCH_MIN_POLL_INTERVAL
+#define TOUCH_MIN_POLL_INTERVAL 20
+#endif
+
 #ifndef TOUCH_POLL_INTERVAL_RELEASE_FAST
 #define TOUCH_POLL_INTERVAL_RELEASE_FAST TOUCH_POLL_INTERVAL_RELEASE
 #endif
@@ -45,6 +53,20 @@
 
 #ifndef TOUCH_THRESHOLD_Y
 #define TOUCH_THRESHOLD_Y 20
+#endif
+
+// Movement (in pixels, from the touch-down point) before a held finger is treated as a drag rather
+// than a tap still in progress. Deliberately below TOUCH_THRESHOLD_X/Y, so a gesture can be a drag
+// well before it would have counted as a swipe.
+#ifndef TOUCH_DRAG_START_THRESHOLD
+#define TOUCH_DRAG_START_THRESHOLD 8
+#endif
+
+// Minimum movement between consecutive TOUCH_ACTION_DRAG reports. Keeps a resting finger on a noisy
+// panel from emitting a drag event every poll; the consumer still gets absolute positions, so a
+// coarser step costs tracking smoothness, not accuracy.
+#ifndef TOUCH_DRAG_MIN_STEP
+#define TOUCH_DRAG_MIN_STEP 2
 #endif
 
 TouchScreenBase::TouchScreenBase(const char *name, uint16_t width, uint16_t height)
@@ -67,8 +89,8 @@ void TouchScreenBase::init(bool hasTouch)
 int32_t TouchScreenBase::runOnce()
 {
     uint32_t nowMs = millis();
-    if (nowMs - _lastRun < 20) { // suppress too fast consecutive runOnce() executions
-        return 20;
+    if (nowMs - _lastRun < TOUCH_MIN_POLL_INTERVAL) { // suppress too fast consecutive runOnce() executions
+        return TOUCH_MIN_POLL_INTERVAL;
     }
     _lastRun = nowMs;
     TouchEvent e;
@@ -98,12 +120,32 @@ int32_t TouchScreenBase::runOnce()
             _start = millis();
             _first_x = x;
             _first_y = y;
+            _dragging = false;
+            _drag_x = x;
+            _drag_y = y;
         } else {
             _state = TOUCH_EVENT_CLEARED;
             time_t duration = millis() - _start;
             x = _last_x;
             y = _last_y;
             this->setInterval(fastTapMode ? TOUCH_POLL_INTERVAL_RELEASE_FAST : TOUCH_POLL_INTERVAL_RELEASE);
+
+            // If a drag was reported for this gesture, tell the consumer the finger is gone.
+            // Dispatched immediately and separately, because the release is ALSO still classified
+            // below: everything that predates drag support - frame paging, menu navigation, node
+            // list scrolling, the games module's D-pad - listens for that swipe and has to keep
+            // receiving it. A consumer acting on the drag stream owns ignoring the swipe that
+            // follows it.
+            if (_dragging) {
+                _dragging = false;
+                TouchEvent de;
+                de.source = this->_originName;
+                de.touchEvent = static_cast<char>(TOUCH_ACTION_DRAG_END);
+                de.x = x;
+                de.y = y;
+                LOG_DEBUG("action DRAG END(%d/%d)", x, y);
+                onEvent(de);
+            }
 
             // compute distance
             int16_t dx = x - _first_x;
@@ -144,6 +186,26 @@ int32_t TouchScreenBase::runOnce()
                 }
             }
         }
+    } else if (touched && dragEventsEnabled()) {
+        // Finger still down. Report movement as it happens, so a consumer can track the finger
+        // rather than waiting for the release-time direction classification above. Uses
+        // _last_x/_last_y rather than x/y because those are only refreshed on a genuine touch
+        // sample - during the release grace window x/y are stale.
+        if (!_dragging) {
+            // Not a drag until the finger has actually travelled: this is what separates a drag
+            // from a tap whose finger wobbled a pixel or two.
+            if (abs(_last_x - _first_x) >= TOUCH_DRAG_START_THRESHOLD || abs(_last_y - _first_y) >= TOUCH_DRAG_START_THRESHOLD) {
+                _dragging = true;
+                _drag_x = _last_x;
+                _drag_y = _last_y;
+                e.touchEvent = static_cast<char>(TOUCH_ACTION_DRAG);
+                LOG_DEBUG("action DRAG START(%d/%d)", _last_x, _last_y);
+            }
+        } else if (abs(_last_x - _drag_x) >= TOUCH_DRAG_MIN_STEP || abs(_last_y - _drag_y) >= TOUCH_DRAG_MIN_STEP) {
+            _drag_x = _last_x;
+            _drag_y = _last_y;
+            e.touchEvent = static_cast<char>(TOUCH_ACTION_DRAG);
+        }
     }
     _touchedOld = touched;
 
@@ -173,7 +235,9 @@ int32_t TouchScreenBase::runOnce()
 #endif
 
     // fire LONG_PRESS event without the need for release
-    if (allowLongPress && touched && (time_t(millis()) - _start) > TIME_LONG_PRESS) {
+    // Never mid-drag: the finger having travelled is exactly what says this gesture isn't a press,
+    // and firing here would also clobber a TOUCH_ACTION_DRAG set for this same poll.
+    if (allowLongPress && touched && !_dragging && (time_t(millis()) - _start) > TIME_LONG_PRESS) {
         // tricky: prevent reoccurring events and another touch event when releasing
         _start = millis() + 30000;
         e.touchEvent = static_cast<char>(TOUCH_ACTION_LONG_PRESS);
@@ -207,4 +271,9 @@ bool TouchScreenBase::fastTapModeEnabled() const
 bool TouchScreenBase::longPressEnabled() const
 {
     return true;
+}
+
+bool TouchScreenBase::dragEventsEnabled() const
+{
+    return false;
 }

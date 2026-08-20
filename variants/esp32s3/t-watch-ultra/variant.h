@@ -28,6 +28,9 @@
 #define BASEUI_BODY_LR_MARGIN 35
 
 #define HAS_TOUCHSCREEN 1
+// The CO5300 redraws fast enough to track a finger, so report drags continuously rather
+// than only classifying a direction on release.
+#define BASEUI_HAS_TOUCH_DRAG 1
 #define HAS_SPI_TFT 1
 #define ENABLE_TOUCH_INT 1
 #define VARIANT_TOUCHSCREEN 1
