@@ -454,7 +454,7 @@ static void drawModuleFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int
 {
     // state->currentFrame names the outgoing frame for the whole of a transition, so it can't be
     // used directly to pick the module - see frameIndexFor().
-    const uint8_t module_frame = graphics::frameIndexFor(state);
+    const uint8_t module_frame = graphics::frameIndexFor(state, screen ? screen->frameCount : 0);
 
     // moduleFrames is padded with nullptr up to the first module slot and ends before whatever
     // frames follow the module region, so an index that isn't a live module is both reachable and
@@ -1131,6 +1131,15 @@ static bool isTouchSourced(const InputEvent *event)
 // rather than springing back.
 #define SCREEN_DRAG_COMMIT_FRACTION 0.35f
 
+// ...or this much absolute travel, whichever comes first. Matches the distance the touch layer
+// uses to call a gesture a swipe (TOUCH_THRESHOLD_X), so a short decisive flick pages the frame
+// exactly as it did before drag tracking existed. Without this, whether a flick paged depended on
+// whether it happened to last long enough to produce a drag sample: too quick and the release-time
+// swipe paged it, slow enough to track and it snapped back instead.
+#ifndef SCREEN_DRAG_COMMIT_PX
+#define SCREEN_DRAG_COMMIT_PX 30
+#endif
+
 static uint16_t dragAnchorX = 0;
 static uint16_t dragAnchorY = 0;
 static bool dragAnchorValid = false;
@@ -1229,7 +1238,7 @@ static void screenDragEnd(OLEDDisplayUi *ui, const InputEvent *event, int16_t fr
     ui->setTargetFPS(SCREEN_TRANSITION_FRAMERATE);
     ui->setTimePerTransition(SCREEN_TOUCH_TRANSITION_TIME);
 
-    if (progress >= SCREEN_DRAG_COMMIT_FRACTION) {
+    if (progress >= SCREEN_DRAG_COMMIT_FRACTION || abs(dx) > SCREEN_DRAG_COMMIT_PX) {
         // Carry on from where the finger left off rather than restarting the slide.
         const uint16_t ticks = SCREEN_TOUCH_TRANSITION_TIME / SCREEN_DRAG_UPDATE_INTERVAL;
         if (progress > 0.999f)
