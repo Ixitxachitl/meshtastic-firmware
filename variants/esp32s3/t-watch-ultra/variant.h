@@ -26,6 +26,7 @@
 #define BASEUI_HEADER_LR_MARGIN 55
 #define BASEUI_BELOW_HEADER_MARGIN 15
 #define BASEUI_BODY_LR_MARGIN 35
+#define BASEUI_ICON_SCALE 2
 
 #define HAS_TOUCHSCREEN 1
 // The CO5300 redraws fast enough to track a finger, so report drags continuously rather
