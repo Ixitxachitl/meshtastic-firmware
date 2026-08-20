@@ -1161,9 +1161,67 @@ static bool dragSuppressNextSwipe = false;
 // intercepting input mid-drag, which is why the anchor already carries a staleness timeout - and a
 // flag left stuck true would pin the screen at the transition framerate indefinitely. That is a
 // battery leak rather than a cosmetic bug, so this self-heals instead.
+// ---- Finger-tracked message scrolling ---------------------------------------------------------
+//
+// The message list shares its frame with normal left/right paging, so this commits to an axis
+// exactly as screenDragUpdate() does and claims only the vertical half. The two are complementary:
+// a drag locked vertical here is one screenDragUpdate() would drop anyway.
+static bool messageScrollAnchorValid = false;
+static uint16_t messageScrollAnchorX = 0;
+static uint16_t messageScrollAnchorY = 0;
+static uint16_t messageScrollLastY = 0;
+static uint32_t messageScrollLastMs = 0;
+static int8_t messageScrollAxis = 0; // 0 undecided, 1 vertical (ours), -1 horizontal (not ours)
+
+// Returns true if this report belongs to the list, false to leave it for the frame transition.
+static bool messageScrollDragUpdate(const InputEvent *event)
+{
+    const uint32_t now = millis();
+    if (!messageScrollAnchorValid || (now - messageScrollLastMs) > DRAG_ANCHOR_STALE_MS) {
+        messageScrollAnchorValid = true;
+        messageScrollAnchorX = event->touchX;
+        messageScrollAnchorY = event->touchY;
+        messageScrollLastY = event->touchY;
+        messageScrollLastMs = now;
+        messageScrollAxis = 0;
+        return false; // this report only establishes where the finger started
+    }
+    messageScrollLastMs = now;
+
+    if (messageScrollAxis == 0) {
+        const int32_t dx = (int32_t)event->touchX - (int32_t)messageScrollAnchorX;
+        const int32_t dy = (int32_t)event->touchY - (int32_t)messageScrollAnchorY;
+        if (abs(dx) < SCREEN_DRAG_AXIS_LOCK_PX && abs(dy) < SCREEN_DRAG_AXIS_LOCK_PX)
+            return false; // too early to tell which way this gesture is going
+        messageScrollAxis = (abs(dy) > abs(dx)) ? 1 : -1;
+    }
+    if (messageScrollAxis < 0)
+        return false; // horizontal: the frame transition owns it
+
+    const float dy = (float)((int32_t)event->touchY - (int32_t)messageScrollLastY);
+    messageScrollLastY = event->touchY;
+    graphics::MessageRenderer::scrollByFingerDelta(dy);
+    return true;
+}
+
+static bool messageScrollDragEnd()
+{
+    const bool claimed = messageScrollAnchorValid && messageScrollAxis > 0;
+    messageScrollAnchorValid = false;
+    messageScrollAxis = 0;
+    return claimed;
+}
+
 static bool screenDragOwnsFramerate()
 {
-    return dragAnchorValid && (millis() - dragAnchorMs) <= DRAG_ANCHOR_STALE_MS;
+    const uint32_t now = millis();
+    if (dragAnchorValid && (now - dragAnchorMs) <= DRAG_ANCHOR_STALE_MS)
+        return true;
+    // Scrolling the list starts no transition either, so frameState stays FIXED for the whole
+    // gesture and the demote in runOnce() would otherwise fire on every drag report.
+    if (messageScrollAnchorValid && (now - messageScrollLastMs) <= DRAG_ANCHOR_STALE_MS)
+        return true;
+    return false;
 }
 
 // Steer the in-progress transition from the finger's displacement.
@@ -2375,6 +2433,19 @@ int Screen::handleInputEvent(const InputEvent *event)
     }
     // UP/DOWN in message screen scrolls through message threads
     if (ui->getUiState()->currentFrame == framesetInfo.positions.textMessage) {
+#if BASEUI_HAS_TOUCH_DRAG
+        if (messageStore.hasVisibleMessages()) {
+            // Only swallowed when the list claimed it; a horizontal drag falls through to page.
+            if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG && messageScrollDragUpdate(event)) {
+                setFastFramerate();
+                return 0;
+            }
+            if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG_END && messageScrollDragEnd()) {
+                setFastFramerate();
+                return 0;
+            }
+        }
+#endif
 
         if (event->inputEvent == INPUT_BROKER_UP) {
             if (!messageStore.hasVisibleMessages()) {
