@@ -629,7 +629,7 @@ void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
         locationScreen = true;
     else if (strcmp(title, "Distance") == 0)
         locationScreen = true;
-    display->clear();
+    clearForFrame(display, state);
 
     // Draw the battery/time header
     graphics::drawCommonHeader(display, x, y, title);

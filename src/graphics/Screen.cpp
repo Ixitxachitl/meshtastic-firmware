@@ -452,22 +452,20 @@ void Screen::showTextInput(const char *header, const char *initialText, uint32_t
 
 static void drawModuleFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-    uint8_t module_frame;
-    // there's a little but in the UI transition code
-    // where it invokes the function at the correct offset
-    // in the array of "drawScreen" functions; however,
-    // the passed-state doesn't quite reflect the "current"
-    // screen, so we have to detect it.
-    if (state->frameState == IN_TRANSITION && state->transitionFrameRelationship == TransitionRelationship_INCOMING) {
-        // if we're transitioning from the end of the frame list back around to the first
-        // frame, then we want this to be `0`
-        module_frame = state->transitionFrameTarget;
-    } else {
-        // otherwise, just display the module frame that's aligned with the current frame
-        module_frame = state->currentFrame;
-    }
-    MeshModule &pi = *moduleFrames.at(module_frame);
-    pi.drawFrame(display, state, x, y);
+    // state->currentFrame names the outgoing frame for the whole of a transition, so it can't be
+    // used directly to pick the module - see frameIndexFor().
+    const uint8_t module_frame = graphics::frameIndexFor(state);
+
+    // moduleFrames is padded with nullptr up to the first module slot and ends before whatever
+    // frames follow the module region, so an index that isn't a live module is both reachable and
+    // fatal: .at() throws past the end, and a padding entry dereferences to null. Neither could
+    // happen while transitions were disabled, because this INCOMING branch never ran.
+    if (module_frame >= moduleFrames.size())
+        return;
+    MeshModule *pi = moduleFrames[module_frame];
+    if (!pi)
+        return;
+    pi->drawFrame(display, state, x, y);
 }
 
 #if BASEUI_HAS_GAMES

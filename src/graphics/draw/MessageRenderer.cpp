@@ -432,7 +432,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             filtered.push_back(m);
     }
 
-    display->clear();
+    clearForFrame(display, state);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
     const bool compactPanel = graphics::isCompactPanel(display);
