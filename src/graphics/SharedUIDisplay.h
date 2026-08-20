@@ -99,13 +99,23 @@ static inline void clearForFrame(OLEDDisplay *display, const OLEDDisplayUiState 
 // picks the wrong one while it is sliding in, and typically bails out and draws nothing until the
 // transition completes. transitionFrameTarget is only maintained by nextFrame(), never by
 // previousFrame(), so going backwards the incoming index has to be derived from the direction.
-static inline uint8_t frameIndexFor(const OLEDDisplayUiState *state)
+// frameCount resolves the backwards wrap off frame 0, whose incoming frame is the *last* one.
+// Callers that identify themselves by index must pass it. The 0 default keeps the old, wrong answer
+// rather than a plausible-looking one, so a missing argument shows up as the same blank frame
+// instead of silently drawing the wrong content.
+static inline uint8_t frameIndexFor(const OLEDDisplayUiState *state, size_t frameCount = 0)
 {
     if (!state)
         return 0;
     if (state->frameState == IN_TRANSITION && state->transitionFrameRelationship == TransitionRelationship_INCOMING) {
-        if (state->frameTransitionDirection < 0)
-            return (state->currentFrame > 0) ? state->currentFrame - 1 : state->currentFrame;
+        if (state->frameTransitionDirection < 0) {
+            if (state->currentFrame > 0)
+                return state->currentFrame - 1;
+            // Wrapping backwards from the first frame lands on the last. Forward wrap needs no
+            // special case: nextFrame() stores the wrapped index in transitionFrameTarget, which is
+            // why last-to-first always worked and first-to-last did not.
+            return frameCount > 0 ? (uint8_t)(frameCount - 1) : state->currentFrame;
+        }
         return state->transitionFrameTarget;
     }
     return state->currentFrame;
