@@ -116,6 +116,18 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
     const bool isBold = config.display.heading_bold;
 
     const int screenW = display->getWidth();
+
+    // The header belongs to the frame, not to the chrome: during a transition it has to slide with
+    // its frame instead of staying pinned to the display, or the divider and title sit still while
+    // the content moves. x is 0 whenever no transition is running, so every position below is
+    // unchanged at rest. The footer is deliberately NOT frame-relative - that is the nav bar, and
+    // persistent chrome should stay put.
+    // NB the HeaderBackground regions below must be frame-relative too. Region precedence is by
+    // registration index, not geometry: during a transition the incoming frame registers its header
+    // background *after* the outgoing frame registered its title, so a full-width absolute
+    // background outranks the outgoing title and repaints those glyphs in its own onColor (Black).
+    const int frameLeft = x;
+    const int frameRight = x + screenW;
     const int screenH = display->getHeight();
     // Compact panels: no persistent header, see UIRenderer::drawNavigationBar instead.
     if (isCompactPanel(display)) {
@@ -129,7 +141,7 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
 #if GRAPHICS_TFT_COLORING_ENABLED
     const uint16_t headerColorForRoles = getThemeHeaderBg();
     int statusLeftEndX = 0;
-    int statusRightStartX = screenW;
+    int statusRightStartX = frameRight;
     const bool isClockHeader = transparent_background && show_date && (!titleStr || titleStr[0] == '\0');
     const auto activeThemeId = getActiveTheme().id;
     const bool useClockHeaderAccent = isClockHeader && useClockHeaderAccentTheme(activeThemeId);
@@ -158,12 +170,12 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
             setTFTColorRole(TFTColorRole::HeaderTitle, headerTitleColorForRole, transparentBgColor);
             setTFTColorRole(TFTColorRole::HeaderStatus, headerStatusColor, transparentBgColor);
         } else if (useInvertedHeaderStyle) {
-            setAndRegisterTFTColorRole(TFTColorRole::HeaderBackground, headerColor, TFTPalette::Black, 0, 0, screenW,
+            setAndRegisterTFTColorRole(TFTColorRole::HeaderBackground, headerColor, TFTPalette::Black, frameLeft, 0, screenW,
                                        headerHeight);
             setTFTColorRole(TFTColorRole::HeaderTitle, headerColor, headerTitleColorForRole);
             setTFTColorRole(TFTColorRole::HeaderStatus, headerColor, headerStatusColor);
         } else {
-            setAndRegisterTFTColorRole(TFTColorRole::HeaderBackground, TFTPalette::Black, headerColor, 0, 0, screenW,
+            setAndRegisterTFTColorRole(TFTColorRole::HeaderBackground, TFTPalette::Black, headerColor, frameLeft, 0, screenW,
                                        headerHeight);
             setTFTColorRole(TFTColorRole::HeaderTitle, headerTitleColorForRole, headerColor);
             setTFTColorRole(TFTColorRole::HeaderStatus, headerStatusColor, headerColor);
@@ -173,21 +185,21 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
         // === Inverted Header Background ===
         if (useInvertedHeaderStyle) {
             display->setColor(BLACK);
-            display->fillRect(0, 0, screenW, headerHeight);
+            display->fillRect(frameLeft, 0, screenW, headerHeight);
             display->setColor(WHITE);
             drawRoundedHighlight(display, x, y, screenW, highlightHeight, 2);
             display->setColor(BLACK);
         } else {
             display->setColor(BLACK);
-            display->fillRect(0, 0, screenW, headerHeight);
+            display->fillRect(frameLeft, 0, screenW, headerHeight);
 // Keep the legacy white separator for monochrome displays only when header background is visible.
 #if !GRAPHICS_TFT_COLORING_ENABLED
             if (!transparent_background) {
                 display->setColor(WHITE);
                 if (currentResolution == ScreenResolution::High) {
-                    display->drawLine(0, 20, screenW, 20);
+                    display->drawLine(frameLeft, 20, frameRight, 20);
                 } else {
-                    display->drawLine(0, 14, screenW, 14);
+                    display->drawLine(frameLeft, 14, frameRight, 14);
                 }
             }
 #endif
@@ -205,7 +217,7 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
         // === Screen Title ===
         const char *headerTitle = titleStr ? titleStr : "";
         const int titleWidth = UIRenderer::measureStringWithEmotes(display, headerTitle);
-        const int titleX = (SCREEN_WIDTH - titleWidth) / 2;
+        const int titleX = frameLeft + (SCREEN_WIDTH - titleWidth) / 2;
 #if GRAPHICS_TFT_COLORING_ENABLED
         const int titleRegionWidth = titleWidth + (config.display.heading_bold ? 3 : 2);
         registerTFTColorRegion(TFTColorRole::HeaderTitle, titleX - 1, y, titleRegionWidth, FONT_HEIGHT_SMALL);
@@ -342,7 +354,7 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
     uint32_t rtc_sec = getValidTime(RTCQuality::RTCQualityDevice, true);
     char timeStr[10] = "--:--";                          // Fallback display
     int timeStrWidth = display->getStringWidth("12:34"); // Default alignment
-    int timeX = screenW - xOffset - timeStrWidth + 4;
+    int timeX = frameRight - xOffset - timeStrWidth + 4;
 
     if (rtc_sec > 0) {
         // === Build Time String ===
@@ -378,7 +390,7 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
         } else {
             timeStrWidth = display->getStringWidth(timeStr);
         }
-        timeX = screenW - xOffset - timeStrWidth + 3;
+        timeX = frameRight - xOffset - timeStrWidth + 3;
 #if GRAPHICS_TFT_COLORING_ENABLED
         statusRightStartX = timeX - (useHorizontalBattery ? 22 : 16);
 #endif
@@ -479,9 +491,9 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
 
     } else {
         // === No Time Available: Mail/Mute Icon Moves to Far Right ===
-        int iconRightEdge = screenW - xOffset;
+        int iconRightEdge = frameRight - xOffset;
 #if GRAPHICS_TFT_COLORING_ENABLED
-        statusRightStartX = screenW - (useHorizontalBattery ? 22 : 12);
+        statusRightStartX = frameRight - (useHorizontalBattery ? 22 : 12);
 #endif
         bool showMail = false;
 
@@ -526,9 +538,9 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
     }
 #endif
 #if GRAPHICS_TFT_COLORING_ENABLED
-    registerTFTColorRegion(TFTColorRole::HeaderStatus, 0, 0, statusLeftEndX, headerHeight);
-    if (statusRightStartX < screenW) {
-        registerTFTColorRegion(TFTColorRole::HeaderStatus, statusRightStartX, 0, screenW - statusRightStartX, headerHeight);
+    registerTFTColorRegion(TFTColorRole::HeaderStatus, frameLeft, 0, statusLeftEndX - frameLeft, headerHeight);
+    if (statusRightStartX < frameRight) {
+        registerTFTColorRegion(TFTColorRole::HeaderStatus, statusRightStartX, 0, frameRight - statusRightStartX, headerHeight);
     }
     if (hasBatteryFillRegion) {
         registerTFTColorRegionDirect(batteryFillRegionX, batteryFillRegionY, batteryFillRegionW, batteryFillRegionH,

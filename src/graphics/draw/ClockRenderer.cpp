@@ -50,7 +50,7 @@ void drawSegmentedDisplayColon(OLEDDisplay *display, int x, int y, float scale)
 
     uint16_t cellHeight = (segmentWidth * 2) + (segmentHeight * 3) + 8;
 
-    uint16_t topAndBottomX = x + 3;
+    int16_t topAndBottomX = x + 3;
 
     uint16_t quarterCellHeight = cellHeight / 4;
 
@@ -73,25 +73,25 @@ void drawSegmentedDisplayCharacter(OLEDDisplay *display, int x, int y, uint8_t n
     uint16_t segmentHeight = SEGMENT_HEIGHT * scale;
 
     // Precompute segment positions
-    uint16_t segmentOneX = x + segmentHeight + 2;
+    int16_t segmentOneX = x + segmentHeight + 2;
     uint16_t segmentOneY = y;
 
-    uint16_t segmentTwoX = segmentOneX + segmentWidth + 2;
+    int16_t segmentTwoX = segmentOneX + segmentWidth + 2;
     uint16_t segmentTwoY = segmentOneY + segmentHeight + 2;
 
-    uint16_t segmentThreeX = segmentTwoX;
+    int16_t segmentThreeX = segmentTwoX;
     uint16_t segmentThreeY = segmentTwoY + segmentWidth + 2 + segmentHeight + 2;
 
-    uint16_t segmentFourX = segmentOneX;
+    int16_t segmentFourX = segmentOneX;
     uint16_t segmentFourY = segmentThreeY + segmentWidth + 2;
 
-    uint16_t segmentFiveX = x;
+    int16_t segmentFiveX = x;
     uint16_t segmentFiveY = segmentThreeY;
 
-    uint16_t segmentSixX = x;
+    int16_t segmentSixX = x;
     uint16_t segmentSixY = segmentTwoY;
 
-    uint16_t segmentSevenX = segmentOneX;
+    int16_t segmentSevenX = segmentOneX;
     uint16_t segmentSevenY = segmentTwoY + segmentWidth + 2;
 
     // Draw only the active segments
@@ -254,8 +254,11 @@ void drawDigitalClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int1
         }
     }
 
-    uint16_t hourMinuteTextX = (display->getWidth() / 2) - (timeStringWidth / 2);
-    uint16_t startingHourMinuteTextX = hourMinuteTextX;
+    // Signed: during a frame transition x is negative for whichever frame is sliding off, and an
+    // unsigned type wraps that to ~65000 and walks the segment drawing far outside the display.
+    // The drawSegmentedDisplay* helpers all take a signed int and clip, so a negative here is safe.
+    int16_t hourMinuteTextX = x + (display->getWidth() / 2) - (timeStringWidth / 2);
+    int16_t startingHourMinuteTextX = hourMinuteTextX;
 
     uint16_t hourMinuteTextY = (display->getHeight() / 2) - (((segmentWidth * 2) + (segmentHeight * 3) + 8) / 2) + 2;
 
@@ -318,7 +321,7 @@ void drawAnalogClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     graphics::drawCommonHeader(display, x, y, titleStr, true, true, true);
 
     // clock face center coordinates
-    int16_t centerX = display->getWidth() / 2;
+    int16_t centerX = x + display->getWidth() / 2;
     int16_t centerY = display->getHeight() / 2;
 
     // clock face radius
