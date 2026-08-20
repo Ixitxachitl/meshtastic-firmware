@@ -307,8 +307,10 @@ void AirQualityTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSta
     graphics::drawCommonHeader(display, x, y, titleStr);
 
     // === Row spacing setup ===
+    // getTextPositions() only clears the header itself, so add the below-header margin
+    // other screens reserve - without it the first row sits flush against the header.
     const int rowHeight = FONT_HEIGHT_SMALL - 4;
-    int currentY = graphics::getTextPositions(display)[line++];
+    int currentY = graphics::getTextPositions(display)[line++] + BASEUI_BELOW_HEADER_MARGIN;
 
     // === Show "No Telemetry" if no data available ===
     if (!lastMeasurementPacket) {
