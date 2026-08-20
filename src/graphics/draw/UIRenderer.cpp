@@ -397,9 +397,9 @@ static void drawCompassStatusText(OLEDDisplay *display, int16_t compassX, int16_
     display->setTextAlignment(TEXT_ALIGN_LEFT);
 }
 
-static void drawBearingCompassOrStatus(OLEDDisplay *display, int16_t compassX, int16_t compassY, int16_t compassRadius,
-                                       bool showCompass, float myHeading, float bearing, const char *statusLine1,
-                                       const char *statusLine2, bool showRing = true)
+void UIRenderer::drawBearingCompassOrStatus(OLEDDisplay *display, int16_t compassX, int16_t compassY, int16_t compassRadius,
+                                            bool showCompass, float myHeading, float bearing, const char *statusLine1,
+                                            const char *statusLine2, bool showRing)
 {
     // Shared "favorite node" compass renderer: draw ring, then either heading data or fallback status text.
     if (showRing)
@@ -447,8 +447,9 @@ static bool computeLandscapeCompassPlacement(OLEDDisplay *display, int16_t xOffs
     return true;
 }
 
-static bool computeBottomCompassPlacement(OLEDDisplay *display, int16_t xOffset, int16_t yBelowContent, int16_t bottomReserved,
-                                          int16_t margin, int16_t *compassX, int16_t *compassY, int16_t *compassRadius)
+bool UIRenderer::computeBottomCompassPlacement(OLEDDisplay *display, int16_t xOffset, int16_t yBelowContent,
+                                               int16_t bottomReserved, int16_t margin, int16_t *compassX, int16_t *compassY,
+                                               int16_t *compassRadius)
 {
     // Return false when content leaves no room for a readable compass.
     int availableHeight =
@@ -936,11 +937,14 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
     }
 #endif
 
-    y += BASEUI_BELOW_HEADER_MARGIN;
+    y += BASEUI_BELOW_HEADER_MARGIN + BASEUI_BODY_TOP_MARGIN;
     // Every row below is placed relative to y, which now carries the below-header margin -
     // getTextPositions() itself only accounts for the header, so rows drawn straight from it
-    // sat flush against the header's bottom edge.
+    // sat flush against the header's bottom edge. bodyX does the same job horizontally: text
+    // rows are inset from the panel edge, while the compass and footer stay full width.
     auto row = [&](int slot) { return getTextPositions(display)[slot] + y; };
+    const int bodyX = x + BASEUI_BODY_LR_MARGIN;
+
     // ===== DYNAMIC ROW STACKING WITH YOUR MACROS =====
     // 1. Each potential info row has a macro-defined Y position (not regular increments!).
     // 2. Each row is only shown if it has valid data.
@@ -963,11 +967,11 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
 #if !(MESHTASTIC_EXCLUDE_PKI_KEYGEN || MESHTASTIC_EXCLUDE_PKI)
         if (nodeInfoLiteHasXeddsaSigned(node)) {
             if (currentResolution == ScreenResolution::High) {
-                graphics::NodeListRenderer::drawScaledXBitmap16x16(x + 2, row(line) + 1, xeddsa_shield_width,
+                graphics::NodeListRenderer::drawScaledXBitmap16x16(bodyX + 2, row(line) + 1, xeddsa_shield_width,
                                                                    xeddsa_shield_height, xeddsa_shield, display);
                 username_buffer = (xeddsa_shield_width * 2 * BASEUI_ICON_SCALE) + 4;
             } else {
-                display->drawXbm(x, row(line) + 3, xeddsa_shield_width, xeddsa_shield_height, xeddsa_shield);
+                display->drawXbm(bodyX, row(line) + 3, xeddsa_shield_width, xeddsa_shield_height, xeddsa_shield);
                 username_buffer = xeddsa_shield_width + 2;
             }
         }
@@ -977,13 +981,13 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
 #if !(MESHTASTIC_EXCLUDE_PKI_KEYGEN || MESHTASTIC_EXCLUDE_PKI)
         if (nodeInfoLiteHasXeddsaSigned(node)) {
             setAndRegisterTFTColorRole(TFTColorRole::FavoriteNodeBGHighlight, TFTPalette::Yellow, TFTPalette::Black,
-                                       x + usernameWidth, row(line), username_buffer, FONT_HEIGHT_SMALL);
+                                       bodyX + usernameWidth, row(line), username_buffer, FONT_HEIGHT_SMALL);
         }
 #endif
-        setAndRegisterTFTColorRole(TFTColorRole::FavoriteNodeBGHighlight, TFTPalette::Yellow, TFTPalette::Black, x, row(line),
+        setAndRegisterTFTColorRole(TFTColorRole::FavoriteNodeBGHighlight, TFTPalette::Yellow, TFTPalette::Black, bodyX, row(line),
                                    usernameWidth, FONT_HEIGHT_SMALL);
 #endif
-        UIRenderer::drawStringWithEmotes(display, x + username_buffer, row(line++), username, FONT_HEIGHT_SMALL, 1, false);
+        UIRenderer::drawStringWithEmotes(display, bodyX + username_buffer, row(line++), username, FONT_HEIGHT_SMALL, 1, false);
     }
 
 #if !MESHTASTIC_EXCLUDE_STATUS && !MESHTASTIC_EXCLUDE_STATUSDB
@@ -993,7 +997,7 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
     if (nodeDB) {
         meshtastic_StatusMessage cachedStatus;
         if (nodeDB->copyNodeStatus(node->num, cachedStatus) && cachedStatus.status[0]) {
-            drawTruncatedStatusLine(display, x, row(line++), cachedStatus.status);
+            drawTruncatedStatusLine(display, bodyX, row(line++), cachedStatus.status);
         }
     }
 #endif
@@ -1059,7 +1063,7 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
 
     if (haveSignal || showHops) {
         int yPos = row(line++);
-        int curX = x + display->getStringWidth(leftSideSpacing);
+        int curX = bodyX + display->getStringWidth(leftSideSpacing);
 
         // Draw signal quality text for zero-hop nodes when present.
         if (haveSignal && qualityLabel) {
@@ -1148,7 +1152,7 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
                           : 'm'));
     }
     if (seenStr[0]) {
-        display->drawString(x, row(line++), seenStr);
+        display->drawString(bodyX, row(line++), seenStr);
     }
 #if !defined(OLED_TINY)
     // === 4. Uptime (only show if metric is present) ===
@@ -1161,7 +1165,7 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
         getUptimeStr(nodeMetrics.uptime_seconds * 1000, upPrefix, uptimeStr, sizeof(uptimeStr));
     }
     if (uptimeStr[0]) {
-        display->drawString(x, row(line++), uptimeStr);
+        display->drawString(bodyX, row(line++), uptimeStr);
     }
 
     // === 5. Distance (only if both nodes have GPS position) ===
@@ -1204,7 +1208,7 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
         }
     }
     if (haveDistance && distStr[0]) {
-        display->drawString(x, row(line++), distStr);
+        display->drawString(bodyX, row(line++), distStr);
     }
 
     // === 6. Battery after Distance line, otherwise next available line ===
@@ -1253,7 +1257,7 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
 
     // Only draw battery if it fits within the allowed lines
     if (haveBatLine && line <= maxTextLines) {
-        display->drawString(x, row(line++), batLine);
+        display->drawString(bodyX, row(line++), batLine);
     }
 
     bool showCompass = false;
@@ -1303,13 +1307,13 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
 #else
             const int navBarHeight = 0;
 #endif
-            if (!computeBottomCompassPlacement(display, x, yBelowContent, navBarHeight, 4, &compassX, &compassY,
-                                               &compassRadius)) {
+            if (!UIRenderer::computeBottomCompassPlacement(display, x, yBelowContent, navBarHeight, 4, &compassX, &compassY,
+                                                           &compassRadius)) {
                 return;
             }
         }
-        drawBearingCompassOrStatus(display, compassX, compassY, compassRadius, showCompass, myHeading, bearing, statusLine1,
-                                   statusLine2);
+        UIRenderer::drawBearingCompassOrStatus(display, compassX, compassY, compassRadius, showCompass, myHeading, bearing,
+                                               statusLine1, statusLine2);
     }
 #endif
     graphics::drawCommonFooter(display, x, y);
@@ -1727,10 +1731,13 @@ void UIRenderer::drawIconScreen(const char *upperMsg, OLEDDisplay *display, OLED
 #else
     additionalYOffset = 0;
 #endif
-    display->drawString(x + getStringCenteredX(title), y + SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM - 5 + additionalYOffset, title);
+    // Lifted off the bottom edge by the same proportion the corner text below is pulled in,
+    // so the rounded bottom of the panel does not clip it.
+    const int titleY = y + SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM - 5 + additionalYOffset -
+                       (SCREEN_HEIGHT / 2) * BASEUI_SPLASH_CORNER_INSET_PCT / 100;
+    display->drawString(x + getStringCenteredX(title), titleY, title);
     if (gBootSplashBoldPass) {
-        display->drawString(x + getStringCenteredX(title) + 1, y + SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM - 5 + additionalYOffset,
-                            title);
+        display->drawString(x + getStringCenteredX(title) + 1, titleY, title);
     }
     display->setFont(FONT_SMALL);
     // Corner text sits diagonally inside the panel on rounded screens, which would

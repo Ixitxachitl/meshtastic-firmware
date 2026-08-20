@@ -52,6 +52,14 @@ namespace graphics
 #ifndef ROUNDED_SCREEN
 #define ROUNDED_SCREEN false
 #endif
+// Breathing room around the body text on the list-style screens (favorites, waypoint,
+// telemetry): BASEUI_BODY_TOP_MARGIN adds to BASEUI_BELOW_HEADER_MARGIN above the first
+// row, and BASEUI_BODY_LR_MARGIN insets it from the left edge. Kept separate from
+// BASEUI_BELOW_HEADER_MARGIN because that one also sizes the bottom nav reserve and the
+// node list rows.
+#ifndef BASEUI_BODY_TOP_MARGIN
+#define BASEUI_BODY_TOP_MARGIN 0
+#endif
 // Fixed number of frame icons the navigation bar shows per page. 0 fits as many as
 // the usable width allows.
 #ifndef BASEUI_NAV_ICONS_PER_PAGE
