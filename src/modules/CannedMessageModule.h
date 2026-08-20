@@ -87,6 +87,9 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
     // "move the selection that way", a finger means "drag the grid that way". Matches
     // MapRenderer::panByFingerDelta() and MessageRenderer::scrollByFingerDelta().
     void scrollEmotesByFingerDelta(float dyPx);
+    /// Slide the on-screen keyboard horizontally. Pass the delta between consecutive drag
+    /// reports; clamped so the grid can never be dragged away from the screen edges.
+    void panKeyboardByFingerDelta(float dxPx);
 
     // === Admin Handlers ===
     void handleGetCannedMessageModuleMessages(const meshtastic_MeshPacket &req, meshtastic_AdminMessage *response);
@@ -159,6 +162,11 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
     int emoteGridBottom = 0;
     int emoteGridCols = 0;
     int emoteGridRows = 0;
+    // On-screen keyboard horizontal pan, <= 0. Only meaningful when BASEUI_KEYBOARD_ZOOM_PCT
+    // draws the grid wider than the screen; keyboardMinPanX is published by drawKeyboard().
+    float keyboardPanX = 0;
+    int keyboardMinPanX = 0;
+
     int emoteCellSize = 0;
     float emoteScrollOffset = 0; // top of the viewport in rows; fractional while a finger is dragging
 
@@ -305,4 +313,5 @@ extern CannedMessageModule *cannedMessageModule;
 //
 // Lives outside the class because the drag anchors do too - see the driver in CannedMessageModule.cpp.
 bool isEmoteScrollFingerSteering();
+bool isKeyboardPanFingerSteering();
 #endif
