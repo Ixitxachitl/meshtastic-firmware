@@ -11,6 +11,7 @@
 #include "graphics/Screen.h"
 #include "graphics/TimeFormatters.h"
 #include "graphics/draw/NodeListRenderer.h"
+#include "graphics/draw/UIRenderer.h"
 #include "main.h"
 #endif
 
@@ -78,12 +79,21 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     display->setFont(FONT_SMALL);
     int line = 1;
 
+    // Rows 1..4 below: age, name, description, distance. Reserved as a block so the compass
+    // does not move between waypoints that fill a different number of them.
+    constexpr int kWaypointContentRows = 4;
+
     // === Set Title
     const char *titleStr = "Waypoint";
 
     // === Header ===
     graphics::drawCommonHeader(display, x, y, titleStr);
-    const int *textPos = graphics::getTextPositions(display);
+
+    // Laid out like the favorite node screen: rows hang off a y that carries the
+    // below-header margins, and the compass comes from the shared placement helper.
+    y += BASEUI_BELOW_HEADER_MARGIN + BASEUI_BODY_TOP_MARGIN;
+    auto row = [&](int slot) { return graphics::getTextPositions(display)[slot] + y; };
+    const int bodyX = x + BASEUI_BODY_LR_MARGIN;
 
     // Decode the waypoint
     const meshtastic_MeshPacket &mp = devicestate.rx_waypoint;
@@ -108,13 +118,13 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     const meshtastic_NodeInfoLite *ourNode = nodeDB->getMeshNode(nodeDB->getNodeNum());
 
     // Match compass sizing/placement to favorite node screen logic.
-    const int w = display->getWidth();
     int16_t compassRadius = 8;
-    int16_t compassX = x + w - compassRadius - 8;
+    int16_t compassX = x + display->getWidth() - compassRadius - 8;
     int16_t compassY = y + display->getHeight() / 2;
+    bool haveCompassPlacement = true;
 
     if (SCREEN_WIDTH > SCREEN_HEIGHT) {
-        const int16_t topY = textPos[1];
+        const int16_t topY = row(1);
         const int16_t bottomY = SCREEN_HEIGHT - (FONT_HEIGHT_SMALL - 1);
         const int16_t usableHeight = bottomY - topY - 5;
         compassRadius = usableHeight / 2;
@@ -123,33 +133,26 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         compassX = x + SCREEN_WIDTH - compassRadius - 8;
         compassY = topY + (usableHeight / 2) + ((FONT_HEIGHT_SMALL - 1) / 2) + 2;
     } else {
-        // Waypoint content uses rows 1..4, so place the compass below that block.
-        const int yBelowContent = textPos[4] + FONT_HEIGHT_SMALL + 2;
-        const int margin = 4;
+        // Waypoint content uses rows 1..4. Reserve that whole block rather than the rows a
+        // given waypoint happens to fill, so the compass stays put between waypoints - the
+        // same rule BASEUI_FIXED_COMPASS_SIZE applies on the favorite node screen.
+        const int yBelowContent = row(kWaypointContentRows) + FONT_HEIGHT_SMALL + 2;
 #if defined(USE_EINK)
         const int iconSize = (graphics::currentResolution == graphics::ScreenResolution::High) ? 16 : 8;
         const int navBarHeight = iconSize + 6;
 #else
         const int navBarHeight = 0;
 #endif
-        const int availableHeight = SCREEN_HEIGHT - yBelowContent - navBarHeight - margin;
-        if (availableHeight > 0) {
-            compassRadius = availableHeight / 2;
-            if (compassRadius < 8)
-                compassRadius = 8;
-            if (compassRadius * 2 > SCREEN_WIDTH - 16)
-                compassRadius = (SCREEN_WIDTH - 16) / 2;
-            if (compassRadius < 8)
-                compassRadius = 8;
-            compassX = x + SCREEN_WIDTH / 2;
-            compassY = yBelowContent + availableHeight / 2;
-        }
+        haveCompassPlacement = graphics::UIRenderer::computeBottomCompassPlacement(display, x, yBelowContent, navBarHeight, 4,
+                                                                                   &compassX, &compassY, &compassRadius);
     }
-    const uint16_t compassDiam = compassRadius * 2;
 
     const bool hasOwnPositionFix = (ourNode && nodeDB->hasValidPosition(ourNode));
     const char *statusLine1 = nullptr;
     const char *statusLine2 = nullptr;
+    bool showCompass = false;
+    float myHeading = 0.0f;
+    float bearingToOther = 0.0f;
 
     // Distance only needs our own position fix; compass/bearing additionally needs heading.
     meshtastic_PositionLite ownPos;
@@ -168,19 +171,13 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
             snprintf(distStr, sizeof(distStr), d < 2000 ? "%.0fm" : "%.1fkm", d < 2000 ? d : d / 1000);
         }
 
-        float myHeading = 0.0f;
         const bool hasHeading =
             graphics::CompassRenderer::getHeadingRadians(DegD(op.latitude_i), DegD(op.longitude_i), myHeading);
         if (hasHeading) {
-            // Draw compass circle
-            display->drawCircle(compassX, compassY, compassRadius);
-            graphics::CompassRenderer::drawCompassNorth(display, compassX, compassY, myHeading, compassRadius);
-
-            // Compass bearing to waypoint
-            float bearingToOther =
+            showCompass = true;
+            bearingToOther =
                 GeoCoord::bearing(DegD(op.latitude_i), DegD(op.longitude_i), DegD(wp.latitude_i), DegD(wp.longitude_i));
             bearingToOther = graphics::CompassRenderer::adjustBearingForCompassMode(bearingToOther, myHeading);
-            graphics::CompassRenderer::drawNodeHeading(display, compassX, compassY, compassDiam, bearingToOther);
 
             const float bearingToOtherDegrees = graphics::CompassRenderer::radiansToDegrees360(bearingToOther);
 
@@ -204,18 +201,18 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         statusLine2 = "Fix";
     }
 
-    if (statusLine1) {
-        display->drawCircle(compassX, compassY, compassRadius);
-        display->setTextAlignment(TEXT_ALIGN_CENTER);
-        display->drawString(compassX, compassY - FONT_HEIGHT_SMALL, statusLine1);
-        display->drawString(compassX, compassY, statusLine2);
+    if (haveCompassPlacement && (showCompass || statusLine1)) {
+        graphics::UIRenderer::drawBearingCompassOrStatus(display, compassX, compassY, compassRadius, showCompass, myHeading,
+                                                         bearingToOther, statusLine1, statusLine2);
     }
 
     display->setTextAlignment(TEXT_ALIGN_LEFT); // Something above me changes to a different alignment, forcing a fix here!
-    display->drawString(0, textPos[line++], lastStr);
-    display->drawString(0, textPos[line++], wp.name);
-    display->drawString(0, textPos[line++], wp.description);
+    display->drawString(bodyX, row(line++), lastStr);
+    display->drawString(bodyX, row(line++), wp.name);
+    display->drawString(bodyX, row(line++), wp.description);
     if (distStr[0])
-        display->drawString(0, textPos[line++], distStr);
+        display->drawString(bodyX, row(line++), distStr);
+
+    graphics::drawCommonFooter(display, x, y);
 }
 #endif

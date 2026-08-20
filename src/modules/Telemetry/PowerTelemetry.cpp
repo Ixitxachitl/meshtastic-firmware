@@ -135,9 +135,16 @@ void PowerTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *s
     // === Header ===
     graphics::drawCommonHeader(display, x, y, titleStr);
 
+    // getTextPositions() only clears the header itself, so add the below-header margin
+    // other screens reserve - without it the first row sits flush against the header.
+    auto row = [&](int slot) {
+        return graphics::getTextPositions(display)[slot] + BASEUI_BELOW_HEADER_MARGIN + BASEUI_BODY_TOP_MARGIN;
+    };
+    const int bodyX = x + BASEUI_BODY_LR_MARGIN;
+
     if (lastMeasurementPacket == nullptr) {
         // In case of no valid packet, display "Power Telemetry", "No measurement"
-        display->drawString(x, graphics::getTextPositions(display)[line++], "No measurement");
+        display->drawString(bodyX, row(line++), "No measurement");
         return;
     }
 
@@ -148,7 +155,7 @@ void PowerTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *s
 
     const meshtastic_Data &p = lastMeasurementPacket->decoded;
     if (!pb_decode_from_bytes(p.payload.bytes, p.payload.size, &meshtastic_Telemetry_msg, &lastMeasurement)) {
-        display->drawString(x, graphics::getTextPositions(display)[line++], "Measurement Error");
+        display->drawString(bodyX, row(line++), "Measurement Error");
         LOG_ERROR("Can't decode last packet");
         return;
     }
@@ -161,17 +168,18 @@ void PowerTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *s
         snprintf(agoStr, sizeof(agoStr), "%us", (unsigned)agoSecs);
     char fromStr[64];
     snprintf(fromStr, sizeof(fromStr), "Pow. From: %s (%s)", lastSender, agoStr);
-    display->drawString(x, graphics::getTextPositions(display)[line++], fromStr);
+    display->drawString(bodyX, row(line++), fromStr);
 
     // Display current and voltage based on ...power_metrics.has_[channel/voltage/current]... flags
     const auto &m = lastMeasurement.variant.power_metrics;
-    int lineY = textSecondLine;
 
+    // Use the shared row table like every other screen. The old code started from the
+    // raw textSecondLine macro, which ignores the resolution-dependent row pitch and any
+    // header margin, so the channel rows landed on top of the "Pow. From" line.
     auto drawLine = [&](const char *label, float voltage, float current) {
         char lineStr[64];
         snprintf(lineStr, sizeof(lineStr), "%s: %.2fV %.0fmA", label, voltage, current);
-        display->drawString(x, lineY, lineStr);
-        lineY += _fontHeight(FONT_SMALL);
+        display->drawString(bodyX, row(line++), lineStr);
     };
 
     if (m.has_ch1_voltage || m.has_ch1_current) {
