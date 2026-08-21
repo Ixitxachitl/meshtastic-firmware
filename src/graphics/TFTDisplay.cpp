@@ -1579,6 +1579,15 @@ void TFTDisplay::display(bool fromBlank)
 #endif
     const uint8_t rowsPerPushBits = (uint8_t)((1U << kRowsPerPush) - 1U);
 
+    // Hold the bus open across the scan, as the full repaint does: otherwise each changed row-pair
+    // opens and closes its own transaction, and closing waits for the bus to drain before the next
+    // pair's pixels can be converted.
+    const bool batchDiffPath = (lineBufferSlots > 1);
+    if (batchDiffPath)
+        beginPixelBatch();
+    const size_t linePixelsPerSlot = (size_t)displayWidth * kRowsPerPush;
+    uint8_t lineSlot = 0;
+
     y = 0;
     while (y < displayHeight) {
         y_byteIndex = (y / 8) * displayWidth;
@@ -1687,6 +1696,7 @@ void TFTDisplay::display(bool fromBlank)
 #endif
             const uint32_t spanWidth = x_LastPixelUpdate - x_FirstPixelUpdate + 1;
             const int y_offset = (int)y_draw - (int)y;
+            uint16_t *const lineSlotBase = linePixelBuffer + ((size_t)lineSlot * linePixelsPerSlot);
 
             // Step 3: Copy the changed span of every covered row into the pixel line buffer, rows
             // laid out back to back so the push below is one contiguous block.
@@ -1694,7 +1704,7 @@ void TFTDisplay::display(bool fromBlank)
                 const uint32_t rowY = y_draw + row;
                 const uint32_t rowByteIndex = (rowY / 8) * displayWidth;
                 const uint8_t rowBitMask = (uint8_t)(1U << (rowY & 7));
-                uint16_t *const dst = &linePixelBuffer[x_FirstPixelUpdate + (row * spanWidth)];
+                uint16_t *const dst = &lineSlotBase[x_FirstPixelUpdate + (row * spanWidth)];
 #if GRAPHICS_TFT_COLORING_ENABLED
                 // Re-cached per row: resolveTFTColorPixelRow() resolves against the regions cached
                 // for whichever row was last passed here, so colouring a second row off the first
@@ -1719,17 +1729,23 @@ void TFTDisplay::display(bool fromBlank)
             }
 
 #if defined(HACKADAY_COMMUNICATOR)
-            tft->draw16bitBeRGBBitmap(x_FirstPixelUpdate, y + y_offset, &linePixelBuffer[x_FirstPixelUpdate], spanWidth,
+            tft->draw16bitBeRGBBitmap(x_FirstPixelUpdate, y + y_offset, &lineSlotBase[x_FirstPixelUpdate], spanWidth,
                                       kRowsPerPush);
 #else
             // Step 4: Send the changed pixels on these rows to the screen as a single block transfer.
             // This function accepts pixel data MSB first so it can dump the memory straight out the SPI port.
-            pushPixelBlock(x_FirstPixelUpdate, y + y_offset, spanWidth, kRowsPerPush, &linePixelBuffer[x_FirstPixelUpdate]);
+            pushPixelBlock(x_FirstPixelUpdate, y + y_offset, spanWidth, kRowsPerPush, &lineSlotBase[x_FirstPixelUpdate]);
+            // Next pair converts into the other slot, so this one can still be in flight.
+            lineSlot = (uint8_t)((lineSlot + 1) % lineBufferSlots);
 #endif
             somethingChanged = true;
         }
         y += kRowsPerPush;
     }
+
+    if (batchDiffPath)
+        endPixelBatch();
+
     // Copy the Buffer to the Back Buffer
     if (somethingChanged)
         memcpy(buffer_back, buffer, displayBufferSize);
@@ -1974,14 +1990,23 @@ bool TFTDisplay::connect()
 #else
         const size_t linePixels = (size_t)displayWidth;
 #endif
-        this->linePixelBuffer = allocPixelBuffer(linePixels, &thisBufferDmaCapable);
+        // Ask for two slots so the diff path can batch (see beginPixelBatch): one transfers while
+        // the next is converted. Falling back to one slot is safe - the batch is skipped rather
+        // than overwriting a row still in flight.
+        this->linePixelBuffer = tryAllocDmaPixelBuffer(linePixels * 2);
+        this->lineBufferSlots = 2;
+        thisBufferDmaCapable = this->linePixelBuffer != nullptr;
 
+        if (!this->linePixelBuffer) {
+            this->lineBufferSlots = 1;
+            this->linePixelBuffer = allocPixelBuffer(linePixels, &thisBufferDmaCapable);
+        }
         if (!this->linePixelBuffer) {
             LOG_ERROR("Not enough memory to create TFT line buffer");
             return false;
         }
         allBuffersDmaCapable &= thisBufferDmaCapable;
-        memaudit::add("display", sizeof(uint16_t) * linePixels);
+        memaudit::add("display", sizeof(uint16_t) * linePixels * this->lineBufferSlots);
     }
     if (this->repaintChunkBuffer == NULL) {
         const size_t chunkPixels = (size_t)displayWidth * kFullRepaintChunkRows;
