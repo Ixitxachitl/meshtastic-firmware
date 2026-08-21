@@ -69,7 +69,16 @@ class TFTDisplay : public OLEDDisplay
     // lets display() ask for a DMA push instead of LovyanGFX's byte-at-a-time PIO fallback.
     bool pixelBuffersAreDmaCapable = false;
 
+    // How many chunk-sized slots repaintChunkBuffer actually holds. Two when the internal heap
+    // could spare it, so conversion overlaps transfer; one otherwise.
+    uint8_t chunkBufferSlots = 1;
+
     // Send a block of pre-swapped RGB565 pixels to the panel, by DMA where that is available.
     // Non-const data: TFT_eSPI's pushImage() takes a mutable pointer.
     void pushPixelBlock(int32_t x, int32_t y, int32_t w, int32_t h, uint16_t *data);
+
+    // Bracket a run of pushPixelBlock() calls so their transfers can overlap the work that
+    // prepares the next one. Must be paired.
+    void beginPixelBatch();
+    void endPixelBatch();
 };

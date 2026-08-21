@@ -1270,7 +1270,49 @@ GpioPin *TFTDisplay::backlightEnable = NULL;
 
 namespace
 {
+#ifdef UI_PERF_DEBUG
+// Times display() and reports roughly once a second. Build with -D UI_PERF_DEBUG when a drag feels
+// laggy. Pairs with the touch-poll cadence reported by TouchScreenBase under the same flag.
+//
+// Splits the two things that keep frames off the screen, because they need opposite fixes: time
+// spent blocked on spiLock (the radio holds it across a transmit) versus time actually converting
+// and pushing pixels. Frames-per-report is the third number that matters - a low frame count with
+// both timings small means the thread is simply not being run.
+struct DisplayFrameTimer {
+    const uint32_t startMs = millis();
+    uint32_t lockedMs = 0;
+    void locked() { lockedMs = millis(); }
+    ~DisplayFrameTimer()
+    {
+        static uint32_t waitTotal = 0, drawTotal = 0, frames = 0, lastReportMs = 0;
+        const uint32_t now = millis();
+        if (lockedMs == 0)
+            lockedMs = startMs;
+        waitTotal += lockedMs - startMs;
+        drawTotal += now - lockedMs;
+        frames++;
+        if (now - lastReportMs >= 1000) {
+            LOG_INFO("TFT display(): %u frames in %u ms, %u ms draw, %u ms spiLock wait", (unsigned)frames,
+                     (unsigned)(now - lastReportMs), (unsigned)(drawTotal / frames), (unsigned)(waitTotal / frames));
+            waitTotal = 0;
+            drawTotal = 0;
+            frames = 0;
+            lastReportMs = now;
+        }
+    }
+};
+#define UI_PERF_TIME_FRAME() DisplayFrameTimer _uiPerfFrameTimer
+#define UI_PERF_FRAME_LOCKED() _uiPerfFrameTimer.locked()
+#else
+#define UI_PERF_TIME_FRAME() (void)0
+#define UI_PERF_FRAME_LOCKED() (void)0
+#endif
+
 static constexpr uint8_t kFullRepaintChunkRows = 8;
+
+// Chunk buffers the full repaint alternates between, so converting one chunk overlaps transferring
+// the previous one. Two is all the overlap there is to get; more would just cost RAM.
+static constexpr uint8_t kFullRepaintChunkSlots = 2;
 
 // Allocate a pixel buffer that SPI DMA can read from, reporting whether that succeeded.
 //
@@ -1281,19 +1323,33 @@ static constexpr uint8_t kFullRepaintChunkRows = 8;
 //
 // Falls back to malloc() so a board too tight on internal RAM still comes up - just without DMA,
 // which is exactly the behavior it had before.
+static uint16_t *tryAllocDmaPixelBuffer(size_t pixels)
+{
+#if defined(ARCH_ESP32)
+    // Leave the internal heap room to breathe. Drivers that come up after the display - the touch
+    // controller among them - need internal RAM too, and taking the last of it to make the repaint
+    // marginally faster is a bad trade.
+    static constexpr size_t kInternalHeapReserve = 24 * 1024;
+    const size_t bytes = pixels * sizeof(uint16_t);
+    if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < bytes + kInternalHeapReserve) {
+        return nullptr;
+    }
+    return static_cast<uint16_t *>(heap_caps_malloc(bytes, MALLOC_CAP_DMA | MALLOC_CAP_8BIT));
+#else
+    (void)pixels;
+    return nullptr;
+#endif
+}
+
 static uint16_t *allocPixelBuffer(size_t pixels, bool *dmaCapable)
 {
-    const size_t bytes = pixels * sizeof(uint16_t);
-#if defined(ARCH_ESP32)
-    void *dmaBuf = heap_caps_malloc(bytes, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    uint16_t *dmaBuf = tryAllocDmaPixelBuffer(pixels);
     if (dmaBuf) {
         *dmaCapable = true;
-        return static_cast<uint16_t *>(dmaBuf);
+        return dmaBuf;
     }
-    LOG_WARN("No DMA-capable RAM for TFT pixel buffer (%u B), falling back to slower PIO pushes", (unsigned)bytes);
-#endif
     *dmaCapable = false;
-    return static_cast<uint16_t *>(malloc(bytes));
+    return static_cast<uint16_t *>(malloc(pixels * sizeof(uint16_t)));
 }
 
 static inline uint16_t getThemeDefaultOnColor()
@@ -1359,9 +1415,31 @@ TFTDisplay::~TFTDisplay()
 
 #if defined(HACKADAY_COMMUNICATOR)
 // Arduino_GFX backend: display() calls draw16bitBeRGBBitmap() directly and never routes through
-// here. This exists only to satisfy the declaration.
+// here. These exist only to satisfy the declarations.
 void TFTDisplay::pushPixelBlock(int32_t, int32_t, int32_t, int32_t, uint16_t *) {}
+void TFTDisplay::beginPixelBatch() {}
+void TFTDisplay::endPixelBatch() {}
 #else
+// Hold the panel's bus transaction open across a run of pushPixelBlock() calls.
+//
+// Without this, each push ends its own transaction - and ending one waits for the bus to drain, so
+// the CPU would stall through every chunk's DMA before starting to build the next. Held open, a
+// push returns while its transfer is still in flight, and the caller's next round of pixel
+// conversion overlaps it. The panel driver re-issues CS and the address window on every push, so
+// batching them changes nothing the panel sees.
+//
+// Callers that batch must alternate between two source buffers, or they will overwrite the one
+// still being transferred.
+void TFTDisplay::beginPixelBatch()
+{
+    tft->startWrite();
+}
+
+void TFTDisplay::endPixelBatch()
+{
+    tft->endWrite(); // ends the transaction, which waits for the last transfer
+}
+
 // Send a block of pre-swapped RGB565 pixels to the panel.
 //
 // Worth going through here rather than calling tft->pushImage() directly: that overload defaults
@@ -1387,14 +1465,16 @@ void TFTDisplay::pushPixelBlock(int32_t x, int32_t y, int32_t w, int32_t h, uint
 // Write the buffer to the display memory
 void TFTDisplay::display(bool fromBlank)
 {
+    UI_PERF_TIME_FRAME(); // before the lock: waiting for it is exactly what we need to see
     concurrency::LockGuard g(spiLock);
+    UI_PERF_FRAME_LOCKED();
 
     uint32_t x, y;
     uint32_t y_byteIndex;
     uint8_t y_byteMask;
     uint32_t x_FirstPixelUpdate;
     uint32_t x_LastPixelUpdate;
-    bool isset, dblbuf_isset;
+    bool isset;
     uint16_t colorTftWhite, colorTftBlack;
     bool somethingChanged = false;
 
@@ -1425,14 +1505,21 @@ void TFTDisplay::display(bool fromBlank)
     // When region roles/layout changed, color can differ even with identical monochrome glyph bits.
     // Repaint full frame only for those frames, then return to diff-based updates.
     if (forceFullColorRepaint) {
+        // Hold the bus open for the whole repaint and alternate between the two chunk slots, so
+        // each chunk's pixel conversion runs against the previous chunk's transfer rather than
+        // after it. See beginPixelBatch().
+        beginPixelBatch();
+        uint8_t chunkSlot = 0;
         for (uint32_t yStart = 0; yStart < displayHeight; yStart += kFullRepaintChunkRows) {
             const uint32_t rowsThisChunk = min<uint32_t>(kFullRepaintChunkRows, displayHeight - yStart);
+            uint16_t *const chunkBuffer = repaintChunkBuffer + ((size_t)chunkSlot * displayWidth * kFullRepaintChunkRows);
+            chunkSlot = (uint8_t)((chunkSlot + 1) % chunkBufferSlots);
             for (uint32_t row = 0; row < rowsThisChunk; row++) {
                 y = yStart + row;
                 y_byteIndex = (y / 8) * displayWidth;
                 y_byteMask = (1 << (y & 7));
 
-                uint16_t *chunkRow = repaintChunkBuffer + (row * displayWidth);
+                uint16_t *chunkRow = chunkBuffer + (row * displayWidth);
 
                 // Step 1: fill the whole row with the default colors. No per-pixel
                 // region scan, so background pixels (the bulk of the screen) are O(1).
@@ -1461,11 +1548,12 @@ void TFTDisplay::display(bool fromBlank)
                 }
             }
 #if defined(HACKADAY_COMMUNICATOR)
-            tft->draw16bitBeRGBBitmap(0, yStart, repaintChunkBuffer, displayWidth, rowsThisChunk);
+            tft->draw16bitBeRGBBitmap(0, yStart, chunkBuffer, displayWidth, rowsThisChunk);
 #else
-            pushPixelBlock(0, yStart, displayWidth, rowsThisChunk, repaintChunkBuffer);
+            pushPixelBlock(0, yStart, displayWidth, rowsThisChunk, chunkBuffer);
 #endif
         }
+        endPixelBatch();
 
         memcpy(buffer_back, buffer, displayBufferSize);
         lastColorFrameSignature = colorFrameSignature;
@@ -1477,13 +1565,27 @@ void TFTDisplay::display(bool fromBlank)
     }
 #endif
 
+    // Rows sent per push. The CO5300 needs an even row start and an even row count, so it goes out a
+    // row pair at a time; every other panel pushes single rows.
+    //
+    // The loop below steps by whole pushes rather than by single rows. That is what stops a changed
+    // pair being sent twice - scanning per row and pushing the pair containing it did the work, and
+    // paid the address-window setup, once for each row of the pair. It also makes the change scan
+    // cheaper: both rows of a pair always live in the same buffer byte, so one mask covers them.
+#if defined(CO5300_CS)
+    constexpr uint32_t kRowsPerPush = 2;
+#else
+    constexpr uint32_t kRowsPerPush = 1;
+#endif
+    const uint8_t rowsPerPushBits = (uint8_t)((1U << kRowsPerPush) - 1U);
+
     y = 0;
     while (y < displayHeight) {
         y_byteIndex = (y / 8) * displayWidth;
-        y_byteMask = (1 << (y & 7));
+        y_byteMask = (uint8_t)(rowsPerPushBits << (y & 7)); // every row this push will cover
 
         // Step 1: Do a quick scan of 8 rows together. This allows fast-forwarding over unchanged screen areas.
-        if (y_byteMask == 1) {
+        if ((y & 7) == 0) {
             if (!forceFullRepaint) {
                 for (x = 0; x < displayWidth; x++) {
                     if (buffer[x + y_byteIndex] != buffer_back[x + y_byteIndex])
@@ -1502,33 +1604,33 @@ void TFTDisplay::display(bool fromBlank)
             }
         }
 
-        // Step 2: Scan this row for changed span (first and last changed pixel).
+        // Step 2: Scan the rows this push covers for the changed span (first and last changed
+        // pixel). Compares masked bytes rather than a single bit, so a change on any covered row
+        // counts - a bool would collapse "row 0 changed" and "row 1 changed" into the same value.
         uint32_t x_FirstChanged = 0;
         for (x_FirstChanged = 0; x_FirstChanged < displayWidth; x_FirstChanged++) {
-            isset = buffer[x_FirstChanged + y_byteIndex] & y_byteMask;
+            const uint8_t bits = buffer[x_FirstChanged + y_byteIndex] & y_byteMask;
 
             if (!forceFullRepaint) {
                 // get src pixel in the page based ordering the OLED lib uses
-                dblbuf_isset = buffer_back[x_FirstChanged + y_byteIndex] & y_byteMask;
-                if (isset != dblbuf_isset) {
+                if (bits != (buffer_back[x_FirstChanged + y_byteIndex] & y_byteMask)) {
                     break;
                 }
-            } else if (isset) {
+            } else if (bits) {
                 break;
             }
         }
 
-        // Did we find a pixel that needs updating on this row?
+        // Did we find a pixel that needs updating on these rows?
         if (x_FirstChanged < displayWidth) {
             uint32_t x_LastChanged = displayWidth - 1;
             while (x_LastChanged > x_FirstChanged) {
-                isset = buffer[x_LastChanged + y_byteIndex] & y_byteMask;
+                const uint8_t bits = buffer[x_LastChanged + y_byteIndex] & y_byteMask;
                 if (!forceFullRepaint) {
-                    dblbuf_isset = buffer_back[x_LastChanged + y_byteIndex] & y_byteMask;
-                    if (isset != dblbuf_isset) {
+                    if (bits != (buffer_back[x_LastChanged + y_byteIndex] & y_byteMask)) {
                         break;
                     }
-                } else if (isset) {
+                } else if (bits) {
                     break;
                 }
                 x_LastChanged--;
@@ -1579,66 +1681,54 @@ void TFTDisplay::display(bool fromBlank)
 
             // snap y down to the even-row pair (AMOLED requires 2-row aligned writes)
             const uint32_t y_draw = y & ~1U;
-            span = x_LastPixelUpdate - x_FirstPixelUpdate + 1;
+#else
+            // Every other panel pushes single rows, so there is nothing to align to.
+            const uint32_t y_draw = y;
+#endif
+            const uint32_t spanWidth = x_LastPixelUpdate - x_FirstPixelUpdate + 1;
             const int y_offset = (int)y_draw - (int)y;
-            for (x = x_FirstPixelUpdate; x <= x_LastPixelUpdate; x++) {
-                const uint32_t col = x - x_FirstPixelUpdate;
-                uint32_t bi = (y_draw / 8) * displayWidth;
-                isset = buffer[x + bi] & (1 << (y_draw & 7));
+
+            // Step 3: Copy the changed span of every covered row into the pixel line buffer, rows
+            // laid out back to back so the push below is one contiguous block.
+            for (uint32_t row = 0; row < kRowsPerPush; row++) {
+                const uint32_t rowY = y_draw + row;
+                const uint32_t rowByteIndex = (rowY / 8) * displayWidth;
+                const uint8_t rowBitMask = (uint8_t)(1U << (rowY & 7));
+                uint16_t *const dst = &linePixelBuffer[x_FirstPixelUpdate + (row * spanWidth)];
 #if GRAPHICS_TFT_COLORING_ENABLED
-                linePixelBuffer[x_FirstPixelUpdate + col] =
-                    hasColorRegions ? graphics::resolveTFTColorPixel(static_cast<int16_t>(x), static_cast<int16_t>(y_draw), isset,
-                                                                     colorTftWhite, colorTftBlack)
-                                    : (isset ? colorTftWhite : colorTftBlack);
-#else
-                linePixelBuffer[x_FirstPixelUpdate + col] = isset ? colorTftWhite : colorTftBlack;
+                // Re-cached per row: resolveTFTColorPixelRow() resolves against the regions cached
+                // for whichever row was last passed here, so colouring a second row off the first
+                // row's cache would pick the wrong regions wherever a region edge falls between the
+                // two.
+                if (hasColorRegions)
+                    graphics::beginTFTColorRow(static_cast<int16_t>(rowY));
 #endif
-                bi = ((y_draw + 1) / 8) * displayWidth;
-                isset = buffer[x + bi] & (1 << ((y_draw + 1) & 7));
+                for (x = x_FirstPixelUpdate; x <= x_LastPixelUpdate; x++) {
+                    isset = buffer[x + rowByteIndex] & rowBitMask;
 #if GRAPHICS_TFT_COLORING_ENABLED
-                linePixelBuffer[x_FirstPixelUpdate + span + col] =
-                    hasColorRegions ? graphics::resolveTFTColorPixel(static_cast<int16_t>(x), static_cast<int16_t>(y_draw + 1),
-                                                                     isset, colorTftWhite, colorTftBlack)
-                                    : (isset ? colorTftWhite : colorTftBlack);
+                    if (hasColorRegions) {
+                        dst[x - x_FirstPixelUpdate] =
+                            graphics::resolveTFTColorPixelRow(static_cast<int16_t>(x), isset, colorTftWhite, colorTftBlack);
+                    } else {
+                        dst[x - x_FirstPixelUpdate] = isset ? colorTftWhite : colorTftBlack;
+                    }
 #else
-                linePixelBuffer[x_FirstPixelUpdate + span + col] = isset ? colorTftWhite : colorTftBlack;
+                    dst[x - x_FirstPixelUpdate] = isset ? colorTftWhite : colorTftBlack;
 #endif
-            }
-            const uint8_t lines_updated = 2;
-#else
-            int y_offset = 0;
-#if GRAPHICS_TFT_COLORING_ENABLED
-            if (hasColorRegions)
-                graphics::beginTFTColorRow(static_cast<int16_t>(y));
-#endif
-            for (x = x_FirstPixelUpdate; x <= x_LastPixelUpdate; x++) {
-                isset = buffer[x + y_byteIndex] & y_byteMask;
-#if GRAPHICS_TFT_COLORING_ENABLED
-                if (hasColorRegions) {
-                    linePixelBuffer[x] =
-                        graphics::resolveTFTColorPixelRow(static_cast<int16_t>(x), isset, colorTftWhite, colorTftBlack);
-                } else {
-                    linePixelBuffer[x] = isset ? colorTftWhite : colorTftBlack;
                 }
-#else
-                linePixelBuffer[x] = isset ? colorTftWhite : colorTftBlack;
-#endif
             }
-            const uint8_t lines_updated = 1;
-#endif
 
 #if defined(HACKADAY_COMMUNICATOR)
-            tft->draw16bitBeRGBBitmap(x_FirstPixelUpdate, y, &linePixelBuffer[x_FirstPixelUpdate],
-                                      (x_LastPixelUpdate - x_FirstPixelUpdate + 1), 1);
+            tft->draw16bitBeRGBBitmap(x_FirstPixelUpdate, y + y_offset, &linePixelBuffer[x_FirstPixelUpdate], spanWidth,
+                                      kRowsPerPush);
 #else
-            // Step 4: Send the changed pixels on this line to the screen as a single block transfer.
+            // Step 4: Send the changed pixels on these rows to the screen as a single block transfer.
             // This function accepts pixel data MSB first so it can dump the memory straight out the SPI port.
-            pushPixelBlock(x_FirstPixelUpdate, y + y_offset, (x_LastPixelUpdate - x_FirstPixelUpdate + 1), lines_updated,
-                           &linePixelBuffer[x_FirstPixelUpdate]);
+            pushPixelBlock(x_FirstPixelUpdate, y + y_offset, spanWidth, kRowsPerPush, &linePixelBuffer[x_FirstPixelUpdate]);
 #endif
             somethingChanged = true;
         }
-        y++;
+        y += kRowsPerPush;
     }
     // Copy the Buffer to the Back Buffer
     if (somethingChanged)
@@ -1894,15 +1984,27 @@ bool TFTDisplay::connect()
         memaudit::add("display", sizeof(uint16_t) * linePixels);
     }
     if (this->repaintChunkBuffer == NULL) {
-        this->repaintChunkBuffer = allocPixelBuffer((size_t)displayWidth * kFullRepaintChunkRows, &thisBufferDmaCapable);
+        const size_t chunkPixels = (size_t)displayWidth * kFullRepaintChunkRows;
 
+        // Two slots let a chunk's pixel conversion overlap the previous chunk's transfer, but that
+        // is only worth having if the internal heap can spare it - so ask for the pair, and drop to
+        // a single slot rather than starving whatever initialises after us.
+        this->repaintChunkBuffer = tryAllocDmaPixelBuffer(chunkPixels * kFullRepaintChunkSlots);
+        this->chunkBufferSlots = kFullRepaintChunkSlots;
+        thisBufferDmaCapable = this->repaintChunkBuffer != nullptr;
+
+        if (!this->repaintChunkBuffer) {
+            this->chunkBufferSlots = 1;
+            this->repaintChunkBuffer = allocPixelBuffer(chunkPixels, &thisBufferDmaCapable);
+        }
         if (!this->repaintChunkBuffer) {
             LOG_ERROR("Not enough memory to create TFT repaint chunk buffer");
             return false;
         }
         allBuffersDmaCapable &= thisBufferDmaCapable;
-        memaudit::add("display", sizeof(uint16_t) * displayWidth * kFullRepaintChunkRows);
+        memaudit::add("display", sizeof(uint16_t) * chunkPixels * this->chunkBufferSlots);
     }
+    LOG_DEBUG("TFT pixel buffers: dma=%d chunkSlots=%u", (int)allBuffersDmaCapable, (unsigned)this->chunkBufferSlots);
 
     this->pixelBuffersAreDmaCapable = allBuffersDmaCapable;
     return true;
