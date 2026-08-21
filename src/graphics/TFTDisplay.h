@@ -73,6 +73,11 @@ class TFTDisplay : public OLEDDisplay
     // could spare it, so conversion overlaps transfer; one otherwise.
     uint8_t chunkBufferSlots = 1;
 
+    // Same contract as chunkBufferSlots, for the diff path: batching holds the bus open, so a push
+    // can still be in flight while the next row-pair is converted. Two slots let those alternate;
+    // one means the diff path must not batch.
+    uint8_t lineBufferSlots = 1;
+
     // Send a block of pre-swapped RGB565 pixels to the panel, by DMA where that is available.
     // Non-const data: TFT_eSPI's pushImage() takes a mutable pointer.
     void pushPixelBlock(int32_t x, int32_t y, int32_t w, int32_t h, uint16_t *data);
