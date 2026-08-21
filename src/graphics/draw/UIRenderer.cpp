@@ -2123,9 +2123,17 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
     // tick() zeroes it when a transition completes - so reading it directly highlighted a stale
     // icon (usually the first) for the whole of a backwards transition, then snapped to the right
     // one at the end. frameIndexFor() derives the incoming frame properly in both directions.
-    uint8_t frameToHighlight = frameIndexFor(state, screen->frameCount);
-    if (frameToHighlight >= screen->indicatorIcons.size())
-        frameToHighlight = state->currentFrame;
+    // Wrap on the icon count, not the frame count. frameIndexFor() only consults the count it is
+    // given when a backwards transition wraps off frame 0, so if the two ever disagree the
+    // wrap landed past the end of indicatorIcons - and the guard below then fell back to
+    // currentFrame, which mid-transition is the frame being left rather than the one arriving.
+    // That showed as the footer sitting one icon behind for the length of a rightward swipe
+    // before snapping to the right one, and only ever rightward, since forward transitions read
+    // transitionFrameTarget and never wrap through here.
+    const size_t iconCount = screen->indicatorIcons.size();
+    uint8_t frameToHighlight = frameIndexFor(state, iconCount);
+    if (iconCount && frameToHighlight >= iconCount)
+        frameToHighlight %= iconCount; // wrap into range rather than show the outgoing frame
 
     // Detect frame change and record time
     if (frameToHighlight != lastFrameIndex) {
@@ -2143,7 +2151,7 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
     const int bigOffset = (currentResolution == ScreenResolution::High) ? 1 : 0;
     const bool compactPanel = graphics::isCompactPanel(display);
 
-    const size_t totalIcons = screen->indicatorIcons.size();
+    const size_t totalIcons = iconCount;
     if (totalIcons == 0)
         return;
 
@@ -2221,15 +2229,43 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
                                                  : (usableWidth / (iconSize + spacing));
     if (iconsThatFit < 1)
         iconsThatFit = 1; // also guards the divisions below
+#if BASEUI_NAV_INFINITE_SCROLL
+    // A centred, wrapping window rather than fixed pages. Paging swapped the whole group
+    // of icons whenever the current frame crossed a page boundary, so mid-swipe the lit
+    // icon appeared to be the wrong one. Here the middle slot is always the current frame
+    // and its neighbours rotate past it: the highlight never moves, and the icons carry
+    // the sense of motion instead.
+    size_t visibleCount = static_cast<size_t>(iconsThatFit);
+    if (visibleCount > totalIcons)
+        visibleCount = totalIcons;
+    if ((visibleCount & 1) == 0)
+        visibleCount--; // needs a true middle slot, and stops an icon being shown twice
+    if (visibleCount < 1)
+        visibleCount = 1;
+    const size_t centerSlot = visibleCount / 2;
+    // Only wrap when there is something off-screen to wrap to.
+    const bool scrolls = totalIcons > visibleCount;
+#else
     const size_t iconsPerPage = static_cast<size_t>(iconsThatFit);
     const size_t currentPage = frameToHighlight / iconsPerPage;
     const size_t pageStart = currentPage * iconsPerPage;
     const size_t pageEnd = min(pageStart + iconsPerPage, totalIcons);
+    const size_t visibleCount = pageEnd - pageStart;
+#endif
 
-    const int totalWidth = (pageEnd - pageStart) * iconSize + (pageEnd - pageStart - 1) * spacing;
+    const int totalWidth = visibleCount * iconSize + (visibleCount - 1) * spacing;
     const int xStart = (SCREEN_WIDTH - totalWidth) / 2;
 
-    const bool navBarVisible = millis() - lastFrameChangeTime <= ICON_DISPLAY_DURATION_MS;
+    bool navBarVisible = millis() - lastFrameChangeTime <= ICON_DISPLAY_DURATION_MS;
+#if BASEUI_NAV_INFINITE_SCROLL
+    // A slow drag can outlast the idle timeout, and having the bar vanish underneath a
+    // finger that is still mid-swipe looks broken. Hold it up for as long as something is
+    // actually sliding, and restart the idle countdown from the end of the gesture.
+    if (state && state->frameState == IN_TRANSITION) {
+        navBarVisible = true;
+        lastFrameChangeTime = millis();
+    }
+#endif
     const int y = navBarVisible ? (SCREEN_HEIGHT - iconSize - 1) : SCREEN_HEIGHT;
 
 #if defined(USE_EINK)
@@ -2294,10 +2330,69 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
     display->setColor(WHITE);
 
     // Icon drawing loop for the current page
-    for (size_t i = pageStart; i < pageEnd; ++i) {
-        const uint8_t *icon = screen->indicatorIcons[i];
-        const int x = xStart + (i - pageStart) * (iconSize + spacing);
-        const bool isActive = (i == static_cast<size_t>(frameToHighlight));
+#if BASEUI_NAV_INFINITE_SCROLL
+    // The strip follows the gesture: icons are laid out around the frame we are leaving and
+    // shifted by however far the transition has come, so they track the finger rather than
+    // jumping a slot when the frame index flips. The highlight box stays put in the middle,
+    // which is the whole point - the icons move through it, it never moves.
+    const int step = iconSize + spacing;
+    const float progress = graphics::frameTransitionProgress(state);
+    const int8_t dir = (state && state->frameState == IN_TRANSITION) ? state->frameTransitionDirection : 0;
+    // frameToHighlight is already the incoming frame, so the outgoing one is a step back.
+    const size_t fromIndex = (static_cast<size_t>(frameToHighlight) + totalIcons - (dir >= 0 ? 1 : (size_t)-1)) % totalIcons;
+    const size_t anchorIndex = dir ? fromIndex : static_cast<size_t>(frameToHighlight);
+    const int slideX = (int)lroundf(-dir * progress * step);
+
+    // One extra slot each side so an icon exists to slide into view; anything not fully
+    // inside the bar is skipped, since the glyph blitter cannot clip a partial icon.
+    const int innerLeft = rectX + 1;
+    const int innerRight = rectX + rectWidth - 1;
+
+    // The middle slot is a filled chip and the glyph inverts inside it - but per pixel, not per
+    // glyph. Picking one colour for a whole icon made the half straddling the chip edge land on
+    // matching background and disappear, which read as the box slicing icons in two. Each icon is
+    // therefore blitted up to three times: clipped to the spans either side of the chip in white,
+    // and to the chip itself in black, so the inversion falls exactly on the edge.
+    const int centerX = xStart + (int)centerSlot * step;
+    const int activePadding = compactPanel ? 1 : 2;
+    const int chipLeft = centerX - activePadding;
+    const int chipRight = centerX + iconSize + activePadding;
+    const int chipClipL = chipLeft > innerLeft ? chipLeft : innerLeft;
+    const int chipClipR = chipRight < innerRight ? chipRight : innerRight;
+
+#if GRAPHICS_TFT_COLORING_ENABLED
+    registerTFTColorRegion(TFTColorRole::NavigationBar, chipLeft, y - activePadding, iconSize + activePadding * 2,
+                           iconSize + activePadding * 2);
+#endif
+    display->setColor(WHITE);
+    display->fillRect(chipLeft, y - activePadding, iconSize + activePadding * 2, iconSize + activePadding * 2);
+
+    for (int slot = -1; slot <= (int)visibleCount; ++slot) {
+        const size_t iconIndex = (anchorIndex + totalIcons * 2 + (size_t)(slot + (int)totalIcons) - centerSlot) % totalIcons;
+        const int x = xStart + slot * step + slideX;
+        if ((x + iconSize) <= innerLeft || x >= innerRight)
+            continue; // entirely outside the bar
+        const uint8_t *icon = screen->indicatorIcons[iconIndex];
+
+        // Either side of the chip, in white. Clipped, so an icon entering or leaving the strip is
+        // revealed a column at a time rather than popping in whole once it happens to fit.
+        display->setColor(WHITE);
+        if (chipLeft > innerLeft)
+            drawStretchedXbmClipped(display, x, y, 8, 8, icon, iconSize, iconSize, innerLeft, chipClipL);
+        if (chipRight < innerRight)
+            drawStretchedXbmClipped(display, x, y, 8, 8, icon, iconSize, iconSize, chipClipR, innerRight);
+
+        // Over the chip, in black.
+        display->setColor(BLACK);
+        drawStretchedXbmClipped(display, x, y, 8, 8, icon, iconSize, iconSize, chipClipL, chipClipR);
+    }
+    display->setColor(WHITE);
+#else
+    for (size_t slot = 0; slot < visibleCount; ++slot) {
+        const size_t iconIndex = pageStart + slot;
+        const bool isActive = (iconIndex == static_cast<size_t>(frameToHighlight));
+        const uint8_t *icon = screen->indicatorIcons[iconIndex];
+        const int x = xStart + slot * (iconSize + spacing);
 
         if (isActive) {
 #if GRAPHICS_TFT_COLORING_ENABLED
@@ -2320,6 +2415,7 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
             display->setColor(WHITE);
         }
     }
+#endif
 
     display->setColor(WHITE);
 
@@ -2347,8 +2443,16 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
         }
     };
 
+#if BASEUI_NAV_INFINITE_SCROLL
+    const bool showLeftArrow = scrolls;
+    const bool showRightArrow = scrolls;
+#else
+    const bool showLeftArrow = pageStart > 0;
+    const bool showRightArrow = pageEnd < totalIcons;
+#endif
+
     // Right arrow
-    if (navBarVisible && pageEnd < totalIcons) {
+    if (navBarVisible && showRightArrow) {
         int baseX = rectX + rectWidth + offset;
         int regionX = baseX;
 
@@ -2360,7 +2464,7 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
     }
 
     // Left arrow
-    if (navBarVisible && pageStart > 0) {
+    if (navBarVisible && showLeftArrow) {
         int baseX = rectX - offset - 1;
         int regionX = baseX - maxW + 1;
 
