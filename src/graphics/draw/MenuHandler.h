@@ -56,6 +56,7 @@ class menuHandler
         ThrottleMessage,
         MessageResponseMenu,
         MessageViewModeMenu,
+        MessageOrderMenu,
         ReplyMenu,
         DeleteMessagesMenu,
         NodeNameLengthMenu,
@@ -131,6 +132,7 @@ class menuHandler
     static void messageBubblesMenu();
     static void themeMenu();
     static void textMessageMenu();
+    static void messageOrderMenu();
     static void hamModeConfirmMenu();
     static void licensedToNormalConfirmMenu();
 #if HAS_LORA_FEM

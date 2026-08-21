@@ -52,9 +52,44 @@ bool scrollStarted = false;
 static bool didReset = false;
 static constexpr int MESSAGE_BLOCK_GAP = 6;
 
+// True when the newest message sits at the bottom and history runs upwards off the top (chat
+// style), rather than the default of newest at the top with history running downwards.
+static inline bool isNewestLast()
+{
+    return config.display.message_order == meshtastic_Config_DisplayConfig_MessageOrder_NEWEST_LAST;
+}
+
+// Scroll geometry as drawTextMessageFrame() last laid it out. The scroll entry points run outside
+// that function and cannot measure the viewport themselves; newest-last *rests* at the scroll
+// limit, so an estimated limit leaves the newest message clipped by the panel edge.
+static int laidOutTotalHeight = 0;
+static int laidOutUsableHeight = 0;
+
+// Furthest the list may scroll from its resting position. Newest-first deliberately runs one line
+// past the bottom - the auto-scroll sweep pauses there, and that line is what lifts the last line
+// clear of the panel edge. Newest-last has no such slack: its resting position is the bottom.
+static int scrollLimit()
+{
+    if (laidOutUsableHeight <= 0)
+        return 0; // Nothing laid out yet; the next draw sets the anchor.
+
+    int limit = laidOutTotalHeight - laidOutUsableHeight;
+    if (!isNewestLast() && !cachedHeights.empty())
+        limit += cachedHeights.back();
+    return std::max(0, limit);
+}
+
 void scrollUp()
 {
     manualScrolling = true;
+
+    if (isNewestLast() && graphics::isCompactPanel(screen->getDisplayDevice()) && scrollY <= 0) {
+        // Compact panels: scrolling past the oldest message wraps back to the newest, mirroring the
+        // wrap scrollDown() gives the default order.
+        scrollY = (float)scrollLimit();
+        return;
+    }
+
     scrollY -= 12;
     if (scrollY < 0)
         scrollY = 0;
@@ -64,16 +99,10 @@ void scrollDown()
 {
     manualScrolling = true;
 
-    int totalHeight = 0;
-    for (int h : cachedHeights)
-        totalHeight += h;
+    const int maxScroll = scrollLimit();
 
-    int visibleHeight = screen->getHeight() - (FONT_HEIGHT_SMALL * 2);
-    int maxScroll = totalHeight - visibleHeight;
-    if (maxScroll < 0)
-        maxScroll = 0;
-
-    if (graphics::isCompactPanel(screen->getDisplayDevice()) && scrollY >= maxScroll) {
+    // Newest-last already wraps at the other end (see scrollUp), so it must not wrap here too.
+    if (!isNewestLast() && graphics::isCompactPanel(screen->getDisplayDevice()) && scrollY >= maxScroll) {
         // Compact panels: scrolling past the bottom wraps back to the top.
         scrollY = 0;
         return;
@@ -111,22 +140,13 @@ void nudgeScroll(int8_t direction)
         return;
     }
 
-    OLEDDisplay *display = (screen != nullptr) ? screen->getDisplayDevice() : nullptr;
-    const int displayHeight = display ? display->getHeight() : 64;
-    const int navHeight = FONT_HEIGHT_SMALL;
-    const int usableHeight = std::max(0, displayHeight - navHeight);
-
-    int totalHeight = 0;
-    for (int h : cachedHeights)
-        totalHeight += h;
-
-    if (totalHeight <= usableHeight) {
+    const int scrollStop = scrollLimit();
+    if (scrollStop <= 0) {
         scrollY = 0.0f;
         return;
     }
 
-    const int scrollStop = std::max(0, totalHeight - usableHeight + cachedHeights.back());
-    const int step = std::max(FONT_HEIGHT_SMALL, usableHeight / 3);
+    const int step = std::max(FONT_HEIGHT_SMALL, laidOutUsableHeight / 3);
 
     float newScroll = scrollY + static_cast<float>(direction) * static_cast<float>(step);
     if (newScroll < 0.0f)
@@ -148,6 +168,8 @@ void clearMessageCache()
 {
     std::vector<std::string>().swap(cachedLines);
     std::vector<int>().swap(cachedHeights);
+    laidOutTotalHeight = 0;
+    laidOutUsableHeight = 0; // Nothing to clamp against until the next draw republishes it.
 
     // Reset scroll so we rebuild cleanly next time we enter the screen
     resetScrollState();
@@ -525,8 +547,15 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     isHeader.reserve(MAX_CACHED_LINES);
     ackForLine.reserve(MAX_CACHED_LINES);
 
+    // First line index of each message, in the order emitted below (always newest-first). Newest-last
+    // is produced by reversing these groups afterwards, so the MAX_CACHED_LINES truncation still drops
+    // the oldest messages rather than the ones the user came to read.
+    std::vector<size_t> groupStart;
+    groupStart.reserve(filtered.size());
+
     for (auto it = filtered.rbegin(); it != filtered.rend(); ++it) {
         const auto &m = *it;
+        groupStart.push_back(allLines.size());
 
         // Channel / destination labeling
         char chanType[32] = "";
@@ -726,6 +755,33 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         }
     }
 
+    if (isNewestLast()) {
+        // Whole messages move; the lines inside one keep their order so it still reads top-down.
+        std::vector<std::string> ordLines;
+        std::vector<bool> ordMine, ordHeader;
+        std::vector<AckStatus> ordAck;
+        ordLines.reserve(allLines.size());
+        ordMine.reserve(allLines.size());
+        ordHeader.reserve(allLines.size());
+        ordAck.reserve(allLines.size());
+        for (size_t g = groupStart.size(); g-- > 0;) {
+            size_t first = groupStart[g];
+            size_t last = (g + 1 < groupStart.size()) ? groupStart[g + 1] : allLines.size();
+            if (last > allLines.size())
+                last = allLines.size();
+            for (size_t i = first; i < last; ++i) {
+                ordLines.push_back(std::move(allLines[i]));
+                ordMine.push_back(isMine[i]);
+                ordHeader.push_back(isHeader[i]);
+                ordAck.push_back(ackForLine[i]);
+            }
+        }
+        allLines.swap(ordLines);
+        isMine.swap(ordMine);
+        isHeader.swap(ordHeader);
+        ackForLine.swap(ordAck);
+    }
+
     // Cache lines and heights
     cachedLines.swap(allLines);
     cachedHeights = calculateLineHeights(cachedLines, emotes, isHeader);
@@ -744,7 +800,10 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     for (size_t i = 0; i < cachedHeights.size(); ++i)
         totalHeight += cachedHeights[i];
     int usableScrollHeight = usableHeight;
-    int scrollStop = std::max(0, totalHeight - usableScrollHeight + cachedHeights.back());
+    const bool orderNewestLast = isNewestLast();
+    laidOutTotalHeight = totalHeight;
+    laidOutUsableHeight = usableScrollHeight;
+    const int scrollStop = scrollLimit();
 
 #ifndef USE_EINK
     uint32_t now = millis();
@@ -757,7 +816,12 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     if (!scrollStarted && now - scrollStartDelay > 2000)
         scrollStarted = true;
 
-    if (!manualScrolling && totalHeight > usableScrollHeight) {
+    if (orderNewestLast) {
+        // The newest message is the resting position, so an auto-scroll sweep would carry the one
+        // line that must stay readable off the bottom. Only a manual scroll moves this list.
+        if (!manualScrolling)
+            scrollY = (float)scrollStop;
+    } else if (!manualScrolling && totalHeight > usableScrollHeight) {
         if (scrollStarted) {
             if (!waitingToReset) {
                 scrollY += delta * scrollSpeed;
@@ -777,8 +841,8 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         scrollY = 0;
     }
 #else
-    // E-Ink: disable autoscroll
-    scrollY = 0.0f;
+    // E-Ink: disable autoscroll, parking the list on the newest message at whichever end it lives.
+    scrollY = orderNewestLast ? (float)scrollStop : 0.0f;
     waitingToReset = false;
     scrollStarted = false;
     lastTime = millis();
