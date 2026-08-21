@@ -215,7 +215,29 @@ static inline void updateUiFrame(OLEDDisplayUi *ui)
 #if GRAPHICS_TFT_COLORING_ENABLED
     prepareFrameColorRegions();
 #endif
+#ifdef UI_PERF_DEBUG
+    // ui->update() covers BOTH rendering the frame callbacks into the buffer and the
+    // TFTDisplay::display() push. TFTDisplay times only the push, so the difference between these
+    // two numbers is what the renderers themselves cost - which is where the time actually goes
+    // when frames-per-second is far below what the measured push time alone would allow.
+    {
+        static uint32_t updTotal = 0, updCount = 0, lastMs = 0;
+        const uint32_t t0 = millis();
+        ui->update();
+        updTotal += millis() - t0;
+        updCount++;
+        const uint32_t now = millis();
+        if (now - lastMs >= 1000) {
+            LOG_INFO("ui->update(): %u calls in %u ms, %u ms each (render + push)", (unsigned)updCount, (unsigned)(now - lastMs),
+                     (unsigned)(updTotal / updCount));
+            updTotal = 0;
+            updCount = 0;
+            lastMs = now;
+        }
+    }
+#else
     ui->update();
+#endif
 }
 // Global variables for alert banner - explicitly define with extern "C" linkage to prevent optimization
 
