@@ -77,6 +77,18 @@ namespace graphics
 #ifndef BASEUI_NAV_INFINITE_SCROLL
 #define BASEUI_NAV_INFINITE_SCROLL 0
 #endif
+// When set, message bubbles are centred horizontally instead of being pushed to the left or right
+// edge by sender. Text keeps its sender-dependent alignment inside them.
+#ifndef BASEUI_CENTER_MESSAGE_BUBBLES
+#define BASEUI_CENTER_MESSAGE_BUBBLES 0
+#endif
+// Widest a left/right-aligned message bubble may grow, as a percentage of the content span. Below
+// 100 this leaves a gutter on the side the bubble is not anchored to, which is what makes the
+// incoming/outgoing split readable rather than two columns of near-full-width blocks. Applies to
+// both the bubble and the width its text wraps to. Ignored when BASEUI_CENTER_MESSAGE_BUBBLES is set.
+#ifndef BASEUI_MESSAGE_BUBBLE_MAX_PCT
+#define BASEUI_MESSAGE_BUBBLE_MAX_PCT 100
+#endif
 // Trims (negative) or grows (positive) how many entry rows the node list screens fit.
 #ifndef BASEUI_NODE_LIST_ROW_ADJUST
 #define BASEUI_NODE_LIST_ROW_ADJUST 0
