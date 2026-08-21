@@ -7,6 +7,10 @@
 #include "platform/portduino/PortduinoGlue.h"
 #endif
 
+#if defined(ARCH_ESP32)
+#include <esp_heap_caps.h> // heap_caps_malloc(), for DMA-reachable pixel buffers
+#endif
+
 #ifndef TFT_BACKLIGHT_ON
 #define TFT_BACKLIGHT_ON HIGH
 #endif
@@ -1256,9 +1260,41 @@ extern unPhone unphone;
 
 GpioPin *TFTDisplay::backlightEnable = NULL;
 
+// TFT_eSPI's DMA API is a different shape entirely - it needs an explicit initDMA() and its own
+// push calls - so the DMA push below is for the LovyanGFX backends only.
+#if defined(ST7735_CS)
+#define TFT_HAS_LGFX_DMA_PUSH 0
+#else
+#define TFT_HAS_LGFX_DMA_PUSH 1
+#endif
+
 namespace
 {
 static constexpr uint8_t kFullRepaintChunkRows = 8;
+
+// Allocate a pixel buffer that SPI DMA can read from, reporting whether that succeeded.
+//
+// Plain malloc() will not reliably do on ESP32: main.cpp calls heap_caps_malloc_extmem_enable(),
+// which sends allocations past a small threshold to PSRAM. Buffers this size land there, which
+// both puts them out of easy reach of the DMA engine and makes the per-pixel fill loop pay bus
+// time on boards where PSRAM shares its SPI bus with flash.
+//
+// Falls back to malloc() so a board too tight on internal RAM still comes up - just without DMA,
+// which is exactly the behavior it had before.
+static uint16_t *allocPixelBuffer(size_t pixels, bool *dmaCapable)
+{
+    const size_t bytes = pixels * sizeof(uint16_t);
+#if defined(ARCH_ESP32)
+    void *dmaBuf = heap_caps_malloc(bytes, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    if (dmaBuf) {
+        *dmaCapable = true;
+        return static_cast<uint16_t *>(dmaBuf);
+    }
+    LOG_WARN("No DMA-capable RAM for TFT pixel buffer (%u B), falling back to slower PIO pushes", (unsigned)bytes);
+#endif
+    *dmaCapable = false;
+    return static_cast<uint16_t *>(malloc(bytes));
+}
 
 static inline uint16_t getThemeDefaultOnColor()
 {
@@ -1320,6 +1356,33 @@ TFTDisplay::~TFTDisplay()
     }
     memaudit::set("display", 0);
 }
+
+#if defined(HACKADAY_COMMUNICATOR)
+// Arduino_GFX backend: display() calls draw16bitBeRGBBitmap() directly and never routes through
+// here. This exists only to satisfy the declaration.
+void TFTDisplay::pushPixelBlock(int32_t, int32_t, int32_t, int32_t, uint16_t *) {}
+#else
+// Send a block of pre-swapped RGB565 pixels to the panel.
+//
+// Worth going through here rather than calling tft->pushImage() directly: that overload defaults
+// to use_dma=false, and Bus_SPI only auto-promotes transfers under 1024 bytes to DMA. Every
+// full-width block we push is comfortably over that, so all of them would otherwise take the PIO
+// fallback, which walks the SPI FIFO 64 bytes at a time and busy-waits for each one to drain -
+// leaving the bus idle in between. Ask for DMA explicitly instead.
+//
+// Safe to reuse the source buffer as soon as this returns: pushImage() wraps the transfer in
+// startWrite()/endWrite(), and endWrite() ends the transaction, which waits on the bus.
+void TFTDisplay::pushPixelBlock(int32_t x, int32_t y, int32_t w, int32_t h, uint16_t *data)
+{
+#if TFT_HAS_LGFX_DMA_PUSH
+    if (pixelBuffersAreDmaCapable) {
+        tft->pushImageDMA(x, y, w, h, data);
+        return;
+    }
+#endif
+    tft->pushImage(x, y, w, h, data);
+}
+#endif
 
 // Write the buffer to the display memory
 void TFTDisplay::display(bool fromBlank)
@@ -1400,7 +1463,7 @@ void TFTDisplay::display(bool fromBlank)
 #if defined(HACKADAY_COMMUNICATOR)
             tft->draw16bitBeRGBBitmap(0, yStart, repaintChunkBuffer, displayWidth, rowsThisChunk);
 #else
-            tft->pushImage(0, yStart, displayWidth, rowsThisChunk, repaintChunkBuffer);
+            pushPixelBlock(0, yStart, displayWidth, rowsThisChunk, repaintChunkBuffer);
 #endif
         }
 
@@ -1570,7 +1633,7 @@ void TFTDisplay::display(bool fromBlank)
 #else
             // Step 4: Send the changed pixels on this line to the screen as a single block transfer.
             // This function accepts pixel data MSB first so it can dump the memory straight out the SPI port.
-            tft->pushImage(x_FirstPixelUpdate, y + y_offset, (x_LastPixelUpdate - x_FirstPixelUpdate + 1), lines_updated,
+            pushPixelBlock(x_FirstPixelUpdate, y + y_offset, (x_LastPixelUpdate - x_FirstPixelUpdate + 1), lines_updated,
                            &linePixelBuffer[x_FirstPixelUpdate]);
 #endif
             somethingChanged = true;
@@ -1809,28 +1872,39 @@ bool TFTDisplay::connect()
 #endif
     tft->fillScreen(getThemeDefaultOffColor());
 
+    // Both buffers have to be DMA-reachable before display() can use the DMA push, so track the
+    // two allocations together.
+    bool allBuffersDmaCapable = true;
+    bool thisBufferDmaCapable = false;
+
     if (this->linePixelBuffer == NULL) {
 #if defined(CO5300_CS)
-        this->linePixelBuffer = (uint16_t *)malloc(sizeof(uint16_t) * displayWidth * 2);
+        // Twice the width: this panel pushes row pairs, so the partner row is staged alongside.
+        const size_t linePixels = (size_t)displayWidth * 2;
 #else
-        this->linePixelBuffer = (uint16_t *)malloc(sizeof(uint16_t) * displayWidth);
+        const size_t linePixels = (size_t)displayWidth;
 #endif
+        this->linePixelBuffer = allocPixelBuffer(linePixels, &thisBufferDmaCapable);
 
         if (!this->linePixelBuffer) {
             LOG_ERROR("Not enough memory to create TFT line buffer");
             return false;
         }
-        memaudit::add("display", sizeof(uint16_t) * displayWidth);
+        allBuffersDmaCapable &= thisBufferDmaCapable;
+        memaudit::add("display", sizeof(uint16_t) * linePixels);
     }
     if (this->repaintChunkBuffer == NULL) {
-        this->repaintChunkBuffer = (uint16_t *)malloc(sizeof(uint16_t) * displayWidth * kFullRepaintChunkRows);
+        this->repaintChunkBuffer = allocPixelBuffer((size_t)displayWidth * kFullRepaintChunkRows, &thisBufferDmaCapable);
 
         if (!this->repaintChunkBuffer) {
             LOG_ERROR("Not enough memory to create TFT repaint chunk buffer");
             return false;
         }
+        allBuffersDmaCapable &= thisBufferDmaCapable;
         memaudit::add("display", sizeof(uint16_t) * displayWidth * kFullRepaintChunkRows);
     }
+
+    this->pixelBuffersAreDmaCapable = allBuffersDmaCapable;
     return true;
 }
 
