@@ -16,7 +16,16 @@
 #define TFT_OFFSET_X 22
 #define TFT_OFFSET_Y 0
 #define TFT_OFFSET_ROTATION 0
-#define SCREEN_TRANSITION_FRAMERATE 5 // fps
+// This is a hard cap, not a hint: setFastFramerate() feeds it to OLEDDisplayUi::setTargetFPS(),
+// which turns it into updateInterval, and update() then refuses to redraw more often than that no
+// matter how many times the thread runs. At 5 a drag was drawn five times a second, which is what
+// made a finger-tracked swipe here feel worse than the T-Deck (30).
+//
+// 15 is sized to what the panel measurably does: a full repaint costs ~26 ms idle and ~46 ms
+// mid-transition, when both the outgoing and incoming frame register colour regions to overprint.
+// Going higher just saturates the cooperative scheduler and starves the touch poll, since these
+// threads cannot preempt each other.
+#define SCREEN_TRANSITION_FRAMERATE 15 // fps
 #define USE_TFTDISPLAY 1
 #define HAS_SCREEN 1
 #define TFT_RESET_AFTER_SLEEP
