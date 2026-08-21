@@ -1292,11 +1292,8 @@ struct DisplayFrameTimer {
         drawTotal += now - lockedMs;
         frames++;
         if (now - lastReportMs >= 1000) {
-            // Region count is reported alongside because resolveTFTColorPixelRow() scans the
-            // row's regions linearly for every pixel, so draw time is expected to track it.
-            LOG_INFO("TFT display(): %u frames in %u ms, %u ms draw, %u ms spiLock wait, %u colour regions", (unsigned)frames,
-                     (unsigned)(now - lastReportMs), (unsigned)(drawTotal / frames), (unsigned)(waitTotal / frames),
-                     (unsigned)graphics::getTFTColorRegionCount());
+            LOG_INFO("TFT display(): %u frames in %u ms, %u ms draw, %u ms spiLock wait", (unsigned)frames,
+                     (unsigned)(now - lastReportMs), (unsigned)(drawTotal / frames), (unsigned)(waitTotal / frames));
             waitTotal = 0;
             drawTotal = 0;
             frames = 0;
