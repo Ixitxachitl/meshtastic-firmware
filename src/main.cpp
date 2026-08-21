@@ -1077,6 +1077,12 @@ void setup()
 #ifdef HAS_I2S
     LOG_DEBUG("Start audio thread");
     audioThread = new AudioThread();
+#if defined(ARDUINO_ARCH_ESP32)
+    // Not fatal: startFreeRTOSTask() leaves the thread on the ThreadController, so playback still
+    // works, just paced by the main loop.
+    if (audioThread->isFreeRTOSTask() && !audioThread->startFreeRTOSTask())
+        LOG_ERROR("AudioThread task create failed, falling back to cooperative scheduling");
+#endif
 #endif
 
 #ifdef HAS_UDP_MULTICAST
@@ -1177,6 +1183,13 @@ void setup()
     auto rIf = initLoRa();
 
     lateInitVariant(); // Do board specific init (see extra_variants/README.md for documentation)
+
+#ifdef HAS_I2S
+    // Now that the audio thread exists and lateInitVariant() has configured the amp enable pin,
+    // play the boot melody that playStartMelody() asked for back at the top of setup(). No-op if
+    // nothing was queued.
+    buzzOnAudioThreadReady();
+#endif
 
 #if !MESHTASTIC_EXCLUDE_MQTT
     mqttInit();

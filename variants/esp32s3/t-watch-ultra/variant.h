@@ -48,6 +48,14 @@
 // strap crowds the bottom of a watch, so the key block is lifted clear of it; the sides need only a
 // hair, since fourteen columns are already narrow and the panel does not round away far enough
 // there to swallow a key. Much smaller than BASEUI_BODY_LR_MARGIN, and deliberately so.
+// Custom boot splash, shown for the second half of the boot screen. The artwork is already drawn at
+// panel resolution, so pin it to 1:1 - BASEUI_ICON_SCALE would blow 216x300 up to 432x600 and clip
+// it against this 410x502 panel.
+#define USERPREFS_OEM_TEXT "Ixitxachitl Build"
+#define USERPREFS_OEM_FONT_SIZE 1
+#define USERPREFS_OEM_IMAGE_SCALE 1
+#include "oem_splash.h"
+
 #define BASEUI_KEYBOARD_LR_MARGIN_PCT 1
 #define BASEUI_KEYBOARD_BOTTOM_MARGIN_PCT 10
 

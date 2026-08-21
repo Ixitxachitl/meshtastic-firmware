@@ -44,6 +44,7 @@ extern NicheGraphics::BaseUIEInkDisplay *setupNicheGraphicsBaseUI();
 #include "TimeFormatters.h"
 #include "draw/ClockRenderer.h"
 #include "draw/DebugRenderer.h"
+#include "draw/MapRenderer.h"
 #include "draw/MenuHandler.h"
 #include "draw/MessageRenderer.h"
 #include "draw/NodeListRenderer.h"
@@ -1176,6 +1177,49 @@ static bool dragSuppressNextSwipe = false;
 // intercepting input mid-drag, which is why the anchor already carries a staleness timeout - and a
 // flag left stuck true would pin the screen at the transition framerate indefinitely. That is a
 // battery leak rather than a cosmetic bug, so this self-heals instead.
+#if BASEUI_HAS_MAP
+// ---- Finger-tracked map panning ---------------------------------------------------------------
+//
+// Pan Mode moves the map with the finger instead of stepping a fixed fraction of the view per
+// classified swipe. Unlike the frame transitions above this never commits to an axis: panning is
+// two-dimensional, so both components of every drag report are used.
+//
+// Only the delta between consecutive reports is applied, never the offset from where the finger
+// landed. That keeps the map tracking the finger exactly even though the first report already
+// arrives some pixels into the gesture (TOUCH_DRAG_START_THRESHOLD), which an absolute offset
+// would show up as a jump on the first move.
+static bool mapPanAnchorValid = false;
+static uint16_t mapPanLastX = 0;
+static uint16_t mapPanLastY = 0;
+static uint32_t mapPanLastMs = 0;
+
+static void mapPanDragUpdate(const InputEvent *event)
+{
+    const uint32_t now = millis();
+    // Same staleness reasoning as the frame drag above - a gesture can end somewhere we never see.
+    if (!mapPanAnchorValid || (now - mapPanLastMs) > DRAG_ANCHOR_STALE_MS) {
+        mapPanAnchorValid = true;
+        mapPanLastX = event->touchX;
+        mapPanLastY = event->touchY;
+        mapPanLastMs = now;
+        return; // this report only establishes where the finger currently is
+    }
+
+    const float dx = (float)((int32_t)event->touchX - (int32_t)mapPanLastX);
+    const float dy = (float)((int32_t)event->touchY - (int32_t)mapPanLastY);
+    mapPanLastX = event->touchX;
+    mapPanLastY = event->touchY;
+    mapPanLastMs = now;
+
+    graphics::MapRenderer::panByFingerDelta(dx, dy);
+}
+
+static void mapPanDragEnd()
+{
+    mapPanAnchorValid = false;
+}
+#endif // BASEUI_HAS_MAP
+
 // ---- Finger-tracked message scrolling ---------------------------------------------------------
 //
 // The message list shares its frame with normal left/right paging, so this commits to an axis
@@ -1232,6 +1276,12 @@ static bool screenDragOwnsFramerate()
     const uint32_t now = millis();
     if (dragAnchorValid && (now - dragAnchorMs) <= DRAG_ANCHOR_STALE_MS)
         return true;
+#if BASEUI_HAS_MAP
+    // Panning never starts a frame transition, so frameState stays FIXED for the whole gesture and
+    // the demote in runOnce() would otherwise fire on every single drag report.
+    if (mapPanAnchorValid && (now - mapPanLastMs) <= DRAG_ANCHOR_STALE_MS)
+        return true;
+#endif
     // Scrolling the list starts no transition either, so frameState stays FIXED for the whole
     // gesture and the demote in runOnce() would otherwise fire on every drag report.
     if (messageScrollAnchorValid && (now - messageScrollLastMs) <= DRAG_ANCHOR_STALE_MS)
@@ -1776,6 +1826,16 @@ void Screen::setFrames(FrameFocus focus)
         PUSH_FRAME_TITLE("GPS");
     }
 #endif
+    // Map doesn't need local GPS - it can show other nodes' positions regardless, and falls back to
+    // their centroid when we have no fix of our own. Opt-in via -DBASEUI_HAS_MAP=1, which also
+    // enforces a color-TFT-or-E-Ink display and somewhere to store a basemap (see configuration.h).
+#if BASEUI_HAS_MAP
+    if (!hiddenFrames.map) {
+        fsi.positions.map = numframes;
+        normalFrames[numframes++] = graphics::MapRenderer::drawMapFrame;
+        indicatorIcons.push_back(icon_map);
+    }
+#endif
     if (RadioLibInterface::instance && !hiddenFrames.lora) {
         fsi.positions.lora = numframes;
         normalFrames[numframes++] = graphics::DebugRenderer::drawLoRaFocused;
@@ -1974,6 +2034,9 @@ void Screen::toggleFrameVisibility(const std::string &frameName)
         hiddenFrames.gps = !hiddenFrames.gps;
     }
 #endif
+    if (frameName == "map") {
+        hiddenFrames.map = !hiddenFrames.map;
+    }
     if (frameName == "lora") {
         hiddenFrames.lora = !hiddenFrames.lora;
     }
@@ -2015,6 +2078,8 @@ bool Screen::isFrameHidden(const std::string &frameName) const
     if (frameName == "gps")
         return hiddenFrames.gps;
 #endif
+    if (frameName == "map")
+        return hiddenFrames.map;
     if (frameName == "lora")
         return hiddenFrames.lora;
     if (frameName == "clock")
@@ -2059,6 +2124,7 @@ enum FrameVisBit : uint8_t {
     FVBIT_LORA = 13,
     FVBIT_SHOW_FAVORITES = 14,
     FVBIT_CHIRPY = 15,
+    FVBIT_MAP = 16,
 };
 
 struct __attribute__((packed)) FrameVisFile {
@@ -2105,6 +2171,7 @@ uint32_t Screen::packHiddenFrames() const
 #endif
     setBit(mask, FVBIT_GPS, hiddenFrames.gps);
 #endif
+    setBit(mask, FVBIT_MAP, hiddenFrames.map);
     setBit(mask, FVBIT_LORA, hiddenFrames.lora);
     setBit(mask, FVBIT_SHOW_FAVORITES, hiddenFrames.show_favorites);
     setBit(mask, FVBIT_CHIRPY, hiddenFrames.chirpy);
@@ -2134,6 +2201,7 @@ void Screen::applyHiddenFramesMask(uint32_t mask)
 #endif
     hiddenFrames.gps = getBit(mask, FVBIT_GPS);
 #endif
+    hiddenFrames.map = getBit(mask, FVBIT_MAP);
     hiddenFrames.lora = getBit(mask, FVBIT_LORA);
     hiddenFrames.show_favorites = getBit(mask, FVBIT_SHOW_FAVORITES);
     hiddenFrames.chirpy = getBit(mask, FVBIT_CHIRPY);
@@ -2447,6 +2515,103 @@ int Screen::handleInputEvent(const InputEvent *event)
         menuHandler::handleMenuSwitch(dispdev);
         return 0;
     }
+    // Pan Mode and Zoom Mode are entered directly from the Map's own menu and held until Back or
+    // Cancel is pressed (not enabled/disabled toggles) - while either is active, the joystick is
+    // claimed entirely so it can't also page between frames underneath. Devices with a single
+    // physical button (e.g. Wio Tracker L1) send INPUT_BROKER_CANCEL for it, not _BACK, so both
+    // need to exit these modes - otherwise Cancel falls through to its device-wide "turn off
+    // screen" meaning further down instead.
+#if BASEUI_HAS_MAP
+    if (framesetInfo.positions.map != 255 && ui->getUiState()->currentFrame == framesetInfo.positions.map) {
+#if BASEUI_HAS_TOUCH_DRAG
+        // Where the hardware reports a continuous drag, Pan Mode tracks the finger directly rather
+        // than waiting for a swipe to be classified and jumping a fixed fraction of the view.
+        if (graphics::MapRenderer::isPanModeEnabled()) {
+            if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG) {
+                mapPanDragUpdate(event);
+                setFastFramerate();
+                return 0;
+            }
+            if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG_END) {
+                mapPanDragEnd();
+                setFastFramerate();
+                return 0;
+            }
+        }
+#endif
+        // A touch drag arrives as a continuous stream of reports alongside the swipe the touch
+        // layer still classifies on release. While Zoom Mode is held it is that swipe which zooms -
+        // there is no continuous equivalent of a zoom step - so the drag reports are neither a
+        // navigation command nor evidence the user did something else. Swallow them here, or the
+        // else-branches below read them as "not part of pan navigation" and drop out of the mode -
+        // which made any touch at all cancel it. Pan Mode only reaches this on builds without
+        // BASEUI_HAS_TOUCH_DRAG, where the swipe is still what pans.
+        if ((graphics::MapRenderer::isPanModeEnabled() || graphics::MapRenderer::isZoomModeEnabled()) &&
+            (event->inputEvent == INPUT_BROKER_TOUCH_DRAG || event->inputEvent == INPUT_BROKER_TOUCH_DRAG_END))
+            return 0;
+        if (graphics::MapRenderer::isPanModeEnabled()) {
+#if BASEUI_HAS_TOUCH_DRAG
+            // Panning is finger-tracked here, so the swipe classified on release must never also
+            // step the view - not after a drag we already applied, and not for a flick too quick to
+            // have produced any drag report at all. Swallowed rather than left to fall through,
+            // which the else-branch below would read as "not part of pan navigation" and use to drop
+            // out of Pan Mode.
+            if (isTouchSourced(event) && (event->inputEvent == INPUT_BROKER_UP || event->inputEvent == INPUT_BROKER_DOWN ||
+                                          event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_RIGHT))
+                return 0;
+#endif
+            if (event->inputEvent == INPUT_BROKER_BACK || event->inputEvent == INPUT_BROKER_CANCEL) {
+                graphics::MapRenderer::setPanModeEnabled(false);
+                setFastFramerate();
+                return 0;
+            } else if (event->inputEvent == INPUT_BROKER_UP) {
+                graphics::MapRenderer::panUp();
+                setFastFramerate();
+                return 0;
+            } else if (event->inputEvent == INPUT_BROKER_DOWN) {
+                graphics::MapRenderer::panDown();
+                setFastFramerate();
+                return 0;
+            } else if (event->inputEvent == INPUT_BROKER_LEFT) {
+                graphics::MapRenderer::panLeft();
+                setFastFramerate();
+                return 0;
+            } else if (event->inputEvent == INPUT_BROKER_RIGHT) {
+                graphics::MapRenderer::panRight();
+                setFastFramerate();
+                return 0;
+            } else {
+                // Anything else (SELECT opening the menu, a frame-switch key, ...) isn't part of
+                // pan navigation - drop out of Pan Mode so it doesn't linger silently once the menu
+                // opens or the frame changes underneath it, then let the event fall through below
+                // for its normal handling.
+                graphics::MapRenderer::setPanModeEnabled(false);
+            }
+        } else if (graphics::MapRenderer::isZoomModeEnabled()) {
+            if (event->inputEvent == INPUT_BROKER_BACK || event->inputEvent == INPUT_BROKER_CANCEL) {
+                graphics::MapRenderer::setZoomModeEnabled(false);
+                setFastFramerate();
+                return 0;
+            } else if (event->inputEvent == INPUT_BROKER_UP) {
+                graphics::MapRenderer::zoomIn();
+                setFastFramerate();
+                return 0;
+            } else if (event->inputEvent == INPUT_BROKER_DOWN) {
+                graphics::MapRenderer::zoomOut();
+                setFastFramerate();
+                return 0;
+            } else if (event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_RIGHT) {
+                // Swallow - don't let these page frames out from under Zoom Mode.
+                setFastFramerate();
+                return 0;
+            } else {
+                // Same reasoning as Pan Mode above - e.g. SELECT opening the menu.
+                graphics::MapRenderer::setZoomModeEnabled(false);
+            }
+        }
+    }
+#endif // BASEUI_HAS_MAP
+
     // UP/DOWN in message screen scrolls through message threads
     if (ui->getUiState()->currentFrame == framesetInfo.positions.textMessage) {
 #if BASEUI_HAS_TOUCH_DRAG
@@ -2674,6 +2839,11 @@ int Screen::handleInputEvent(const InputEvent *event)
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.gps && gps) {
                     menuHandler::positionBaseMenu();
 #endif
+#if BASEUI_HAS_MAP
+                } else if (framesetInfo.positions.map != 255 &&
+                           this->ui->getUiState()->currentFrame == framesetInfo.positions.map) {
+                    menuHandler::mapBaseMenu();
+#endif
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.clock) {
                     menuHandler::clockMenu();
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.lora) {
@@ -2748,6 +2918,11 @@ bool Screen::isOverlayBannerShowing()
 bool Screen::isGamesFrameShown()
 {
     return framesetInfo.positions.games != 255 && ui && ui->getUiState()->currentFrame == framesetInfo.positions.games;
+}
+
+bool Screen::isMapFrameShown()
+{
+    return framesetInfo.positions.map != 255 && ui && ui->getUiState()->currentFrame == framesetInfo.positions.map;
 }
 
 } // namespace graphics

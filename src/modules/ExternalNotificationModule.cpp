@@ -307,13 +307,8 @@ void ExternalNotificationModule::stopNow()
     buzzerShouldAlert = false;
     nagCycleCutoff = UINT32_MAX;
 
-#ifdef HAS_I2S
-    // GPIO0 is used as mclk for I2S audio and set to OUTPUT by the sound library
-    // T-Deck uses GPIO0 as trackball button, so restore the mode
-#if defined(T_DECK) || (defined(BUTTON_PIN) && BUTTON_PIN == 0)
-    pinMode(0, INPUT);
-#endif
-#endif
+    // No pinMode(0, INPUT) needed any more: that undid the old sound library claiming GPIO0 as I2S
+    // MCLK. MeshtasticI2SOut always passes the variant's explicit DAC_I2S_MCLK instead.
 }
 
 ExternalNotificationModule::ExternalNotificationModule()
