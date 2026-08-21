@@ -476,12 +476,12 @@ constexpr int kChromeColorRegionReserve = 32;
 constexpr int kMaxNodeColorRegions =
     (MAX_TFT_COLOR_REGIONS > kChromeColorRegionReserve + 24) ? (int)MAX_TFT_COLOR_REGIONS - kChromeColorRegionReserve : 24;
 
-void tintMarkerCenter(int16_t centerX, int16_t centerY, int &budget)
+void tintMarkerCenter(int16_t centerX, int16_t centerY, int &budget, uint32_t centerColor = TFTPalette::Red)
 {
     if (budget <= 0)
         return;
     registerTFTColorRegionDirect(centerX - BASEUI_ICON_SCALE, centerY - BASEUI_ICON_SCALE, 2 * BASEUI_ICON_SCALE,
-                                 2 * BASEUI_ICON_SCALE, TFTPalette::White, TFTPalette::Red);
+                                 2 * BASEUI_ICON_SCALE, TFTPalette::White, centerColor);
     budget--;
 }
 #endif
@@ -790,6 +790,36 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
                     labelW[labelCount] = lw;
                     labelH[labelCount] = labelHeight;
                     labelCount++;
+                }
+            }
+        }
+    }
+
+    // Received waypoint: same ring glyph as a node, tinted green instead of red so the two read
+    // apart at a glance. Drawn after the nodes and before the self crosshair - a waypoint is more
+    // interesting than a node marker it lands on, and less interesting than where you are.
+    //
+    // devicestate.rx_waypoint holds only the most recently received waypoint - the firmware keeps
+    // no collection - so this is one marker, matching what the waypoint screen itself shows.
+    if (devicestate.has_rx_waypoint) {
+        meshtastic_Waypoint wp = meshtastic_Waypoint_init_default;
+        const meshtastic_MeshPacket &wmp = devicestate.rx_waypoint;
+        if (pb_decode_from_bytes(wmp.decoded.payload.bytes, wmp.decoded.payload.size, &meshtastic_Waypoint_msg, &wp) &&
+            (wp.latitude_i != 0 || wp.longitude_i != 0)) {
+            const float wlat = wp.latitude_i * 1e-7f;
+            const float wlng = wp.longitude_i * 1e-7f;
+            const float wdistance = GeoCoord::latLongToMeter(centerLat, centerLng, wlat, wlng);
+            const float wbearing = GeoCoord::bearing(centerLat, centerLng, wlat, wlng);
+            const int16_t wx = x + viewWidth / 2 + (int16_t)(sinf(wbearing) * wdistance * metersToPx);
+            const int16_t wy = y + viewHeight / 2 - (int16_t)(cosf(wbearing) * wdistance * metersToPx);
+
+            if (wx >= x - 2 && wx <= x + viewWidth + 1 && wy >= y - 2 && wy <= y + viewHeight + 1) {
+                drawHaloXbm(display, wx - 4 * BASEUI_ICON_SCALE, wy - 4 * BASEUI_ICON_SCALE, 8, 8, icon_map_node);
+#if GRAPHICS_TFT_COLORING_ENABLED
+                tintMarkerCenter(wx, wy, nodeColorRegions, TFTPalette::MeshtasticGreen);
+#endif
+                if (wp.name[0] != '\0') {
+                    drawHaloString(display, wx + 5 * BASEUI_ICON_SCALE, wy - labelHeight / 2, wp.name);
                 }
             }
         }

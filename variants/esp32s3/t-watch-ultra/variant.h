@@ -25,7 +25,7 @@
 // mid-transition, when both the outgoing and incoming frame register colour regions to overprint.
 // Going higher just saturates the cooperative scheduler and starves the touch poll, since these
 // threads cannot preempt each other.
-#define SCREEN_TRANSITION_FRAMERATE 15 // fps
+#define SCREEN_TRANSITION_FRAMERATE 30 // fps  [EXPERIMENT: was 15, testing busy-screen scroll]
 #define USE_TFTDISPLAY 1
 #define HAS_SCREEN 1
 #define TFT_RESET_AFTER_SLEEP
