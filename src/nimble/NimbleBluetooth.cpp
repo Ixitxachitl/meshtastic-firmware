@@ -768,18 +768,6 @@ class NimbleBluetoothServerCallback : public BLEServerCallbacks
 
         LOG_INFO("BLE conn %u peer MTU %u (target %u)", connHandle, pServer->getPeerMTU(connHandle), kPreferredBleMtu);
         pServer->updateConnParams(connHandle, 6, 12, 0, 200);
-
-        // A peer we are already bonded to reconnects using the stored key, so the passkey banner
-        // put up for pairing has nothing left to dismiss it - onPassKeyDisplay() never runs, and
-        // the encryption-change that would reach onAuthenticationComplete() may not arrive before
-        // the user is looking at a screen still demanding a PIN they cannot enter. Settle the state
-        // here instead, exactly as the authenticated path does.
-        if (desc != nullptr && desc->sec_state.bonded) {
-            LOG_INFO("BLE conn %u already bonded", connHandle);
-            meshtastic::BluetoothStatus newStatus(meshtastic::BluetoothStatus::ConnectionState::CONNECTED);
-            bluetoothStatus->updateStatus(&newStatus);
-            clearPairingDisplay();
-        }
     }
 
     void onDisconnect(BLEServer *pServer, struct ble_gap_conn_desc *desc)
