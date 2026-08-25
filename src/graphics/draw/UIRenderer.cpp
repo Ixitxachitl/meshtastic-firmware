@@ -1529,8 +1529,8 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
     std::string stepsLine = "Steps: " + std::to_string(screen->steps);
     textWidth = UIRenderer::measureStringWithEmotes(display, stepsLine.c_str());
     nameX = (SCREEN_WIDTH - textWidth) / 2;
-    UIRenderer::drawStringWithEmotes(display, nameX, getTextPositions(display)[line++] + y, stepsLine.c_str(), FONT_HEIGHT_SMALL,
-                                     1, false);
+    UIRenderer::drawStringWithEmotes(display, nameX, getTextPositions(display)[line++] + trailingYOffset + y, stepsLine.c_str(),
+                                     FONT_HEIGHT_SMALL, 1, false);
 #endif
 #endif
     graphics::drawCommonFooter(display, x, y);
