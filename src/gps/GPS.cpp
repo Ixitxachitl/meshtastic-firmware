@@ -801,6 +801,35 @@ bool GPS::verifyCachedProbePresence()
  *  to known GPS responses.
  * @retval Whether setup reached the end of its potential to configure the GPS.
  */
+#ifdef GPS_POWER_CYCLE_IF_UNRESPONSIVE
+// A receiver left latched by a dirty power cut (see GPS_NO_HARDSLEEP) only recovers when its power is
+// removed with nothing driving into it. Only done after it has failed to answer, so an ordinary reboot
+// keeps the receiver's ephemeris and its hot start.
+void GPS::powerCycleIfUnresponsive()
+{
+    if (didPowerCycle || !en_gpio)
+        return;
+    didPowerCycle = true;
+    LOG_WARN("GPS silent, power cycling for %ums", (unsigned)GPS_POWER_CYCLE_OFF_MS);
+    _serial_gps->end();
+    pinMode(tx_gpio, OUTPUT);
+    digitalWrite(tx_gpio, LOW);
+    pinMode(rx_gpio, INPUT);
+#ifdef PIN_GPS_RESET
+    pinMode(PIN_GPS_RESET, OUTPUT);
+    digitalWrite(PIN_GPS_RESET, LOW);
+#endif
+    pinMode(en_gpio, OUTPUT);
+    digitalWrite(en_gpio, !GPS_EN_ACTIVE);
+    delay(GPS_POWER_CYCLE_OFF_MS);
+    digitalWrite(en_gpio, GPS_EN_ACTIVE);
+#ifdef PIN_GPS_RESET
+    digitalWrite(PIN_GPS_RESET, !GPS_RESET_MODE);
+#endif
+    _serial_gps->begin(GPS_BAUDRATE); // probe() re-pulses reset and re-selects the baud from here
+}
+#endif
+
 bool GPS::setup()
 {
     if (!didSerialInit) {
@@ -813,6 +842,9 @@ bool GPS::setup()
             if (hasProbeCache && !triedProbeCache) {
                 triedProbeCache = true;
                 if (!verifyCachedProbePresence()) {
+#ifdef GPS_POWER_CYCLE_IF_UNRESPONSIVE
+                    powerCycleIfUnresponsive();
+#endif
                     currentStep = 0;
                     speedSelect = 0;
                     probeTries = 0;
@@ -827,6 +859,9 @@ bool GPS::setup()
                 } else if (currentStep == 0 && ++speedSelect == array_count(serialSpeeds)) {
                     speedSelect = 0;
                     ++probeTries;
+#ifdef GPS_POWER_CYCLE_IF_UNRESPONSIVE
+                    powerCycleIfUnresponsive(); // no-op after the first time
+#endif
                 }
             }
             // Rare Serial Speeds
@@ -1989,6 +2024,7 @@ std::unique_ptr<GPS> GPS::createGps()
         new_gps->gnssModel = GNSS_MODEL_GENERIC_NMEA;
 #endif
 
+    new_gps->en_gpio = _en_gpio;
     GpioVirtPin *virtPin = new GpioVirtPin();
     new_gps->enablePin = virtPin; // Always at least populate a virtual pin
     if (_en_gpio) {
@@ -2023,25 +2059,6 @@ std::unique_ptr<GPS> GPS::createGps()
     gsafixtype.begin(reader, NMEA_MSG_GXGSA, 2);
     gsapdop.begin(reader, NMEA_MSG_GXGSA, 15);
     LOG_DEBUG("Use " NMEA_MSG_GXGSA " for 3DFIX and PDOP");
-#endif
-
-#ifdef GPS_POWER_CYCLE_ON_BOOT
-    // A receiver left latched by an earlier dirty power cut (see GPS_NO_HARDSLEEP) only recovers when its
-    // power is removed with nothing driving into it. Do that once, before anything touches the UART.
-    if (_en_gpio) {
-        pinMode(_tx_gpio, OUTPUT);
-        digitalWrite(_tx_gpio, LOW);
-        pinMode(_rx_gpio, INPUT);
-#ifdef PIN_GPS_RESET
-        pinMode(PIN_GPS_RESET, OUTPUT);
-        digitalWrite(PIN_GPS_RESET, LOW);
-#endif
-        pinMode(_en_gpio, OUTPUT);
-        digitalWrite(_en_gpio, !GPS_EN_ACTIVE);
-        delay(GPS_POWER_CYCLE_OFF_MS);
-        digitalWrite(_en_gpio, GPS_EN_ACTIVE);
-        LOG_INFO("GPS power cycled for %ums", (unsigned)GPS_POWER_CYCLE_OFF_MS);
-    }
 #endif
 
     // Make sure the GPS is awake before performing any init.
