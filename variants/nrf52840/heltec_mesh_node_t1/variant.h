@@ -51,6 +51,7 @@ extern "C" {
 #define TFT_OFFSET_X 24
 #define TFT_OFFSET_Y 0
 #define TFT_INVERT false
+#define TFT_BACKLIGHT_AFTER_FIRST_FRAME // backlight stays off until GRAM has been cleared
 #define DISPLAY_FORCE_SMALL_FONTS
 #define FORCE_LOW_RES 1 // 80px-wide panel causes artifacts with full-res UI elements
 
