@@ -122,7 +122,7 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
         display->setColor(WHITE); // Reset for other UI - normally done at the end of this function
         return;
     }
-    const int headerHeight = highlightHeight + 2;
+    const int headerHeight = BASEUI_HEADER_HEIGHT; // == highlightHeight + 2
     // Color TFT headers use a fixed dark background + white glyphs.
     // Keep legacy inverted bitmap behavior only for monochrome displays.
     const bool useInvertedHeaderStyle = (isInverted && !force_no_invert && !isTFTColoringEnabled() && !transparent_background);
