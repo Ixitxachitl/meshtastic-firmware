@@ -1354,7 +1354,7 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
                 int textWidth = display->getStringWidth(txdisabled);
                 display->drawString(x + (SCREEN_WIDTH - textWidth) / 2, getTextPositions(display)[line] + y, txdisabled);
             } else {
-                display->drawString(x, getTextPositions(display)[line] + y, txdisabled);
+                display->drawString(x + BASEUI_BODY_LR_MARGIN, getTextPositions(display)[line] + y, txdisabled);
             }
         } else if (compactPanel) {
             // No room for a separate left/right column layout - center it instead.
@@ -1395,7 +1395,7 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
         char chUtilStr[16];
         snprintf(chUtilStr, sizeof(chUtilStr), "ChUtil %d%%", chutil_percent);
         int chUtilWidth = display->getStringWidth(chUtilStr);
-        display->drawString(x + (SCREEN_WIDTH - chUtilWidth) / 2, getTextPositions(display)[line++], chUtilStr);
+        display->drawString(x + (SCREEN_WIDTH - chUtilWidth) / 2, getTextPositions(display)[line++] + y, chUtilStr);
 
         // === Node Identity: long name (falls back to short), truncated with "..." if too wide ===
         const char *longName = (nodeInfoLiteHasUser(ourNode) && ourNode->long_name[0]) ? ourNode->long_name : "";
@@ -1405,14 +1405,14 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
         UIRenderer::truncateStringWithEmotes(display, rawName, nodeName, sizeof(nodeName), SCREEN_WIDTH - 4);
         int textWidth = UIRenderer::measureStringWithEmotes(display, nodeName);
         int nameX = x + (SCREEN_WIDTH - textWidth) / 2;
-        UIRenderer::drawStringWithEmotes(display, nameX, getTextPositions(display)[line++], nodeName, FONT_HEIGHT_SMALL, 1,
+        UIRenderer::drawStringWithEmotes(display, nameX, getTextPositions(display)[line++] + y, nodeName, FONT_HEIGHT_SMALL, 1,
                                          false);
     } else {
         // === Node Identity ===
         const char *shortName = owner.short_name[0] ? owner.short_name : "";
         int textWidth = UIRenderer::measureStringWithEmotes(display, shortName);
         int nameX = x + (SCREEN_WIDTH - textWidth) / 2;
-        UIRenderer::drawStringWithEmotes(display, nameX, getTextPositions(display)[line++], shortName, FONT_HEIGHT_SMALL, 1,
+        UIRenderer::drawStringWithEmotes(display, nameX, getTextPositions(display)[line++] + y, shortName, FONT_HEIGHT_SMALL, 1,
                                          false);
     }
 #else

@@ -7,16 +7,14 @@
 // esp_partition_read through esp_partition_mmap + memcpy, which uses the working
 // cache path. Activated by `-Wl,--wrap=esp_partition_read` (t-watch-ultra only).
 //
-// esp_partition_read alone isn't enough: nvs_flash reads the NVS partition via the
-// lower-level esp_flash_read (not esp_partition_read), which hits the same 0x00
-// regression - every boot came up with an empty-looking NVS (0 entries/namespaces),
-// silently dropping BLE bonds and anything else stored through Preferences/NVS even
-// though the data was actually still on flash. Wrap esp_flash_read the same way, via
-// the raw (non-partition) spi_flash_mmap so it works for callers, like nvs_flash,
-// that don't go through the esp_partition_t API at all.
+// That alone isn't enough: nvs_flash reads through the lower-level esp_flash_read,
+// which hits the same 0x00 regression, so NVS came up empty every boot (0 entries)
+// and silently dropped BLE bonds and everything else stored via Preferences. Wrap
+// esp_flash_read too, via raw spi_flash_mmap, for callers that bypass esp_partition_t.
 #if defined(T_WATCH_ULTRA)
 
 #include "esp_flash.h"
+#include "esp_flash_encrypt.h"
 #include "esp_partition.h"
 #include "spi_flash_mmap.h"
 #include <string.h>
@@ -59,6 +57,10 @@ esp_err_t __wrap_esp_flash_read(esp_flash_t *chip, void *buffer, uint32_t addres
     // spi_flash_mmap only maps the default (main) chip's address space - anything
     // else (e.g. a second chip on another bus) falls back to the real call.
     if (chip != NULL && chip != esp_flash_default_chip)
+        return __real_esp_flash_read(chip, buffer, address, length);
+    // esp_flash_read is specified to return raw bytes, but the cache decrypts transparently.
+    // With flash encryption on, the mmap path would hand back plaintext - so don't take it.
+    if (esp_flash_encryption_enabled())
         return __real_esp_flash_read(chip, buffer, address, length);
 
     const size_t PAGE = 0x10000;

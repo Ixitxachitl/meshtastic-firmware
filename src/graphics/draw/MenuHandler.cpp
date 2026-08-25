@@ -249,8 +249,9 @@ static void applyLoraRegion(meshtastic_Config_LoRaConfig_RegionCode region, bool
     }
     auto changes = SEGMENT_CONFIG;
 #if !(MESHTASTIC_EXCLUDE_PKI_KEYGEN || MESHTASTIC_EXCLUDE_PKI)
-    if (crypto) {
-        crypto->ensurePkiKeys(config.security, owner);
+    // Minting the key moves our node num with it, and nothing reboots on this path to repair it later.
+    if (nodeDB->ensurePkiIdentity()) {
+        changes |= SEGMENT_DEVICESTATE | SEGMENT_NODEDATABASE;
     }
 #endif
     initRegion();
@@ -1191,7 +1192,7 @@ void menuHandler::homeBaseMenu()
         }
         optionsEnumArray[options++] = Mute;
     }
-#if HAS_PWM_BACKLIGHT || defined(PIN_EINK_EN) || defined(PCA_PIN_EINK_EN)
+#if HAS_BACKLIGHT
     optionsArray[options] = "Toggle Backlight";
     optionsEnumArray[options++] = Backlight;
 #else
@@ -1221,26 +1222,8 @@ void menuHandler::homeBaseMenu()
             }
         } else if (selected == Backlight) {
             screen->setOn(false);
-#if HAS_PWM_BACKLIGHT
+#if HAS_BACKLIGHT
             graphics::backlightToggle();
-            saveUIConfig();
-#elif defined(PIN_EINK_EN)
-            if (uiconfig.screen_brightness == 1) {
-                uiconfig.screen_brightness = 0;
-                digitalWrite(PIN_EINK_EN, LOW);
-            } else {
-                uiconfig.screen_brightness = 1;
-                digitalWrite(PIN_EINK_EN, HIGH);
-            }
-            saveUIConfig();
-#elif defined(PCA_PIN_EINK_EN)
-            if (uiconfig.screen_brightness > 0) {
-                uiconfig.screen_brightness = 0;
-                io.digitalWrite(PCA_PIN_EINK_EN, LOW);
-            } else {
-                uiconfig.screen_brightness = 1;
-                io.digitalWrite(PCA_PIN_EINK_EN, HIGH);
-            }
             saveUIConfig();
 #endif
         } else if (selected == Sleep) {

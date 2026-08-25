@@ -29,9 +29,43 @@ uint16_t TFT_MESH = COLOR565(0x67, 0xEA, 0x94);
 
 #if defined(CO5300_CS)
 #include <LovyanGFX.hpp> // Graphics and font library for AMOLED driver chip
+
+// Panel_CO5300's init table sends Sleep Out and Display On with zero delay. The CO5300 needs up
+// to 120 ms after Sleep Out, or Display On is occasionally ignored and the panel stays dark.
+class Panel_CO5300_Delayed : public lgfx::Panel_CO5300
+{
+  protected:
+    const uint8_t *getInitCommands(uint8_t listno) const override
+    {
+        // clang-format off
+        static constexpr uint8_t list0[] = {
+            0xFE, 1, 0x00,                   // page 0
+            0xC4, 1, 0x80,
+            0x3A, 1, 0x55,                   // 16 bit/pixel
+            0x35, 1, 0x00,                   // TE on
+            0x53, 1, 0x20,
+            0x63, 1, 0xFF,
+            0x2A, 4, 0x00, 0x16, 0x01, 0xAF, // column 22..431
+            0x2B, 4, 0x00, 0x00, 0x01, 0xF5, // row 0..501
+            0x11, 0x80, 120,                 // sleep out, then the settle time the datasheet requires
+            0x51, 1, 0x01,                   // brightness dark
+            0x29, 0x80, 20,                  // display on
+            0x51, 1, 0x80,                   // brightness
+            0xff, 0xff
+        };
+        // clang-format on
+        switch (listno) {
+        case 0:
+            return list0;
+        default:
+            return nullptr;
+        }
+    }
+};
+
 class LGFX : public lgfx::LGFX_Device
 {
-    lgfx::Panel_CO5300 _panel_instance;
+    Panel_CO5300_Delayed _panel_instance;
     lgfx::Bus_SPI _bus_instance;
 
   public:
@@ -209,7 +243,7 @@ static void rak14014_tpIntHandle(void)
     _rak14014_touch_int = true;
 }
 
-#elif defined(HACKADAY_COMMUNICATOR)
+#elif defined(USE_ARDUINO_GFX)
 #include <Arduino_GFX_Library.h>
 Arduino_GFX *tft = nullptr;
 
@@ -1481,7 +1515,7 @@ TFTDisplay::~TFTDisplay()
     memaudit::set("display", 0);
 }
 
-#if defined(HACKADAY_COMMUNICATOR)
+#if defined(USE_ARDUINO_GFX)
 // Arduino_GFX backend: display() calls draw16bitBeRGBBitmap() directly and never routes through
 // here. These exist only to satisfy the declarations.
 void TFTDisplay::pushPixelBlock(int32_t, int32_t, int32_t, int32_t, uint16_t *) {}
@@ -1625,7 +1659,7 @@ void TFTDisplay::display(bool fromBlank)
                     }
                 }
             }
-#if defined(HACKADAY_COMMUNICATOR)
+#if defined(USE_ARDUINO_GFX)
             tft->draw16bitBeRGBBitmap(0, yStart, chunkBuffer, displayWidth, rowsThisChunk);
 #else
             pushPixelBlock(0, yStart, displayWidth, rowsThisChunk, chunkBuffer);
@@ -1810,7 +1844,7 @@ void TFTDisplay::display(bool fromBlank)
                 }
             }
 
-#if defined(HACKADAY_COMMUNICATOR)
+#if defined(USE_ARDUINO_GFX)
             tft->draw16bitBeRGBBitmap(x_FirstPixelUpdate, y, &linePixelBuffer[x_FirstPixelUpdate], spanWidth, kRowsPerPush);
 #else
             // Step 4: Send the changed pixels on these rows to the screen as a single block transfer.
@@ -1974,12 +2008,24 @@ void TFTDisplay::sendCommand(uint8_t com)
     switch (com) {
     case DISPLAYON: {
         LOG_DEBUG("Display on");
+#if defined(TFT_NV3001B)
+        // DISPLAYOFF cuts the panel rail, so the controller loses its configuration and sleep-out
+        // alone cannot bring it back. Restore the rail, let it settle, then re-run the init sequence.
+        digitalWrite(VTFT_CTRL, TFT_EN_ON);
+        delay(10);
+        if (!tft->begin(SPI_FREQUENCY)) {
+            // Nothing below this point can reach the panel, so skip the wake instead of lighting
+            // the backlight and repainting over a bus that did not come up.
+            LOG_ERROR("NV3001B re-init failed on wake");
+            break;
+        }
+#endif
         backlightEnable->set(true);
 #if ARCH_PORTDUINO
         display(true);
         if (portduino_config.displayBacklight.pin > 0)
             digitalWrite(portduino_config.displayBacklight.pin, TFT_BACKLIGHT_ON);
-#elif defined(HACKADAY_COMMUNICATOR)
+#elif defined(USE_ARDUINO_GFX)
         tft->displayOn();
 #elif !defined(RAK14014) && !defined(M5STACK) && !defined(UNPHONE) && !defined(HELTEC_MESH_NODE_T096) &&                         \
     !defined(HELTEC_MESH_NODE_T1)
@@ -1987,7 +2033,13 @@ void TFTDisplay::sendCommand(uint8_t com)
         tft->powerSaveOff();
 #endif
 
-#ifdef VTFT_CTRL
+#if defined(TFT_NV3001B)
+        // Re-init left display RAM undefined, so repaint in full rather than diff against a
+        // buffer that no longer describes the panel.
+        display(true);
+#endif
+
+#if defined(VTFT_CTRL) && !defined(TFT_NV3001B) // NV3001B panels already powered the rail above
         digitalWrite(VTFT_CTRL, LOW);
 #endif
 #ifdef UNPHONE
@@ -1995,7 +2047,7 @@ void TFTDisplay::sendCommand(uint8_t com)
 #endif
 #if defined(RAK14014) || defined(HELTEC_MESH_NODE_T096) || defined(HELTEC_MESH_NODE_T1)
 #elif !defined(M5STACK) && !defined(ST7789_CS) &&                                                                                \
-    !defined(HACKADAY_COMMUNICATOR) // T-Deck gets brightness set in Screen.cpp in the handleSetOn function
+    !defined(USE_ARDUINO_GFX) // T-Deck gets brightness set in Screen.cpp in the handleSetOn function
         tft->setBrightness(172);
 #endif
         break;
@@ -2007,7 +2059,7 @@ void TFTDisplay::sendCommand(uint8_t com)
         tft->clear();
         if (portduino_config.displayBacklight.pin > 0)
             digitalWrite(portduino_config.displayBacklight.pin, !TFT_BACKLIGHT_ON);
-#elif defined(HACKADAY_COMMUNICATOR)
+#elif defined(USE_ARDUINO_GFX)
         tft->displayOff();
 #elif !defined(RAK14014) && !defined(M5STACK) && !defined(UNPHONE) && !defined(HELTEC_MESH_NODE_T096) &&                         \
     !defined(HELTEC_MESH_NODE_T1)
@@ -2022,7 +2074,7 @@ void TFTDisplay::sendCommand(uint8_t com)
         unphone.backlight(false); // using unPhone library
 #endif
 #if defined(RAK14014) || defined(HELTEC_MESH_NODE_T096) || defined(HELTEC_MESH_NODE_T1)
-#elif !defined(M5STACK) && !defined(HACKADAY_COMMUNICATOR)
+#elif !defined(M5STACK) && !defined(USE_ARDUINO_GFX)
         tft->setBrightness(0);
 #endif
         break;
@@ -2038,7 +2090,7 @@ void TFTDisplay::setDisplayBrightness(uint8_t _brightness)
 {
 #if defined(RAK14014) || defined(HELTEC_MESH_NODE_T096) || defined(HELTEC_MESH_NODE_T1)
     // todo
-#elif !defined(HACKADAY_COMMUNICATOR)
+#elif !defined(USE_ARDUINO_GFX)
     tft->setBrightness(_brightness);
     LOG_DEBUG("Brightness is set to value: %i ", _brightness);
 #endif
@@ -2056,7 +2108,7 @@ bool TFTDisplay::hasTouch(void)
 {
 #ifdef RAK14014
     return true;
-#elif !defined(M5STACK) && !defined(HACKADAY_COMMUNICATOR) && !defined(HELTEC_MESH_NODE_T096) && !defined(HELTEC_MESH_NODE_T1)
+#elif !defined(M5STACK) && !defined(USE_ARDUINO_GFX) && !defined(HELTEC_MESH_NODE_T096) && !defined(HELTEC_MESH_NODE_T1)
     return tft->touch() != nullptr;
 #else
     return false;
@@ -2075,7 +2127,7 @@ bool TFTDisplay::getTouch(int16_t *x, int16_t *y)
     } else {
         return false;
     }
-#elif !defined(M5STACK) && !defined(HACKADAY_COMMUNICATOR) && !defined(HELTEC_MESH_NODE_T096) && !defined(HELTEC_MESH_NODE_T1)
+#elif !defined(M5STACK) && !defined(USE_ARDUINO_GFX) && !defined(HELTEC_MESH_NODE_T096) && !defined(HELTEC_MESH_NODE_T1)
     return tft->getTouch(x, y);
 #else
     return false;
@@ -2288,12 +2340,27 @@ bool TFTDisplay::connect()
     if (!tft) {
 #if defined(RAK14014) || defined(HELTEC_MESH_NODE_T096) || defined(HELTEC_MESH_NODE_T1)
         tft = new TFT_eSPI;
-#elif defined(HACKADAY_COMMUNICATOR)
+#elif defined(USE_ARDUINO_GFX)
         Arduino_DataBus *bus =
             new Arduino_ESP32SPI(TFT_DC, TFT_CS, 38 /* SCK */, 21 /* MOSI */, GFX_NOT_DEFINED /* MISO */, HSPI /* spi_num */);
         tft = new Arduino_NV3007(bus, 40, 0 /* rotation */, false /* IPS */, 142 /* width */, 428 /* height */,
                                  12 /* col offset 1 */, 0 /* row offset 1 */, 14 /* col offset 2 */, 0 /* row offset 2 */,
                                  nv3007_279_init_operations, sizeof(nv3007_279_init_operations));
+#elif defined(TFT_NV3001B)
+        // The Heltec RC panels all use the same controller and differ only in how the bus is wired.
+#if defined(HELTEC_RC52)
+        // nRF52840: the panel sits on SPI1, clear of the LoRa radio on SPI0.
+        Arduino_DataBus *bus = new Arduino_HWSPI(TFT_RS, TFT_CS, &SPI1, true /* is_shared_interface */);
+#elif defined(HELTEC_RCC6)
+        // ESP32-C6: the panel shares pins with the LoRa host, so bit-bang it rather than claim the peripheral.
+        Arduino_DataBus *bus = new Arduino_SWSPI(TFT_RS, TFT_CS, TFT_SCL, TFT_SDA, GFX_NOT_DEFINED /* MISO */);
+#else
+        // ESP32-S3: keep the panel off the LoRa FSPI host, since Arduino_GFX reconfigures whichever bus it is handed.
+        Arduino_DataBus *bus =
+            new Arduino_ESP32SPI(TFT_RS, TFT_CS, TFT_SCL, TFT_SDA, GFX_NOT_DEFINED /* MISO */, HSPI /* spi_num */);
+#endif
+        tft = new Arduino_NV3001B(bus, TFT_RST, 3 /* rotation */, true /* IPS */, TFT_WIDTH, TFT_HEIGHT, 0 /* col offset 1 */,
+                                  0 /* row offset 1 */, 0 /* col offset 2 */, 0 /* row offset 2 */);
 #else
         tft = new LGFX;
 #endif
@@ -2305,8 +2372,13 @@ bool TFTDisplay::connect()
 #ifdef UNPHONE
     unphone.backlight(true); // using unPhone library
 #endif
-#ifdef HACKADAY_COMMUNICATOR
+#ifdef USE_ARDUINO_GFX
+#if defined(TFT_NV3001B)
+    // Arduino_SWSPI ignores the clock argument, so this only bites on the hardware-SPI variants.
+    bool beginStatus = tft->begin(SPI_FREQUENCY);
+#else
     bool beginStatus = tft->begin();
+#endif
     if (beginStatus)
         LOG_DEBUG("TFT Success");
     else
