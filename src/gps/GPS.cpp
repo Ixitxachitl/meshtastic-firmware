@@ -2181,7 +2181,10 @@ bool GPS::lookForLocation()
 #endif
 
 #ifndef TINYGPS_OPTION_NO_CUSTOM_FIELDS
-    fixType = atoi(gsafixtype.value()); // will set to zero if no data
+    // GSA is optional and bound to one talker ID; receivers stop sending it or switch talker (GPGSA vs
+    // GNGSA) mid-run. Once it goes stale treat it as absent rather than let it veto a fresh GGA/RMC fix.
+    const bool gsaFresh = gsafixtype.age() < GPS_SOL_EXPIRY_MS;
+    fixType = gsaFresh ? atoi(gsafixtype.value()) : 0; // zero means "no data received"
 #endif
 
     // check if GPS has an acceptable lock
@@ -2205,11 +2208,8 @@ bool GPS::lookForLocation()
     // check if a complete GPS solution set is available for reading
     //   tinyGPSDatum::age() also includes isValid() test
     // FIXME
-    if (!((reader.location.age() < GPS_SOL_EXPIRY_MS) &&
-#ifndef TINYGPS_OPTION_NO_CUSTOM_FIELDS
-          (gsafixtype.age() < GPS_SOL_EXPIRY_MS) &&
-#endif
-          (reader.time.age() < GPS_SOL_EXPIRY_MS) && (reader.date.age() < GPS_SOL_EXPIRY_MS))) {
+    if (!((reader.location.age() < GPS_SOL_EXPIRY_MS) && (reader.time.age() < GPS_SOL_EXPIRY_MS) &&
+          (reader.date.age() < GPS_SOL_EXPIRY_MS))) {
         LOG_WARN("SOME data TOO OLD: LOC %u, TIME %u, DATE %u", reader.location.age(), reader.time.age(), reader.date.age());
         return false;
     }
@@ -2232,7 +2232,8 @@ bool GPS::lookForLocation()
     // Dilution of precision (an accuracy metric) is reported in 10^2 units, so we need to scale down when we use it
 #ifndef TINYGPS_OPTION_NO_CUSTOM_FIELDS
     p.HDOP = reader.hdop.value();
-    p.PDOP = TinyGPSPlus::parseDecimal(gsapdop.value());
+    // Same naive PDOP emulation as the no-custom-fields build when GSA has stopped.
+    p.PDOP = gsaFresh ? TinyGPSPlus::parseDecimal(gsapdop.value()) : 1.41 * reader.hdop.value();
 #else
     // FIXME! naive PDOP emulation (assumes VDOP==HDOP)
     // correct formula is PDOP = SQRT(HDOP^2 + VDOP^2)
