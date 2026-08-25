@@ -1157,8 +1157,12 @@ void GPS::setPowerState(GPSPowerState newState, uint32_t sleepTime)
         if (oldState == GPS_ACTIVE)
             break;
         gotTime = false;
-        if (oldState == GPS_IDLE) // If hardware already awake, no changes needed
+        if (oldState == GPS_IDLE) { // If hardware already awake, no changes needed
+#ifdef GPS_NO_HARDSLEEP
+            clearBuffer(); // idle stretches are long here; drop the backlog rather than parse stale fixes
+#endif
             break;
+        }
         if (oldState != GPS_ACTIVE && oldState != GPS_IDLE) // If hardware just waking now, clear buffer
             clearBuffer();
 #ifdef TRACKER_T1000_E
@@ -1392,6 +1396,15 @@ void GPS::down()
 #ifdef GPS_FORCE_SOFT_SLEEP
         if (softsleepSupported) {
             setPowerState(GPS_SOFTSLEEP, sleepTime);
+            return;
+        }
+#endif
+
+#ifdef GPS_NO_HARDSLEEP
+        // Cutting this receiver's power is not survivable on this board: it comes back latched with its
+        // RAM config gone and only a full power removal recovers it. Leave it running instead.
+        if (!softsleepSupported) {
+            setPowerState(GPS_IDLE);
             return;
         }
 #endif
