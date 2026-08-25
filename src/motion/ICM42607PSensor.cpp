@@ -29,12 +29,44 @@ static constexpr uint8_t ICM42607P_UNUSED_INT_PIN = 0;
 // One wake per burst of movement is all the screen needs, so collapse the rest.
 static constexpr uint32_t ICM42607P_MOTION_WAKE_INTERVAL_MS = 1000;
 
+#ifdef ICM_42607P_WOM_THRESHOLD
+#ifndef ICM_42607P_WOM_DURATION_SAMPLES
+#define ICM_42607P_WOM_DURATION_SAMPLES 1
+#endif
+static_assert(ICM_42607P_WOM_THRESHOLD >= 1 && ICM_42607P_WOM_THRESHOLD <= 255, "WOM threshold is an 8-bit 1/256 g value");
+static_assert(ICM_42607P_WOM_DURATION_SAMPLES >= 1 && ICM_42607P_WOM_DURATION_SAMPLES <= 4,
+              "WOM_CONFIG only counts 1 to 4 over-threshold samples");
+
+// The library hard-codes its WOM threshold (50 = 195 mg, single sample) and keeps the driver handle
+// protected, so this shim is the only way to set a variant's own threshold and sample count.
+class ICM42607PWom : public ICM42670
+{
+  public:
+    using ICM42670::ICM42670;
+
+    int configureWom()
+    {
+        static constexpr WOM_CONFIG_WOM_INT_DUR_t kDuration[] = {WOM_CONFIG_WOM_INT_DUR_1_SMPL, WOM_CONFIG_WOM_INT_DUR_2_SMPL,
+                                                                 WOM_CONFIG_WOM_INT_DUR_3_SMPL, WOM_CONFIG_WOM_INT_DUR_4_SMPL};
+        int rc = inv_imu_configure_wom(&icm_driver, ICM_42607P_WOM_THRESHOLD, ICM_42607P_WOM_THRESHOLD, ICM_42607P_WOM_THRESHOLD,
+                                       WOM_CONFIG_WOM_INT_MODE_ORED, kDuration[ICM_42607P_WOM_DURATION_SAMPLES - 1]);
+        rc |= inv_imu_enable_wom(&icm_driver);
+        return rc;
+    }
+};
+using ICM42607PDevice = ICM42607PWom;
+#endif
+
 volatile static bool ICM42607P_IRQ = false;
 
 void ICM42607PSetInterrupt()
 {
     ICM42607P_IRQ = true;
 }
+#endif
+
+#if !defined(ICM_42607P_INT_PIN) || !defined(ICM_42607P_WOM_THRESHOLD)
+using ICM42607PDevice = ICM42670; // stock library wake-on-motion behaviour
 #endif
 
 ICM42607PSensor::ICM42607PSensor(ScanI2C::FoundDevice foundDevice) : MotionSensor::MotionSensor(foundDevice) {}
@@ -48,7 +80,7 @@ bool ICM42607PSensor::init()
     LOG_DEBUG("ICM-42607-P begin on addr 0x%02X (port=%d)", deviceAddress(), devicePort());
     TwoWire *wire = ScanI2CTwoWire::fetchI2CBus(device.address);
     sensor.reset();
-    auto newSensor = std::make_unique<ICM42670>(*wire, addressLsb);
+    auto newSensor = std::make_unique<ICM42607PDevice>(*wire, addressLsb);
 
     int status = newSensor->begin();
     // ICM42670P library returns -3 for ICM42607P because WHO_AM_I differs; the register map is compatible.
@@ -73,6 +105,16 @@ bool ICM42607PSensor::init()
         return false;
     }
     LOG_DEBUG("ICM-42607-P wake-on-motion interrupt ok pin=%d", ICM_42607P_INT_PIN);
+#ifdef ICM_42607P_WOM_THRESHOLD
+    // Overrides the threshold startWakeOnMotion() just wrote, so it has to come after it.
+    status = newSensor->configureWom();
+    if (status != 0) {
+        LOG_DEBUG("ICM-42607-P wake-on-motion threshold error %d", status);
+        return false;
+    }
+    LOG_DEBUG("ICM-42607-P wake-on-motion threshold %d/256 g x%d samples", ICM_42607P_WOM_THRESHOLD,
+              ICM_42607P_WOM_DURATION_SAMPLES);
+#endif
 #endif
 
 #ifdef SHOW_STEP_COUNTER
