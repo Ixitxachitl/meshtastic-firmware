@@ -1177,7 +1177,7 @@ void menuHandler::homeBaseMenu()
         }
         optionsEnumArray[options++] = Mute;
     }
-#if HAS_BACKLIGHT
+#if HAS_BACKLIGHT && defined(USE_EINK) // a frontlight is optional; a TFT is unreadable without its backlight
     optionsArray[options] = "Toggle Backlight";
     optionsEnumArray[options++] = Backlight;
 #else
@@ -1207,7 +1207,7 @@ void menuHandler::homeBaseMenu()
             }
         } else if (selected == Backlight) {
             screen->setOn(false);
-#if HAS_BACKLIGHT
+#if HAS_BACKLIGHT && defined(USE_EINK)
             graphics::backlightToggle();
             saveUIConfig();
 #endif
@@ -2294,7 +2294,9 @@ void menuHandler::BrightnessPickerMenu()
 
         if (selected != 0) { // Not "Back"
                              // Apply brightness immediately
-#if defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190)
+#if HAS_PWM_BACKLIGHT
+            graphics::backlightSet(uiconfig.screen_brightness);
+#elif defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190)
             // For HELTEC devices, use analogWrite to control backlight
             analogWrite(VTFT_LEDA, uiconfig.screen_brightness);
 #elif defined(ST7789_CS) || defined(ST7796_CS)
@@ -2514,7 +2516,8 @@ void menuHandler::screenOptionsMenu()
 #if defined(T_DECK)
     // TDeck Doesn't seem to support brightness at all, at least not reliably
     bool hasSupportBrightness = false;
-#elif defined(ST7789_CS) || defined(USE_OLED) || defined(USE_SSD1306) || defined(USE_SH1106) || defined(USE_SH1107)
+#elif HAS_PWM_BACKLIGHT || defined(ST7789_CS) || defined(USE_OLED) || defined(USE_SSD1306) || defined(USE_SH1106) ||             \
+    defined(USE_SH1107)
     bool hasSupportBrightness = true;
 #else
     bool hasSupportBrightness = false;

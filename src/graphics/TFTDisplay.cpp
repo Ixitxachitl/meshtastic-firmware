@@ -1,4 +1,5 @@
 #include "configuration.h"
+#include "graphics/Backlight.h"
 #include "main.h"
 #include "memory/MemAudit.h"
 #if USE_TFTDISPLAY
@@ -1885,7 +1886,11 @@ bool TFTDisplay::connect()
 #ifdef TFT_BACKLIGHT_AFTER_FIRST_FRAME
     // GRAM holds random data until that fill, so lighting the backlight any earlier shows static.
     LOG_INFO("Power to TFT Backlight");
+#if HAS_BACKLIGHT
+    graphics::backlightOn();
+#else
     backlightEnable->set(true);
+#endif
 #endif
 
     if (this->linePixelBuffer == NULL) {

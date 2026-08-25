@@ -42,6 +42,8 @@ extern "C" {
 #define ST7735_MISO -1
 #define ST7735_BUSY -1
 #define ST7735_BL (0 + 15)
+#define PIN_PWM_BACKLIGHT ST7735_BL // brightness via graphics/Backlight.cpp, not TFT_BL on/off
+#define PWM_BACKLIGHT_ACTIVE_LOW
 #define VTFT_CTRL (0 + 13) // Active HIGH, powers the ST7735 display
 #define SPI_FREQUENCY 80000000
 #define SPI_READ_FREQUENCY 16000000
