@@ -3,6 +3,7 @@
 #if BASEUI_HAS_MAP
 
 #include "NodeDB.h"
+#include "WaypointStore.h"
 #include "gps/GeoCoord.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/TFTColorRegions.h"
@@ -717,7 +718,18 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     int labelCount = 0;
 
 #if GRAPHICS_TFT_COLORING_ENABLED
-    int nodeColorRegions = kMaxNodeColorRegions; // budget for the red marker-centre tints
+    // Waypoints are drawn after the nodes, so on a small region pool a busy mesh would spend the
+    // whole budget before reaching them and each one would get a black centre - which is precisely
+    // a node marker, the thing the green tint is there to prevent. Reserve them a slice up front;
+    // WAYPOINT_HISTORY_LIMIT is the most that can ever ask for one.
+#if MESHTASTIC_EXCLUDE_WAYPOINT
+    constexpr int kWaypointColorRegions = 0;
+#else
+    constexpr int kWaypointColorRegions =
+        (WAYPOINT_HISTORY_LIMIT < kMaxNodeColorRegions / 4) ? WAYPOINT_HISTORY_LIMIT : kMaxNodeColorRegions / 4;
+    int waypointColorRegions = kWaypointColorRegions; // green waypoint centres
+#endif
+    int nodeColorRegions = kMaxNodeColorRegions - kWaypointColorRegions; // red node centres
 #endif
 
     // FONT_SMALL_LOCAL rather than FONT_SMALL deliberately: on TFT/HAS_SPI_TFT builds FONT_SMALL is
@@ -727,6 +739,27 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     display->setFont(FONT_SMALL_LOCAL);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     const int16_t labelHeight = _fontHeight(FONT_SMALL_LOCAL);
+
+    // Draws a label unless it would land on one already placed. Shared by the node markers and the
+    // waypoint markers below, so waypoint names respect node names and, more to the point, each
+    // other - a cluster of waypoints would otherwise write all their names over the same spot.
+    auto placeLabel = [&](int16_t lx, int16_t ly, const char *text) {
+        const int16_t lw = (int16_t)display->getStringWidth(text);
+        for (int li = 0; li < labelCount; li++) {
+            if (lx < labelX[li] + labelW[li] && lx + lw > labelX[li] && ly < labelY[li] + labelH[li] &&
+                ly + labelHeight > labelY[li])
+                return;
+        }
+
+        drawHaloString(display, lx, ly, text);
+        if (labelCount < kMaxLabelsTracked) {
+            labelX[labelCount] = lx;
+            labelY[labelCount] = ly;
+            labelW[labelCount] = lw;
+            labelH[labelCount] = labelHeight;
+            labelCount++;
+        }
+    };
 
     for (uint32_t i = 0; i < nodeDB->getNumMeshNodes(); i++) {
         meshtastic_NodeInfoLite *node = nodeDB->getMeshNodeByIndex(i);
@@ -768,62 +801,45 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         tintMarkerCenter(mx, my, nodeColorRegions);
 #endif
 
-        if (node->short_name[0] != '\0') {
-            int16_t lx = mx + 5 * BASEUI_ICON_SCALE;
-            int16_t ly = my - labelHeight / 2;
-            int16_t lw = (int16_t)display->getStringWidth(node->short_name);
-
-            bool overlaps = false;
-            for (int li = 0; li < labelCount; li++) {
-                if (lx < labelX[li] + labelW[li] && lx + lw > labelX[li] && ly < labelY[li] + labelH[li] &&
-                    ly + labelHeight > labelY[li]) {
-                    overlaps = true;
-                    break;
-                }
-            }
-
-            if (!overlaps) {
-                drawHaloString(display, lx, ly, node->short_name);
-                if (labelCount < kMaxLabelsTracked) {
-                    labelX[labelCount] = lx;
-                    labelY[labelCount] = ly;
-                    labelW[labelCount] = lw;
-                    labelH[labelCount] = labelHeight;
-                    labelCount++;
-                }
-            }
-        }
+        if (node->short_name[0] != '\0')
+            placeLabel(mx + 5 * BASEUI_ICON_SCALE, my - labelHeight / 2, node->short_name);
     }
 
-    // Received waypoint: same ring glyph as a node, tinted green instead of red so the two read
+    // Stored waypoints: same ring glyph as a node, tinted green instead of red so the two read
     // apart at a glance. Drawn after the nodes and before the self crosshair - a waypoint is more
     // interesting than a node marker it lands on, and less interesting than where you are.
     //
-    // devicestate.rx_waypoint holds only the most recently received waypoint - the firmware keeps
-    // no collection - so this is one marker, matching what the waypoint screen itself shows.
-    if (devicestate.has_rx_waypoint) {
-        meshtastic_Waypoint wp = meshtastic_Waypoint_init_default;
-        const meshtastic_MeshPacket &wmp = devicestate.rx_waypoint;
-        if (pb_decode_from_bytes(wmp.decoded.payload.bytes, wmp.decoded.payload.size, &meshtastic_Waypoint_msg, &wp) &&
-            (wp.latitude_i != 0 || wp.longitude_i != 0)) {
-            const float wlat = wp.latitude_i * 1e-7f;
-            const float wlng = wp.longitude_i * 1e-7f;
-            const float wdistance = GeoCoord::latLongToMeter(centerLat, centerLng, wlat, wlng);
-            const float wbearing = GeoCoord::bearing(centerLat, centerLng, wlat, wlng);
-            const int16_t wx = x + viewWidth / 2 + (int16_t)(sinf(wbearing) * wdistance * metersToPx);
-            const int16_t wy = y + viewHeight / 2 - (int16_t)(cosf(wbearing) * wdistance * metersToPx);
+    // The whole of waypointStore, not devicestate.rx_waypoint: that field is only ever the most
+    // recently received one, and the device now keeps a collection. Same filter the waypoint screen
+    // applies, so the map and the list agree on which waypoints exist.
+    //
+    // Deliberately not deduped against the node markers, for the reason above - a waypoint sitting
+    // on a node must still be drawn - so only the labels arbitrate between them.
+#if !MESHTASTIC_EXCLUDE_WAYPOINT
+    for (const StoredWaypoint &entry : waypointStore.getWaypoints()) {
+        const meshtastic_Waypoint &wp = entry.waypoint;
+        if (WaypointStore::isExpired(entry))
+            continue;
+        if (!wp.has_latitude_i || !wp.has_longitude_i || (wp.latitude_i == 0 && wp.longitude_i == 0))
+            continue;
 
-            if (wx >= x - 2 && wx <= x + viewWidth + 1 && wy >= y - 2 && wy <= y + viewHeight + 1) {
-                drawHaloXbm(display, wx - 4 * BASEUI_ICON_SCALE, wy - 4 * BASEUI_ICON_SCALE, 8, 8, icon_map_node);
+        const float wlat = wp.latitude_i * 1e-7f;
+        const float wlng = wp.longitude_i * 1e-7f;
+        const float wdistance = GeoCoord::latLongToMeter(centerLat, centerLng, wlat, wlng);
+        const float wbearing = GeoCoord::bearing(centerLat, centerLng, wlat, wlng);
+        const int16_t wx = x + viewWidth / 2 + (int16_t)(sinf(wbearing) * wdistance * metersToPx);
+        const int16_t wy = y + viewHeight / 2 - (int16_t)(cosf(wbearing) * wdistance * metersToPx);
+        if (wx < x - 2 || wx > x + viewWidth + 1 || wy < y - 2 || wy > y + viewHeight + 1)
+            continue;
+
+        drawHaloXbm(display, wx - 4 * BASEUI_ICON_SCALE, wy - 4 * BASEUI_ICON_SCALE, 8, 8, icon_map_node);
 #if GRAPHICS_TFT_COLORING_ENABLED
-                tintMarkerCenter(wx, wy, nodeColorRegions, TFTPalette::MeshtasticGreen);
+        tintMarkerCenter(wx, wy, waypointColorRegions, TFTPalette::MeshtasticGreen);
 #endif
-                if (wp.name[0] != '\0') {
-                    drawHaloString(display, wx + 5 * BASEUI_ICON_SCALE, wy - labelHeight / 2, wp.name);
-                }
-            }
-        }
+        if (wp.name[0] != '\0')
+            placeLabel(wx + 5 * BASEUI_ICON_SCALE, wy - labelHeight / 2, wp.name);
     }
+#endif
 
     // Self marker: crosshair, drawn last so it's always visible when on-screen. Uses the live
     // `localPosition` global (see computeAutoCenter's comment) rather than nodeDB->copyNodePosition,
