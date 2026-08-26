@@ -80,6 +80,8 @@ static struct uBloxGnssModelInfo {
     uint8_t protocol_version;
 } ublox_info;
 
+// A healthy receiver emits at least one sentence per second, so this much silence means the port died.
+#define GPS_RX_STALL_MS 10000
 #define GPS_SOL_EXPIRY_MS 5000 // in millis. give 1 second time to combine different sentences. NMEA Frequency isn't higher anyway
 #define NMEA_MSG_GXGSA "GNGSA" // GSA message (GPGSA, GNGSA etc)
 
@@ -1196,6 +1198,7 @@ void GPS::setPowerState(GPSPowerState newState, uint32_t sleepTime)
         if (oldState == GPS_ACTIVE)
             break;
         gotTime = false;
+        lastRxMs = Time::getMillis();
         if (oldState == GPS_IDLE) { // If hardware already awake, no changes needed
 #ifdef GPS_NO_HARDSLEEP
             clearBuffer(); // idle stretches are long here; drop the backlog rather than parse stale fixes
@@ -1581,6 +1584,16 @@ int32_t GPS::runOnce()
     uint8_t prev_fixQual = fixQual;
 
     if (powerState == GPS_ACTIVE) {
+#ifdef ARCH_NRF52
+        // This core's UARTE ISR re-arms RX only from its own ENDRX event and never enables ERROR/RXTO, so
+        // one overrun leaves the port deaf until begin() runs again. Re-arm it instead of awaiting a reboot.
+        if (_serial_gps && Throttle::hasElapsed(lastRxMs, GPS_RX_STALL_MS)) {
+            LOG_WARN("No GPS data for %us, re-arming UART", (unsigned)(GPS_RX_STALL_MS / 1000));
+            _serial_gps->end();
+            _serial_gps->begin(detectedBaud);
+            lastRxMs = Time::getMillis();
+        }
+#endif
         // if gps_update_interval is <=10s, GPS never goes off, so we treat that differently
         uint32_t updateInterval = Default::getConfiguredOrDefaultMs(config.position.gps_update_interval);
 
@@ -2323,6 +2336,8 @@ bool GPS::whileActive()
     }
 #endif
     // First consume any chars that have piled up at the receiver
+    if (_serial_gps->available() > 0)
+        lastRxMs = Time::getMillis();
     while (_serial_gps->available() > 0) {
         int c = _serial_gps->read();
         UBXscratch[charsInBuf] = c;
