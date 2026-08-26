@@ -3,9 +3,12 @@
 #if !defined(ARCH_STM32WL) && !MESHTASTIC_EXCLUDE_I2C && __has_include(<ICM42670P.h>)
 
 #include "detect/ScanI2CTwoWire.h"
+#include "mesh/Throttle.h"
 #include <ICM42670P.h>
 #include <math.h>
 
+// Boards with ICM_42607P_INT_PIN defined run at 12.5Hz instead - startWakeOnMotion() lowers the ODR.
+// Boards that also define SHOW_STEP_COUNTER end up back at 50Hz, which the APEX pedometer requires.
 static constexpr uint16_t ICM42607P_ACCEL_ODR_HZ = 50;
 static constexpr uint16_t ICM42607P_ACCEL_FSR_G = 2;
 static constexpr float ICM42607P_ACCEL_TO_COMPASS_ROTATION_DEG_VALUE =
@@ -15,13 +18,55 @@ static constexpr float ICM42607P_ACCEL_TO_COMPASS_ROTATION_DEG_VALUE =
     0.0f;
 #endif
 
+#ifdef SHOW_STEP_COUNTER
+// startPedometer() requires a pin argument even when polling. It is never touched with a null handler.
+static constexpr uint8_t ICM42607P_UNUSED_INT_PIN = 0;
+#endif
+
 #ifdef ICM_42607P_INT_PIN
+// startWakeOnMotion() configures WOM with WOM_CONFIG_WOM_INT_DUR_1_SMPL, so the interrupt re-asserts
+// on every sample over the threshold - once per accel period for as long as the device is handled.
+// One wake per burst of movement is all the screen needs, so collapse the rest.
+static constexpr uint32_t ICM42607P_MOTION_WAKE_INTERVAL_MS = 1000;
+
+#ifdef ICM_42607P_WOM_THRESHOLD
+#ifndef ICM_42607P_WOM_DURATION_SAMPLES
+#define ICM_42607P_WOM_DURATION_SAMPLES 1
+#endif
+static_assert(ICM_42607P_WOM_THRESHOLD >= 1 && ICM_42607P_WOM_THRESHOLD <= 255, "WOM threshold is an 8-bit 1/256 g value");
+static_assert(ICM_42607P_WOM_DURATION_SAMPLES >= 1 && ICM_42607P_WOM_DURATION_SAMPLES <= 4,
+              "WOM_CONFIG only counts 1 to 4 over-threshold samples");
+
+// The library hard-codes its WOM threshold (50 = 195 mg, single sample) and keeps the driver handle
+// protected, so this shim is the only way to set a variant's own threshold and sample count.
+class ICM42607PWom : public ICM42670
+{
+  public:
+    using ICM42670::ICM42670;
+
+    int configureWom()
+    {
+        static constexpr WOM_CONFIG_WOM_INT_DUR_t kDuration[] = {WOM_CONFIG_WOM_INT_DUR_1_SMPL, WOM_CONFIG_WOM_INT_DUR_2_SMPL,
+                                                                 WOM_CONFIG_WOM_INT_DUR_3_SMPL, WOM_CONFIG_WOM_INT_DUR_4_SMPL};
+        int rc = inv_imu_configure_wom(&icm_driver, ICM_42607P_WOM_THRESHOLD, ICM_42607P_WOM_THRESHOLD, ICM_42607P_WOM_THRESHOLD,
+                                       WOM_CONFIG_WOM_INT_MODE_ORED, kDuration[ICM_42607P_WOM_DURATION_SAMPLES - 1]);
+        rc |= inv_imu_enable_wom(&icm_driver);
+        return rc;
+    }
+};
+using ICM42607PDevice = ICM42607PWom;
+#endif
+
 volatile static bool ICM42607P_IRQ = false;
 
 void ICM42607PSetInterrupt()
 {
     ICM42607P_IRQ = true;
 }
+#endif
+
+#if !defined(ICM_42607P_INT_PIN) || !defined(ICM_42607P_WOM_THRESHOLD)
+using ICM42607PDevice = ICM42670; // stock library wake-on-motion behaviour
 #endif
 
 ICM42607PSensor::ICM42607PSensor(ScanI2C::FoundDevice foundDevice) : MotionSensor::MotionSensor(foundDevice) {}
@@ -35,7 +80,7 @@ bool ICM42607PSensor::init()
     LOG_DEBUG("ICM-42607-P begin on addr 0x%02X (port=%d)", deviceAddress(), devicePort());
     TwoWire *wire = ScanI2CTwoWire::fetchI2CBus(device.address);
     sensor.reset();
-    auto newSensor = std::make_unique<ICM42670>(*wire, addressLsb);
+    auto newSensor = std::make_unique<ICM42607PDevice>(*wire, addressLsb);
 
     int status = newSensor->begin();
     // ICM42670P library returns -3 for ICM42607P because WHO_AM_I differs; the register map is compatible.
@@ -52,12 +97,37 @@ bool ICM42607PSensor::init()
 
 #ifdef ICM_42607P_INT_PIN
     ICM42607P_IRQ = false;
+    // startWakeOnMotion() leaves the accel running - it only drops it to low-power mode at
+    // 12.5Hz - so the data registers keep updating for the compass tilt compensation below.
     status = newSensor->startWakeOnMotion(ICM_42607P_INT_PIN, ICM42607PSetInterrupt);
     if (status != 0) {
         LOG_DEBUG("ICM-42607-P wake-on-motion start error %d", status);
         return false;
     }
     LOG_DEBUG("ICM-42607-P wake-on-motion interrupt ok pin=%d", ICM_42607P_INT_PIN);
+#ifdef ICM_42607P_WOM_THRESHOLD
+    // Overrides the threshold startWakeOnMotion() just wrote, so it has to come after it.
+    status = newSensor->configureWom();
+    if (status != 0) {
+        LOG_DEBUG("ICM-42607-P wake-on-motion threshold error %d", status);
+        return false;
+    }
+    LOG_DEBUG("ICM-42607-P wake-on-motion threshold %d/256 g x%d samples", ICM_42607P_WOM_THRESHOLD,
+              ICM_42607P_WOM_DURATION_SAMPLES);
+#endif
+#endif
+
+#ifdef SHOW_STEP_COUNTER
+    // Must follow startWakeOnMotion(), which unconditionally disables the APEX pedometer. The reverse
+    // order silently leaves the step counter off. WOM lives in its own register that the APEX path
+    // never touches, so enabling the pedometer second keeps both alive on INT1. Passing a null handler
+    // means we poll getPedometer() instead, so the pin argument is never used.
+    status = newSensor->startPedometer(ICM42607P_UNUSED_INT_PIN, nullptr);
+    if (status != 0) {
+        LOG_DEBUG("ICM-42607-P pedometer start error %d", status);
+        return false;
+    }
+    LOG_DEBUG("ICM-42607-P pedometer ok");
 #endif
 
     sensor = std::move(newSensor);
@@ -70,11 +140,29 @@ int32_t ICM42607PSensor::runOnce()
 #ifdef ICM_42607P_INT_PIN
     if (ICM42607P_IRQ) {
         ICM42607P_IRQ = false;
-        LOG_DEBUG("ICM-42607-P motion interrupt");
-        wakeScreen();
+        if (!Throttle::isWithinTimespanMs(lastMotionWakeMs, ICM42607P_MOTION_WAKE_INTERVAL_MS)) {
+            lastMotionWakeMs = millis();
+            LOG_DEBUG("ICM-42607-P motion interrupt");
+            wakeScreen();
+        }
     }
-    return MOTION_SENSOR_CHECK_INTERVAL_MS;
-#else
+#endif
+
+#if defined(SHOW_STEP_COUNTER) && !defined(MESHTASTIC_EXCLUDE_SCREEN) && HAS_SCREEN
+    if (sensor != nullptr) {
+        uint32_t stepCount = 0;
+        float stepCadence = 0.0f;
+        const char *activity = nullptr;
+        // Returns non-zero when no step was detected since the last poll, leaving stepCount untouched.
+        if (sensor->getPedometer(stepCount, stepCadence, activity) == 0 && stepCount != steps) {
+            steps = stepCount;
+            LOG_DEBUG("ICM-42607-P step count %u (%s)", steps, activity ? activity : "unknown");
+            if (screen)
+                screen->steps = steps;
+        }
+    }
+#endif
+
     inv_imu_sensor_event_t event = {};
 
     if (sensor == nullptr || sensor->getDataFromRegisters(event) != 0) {
@@ -104,7 +192,6 @@ int32_t ICM42607PSensor::runOnce()
     publishCompassAccelSample(ax, -ay, -az);
 
     return MOTION_SENSOR_CHECK_INTERVAL_MS;
-#endif
 }
 
 #endif

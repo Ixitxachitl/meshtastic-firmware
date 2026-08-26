@@ -87,9 +87,16 @@ extern "C" {
 #define PIN_SENSOR_EN (32 + 6) // Active LOW - controls IMU and compass VDD
 #define PIN_SENSOR_EN_ACTIVE LOW
 
-// ICM42607P interrupt pins - populated on PCB, not yet used in firmware
-// #define ICM_42607P_INT_PIN  (32 + 1) // INT1 - P1.01
-// #define ICM_42607P_INT2_PIN (32 + 7) // INT2 - P1.07
+// ICM42607P interrupt pins - populated on PCB
+#define ICM_42607P_INT_PIN (32 + 1) // INT1 - P1.01, wake-on-motion
+// Wake the screen on a deliberate pick-up, not every jostle: ~390 mg between consecutive
+// samples, held for 3 samples. The library default (195 mg, 1 sample) fires far too often.
+#define ICM_42607P_WOM_THRESHOLD 100
+#define ICM_42607P_WOM_DURATION_SAMPLES 3
+// #define ICM_42607P_INT2_PIN (32 + 7) // INT2 - P1.07, unused
+
+// ICM42607P APEX pedometer, drawn on the device screen
+#define SHOW_STEP_COUNTER
 
 // LoRa (SX1262)
 
