@@ -1502,11 +1502,16 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
         strncpy(combinedName, shortName, sizeof(combinedName) - 1);
         combinedName[sizeof(combinedName) - 1] = '\0';
     }
+    // Anything drawn after the identity rows has to repeat whatever offset the last of them used,
+    // otherwise it lands a partial line high and overlaps the name above it.
+    // (maybe_unused: only read when SHOW_STEP_COUNTER is compiled in.)
+    [[maybe_unused]] int trailingYOffset = 0;
     if (SCREEN_WIDTH - UIRenderer::measureStringWithEmotes(display, combinedName) > 10) {
         textWidth = UIRenderer::measureStringWithEmotes(display, combinedName);
         nameX = (SCREEN_WIDTH - textWidth) / 2;
         UIRenderer::drawStringWithEmotes(display, nameX, getTextPositions(display)[line++] + yOffset + y, combinedName,
                                          FONT_HEIGHT_SMALL, 1, false);
+        trailingYOffset = yOffset;
     } else {
         // === LongName Centered ===
         textWidth = UIRenderer::measureStringWithEmotes(display, longName);
@@ -1524,8 +1529,8 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
     std::string stepsLine = "Steps: " + std::to_string(screen->steps);
     textWidth = UIRenderer::measureStringWithEmotes(display, stepsLine.c_str());
     nameX = (SCREEN_WIDTH - textWidth) / 2;
-    UIRenderer::drawStringWithEmotes(display, nameX, getTextPositions(display)[line++] + y, stepsLine.c_str(), FONT_HEIGHT_SMALL,
-                                     1, false);
+    UIRenderer::drawStringWithEmotes(display, nameX, getTextPositions(display)[line++] + trailingYOffset + y, stepsLine.c_str(),
+                                     FONT_HEIGHT_SMALL, 1, false);
 #endif
 #endif
     graphics::drawCommonFooter(display, x, y);
