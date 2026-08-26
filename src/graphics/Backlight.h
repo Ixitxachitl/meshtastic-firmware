@@ -4,6 +4,8 @@
 
 // Backlight control for a PWM rail (PIN_PWM_BACKLIGHT) or an on/off GPIO rail (PIN_EINK_EN,
 // PCA_PIN_EINK_EN). uiconfig.screen_brightness is the configured level, not the live pin state.
+// PWM_BACKLIGHT_ACTIVE_LOW inverts the PWM duty; TFT_BACKLIGHT_AFTER_FIRST_FRAME leaves the rail
+// dark at init so TFTDisplay::connect() can light it once the panel's GRAM has been cleared.
 
 #if defined(PIN_PWM_BACKLIGHT)
 #define HAS_PWM_BACKLIGHT 1

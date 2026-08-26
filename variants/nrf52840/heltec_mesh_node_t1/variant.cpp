@@ -32,6 +32,13 @@ const uint32_t g_ADigitalPinMap[] = {
 
 void initVariant()
 {
+    // Both pins float at power-up, so the panel comes up un-reset with its backlight (active LOW) lit
+    // and shows random GRAM as static until TFTDisplay::connect() runs. Hold it dark and in reset.
+    pinMode(ST7735_BL, OUTPUT);
+    digitalWrite(ST7735_BL, HIGH);
+    pinMode(ST7735_RESET, OUTPUT);
+    digitalWrite(ST7735_RESET, LOW);
+
     pinMode(PIN_BUZZER_VOLTAGE_MULTIPLIER_1, OUTPUT);
     pinMode(PIN_BUZZER_VOLTAGE_MULTIPLIER_2, OUTPUT);
     digitalWrite(PIN_BUZZER_VOLTAGE_MULTIPLIER_1, HIGH);
