@@ -2538,6 +2538,22 @@ int Screen::handleInputEvent(const InputEvent *event)
     // screen" meaning further down instead.
 #if BASEUI_HAS_MAP
     if (framesetInfo.positions.map != 255 && ui->getUiState()->currentFrame == framesetInfo.positions.map) {
+#if BASEUI_MAP_ONSCREEN_CONTROLS
+        // The map's own buttons get first refusal on a tap, before either mode block below: a tap
+        // is not pan navigation, so Pan Mode's fall-through would drop the mode and then page the
+        // frame - and the button under the finger would never be pressed at all.
+        if (event->inputEvent == INPUT_BROKER_USER_PRESS && (event->touchX != 0 || event->touchY != 0) &&
+            graphics::MapRenderer::handleControlTap((int16_t)event->touchX, (int16_t)event->touchY)) {
+            setFastFramerate();
+            return 0;
+        }
+        // A tap that missed every button is not an escape hatch from Pan Mode here - the latch is
+        // drawn on screen and its button is the only thing that clears it. Swallowed rather than
+        // left to fall through, where Pan Mode's else-branch below would drop the mode and the tap
+        // would then go on to page the frame, all from a press that hit nothing.
+        if (graphics::MapRenderer::isPanModeEnabled() && event->inputEvent == INPUT_BROKER_USER_PRESS)
+            return 0;
+#endif
 #if BASEUI_HAS_TOUCH_DRAG
         // Where the hardware reports a continuous drag, Pan Mode tracks the finger directly rather
         // than waiting for a swipe to be classified and jumping a fixed fraction of the view.
@@ -2874,7 +2890,7 @@ int Screen::handleInputEvent(const InputEvent *event)
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.gps && gps) {
                     menuHandler::positionBaseMenu();
 #endif
-#if BASEUI_HAS_MAP
+#if BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
                 } else if (framesetInfo.positions.map != 255 &&
                            this->ui->getUiState()->currentFrame == framesetInfo.positions.map) {
                     menuHandler::mapBaseMenu();
