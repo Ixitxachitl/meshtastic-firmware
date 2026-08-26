@@ -44,6 +44,9 @@ bool ascending = true;
 #if defined(HAS_I2S_SPEAKER_NRF52)
 #include "platform/nrf52/NRF52RtttlPlayer.h"
 #endif
+#ifdef ARCH_NRF52
+#include "platform/nrf52/NRF52RtttlTicker.h"
+#endif
 
 /*
     Documentation:
@@ -59,6 +62,35 @@ bool ascending = true;
 #define EXT_NOTIFICATION_MODULE_OUTPUT_MS 1000
 
 #define EXT_NOTIFICATION_FAST_THREAD_MS 25
+
+// The PWM buzzer sequencer is normally polled from this cooperative thread, so a slow display refresh
+// delays the next note. nRF52 runs it from a FreeRTOS timer instead (NRF52RtttlTicker).
+static void pwmRtttlBegin(uint8_t pin, const char *song)
+{
+#ifdef ARCH_NRF52
+    NRF52RtttlTicker::begin(pin, song);
+#else
+    rtttl::begin(pin, song);
+#endif
+}
+
+static void pwmRtttlPump()
+{
+#ifdef ARCH_NRF52
+    NRF52RtttlTicker::pump();
+#else
+    rtttl::play();
+#endif
+}
+
+static void pwmRtttlStop()
+{
+#ifdef ARCH_NRF52
+    NRF52RtttlTicker::stop();
+#else
+    rtttl::stop();
+#endif
+}
 
 #define ASCII_BELL 0x07
 
@@ -172,10 +204,10 @@ int32_t ExternalNotificationModule::runOnce()
         // now let the PWM buzzer play
         if (moduleConfig.external_notification.use_pwm && config.device.buzzer_gpio && canBuzz() && buzzerShouldAlert) {
             if (rtttl::isPlaying()) {
-                rtttl::play();
+                pwmRtttlPump();
             } else if (isNagging && !Throttle::deadlinePassed(nagCycleCutoff)) {
                 // start the song again if we have time left
-                rtttl::begin(config.device.buzzer_gpio, rtttlConfig.ringtone);
+                pwmRtttlBegin(config.device.buzzer_gpio, rtttlConfig.ringtone);
             }
             // we need fast updates to play the RTTTL
             delay = EXT_NOTIFICATION_FAST_THREAD_MS;
@@ -283,7 +315,7 @@ void ExternalNotificationModule::stopNow()
 {
     LOG_INFO("Turning off external notification: ");
     LOG_INFO("Stop RTTTL playback");
-    rtttl::stop();
+    pwmRtttlStop();
 #ifdef HAS_I2S
     LOG_INFO("Stop audioThread playback");
     audioThread->stop();
@@ -488,7 +520,7 @@ void ExternalNotificationModule::triggerBuzzerOutput()
         audioThread->beginRttl(rtttlConfig.ringtone, strlen_P(rtttlConfig.ringtone));
 #endif
     } else if (moduleConfig.external_notification.use_pwm) {
-        rtttl::begin(config.device.buzzer_gpio, rtttlConfig.ringtone);
+        pwmRtttlBegin(config.device.buzzer_gpio, rtttlConfig.ringtone);
     } else {
         setExternalState(2, true);
     }
