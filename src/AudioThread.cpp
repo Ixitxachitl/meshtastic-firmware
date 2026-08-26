@@ -56,6 +56,12 @@ void AudioThread::ampEnable(bool on)
     // I2C expander write, and issuing it from another task would race the main loop's
     // other I2C users.
     AUDIO_AMP_ENABLE(on);
+#ifdef AUDIO_AMP_SETTLE_MS
+    // Amps that need longer to leave shutdown than the DMA lead-in silence covers: without
+    // this wait the short system tones are over before any audio gets out.
+    if (on)
+        delay(AUDIO_AMP_SETTLE_MS);
+#endif
 #endif
 }
 

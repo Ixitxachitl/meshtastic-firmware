@@ -37,6 +37,10 @@ class menuHandler
         NodePickerMenu,
         ManageNodeMenu,
         RemoveFavorite,
+        WaypointBaseMenu,
+        GeofenceWaypointMenu,
+        GeofenceOptionsMenu,
+        RemoveWaypointMenu,
         TestMenu,
         NumberTest,
         EnvironmentTelemetryMenu,
@@ -115,6 +119,10 @@ class menuHandler
     static void manageNodeMenu();
     static void addFavoriteMenu();
     static void removeFavoriteMenu();
+    static void waypointBaseMenu();
+    static void geofenceWaypointMenu();
+    static void geofenceOptionsMenu();
+    static void removeWaypointMenu();
     static void traceRouteMenu();
     static void testMenu();
     static void numberTest();

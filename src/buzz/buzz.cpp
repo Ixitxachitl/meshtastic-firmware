@@ -67,11 +67,9 @@ const int DURATION_3_4 = 750;  // 3/4 note
 const int DURATION_1_1 = 1000; // 1/1 note
 
 #ifdef HAS_I2S
-// playStartMelody() is called from setup() at main.cpp:852, long before audioThread is
-// constructed at :1034, so the boot melody had nowhere to go: boards without a piezo fell
-// through to the PIN_BUZZER path and dropped it silently. Park it here instead and let
-// main() hand it over from buzzOnAudioThreadReady(), once the thread exists and
-// lateInitVariant() has made the amp enable pin an output.
+// Tones requested before audioThread exists have nowhere to go: boards without a piezo
+// fall through to the PIN_BUZZER path and drop them silently. Park the last one here and
+// let main() hand it over from buzzOnAudioThreadReady(), once the thread is up.
 static ToneDuration pendingTones[RtttlPcm::kMaxTones];
 static size_t pendingToneCount = 0;
 
