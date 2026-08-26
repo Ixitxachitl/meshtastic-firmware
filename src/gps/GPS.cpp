@@ -37,6 +37,10 @@
 #include <ctime>
 #endif
 
+#ifndef GPS_POWER_CYCLE_OFF_MS
+#define GPS_POWER_CYCLE_OFF_MS 1500 // long enough for the receiver's rail to collapse with nothing back-feeding it
+#endif
+
 #ifndef GPS_RESET_MODE
 #define GPS_RESET_MODE HIGH
 #endif
@@ -923,6 +927,35 @@ bool GPS::configureUblox10Staged()
     return true;
 }
 
+#ifdef GPS_POWER_CYCLE_IF_UNRESPONSIVE
+// A receiver left latched by a dirty power cut (see GPS_NO_HARDSLEEP) only recovers when its power is
+// removed with nothing driving into it. Only done after it has failed to answer, so an ordinary reboot
+// keeps the receiver's ephemeris and its hot start.
+void GPS::powerCycleIfUnresponsive()
+{
+    if (didPowerCycle || !en_gpio)
+        return;
+    didPowerCycle = true;
+    LOG_WARN("GPS silent, power cycling for %ums", (unsigned)GPS_POWER_CYCLE_OFF_MS);
+    _serial_gps->end();
+    pinMode(tx_gpio, OUTPUT);
+    digitalWrite(tx_gpio, LOW);
+    pinMode(rx_gpio, INPUT);
+#ifdef PIN_GPS_RESET
+    pinMode(PIN_GPS_RESET, OUTPUT);
+    digitalWrite(PIN_GPS_RESET, LOW);
+#endif
+    pinMode(en_gpio, OUTPUT);
+    digitalWrite(en_gpio, !GPS_EN_ACTIVE);
+    delay(GPS_POWER_CYCLE_OFF_MS);
+    digitalWrite(en_gpio, GPS_EN_ACTIVE);
+#ifdef PIN_GPS_RESET
+    digitalWrite(PIN_GPS_RESET, !GPS_RESET_MODE);
+#endif
+    _serial_gps->begin(GPS_BAUDRATE); // probe() re-pulses reset and re-selects the baud from here
+}
+#endif
+
 bool GPS::setup()
 {
     if (!didSerialInit) {
@@ -940,6 +973,9 @@ bool GPS::setup()
                 if (hasProbeCache && !triedProbeCache) {
                     triedProbeCache = true;
                     if (!verifyCachedProbePresence()) {
+#ifdef GPS_POWER_CYCLE_IF_UNRESPONSIVE
+                        powerCycleIfUnresponsive();
+#endif
                         currentStep = 0;
                         speedSelect = 0;
                         probeTries = 0;
@@ -954,6 +990,9 @@ bool GPS::setup()
                     } else if (currentStep == 0 && ++speedSelect == array_count(serialSpeeds)) {
                         speedSelect = 0;
                         ++probeTries;
+#ifdef GPS_POWER_CYCLE_IF_UNRESPONSIVE
+                        powerCycleIfUnresponsive(); // no-op after the first time
+#endif
                     }
                 }
                 // Rare Serial Speeds
@@ -1246,8 +1285,12 @@ void GPS::setPowerState(GPSPowerState newState, uint32_t sleepTime)
         if (oldState == GPS_ACTIVE)
             break;
         gotTime = false;
-        if (oldState == GPS_IDLE) // If hardware already awake, no changes needed
+        if (oldState == GPS_IDLE) { // If hardware already awake, no changes needed
+#ifdef GPS_NO_HARDSLEEP
+            clearBuffer(); // idle stretches are long here; drop the backlog rather than parse stale fixes
+#endif
             break;
+        }
         if (oldState != GPS_ACTIVE && oldState != GPS_IDLE) // If hardware just waking now, clear buffer
             clearBuffer();
 #ifdef TRACKER_T1000_E
@@ -1509,6 +1552,15 @@ void GPS::down()
 #ifdef GPS_FORCE_SOFT_SLEEP
         if (softsleepSupported) {
             setPowerState(GPS_SOFTSLEEP, sleepTime);
+            return;
+        }
+#endif
+
+#ifdef GPS_NO_HARDSLEEP
+        // Cutting this receiver's power is not survivable on this board: it comes back latched with its
+        // RAM config gone and only a full power removal recovers it. Leave it running instead.
+        if (!softsleepSupported) {
+            setPowerState(GPS_IDLE);
             return;
         }
 #endif
@@ -2106,6 +2158,7 @@ std::unique_ptr<GPS> GPS::createGps()
 #endif
 #endif
 
+    new_gps->en_gpio = _en_gpio;
     GpioVirtPin *virtPin = new GpioVirtPin();
     new_gps->enablePin = virtPin; // Always at least populate a virtual pin
     if (_en_gpio) {
@@ -2267,7 +2320,11 @@ bool GPS::lookForLocation()
 #ifndef TINYGPS_OPTION_NO_CUSTOM_FIELDS
     // GSA is optional and bound to one talker ID; receivers stop sending it or switch talker (GPGSA vs
     // GNGSA) mid-run. Once it goes stale treat it as absent rather than let it veto a fresh GGA/RMC fix.
+#ifdef GPS_IGNORE_STALE_GSA
     const bool gsaFresh = gsafixtype.age() < GPS_SOL_EXPIRY_MS;
+#else
+    const bool gsaFresh = true;
+#endif
     fixType = gsaFresh ? atoi(gsafixtype.value()) : 0; // zero means "no data received"
 #endif
 
