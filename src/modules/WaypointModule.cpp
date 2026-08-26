@@ -36,6 +36,16 @@ namespace
 
 constexpr int16_t WAYPOINT_ROW_GAP = 2;
 
+// Short panels fit one card in the body font. WAYPOINT_LIST_TINY_FONT trades legibility
+// for rows; the header keeps FONT_SMALL either way, so textPos still sizes the body top.
+#ifdef WAYPOINT_LIST_TINY_FONT
+#define WAYPOINT_LIST_FONT FONT_TINY
+#define WAYPOINT_LIST_FONT_HEIGHT FONT_HEIGHT_TINY
+#else
+#define WAYPOINT_LIST_FONT FONT_SMALL
+#define WAYPOINT_LIST_FONT_HEIGHT FONT_HEIGHT_SMALL
+#endif
+
 void drawFallbackWaypointIcon(OLEDDisplay *display, int16_t left, int16_t top, uint16_t boxSize)
 {
     const int16_t cx = left + (boxSize / 2);
@@ -60,7 +70,7 @@ void drawWaypointIcon(OLEDDisplay *display, const meshtastic_Waypoint &wp, int16
         return;
     }
 
-    graphics::UIRenderer::drawStringWithEmotes(display, left, top, utf8, FONT_HEIGHT_SMALL, 1, false);
+    graphics::UIRenderer::drawStringWithEmotes(display, left, top, utf8, boxSize, 1, false);
 }
 
 void formatWaypointDistance(char *out, size_t outSize, float meters)
@@ -302,6 +312,7 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
 
     const char *titleStr = (totalWaypoints == 1) ? "Waypoint" : "Waypoints";
     graphics::drawCommonHeader(display, x, y, titleStr);
+    display->setFont(WAYPOINT_LIST_FONT); // the header left FONT_SMALL selected
     const int *textPos = graphics::getTextPositions(display);
 
     const meshtastic_NodeInfoLite *ourNode = nodeDB->getMeshNode(nodeDB->getNodeNum());
@@ -309,7 +320,7 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     meshtastic_PositionLite ownPos = meshtastic_PositionLite_init_zero;
     const bool haveOwnPos = ourNode && nodeDB->copyNodePosition(ourNode->num, ownPos);
 
-    const uint16_t iconWidth = FONT_HEIGHT_SMALL;
+    const uint16_t iconWidth = WAYPOINT_LIST_FONT_HEIGHT;
     const uint16_t iconGap = 3;
     const uint16_t nameX = iconWidth + iconGap;
     const int16_t contentBottom = display->getHeight() - 1;
@@ -338,9 +349,9 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         const std::string description = trimmedWaypointText(safeDescription);
         const bool hasDescription = !description.empty();
         const int16_t row1Y = rowTop;
-        const int16_t row2Y = row1Y + FONT_HEIGHT_SMALL + 1;
-        const int16_t rowMetaY = hasDescription ? (row2Y + FONT_HEIGHT_SMALL + 1) : row2Y;
-        const int16_t cardBottom = rowMetaY + FONT_HEIGHT_SMALL;
+        const int16_t row2Y = row1Y + WAYPOINT_LIST_FONT_HEIGHT + 1;
+        const int16_t rowMetaY = hasDescription ? (row2Y + WAYPOINT_LIST_FONT_HEIGHT + 1) : row2Y;
+        const int16_t cardBottom = rowMetaY + WAYPOINT_LIST_FONT_HEIGHT;
         if (cardBottom > contentBottom)
             break;
 
@@ -360,8 +371,8 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
             }
         }
 
-        const int16_t compactArrowCenterX = display->getWidth() - ((FONT_HEIGHT_SMALL > 10) ? 9 : 7);
-        const int16_t compactArrowCenterY = (hasDescription ? row2Y : row1Y) + (FONT_HEIGHT_SMALL / 2);
+        const int16_t compactArrowCenterX = display->getWidth() - ((WAYPOINT_LIST_FONT_HEIGHT > 10) ? 9 : 7);
+        const int16_t compactArrowCenterY = (hasDescription ? row2Y : row1Y) + (WAYPOINT_LIST_FONT_HEIGHT / 2);
         const int16_t compactContentRight = compactArrowCenterX - 8;
         const char *distanceLabel = distStr[0] ? distStr : "--";
         const char *expireLabel = expireStr[0] ? expireStr : "--";
@@ -375,15 +386,16 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
             hasDescription ? graphics::UIRenderer::truncateStringWithEmotes(display, description, nameWidth) : std::string();
 
         drawWaypointIcon(display, wp, 0, row1Y, iconWidth);
-        graphics::UIRenderer::drawStringWithEmotes(display, nameX, row1Y, shownName, FONT_HEIGHT_SMALL, 1, false);
-        const int16_t underlineY = row1Y + FONT_HEIGHT_SMALL;
+        graphics::UIRenderer::drawStringWithEmotes(display, nameX, row1Y, shownName, WAYPOINT_LIST_FONT_HEIGHT, 1, false);
+        const int16_t underlineY = row1Y + WAYPOINT_LIST_FONT_HEIGHT;
         const int16_t underlineRight =
             std::min<int16_t>(textRight, nameX + graphics::UIRenderer::measureStringWithEmotes(display, shownName) - 1);
         if (underlineRight >= nameX)
             display->drawLine(nameX, underlineY, underlineRight, underlineY);
 
         if (hasDescription)
-            graphics::UIRenderer::drawStringWithEmotes(display, nameX, row2Y, shownDescription, FONT_HEIGHT_SMALL, 1, false);
+            graphics::UIRenderer::drawStringWithEmotes(display, nameX, row2Y, shownDescription, WAYPOINT_LIST_FONT_HEIGHT, 1,
+                                                       false);
 
         if (showCompass)
             graphics::NodeListRenderer::drawRelativeCompassArrow(display, compactArrowCenterX, compactArrowCenterY,
@@ -397,7 +409,7 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
 
         const int16_t separatorY = cardBottom + 1;
         const int16_t nextRowTop = separatorY + WAYPOINT_ROW_GAP;
-        if (i + 1 < totalWaypoints && nextRowTop + ((FONT_HEIGHT_SMALL * 2) + 1) <= contentBottom) {
+        if (i + 1 < totalWaypoints && nextRowTop + ((WAYPOINT_LIST_FONT_HEIGHT * 2) + 1) <= contentBottom) {
             drawDottedHorizontalDivider(display, 0, display->getWidth() - 1, separatorY);
             rowTop = nextRowTop;
         } else {
