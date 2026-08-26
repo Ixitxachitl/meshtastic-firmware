@@ -177,6 +177,11 @@ class GPS : private concurrency::OSThread
     // Verify the cached model+baud still maps to a live GPS device.
     bool verifyCachedProbePresence();
 
+#ifdef GPS_POWER_CYCLE_IF_UNRESPONSIVE
+    // Cleanly remove and restore the receiver's power once, after it has failed to answer a probe.
+    void powerCycleIfUnresponsive();
+#endif
+
     GnssModel_t gnssModel = GNSS_MODEL_UNKNOWN;
     int32_t detectedBaud = GPS_BAUDRATE;
     int32_t cachedProbeBaud = 0;
@@ -200,6 +205,7 @@ class GPS : private concurrency::OSThread
     uint32_t fixHoldEnds = 0;
     uint32_t rx_gpio = 0;
     uint32_t tx_gpio = 0;
+    uint32_t en_gpio = 0;
 
     uint8_t speedSelect = 0;
     uint8_t probeTries = 0;
@@ -207,6 +213,9 @@ class GPS : private concurrency::OSThread
     bool hasProbeCache = false;
     // Ensures cached probe is attempted once per boot.
     bool triedProbeCache = false;
+#ifdef GPS_POWER_CYCLE_IF_UNRESPONSIVE
+    bool didPowerCycle = false;
+#endif
 
     /**
      * hasValidLocation - indicates that the position variables contain a complete

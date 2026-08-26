@@ -135,6 +135,11 @@ extern "C" {
 #define GPS_RESET_MODE LOW
 #define PIN_GPS_EN (0 + 4)
 #define GPS_EN_ACTIVE LOW
+// The UC6580 has no soft sleep and does not survive the hard-sleep power cut (MCU still drives TX and
+// RESET into it): it wakes latched, RAM config lost, and stays dead until power is fully removed.
+#define GPS_NO_HARDSLEEP
+// Recover a receiver already latched by that power cut; the battery is not removable.
+#define GPS_POWER_CYCLE_IF_UNRESPONSIVE
 #define PERIPHERAL_WARMUP_MS 1000 // Allow I2C bus to stabilise after sensor power-on
 #define PIN_GPS_PPS (32 + 9)      // Pulse per second input from the GPS
 #define GPS_TX_PIN (0 + 7)
