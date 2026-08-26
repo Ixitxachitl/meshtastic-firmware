@@ -30,11 +30,26 @@
 
 WaypointModule *waypointModule;
 
+// Set by the variant, so the configuration.h include above is what makes it visible here.
+#ifndef BASEUI_HAS_TOUCH_DRAG
+#define BASEUI_HAS_TOUCH_DRAG 0
+#endif
+
 #if HAS_SCREEN && !MESHTASTIC_EXCLUDE_WAYPOINT
 namespace
 {
 
+// Only a board that can drag the list draws a card clipped by the panel edge. Without a way to
+// reach it, a part-drawn card is clutter rather than a hint, so those stop at the last one to fit.
+constexpr bool WAYPOINT_LIST_SCROLLS = (BASEUI_HAS_TOUCH_DRAG != 0);
+
 constexpr int16_t WAYPOINT_ROW_GAP = 2;
+
+// Finger-tracked scroll state. drawFrame() publishes the limit it actually laid out with, so
+// scrollByFingerDelta() clamps against what is on screen rather than an estimate of it.
+float waypointScrollY = 0.0f;
+int16_t waypointScrollLimit = 0;
+uint32_t waypointListSignature = 0;
 
 void drawFallbackWaypointIcon(OLEDDisplay *display, int16_t left, int16_t top, uint16_t boxSize)
 {
@@ -163,6 +178,22 @@ void notifyWaypointReceived(const StoredWaypoint &stored)
         externalNotificationModule->startNotification();
 }
 
+// Card height, shared by the measuring pass and the draw loop so the scroll limit matches what is
+// drawn: title row, optional description row, then the coordinates/expiry row.
+int16_t waypointCardHeight(bool hasDescription)
+{
+    return hasDescription ? ((FONT_HEIGHT_SMALL * 3) + 2) : ((FONT_HEIGHT_SMALL * 2) + 1);
+}
+
+bool waypointHasDescription(const meshtastic_Waypoint &wp)
+{
+    char safeDescription[sizeof(wp.description)];
+    memcpy(safeDescription, wp.description, sizeof(safeDescription));
+    safeDescription[sizeof(safeDescription) - 1] = '\0';
+    sanitizeUtf8(safeDescription, sizeof(safeDescription));
+    return !trimmedWaypointText(safeDescription).empty();
+}
+
 } // namespace
 #endif
 
@@ -250,6 +281,27 @@ bool WaypointModule::broadcastDelete(uint32_t waypointId)
 #endif
 
 #if HAS_SCREEN
+void WaypointModule::scrollByFingerDelta(float dyPx)
+{
+#if MESHTASTIC_EXCLUDE_WAYPOINT
+    (void)dyPx;
+#else
+    if (waypointScrollLimit <= 0) {
+        waypointScrollY = 0.0f;
+        return;
+    }
+
+    // The list follows the finger, which is the opposite sense to a scroll-down button: dragging
+    // down walks back towards the top. Same as the map pan and MessageRenderer's touch scroll.
+    float next = waypointScrollY - dyPx;
+    if (next < 0.0f)
+        next = 0.0f;
+    if (next > (float)waypointScrollLimit)
+        next = (float)waypointScrollLimit;
+    waypointScrollY = next;
+#endif
+}
+
 bool WaypointModule::shouldDraw()
 {
 #if !MESHTASTIC_EXCLUDE_WAYPOINT
@@ -301,7 +353,12 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         return;
 
     const char *titleStr = (totalWaypoints == 1) ? "Waypoint" : "Waypoints";
-    graphics::drawCommonHeader(display, x, y, titleStr);
+    // Where the header goes depends on whether the list moves. Boards that can't scroll draw it
+    // first, as they always have: textFirstLine sits two pixels inside the painted header and
+    // glyph ascenders hide the overlap, so drawing it last would clip the first card's title.
+    // Boards that can must draw it last instead - see the tail of this function.
+    if (!WAYPOINT_LIST_SCROLLS)
+        graphics::drawCommonHeader(display, x, y, titleStr);
     const int *textPos = graphics::getTextPositions(display);
 
     const meshtastic_NodeInfoLite *ourNode = nodeDB->getMeshNode(nodeDB->getNodeNum());
@@ -313,10 +370,55 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     const uint16_t iconGap = 3;
     const int16_t bodyX = x + BASEUI_BODY_LR_MARGIN;
     const int16_t nameX = bodyX + iconWidth + iconGap;
-    const int16_t contentBottom = display->getHeight() - 1;
-    int16_t rowTop = textPos[1] + BASEUI_BELOW_HEADER_MARGIN + BASEUI_BODY_TOP_MARGIN;
+    const int16_t contentBottom = y + display->getHeight() - 1;
+    const int16_t bodyTop = y + textPos[1] + BASEUI_BELOW_HEADER_MARGIN + BASEUI_BODY_TOP_MARGIN;
+
+    // Measure the whole list up front: a card is a row taller when its waypoint carries a
+    // description, so how far the list can scroll isn't known until every card has been sized.
+    bool cardHasDescription[WAYPOINT_HISTORY_LIMIT];
+    int16_t cardHeights[WAYPOINT_HISTORY_LIMIT];
+    int16_t listHeight = 0;
+    uint32_t signature = (uint32_t)totalWaypoints;
+    for (size_t i = 0; i < totalWaypoints; ++i) {
+        cardHasDescription[i] = waypointHasDescription(entries[i]->waypoint);
+        cardHeights[i] = waypointCardHeight(cardHasDescription[i]);
+        listHeight += cardHeights[i];
+        if (i + 1 < totalWaypoints)
+            listHeight += 1 + WAYPOINT_ROW_GAP; // the divider, plus the gap under it
+        signature = (signature * 31u) + entries[i]->waypoint.id;
+    }
+
+    // A list that changed under the finger starts again from the top: the old offset now points at
+    // a different waypoint.
+    if (signature != waypointListSignature) {
+        waypointListSignature = signature;
+        waypointScrollY = 0.0f;
+    }
+    waypointScrollLimit = WAYPOINT_LIST_SCROLLS ? std::max<int16_t>(0, listHeight - (contentBottom - bodyTop)) : 0;
+    if (waypointScrollY > (float)waypointScrollLimit)
+        waypointScrollY = (float)waypointScrollLimit;
+
+    int16_t rowTop = bodyTop - (int16_t)waypointScrollY;
 
     for (size_t i = 0; i < totalWaypoints; ++i) {
+        const int16_t cardBottom = rowTop + cardHeights[i];
+        const int16_t separatorY = cardBottom + 1;
+        const int16_t nextRowTop = separatorY + WAYPOINT_ROW_GAP;
+
+        // Cull against the panel edge rather than bodyTop, so a card sliding up out of the list
+        // keeps being drawn until it is genuinely gone: the header is painted over the top of it
+        // at the end of this function, which is what hides the part that has left the body.
+        if (WAYPOINT_LIST_SCROLLS) {
+            if (rowTop > contentBottom)
+                break;
+            if (cardBottom < y) { // scrolled off the top
+                rowTop = nextRowTop;
+                continue;
+            }
+        } else if (cardBottom > contentBottom) {
+            break;
+        }
+
         const StoredWaypoint &entry = *entries[i];
         const meshtastic_Waypoint &wp = entry.waypoint;
 
@@ -337,13 +439,10 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         formatWaypointExpire(expireStr, sizeof(expireStr), wp);
 
         const std::string description = trimmedWaypointText(safeDescription);
-        const bool hasDescription = !description.empty();
+        const bool hasDescription = cardHasDescription[i];
         const int16_t row1Y = rowTop;
         const int16_t row2Y = row1Y + FONT_HEIGHT_SMALL + 1;
         const int16_t rowMetaY = hasDescription ? (row2Y + FONT_HEIGHT_SMALL + 1) : row2Y;
-        const int16_t cardBottom = rowMetaY + FONT_HEIGHT_SMALL;
-        if (cardBottom > contentBottom)
-            break;
 
         bool showCompass = false;
         float myHeading = 0.0f;
@@ -361,7 +460,7 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
             }
         }
 
-        const int16_t compactArrowCenterX = display->getWidth() - BASEUI_BODY_LR_MARGIN - ((FONT_HEIGHT_SMALL > 10) ? 9 : 7);
+        const int16_t compactArrowCenterX = x + display->getWidth() - BASEUI_BODY_LR_MARGIN - ((FONT_HEIGHT_SMALL > 10) ? 9 : 7);
         const int16_t compactArrowCenterY = (hasDescription ? row2Y : row1Y) + (FONT_HEIGHT_SMALL / 2);
         const int16_t compactContentRight = compactArrowCenterX - 8;
         const char *distanceLabel = distStr[0] ? distStr : "--";
@@ -396,16 +495,20 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         display->drawString(metaLeft + metaWidth - 1, rowMetaY, expireLabel);
         display->setTextAlignment(TEXT_ALIGN_LEFT);
 
-        const int16_t separatorY = cardBottom + 1;
-        const int16_t nextRowTop = separatorY + WAYPOINT_ROW_GAP;
-        if (i + 1 < totalWaypoints && nextRowTop + ((FONT_HEIGHT_SMALL * 2) + 1) <= contentBottom) {
-            drawDottedHorizontalDivider(display, bodyX, display->getWidth() - 1 - BASEUI_BODY_LR_MARGIN, separatorY);
-            rowTop = nextRowTop;
-        } else {
+        // The divider only earns its place when the card it separates from is going to be drawn.
+        const bool moreBelow = (i + 1 < totalWaypoints);
+        const bool separatorVisible = WAYPOINT_LIST_SCROLLS ? (separatorY >= y && separatorY <= contentBottom)
+                                                            : (moreBelow && nextRowTop + cardHeights[i + 1] <= contentBottom);
+        if (moreBelow && separatorVisible)
+            drawDottedHorizontalDivider(display, bodyX, x + display->getWidth() - 1 - BASEUI_BODY_LR_MARGIN, separatorY);
+        if (!WAYPOINT_LIST_SCROLLS && !separatorVisible)
             break;
-        }
+        rowTop = nextRowTop;
     }
 
+    // Header last, so a card scrolled up under it is painted over rather than through.
+    if (WAYPOINT_LIST_SCROLLS)
+        graphics::drawCommonHeader(display, x, y, titleStr);
     graphics::drawCommonFooter(display, x, y);
 #endif
 }

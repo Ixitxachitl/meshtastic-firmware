@@ -15,6 +15,15 @@ class WaypointModule : public SinglePortModule, public Observable<const UIFrameE
 #if HAS_SCREEN
     bool shouldDraw();
     void onDeviceTimeChanged();
+
+    // Touch scroll - moves the list by an exact finger displacement in screen pixels, for hardware
+    // that reports a continuous drag (BASEUI_HAS_TOUCH_DRAG). Pass the delta between consecutive
+    // drag reports, not the offset from where the finger landed.
+    //
+    // The list follows the finger, so dragging down walks back towards the top of the list. Clamped
+    // against the geometry the last drawFrame() actually laid out with; a no-op until then, and on
+    // a list short enough to fit.
+    void scrollByFingerDelta(float dyPx);
 #endif
 #if !MESHTASTIC_EXCLUDE_WAYPOINT
     /// Broadcast an expired copy of the waypoint so the mesh (and we) discard it.
