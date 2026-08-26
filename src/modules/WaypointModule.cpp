@@ -5,6 +5,7 @@
 #include "configuration.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/draw/CompassRenderer.h"
+#include "mesh/Throttle.h"
 #include "meshUtils.h"
 #include <algorithm>
 #include <cctype>
@@ -35,9 +36,15 @@ namespace
 {
 
 constexpr int16_t WAYPOINT_ROW_GAP = 2;
+// The title is underlined on its baseline, so whatever follows needs a gap the other rows don't.
+constexpr int16_t WAYPOINT_TITLE_GAP = 2;
+// EmoteRenderer draws emotes at their native size, so the icon column follows the emote bitmaps
+// rather than the body font - otherwise a 16px pin is drawn straight over the name.
+constexpr int16_t WAYPOINT_ICON_BOX = 16;
+constexpr int16_t WAYPOINT_ICON_GAP = 3;
 
-// Short panels fit one card in the body font. WAYPOINT_LIST_TINY_FONT trades legibility
-// for rows; the header keeps FONT_SMALL either way, so textPos still sizes the body top.
+// Short panels fit one card in the body font. WAYPOINT_LIST_TINY_FONT trades legibility for
+// rows; the header is drawn in FONT_SMALL either way.
 #ifdef WAYPOINT_LIST_TINY_FONT
 #define WAYPOINT_LIST_FONT FONT_TINY
 #define WAYPOINT_LIST_FONT_HEIGHT FONT_HEIGHT_TINY
@@ -171,6 +178,88 @@ void notifyWaypointReceived(const StoredWaypoint &stored)
 
     if (externalNotificationModule)
         externalNotificationModule->startNotification();
+}
+
+// Autoscroll, timed like MessageRenderer's so the two screens behave the same: settle, crawl to
+// the end, hold, snap back. The T1 has no way to scroll a list by hand.
+constexpr uint32_t WAYPOINT_SCROLL_SETTLE_MS = 2000;
+constexpr uint32_t WAYPOINT_SCROLL_HOLD_MS = 3000;
+constexpr float WAYPOINT_SCROLL_SPEED = 2.0f;
+
+float waypointScrollY = 0.0f;
+uint32_t waypointScrollTick = 0;
+uint32_t waypointScrollMark = 0;
+uint32_t waypointScrollSignature = 0;
+bool waypointScrollRunning = false;
+bool waypointScrollHolding = false;
+
+int16_t waypointCardHeight(bool hasDescription)
+{
+    const int16_t rows = hasDescription ? ((WAYPOINT_LIST_FONT_HEIGHT * 3) + WAYPOINT_TITLE_GAP + 1)
+                                        : ((WAYPOINT_LIST_FONT_HEIGHT * 2) + WAYPOINT_TITLE_GAP);
+    // A card is never shorter than its icon, or the icon bleeds into the card below.
+    return std::max<int16_t>(rows, WAYPOINT_ICON_BOX);
+}
+
+bool waypointHasDescription(const meshtastic_Waypoint &wp)
+{
+    char safeDescription[sizeof(wp.description)];
+    memcpy(safeDescription, wp.description, sizeof(safeDescription));
+    safeDescription[sizeof(safeDescription) - 1] = '\0';
+    sanitizeUtf8(safeDescription, sizeof(safeDescription));
+    return !trimmedWaypointText(safeDescription).empty();
+}
+
+void advanceWaypointScroll(int16_t maxScroll, uint32_t signature)
+{
+    const uint32_t now = millis();
+    if (signature != waypointScrollSignature) {
+        waypointScrollSignature = signature;
+        waypointScrollY = 0.0f;
+        waypointScrollRunning = false;
+        waypointScrollHolding = false;
+        waypointScrollMark = now;
+        waypointScrollTick = now;
+    }
+
+#ifdef USE_EINK
+    (void)maxScroll;
+    waypointScrollY = 0.0f; // a partial refresh per frame is not worth a moving list
+#else
+    const float delta = (now - waypointScrollTick) / 400.0f;
+    waypointScrollTick = now;
+
+    if (maxScroll <= 0) {
+        waypointScrollY = 0.0f;
+        waypointScrollRunning = false;
+        waypointScrollHolding = false;
+        waypointScrollMark = now;
+        return;
+    }
+
+    if (!waypointScrollRunning) {
+        if (Throttle::hasElapsed(waypointScrollMark, WAYPOINT_SCROLL_SETTLE_MS))
+            waypointScrollRunning = true;
+        return;
+    }
+
+    if (waypointScrollHolding) {
+        if (Throttle::hasElapsed(waypointScrollMark, WAYPOINT_SCROLL_HOLD_MS)) {
+            waypointScrollY = 0.0f;
+            waypointScrollHolding = false;
+            waypointScrollRunning = false;
+            waypointScrollMark = now;
+        }
+        return;
+    }
+
+    waypointScrollY += delta * WAYPOINT_SCROLL_SPEED;
+    if (waypointScrollY >= maxScroll) {
+        waypointScrollY = maxScroll;
+        waypointScrollHolding = true;
+        waypointScrollMark = now;
+    }
+#endif
 }
 
 } // namespace
@@ -311,24 +400,48 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         return;
 
     const char *titleStr = (totalWaypoints == 1) ? "Waypoint" : "Waypoints";
-    graphics::drawCommonHeader(display, x, y, titleStr);
-    display->setFont(WAYPOINT_LIST_FONT); // the header left FONT_SMALL selected
-    const int *textPos = graphics::getTextPositions(display);
+    display->setFont(WAYPOINT_LIST_FONT);
 
     const meshtastic_NodeInfoLite *ourNode = nodeDB->getMeshNode(nodeDB->getNodeNum());
     const bool hasOwnPositionFix = (ourNode && nodeDB->hasValidPosition(ourNode));
     meshtastic_PositionLite ownPos = meshtastic_PositionLite_init_zero;
     const bool haveOwnPos = ourNode && nodeDB->copyNodePosition(ourNode->num, ownPos);
 
-    const uint16_t iconWidth = WAYPOINT_LIST_FONT_HEIGHT;
-    const uint16_t iconGap = 3;
-    const uint16_t nameX = iconWidth + iconGap;
+    const int16_t nameX = WAYPOINT_ICON_BOX + WAYPOINT_ICON_GAP;
     const int16_t contentBottom = display->getHeight() - 1;
-    int16_t rowTop = textPos[1];
+    // Body starts below the painted header. textFirstLine sits 2px inside it, which works for text
+    // because glyph ascenders hide the overlap, but not for the icon or the title underline.
+    const int16_t bodyTop = BASEUI_HEADER_HEIGHT + BASEUI_BELOW_HEADER_MARGIN;
+
+    // Measure every card first: the stride depends on whether each waypoint carries a description.
+    int16_t totalHeight = 0;
+    uint32_t signature = static_cast<uint32_t>(totalWaypoints);
+    for (size_t i = 0; i < totalWaypoints; ++i) {
+        totalHeight += waypointCardHeight(waypointHasDescription(entries[i]->waypoint));
+        if (i + 1 < totalWaypoints)
+            totalHeight += 1 + WAYPOINT_ROW_GAP; // divider plus the gap under it
+        signature = (signature * 31u) + entries[i]->waypoint.id;
+    }
+    const int16_t maxScroll = std::max<int16_t>(0, totalHeight - (contentBottom - bodyTop));
+    advanceWaypointScroll(maxScroll, signature);
+
+    int16_t rowTop = bodyTop - static_cast<int16_t>(waypointScrollY);
 
     for (size_t i = 0; i < totalWaypoints; ++i) {
         const StoredWaypoint &entry = *entries[i];
         const meshtastic_Waypoint &wp = entry.waypoint;
+
+        const bool hasDescription = waypointHasDescription(wp);
+        const int16_t cardBottom = rowTop + waypointCardHeight(hasDescription);
+        const int16_t separatorY = cardBottom + 1;
+        const int16_t nextRowTop = separatorY + WAYPOINT_ROW_GAP;
+
+        if (rowTop > contentBottom)
+            break;
+        if (cardBottom < bodyTop) { // scrolled off the top
+            rowTop = nextRowTop;
+            continue;
+        }
 
         char safeName[sizeof(wp.name)];
         memcpy(safeName, wp.name, sizeof(safeName));
@@ -347,13 +460,9 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         formatWaypointExpire(expireStr, sizeof(expireStr), wp);
 
         const std::string description = trimmedWaypointText(safeDescription);
-        const bool hasDescription = !description.empty();
         const int16_t row1Y = rowTop;
-        const int16_t row2Y = row1Y + WAYPOINT_LIST_FONT_HEIGHT + 1;
+        const int16_t row2Y = row1Y + WAYPOINT_LIST_FONT_HEIGHT + WAYPOINT_TITLE_GAP;
         const int16_t rowMetaY = hasDescription ? (row2Y + WAYPOINT_LIST_FONT_HEIGHT + 1) : row2Y;
-        const int16_t cardBottom = rowMetaY + WAYPOINT_LIST_FONT_HEIGHT;
-        if (cardBottom > contentBottom)
-            break;
 
         bool showCompass = false;
         float myHeading = 0.0f;
@@ -385,7 +494,7 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         const std::string shownDescription =
             hasDescription ? graphics::UIRenderer::truncateStringWithEmotes(display, description, nameWidth) : std::string();
 
-        drawWaypointIcon(display, wp, 0, row1Y, iconWidth);
+        drawWaypointIcon(display, wp, 0, row1Y, WAYPOINT_ICON_BOX);
         graphics::UIRenderer::drawStringWithEmotes(display, nameX, row1Y, shownName, WAYPOINT_LIST_FONT_HEIGHT, 1, false);
         const int16_t underlineY = row1Y + WAYPOINT_LIST_FONT_HEIGHT;
         const int16_t underlineRight =
@@ -407,15 +516,13 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         display->drawString(metaLeft + metaWidth - 1, rowMetaY, expireLabel);
         display->setTextAlignment(TEXT_ALIGN_LEFT);
 
-        const int16_t separatorY = cardBottom + 1;
-        const int16_t nextRowTop = separatorY + WAYPOINT_ROW_GAP;
-        if (i + 1 < totalWaypoints && nextRowTop + ((WAYPOINT_LIST_FONT_HEIGHT * 2) + 1) <= contentBottom) {
+        if (i + 1 < totalWaypoints && separatorY >= bodyTop && separatorY <= contentBottom)
             drawDottedHorizontalDivider(display, 0, display->getWidth() - 1, separatorY);
-            rowTop = nextRowTop;
-        } else {
-            break;
-        }
+        rowTop = nextRowTop;
     }
+
+    // Header last, so a card scrolled under it is painted over rather than through.
+    graphics::drawCommonHeader(display, x, y, titleStr);
 #endif
 }
 #endif
