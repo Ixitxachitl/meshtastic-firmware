@@ -21,6 +21,7 @@
 #include "graphics/niche/Map/MapTileSourceIndicator.h"
 #endif
 
+#include <algorithm>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,6 +36,12 @@ constexpr int kDefaultZoomAlone = 6; // Sensible starting zoom when only our own
 
 int16_t s_lastViewWidth = 128;
 int16_t s_lastViewHeight = 64;
+#if BASEUI_MAP_ONSCREEN_CONTROLS
+// Top of the map viewport (below the shared header) as the last draw laid it out, so handleControlTap
+// can place the same buttons the user is looking at. Cleared whenever a frame draws without them.
+int16_t s_lastViewTop = 0;
+bool s_controlsOnScreen = false;
+#endif
 
 bool s_panMode = false;
 bool s_zoomMode = false;
@@ -487,6 +494,92 @@ void tintMarkerCenter(int16_t centerX, int16_t centerY, int &budget, uint32_t ce
 }
 #endif
 
+#if BASEUI_MAP_ONSCREEN_CONTROLS
+// On-screen controls, in place of the Map menu those boards would otherwise reach these through.
+//
+// A column down the right edge rather than a row along the bottom: the shared header owns the top
+// of the frame, the nav bar sweeps across the bottom whenever the frame changes, and on a rounded
+// panel the mid-height edge is the widest part of the glass. Nothing else on the map is anchored
+// there either - the coordinate and status labels are centred on rounded panels and cornered
+// otherwise, and the zoom ruler only exists in a mode these boards cannot enter.
+enum class MapControl : uint8_t { ZoomIn, ZoomOut, Pan, FollowMe, Count };
+constexpr int kMapControlCount = (int)MapControl::Count;
+constexpr int16_t kMapControlRadius = 7; // matches the keyboard's key caps
+
+struct MapControlRect {
+    int16_t x, y, w, h;
+};
+
+// Both the draw and the hit test go through this, so a button can never be drawn somewhere other
+// than where it is pressed.
+void layoutMapControls(int16_t x, int16_t y, int16_t viewWidth, int16_t viewHeight, MapControlRect out[kMapControlCount])
+{
+    constexpr int16_t gap = 4;
+    const int16_t w = std::max<int16_t>(34, viewWidth / 7);
+    const int16_t h = std::max<int16_t>(24, viewHeight / 10);
+    const int16_t inset = std::max<int16_t>(2, viewWidth / 40);
+    const int16_t left = x + viewWidth - inset - w;
+    const int16_t stackHeight = kMapControlCount * h + (kMapControlCount - 1) * gap;
+    const int16_t top = std::max<int16_t>(y, y + (viewHeight - stackHeight) / 2);
+
+    for (int i = 0; i < kMapControlCount; ++i)
+        out[i] = {left, (int16_t)(top + i * (h + gap)), w, h};
+}
+
+void drawMapControls(OLEDDisplay *display, int16_t x, int16_t y, int16_t viewWidth, int16_t viewHeight)
+{
+    MapControlRect rects[kMapControlCount];
+    layoutMapControls(x, y, viewWidth, viewHeight, rects);
+
+    display->setFont(FONT_SMALL);
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+
+    for (int i = 0; i < kMapControlCount; ++i) {
+        const MapControlRect &r = rects[i];
+        const MapControl control = (MapControl)i;
+        // The two toggles latch, so they stay filled for as long as they are on - the same way the
+        // keyboard's shift key does. The zoom steps are momentary and never fill.
+        const bool latched = (control == MapControl::Pan && s_panMode) || (control == MapControl::FollowMe && s_followMe);
+
+        // Filled either way, never a bare outline: the basemap runs underneath, and tile art shows
+        // straight through an unfilled cap. Same reason everything else here is haloed.
+        if (latched) {
+            display->setColor(WHITE);
+            fillRoundedRect(display, r.x, r.y, r.w, r.h, kMapControlRadius);
+            display->setColor(BLACK);
+        } else {
+            display->setColor(BLACK);
+            fillRoundedRect(display, r.x, r.y, r.w, r.h, kMapControlRadius);
+            display->setColor(WHITE);
+            drawRoundedRect(display, r.x, r.y, r.w, r.h, kMapControlRadius);
+        }
+
+        const int16_t cx = r.x + r.w / 2;
+        const int16_t cy = r.y + r.h / 2;
+        // Strokes rather than font glyphs: '+' and '-' are small and off-centre in most faces, and
+        // these have a whole cap to fill.
+        const int16_t arm = std::min<int16_t>(r.w, r.h) / 4;
+        const int16_t stroke = std::max<int16_t>(2, r.h / 12);
+        switch (control) {
+        case MapControl::ZoomIn:
+            display->fillRect(cx - arm, cy - stroke / 2, arm * 2, stroke);
+            display->fillRect(cx - stroke / 2, cy - arm, stroke, arm * 2);
+            break;
+        case MapControl::ZoomOut:
+            display->fillRect(cx - arm, cy - stroke / 2, arm * 2, stroke);
+            break;
+        default:
+            display->drawString(cx, r.y + (r.h - FONT_HEIGHT_SMALL) / 2, control == MapControl::Pan ? "PAN" : "ME");
+            break;
+        }
+
+        display->setColor(WHITE);
+    }
+
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+}
+#endif // BASEUI_MAP_ONSCREEN_CONTROLS
+
 } // namespace
 
 bool MapRenderer::isPanModeEnabled()
@@ -613,6 +706,12 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
 
     s_lastViewWidth = viewWidth;
     s_lastViewHeight = viewHeight;
+#if BASEUI_MAP_ONSCREEN_CONTROLS
+    s_lastViewTop = y;
+    // Raised again only once the controls have actually been drawn below, so the early return for
+    // "no node positions yet" leaves nothing for a tap to hit.
+    s_controlsOnScreen = false;
+#endif
 
     float centerLat, centerLng;
     bool haveCenter;
@@ -935,6 +1034,50 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         display->setFont(FONT_SMALL);
         drawHaloString(display, rulerX - 7, indicatorY - FONT_HEIGHT_SMALL / 2, zoomText);
     }
+
+#if BASEUI_MAP_ONSCREEN_CONTROLS
+    // Last, so nothing is drawn over a button - they are what the finger is aiming at.
+    drawMapControls(display, x, y, viewWidth, viewHeight);
+    s_controlsOnScreen = true;
+#endif
 }
+
+#if BASEUI_MAP_ONSCREEN_CONTROLS
+bool MapRenderer::handleControlTap(int16_t tapX, int16_t tapY)
+{
+    if (!s_controlsOnScreen)
+        return false;
+
+    // x is 0 here, not the frame origin the draw used: that offset is only non-zero mid-transition,
+    // and a tap is answered against the frame at rest.
+    MapControlRect rects[kMapControlCount];
+    layoutMapControls(0, s_lastViewTop, s_lastViewWidth, s_lastViewHeight, rects);
+
+    for (int i = 0; i < kMapControlCount; ++i) {
+        const MapControlRect &r = rects[i];
+        if (tapX < r.x || tapX >= r.x + r.w || tapY < r.y || tapY >= r.y + r.h)
+            continue;
+
+        switch ((MapControl)i) {
+        case MapControl::ZoomIn:
+            zoomIn();
+            return true;
+        case MapControl::ZoomOut:
+            zoomOut();
+            return true;
+        case MapControl::Pan:
+            setPanModeEnabled(!s_panMode);
+            return true;
+        case MapControl::FollowMe:
+            setFollowMeEnabled(!s_followMe);
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    return false;
+}
+#endif
 
 #endif // BASEUI_HAS_MAP

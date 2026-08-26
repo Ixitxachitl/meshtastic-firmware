@@ -3322,7 +3322,7 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
     case LicensedToNormalConfirm:
         licensedToNormalConfirmMenu();
         break;
-#if BASEUI_HAS_MAP
+#if BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
     case MapBaseMenu:
         mapBaseMenu();
         break;
@@ -3365,7 +3365,7 @@ void menuHandler::saveUIConfig()
     nodeDB->saveProto("/prefs/uiconfig.proto", meshtastic_DeviceUIConfig_size, &meshtastic_DeviceUIConfig_msg, &uiconfig);
 }
 
-#if BASEUI_HAS_MAP
+#if BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
 void menuHandler::mapBaseMenu()
 {
     enum class MapAction { PanMode, FollowMe, ZoomLevel };
@@ -3547,7 +3547,7 @@ void menuHandler::mapPanMenu()
 
     screen->showOverlayBanner(bannerOptions);
 }
-#endif // BASEUI_HAS_MAP
+#endif // BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
 
 } // namespace graphics
 

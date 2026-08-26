@@ -14,6 +14,7 @@
 #include "meshtastic/config.pb.h"
 #include "modules/ExternalNotificationModule.h"
 #include <OLEDDisplay.h>
+#include <algorithm>
 #include <cctype>
 #include <graphics/images.h>
 
@@ -96,6 +97,45 @@ void drawRoundedHighlight(OLEDDisplay *display, int16_t x, int16_t y, int16_t w,
     display->fillCircle(x + w - r - 1, y + r, r);         // top-right
     display->fillCircle(x + r + 1, y + h - r - 1, r);     // bottom-left
     display->fillCircle(x + w - r - 1, y + h - r - 1, r); // bottom-right
+}
+
+// *********************************
+// * Rounded button caps           *
+// *********************************
+void drawRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r)
+{
+    r = std::min<int16_t>(r, std::min(w, h) / 2);
+    if (r < 1) {
+        display->drawRect(x, y, w, h);
+        return;
+    }
+
+    display->drawHorizontalLine(x + r, y, w - r * 2);
+    display->drawHorizontalLine(x + r, y + h - 1, w - r * 2);
+    display->drawVerticalLine(x, y + r, h - r * 2);
+    display->drawVerticalLine(x + w - 1, y + r, h - r * 2);
+    // Quadrant bitmask: 1 = top-right, 2 = top-left, 4 = bottom-left, 8 = bottom-right
+    display->drawCircleQuads(x + r, y + r, r, 2);
+    display->drawCircleQuads(x + w - 1 - r, y + r, r, 1);
+    display->drawCircleQuads(x + r, y + h - 1 - r, r, 4);
+    display->drawCircleQuads(x + w - 1 - r, y + h - 1 - r, r, 8);
+}
+
+void fillRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r)
+{
+    r = std::min<int16_t>(r, std::min(w, h) / 2);
+    if (r < 1) {
+        display->fillRect(x, y, w, h);
+        return;
+    }
+
+    display->fillRect(x + r, y, w - r * 2, h);
+    display->fillRect(x, y + r, r, h - r * 2);
+    display->fillRect(x + w - r, y + r, r, h - r * 2);
+    display->fillCircle(x + r, y + r, r);
+    display->fillCircle(x + w - 1 - r, y + r, r);
+    display->fillCircle(x + r, y + h - 1 - r, r);
+    display->fillCircle(x + w - 1 - r, y + h - 1 - r, r);
 }
 
 // ***********************

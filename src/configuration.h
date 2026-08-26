@@ -526,6 +526,19 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #endif
 #endif
 
+// Where a finger can reach them, the map's pan/zoom/follow-me controls are buttons drawn on the
+// frame itself rather than entries in the Map menu - see MapRenderer::handleControlTap(). Never
+// both: the buttons exist precisely to replace that menu, which then has nothing left in it, so
+// the Map frame opens no menu at all on these boards. Zoom Mode goes the same way - two buttons
+// step the zoom directly, leaving no mode to hold.
+//
+// Keyed on the same flag as every other finger-tracked interaction, so a board opts into all of
+// them together. BASEUI_HAS_TOUCH_DRAG is a variant define, hence the default here.
+#ifndef BASEUI_HAS_TOUCH_DRAG
+#define BASEUI_HAS_TOUCH_DRAG 0
+#endif
+#define BASEUI_MAP_ONSCREEN_CONTROLS (BASEUI_HAS_MAP && BASEUI_HAS_TOUCH_DRAG)
+
 #ifndef HW_VENDOR
 #error HW_VENDOR must be defined
 #endif

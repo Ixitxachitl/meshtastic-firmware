@@ -125,6 +125,15 @@ void decomposeTime(uint32_t rtc_sec, int &hour, int &minute, int &second);
 // Rounded highlight (used for inverted headers)
 void drawRoundedHighlight(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r);
 
+// Rounded button caps. drawRect() reads as a plain box at the sizes a dense control layout forces;
+// rounding the corners is what lets something only ~25px wide still read as a button. Used by the
+// on-screen keyboard's keys and by the map's on-screen controls, so the two look like one family.
+// r is clamped to half the shorter side, and degenerates to a plain rect when there's no room.
+void drawRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r);
+
+// Filled counterpart, for a cap that is pressed or latched on.
+void fillRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r);
+
 // Nearest-neighbour XBM blit. Falls through to the library's drawXbm() at scale 1,
 // so callers can use it unconditionally. w/h are the bitmap's own dimensions; the
 // drawn area is w*scale by h*scale.
