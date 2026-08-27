@@ -1,5 +1,6 @@
 #include "variant.h"
 #include "configuration.h"
+#include "haptics_aw86224.h"
 #include "input/TouchScreenImpl1.h"
 #include "keyboard_module.h"
 #include "touch_cst9220.h"
@@ -24,6 +25,7 @@ void initVariant()
     // follows sees its devices and the GNSS is already out of reset.
     Wire.begin();
     keyboardModule.begin();
+    hapticsAW86224.begin();
 }
 
 // Runs late in setup(), once the screen exists. LovyanGFX has no CST9220

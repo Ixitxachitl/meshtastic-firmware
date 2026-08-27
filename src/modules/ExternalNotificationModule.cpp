@@ -23,6 +23,9 @@
 #include "main.h"
 #include "mesh/Throttle.h"
 #include "mesh/generated/meshtastic/rtttl.pb.h"
+#ifdef HAS_AW86224
+#include "haptics_aw86224.h"
+#endif
 #include <Arduino.h>
 
 #if defined(HAS_RGB_LED)
@@ -268,6 +271,15 @@ void ExternalNotificationModule::setExternalState(uint8_t index, bool on)
         drv.stop();
     }
 #endif
+
+#ifdef HAS_AW86224
+    if (on && index == 1 &&
+        (moduleConfig.external_notification.alert_message_vibra || moduleConfig.external_notification.alert_bell_vibra)) {
+        hapticsAW86224.play();
+    } else if (!on && index == 1) {
+        hapticsAW86224.stop();
+    }
+#endif
 }
 
 bool ExternalNotificationModule::getExternal(uint8_t index)
@@ -302,6 +314,9 @@ void ExternalNotificationModule::stopNow()
     setIntervalFromNow(0);
 #ifdef HAS_DRV2605
     drv.stop();
+#endif
+#ifdef HAS_AW86224
+    hapticsAW86224.stop();
 #endif
 
     // Prevent the state machine from immediately re-triggering outputs after a manual stop.
@@ -508,6 +523,9 @@ void ExternalNotificationModule::triggerVibraOutput()
     drv.setWaveform(6, 16);
     drv.setWaveform(7, 0);
     drv.go();
+#endif
+#ifdef HAS_AW86224
+    hapticsAW86224.play();
 #endif
     setExternalState(1, true);
 }

@@ -44,6 +44,9 @@ mt_declare(lovyangfx    https://github.com/lovyan03/LovyanGFX/archive/refs/tags/
 mt_declare(ada_busio    https://github.com/adafruit/Adafruit_BusIO/archive/refs/tags/1.17.4.zip)
 mt_declare(ada_sensor   https://github.com/adafruit/Adafruit_Sensor/archive/refs/tags/1.1.15.zip)
 mt_declare(ada_bme280   https://github.com/adafruit/Adafruit_BME280_Library/archive/refs/tags/2.3.0.zip)
+# IMU: the BHI260AP on the main board. The library also carries the Bosch
+# sensor-hub firmware blob the chip has to be fed at every boot.
+mt_declare(sensorlib    https://github.com/lewisxhe/SensorLib/archive/refs/tags/v0.3.1.zip)
 
 # DeviceUI (MUI) and its own dependencies, versions from device-ui's library.json.
 mt_declare(device_ui     https://github.com/meshtastic/device-ui/archive/adfbd3811a53b6aed0649c8d8f078118c042a407.zip
@@ -68,6 +71,7 @@ set(MT_DEP_INCLUDES
   ${ada_busio_SOURCE_DIR}
   ${ada_sensor_SOURCE_DIR}
   ${ada_bme280_SOURCE_DIR}
+  ${sensorlib_SOURCE_DIR}/src
   # DeviceUI. The 320x240 view is the one that adapts itself to larger panels;
   # TFTView_320x240::apply_hotfix() resizes for 480-pixel displays at runtime.
   ${device_ui_SOURCE_DIR}
@@ -91,6 +95,17 @@ file(GLOB MT_SENSOR_SRC
   ${ada_busio_SOURCE_DIR}/*.cpp
   ${ada_sensor_SOURCE_DIR}/*.cpp
   ${ada_bme280_SOURCE_DIR}/*.cpp
+)
+
+# SensorLib ships drivers for a whole catalogue of parts; only the BHI260AP
+# path is listed, so the touch, RTC and BMA423 drivers stay out of the image.
+file(GLOB MT_SENSORLIB_SRC
+  ${sensorlib_SOURCE_DIR}/src/SensorBHI260AP.cpp
+  ${sensorlib_SOURCE_DIR}/src/SensorBHI260AP_Klio.cpp
+  ${sensorlib_SOURCE_DIR}/src/platform/*.cpp
+  ${sensorlib_SOURCE_DIR}/src/bosch/*.c
+  ${sensorlib_SOURCE_DIR}/src/bosch/*.cpp
+  ${sensorlib_SOURCE_DIR}/src/bosch/common/*.cpp
 )
 
 file(GLOB MT_MISC_SRC
@@ -126,4 +141,4 @@ file(GLOB_RECURSE MT_LVGL_SRC ${lvgl_SOURCE_DIR}/src/*.c)
 file(GLOB MT_PNGDEC_SRC ${pngdec_SOURCE_DIR}/src/*.cpp)
 
 set(MT_DEP_SOURCES ${MT_RADIOLIB_SRC} ${MT_CRYPTO_SRC} ${MT_MISC_SRC} ${MT_OLED_SRC} ${MT_SENSOR_SRC}
-    ${MT_LGFX_SRC} ${MT_LVGL_SRC} ${MT_PNGDEC_SRC} ${MT_DEVICE_UI_SRC})
+    ${MT_SENSORLIB_SRC} ${MT_LGFX_SRC} ${MT_LVGL_SRC} ${MT_PNGDEC_SRC} ${MT_DEVICE_UI_SRC})
