@@ -72,9 +72,9 @@
 	};
 
 	aliases {
-		sw0 = &key1;
-		sw1 = &key2;
-		sw2 = &key3;
+		sw0 = &key_c;
+		sw1 = &key_a;
+		sw2 = &key_b;
 		rtc = &rtc;
 		watchdog0 = &wdt;
 	};
