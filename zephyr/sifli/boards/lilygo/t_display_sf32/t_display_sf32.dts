@@ -32,28 +32,29 @@
 		zephyr,bt-hci = &mailbox;
 	};
 
-	/* Side buttons on the 6-pin KEY FPC. Pin assignment follows LilyGo's pin
-	 * map; polarity is unverified until hardware is in hand.
+	/* The three side buttons, silkscreened A/B/C. Pins and polarity follow
+	 * LilyGo's pin map and button example; B is the odd one out, wired
+	 * active-high with a pull-down.
 	 */
 	buttons {
 		compatible = "gpio-keys";
 
-		key1: key1 {
-			label = "KEY1";
-			gpios = <&gpioa_32_44 1 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
-			zephyr,code = <INPUT_KEY_1>;
+		key_a: key_a {
+			label = "A";
+			gpios = <&gpioa_32_44 2 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>;
+			zephyr,code = <INPUT_KEY_A>;
 		};
 
-		key2: key2 {
-			label = "KEY2";
-			gpios = <&gpioa_32_44 2 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
-			zephyr,code = <INPUT_KEY_2>;
-		};
-
-		key3: key3 {
-			label = "KEY3";
+		key_b: key_b {
+			label = "B";
 			gpios = <&gpioa_32_44 3 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
-			zephyr,code = <INPUT_KEY_3>;
+			zephyr,code = <INPUT_KEY_B>;
+		};
+
+		key_c: key_c {
+			label = "C";
+			gpios = <&gpioa_32_44 1 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+			zephyr,code = <INPUT_KEY_C>;
 		};
 	};
 

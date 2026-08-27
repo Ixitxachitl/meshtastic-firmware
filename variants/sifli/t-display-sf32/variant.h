@@ -54,6 +54,11 @@
 #define PIN_WIRE_SCL 38
 #define WIRE_INTERFACES_COUNT 1
 
+// ── IMU (BHI260AP, main board) ──────────────────────────────────────────────
+// Detected at 0x28 by the I2C scan. The chip is a sensor hub: SensorLib feeds
+// it a Bosch firmware blob at every boot, so it is useless without SensorLib.
+#define BHI260AP_INT 27
+
 // ── TF card, on the LoRa SPI bus ────────────────────────────────────────────
 #define SDCARD_CS 44
 
@@ -88,8 +93,14 @@
 #define PIN_PWR_INT 42
 
 // ── Buttons ─────────────────────────────────────────────────────────────────
-// Three lines on the 6-pin KEY FPC; polarity assumed active-low, unverified.
-#define PIN_BUTTON1 33
-#define PIN_BUTTON2 34
-#define PIN_BUTTON3 35
+// Silkscreened C, A and B. Pins and polarity are from LilyGo's pin map and
+// examples/button: A is active-high with a pull-down, C and B active-low.
+#define PIN_BUTTON1 33 // C
+#define PIN_BUTTON2 34 // A
+#define PIN_BUTTON3 35 // B
 #define BUTTON_NEED_PULLUP
+
+// PIN_BUTTON2 becomes ALT_BUTTON_PIN in configuration.h, which defaults to
+// active-low with a pull-up. A is neither.
+#define ALT_BUTTON_ACTIVE_LOW false
+#define ALT_BUTTON_ACTIVE_PULLUP false
