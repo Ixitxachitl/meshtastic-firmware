@@ -43,11 +43,11 @@
 // Module supply switch - held HIGH by initVariant() before RadioLib starts.
 #define SX126X_POWER_EN 26
 
-// The module brings DIO2 and DIO3 out internally only, so the usual module
-// wiring is assumed: DIO2 drives the RF switch, DIO3 the TCXO. Both need
-// confirming against a real board before the radio is trusted.
+// DIO2 and DIO3 are internal to the module. Both settings come from LilyGo's
+// own SX1262_SF32LB52X board port: DIO2 drives the RF switch, and DIO3 feeds
+// the TCXO at 3.0 V - not the 1.8 V that is common on other SX1262 boards.
 #define SX126X_DIO2_AS_RF_SWITCH
-#define SX126X_DIO3_TCXO_VOLTAGE 1.8f
+#define SX126X_DIO3_TCXO_VOLTAGE 3.0f
 
 // ── I2C ─────────────────────────────────────────────────────────────────────
 #define PIN_WIRE_SDA 37
