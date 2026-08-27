@@ -10,6 +10,70 @@
         "isDefault": true
       },
       "label": "PlatformIO: Build"
+    },
+    {
+      "label": "SiFli: Build",
+      "type": "shell",
+      "command": "${workspaceFolder}/zephyr/sifli/build.sh",
+      "problemMatcher": ["$gcc"],
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "SiFli: Build (pristine)",
+      "type": "shell",
+      "command": "${workspaceFolder}/zephyr/sifli/build.sh",
+      "options": {
+        "env": {
+          "WEST_ARGS": "-p always"
+        }
+      },
+      "problemMatcher": ["$gcc"],
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "SiFli: Flash",
+      "type": "shell",
+      "command": "ZEPHYR_BASE=/workspaces/sifli-ws /workspaces/zephyr-venv/bin/west flash -d ${input:sifliBuildDir} -- --port ${input:sifliPort}",
+      "options": {
+        "cwd": "/workspaces/sifli-ws"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "label": "SiFli: Monitor console",
+      "type": "shell",
+      "command": "python3 -m serial.tools.miniterm ${input:sifliPort} 115200",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    }
+  ],
+  "inputs": [
+    {
+      "id": "sifliPort",
+      "type": "promptString",
+      "description": "Serial port of the CH343P bridge",
+      "default": "/dev/ttyACM0"
+    },
+    {
+      "id": "sifliBuildDir",
+      "type": "promptString",
+      "description": "Build directory",
+      "default": "/tmp/mt-build"
     }
   ]
 }

@@ -10,5 +10,22 @@
   },
   "[powershell]": {
     "editor.defaultFormatter": "ms-vscode.powershell"
-  }
+  },
+  "VsCodeTaskButtons.tasks": [
+    {
+      "label": "$(tools) SF32 Build",
+      "task": "SiFli: Build",
+      "tooltip": "west build for the LilyGo T-Display SF32"
+    },
+    {
+      "label": "$(zap) SF32 Flash",
+      "task": "SiFli: Flash",
+      "tooltip": "sftool over the CH343P bridge (prompts for port)"
+    },
+    {
+      "label": "$(terminal) SF32 Console",
+      "task": "SiFli: Monitor console",
+      "tooltip": "Serial console at 115200 (prompts for port)"
+    }
+  ]
 }

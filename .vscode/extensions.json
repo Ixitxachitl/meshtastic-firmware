@@ -1,10 +1,11 @@
 {
-    "recommendations": [
-        "Jason2866.esp-decoder",
-        "pioarduino.pioarduino-ide"
-    ],
-    "unwantedRecommendations": [
-        "ms-vscode.cpptools-extension-pack",
-        "platformio.platformio-ide"
-    ]
+  "recommendations": [
+    "Jason2866.esp-decoder",
+    "pioarduino.pioarduino-ide",
+    "spencerwmiles.vscode-task-buttons"
+  ],
+  "unwantedRecommendations": [
+    "ms-vscode.cpptools-extension-pack",
+    "platformio.platformio-ide"
+  ]
 }
