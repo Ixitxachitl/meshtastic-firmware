@@ -84,7 +84,7 @@ uint32_t GPSUpdateScheduling::msUntilNextSearch()
     // so wake at most once per broadcast interval rather than once per gps_update_interval.
     // Capped at 1 hour so a user-configured very-long broadcast interval still retries
     // periodically (in case conditions change). Reset on any successful lock.
-    if (consecutiveFailures > 0) {
+    if (failureBackoff && consecutiveFailures > 0) {
         constexpr uint32_t failureRetryCapMs = 60UL * 60UL * 1000UL; // 1 hour cap
         uint32_t failureSleepMs =
             Default::getConfiguredOrDefaultMs(config.position.position_broadcast_secs, default_broadcast_interval_secs);

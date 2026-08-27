@@ -2038,6 +2038,11 @@ std::unique_ptr<GPS> GPS::createGps()
 #endif
 
     new_gps->en_gpio = _en_gpio;
+#ifdef GPS_NO_HARDSLEEP
+    // The receiver stays powered here, so backing off after a failure saves nothing and only delays
+    // recovery by up to an hour.
+    scheduling.setFailureBackoff(false);
+#endif
     GpioVirtPin *virtPin = new GpioVirtPin();
     new_gps->enablePin = virtPin; // Always at least populate a virtual pin
     if (_en_gpio) {

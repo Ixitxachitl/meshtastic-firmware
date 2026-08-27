@@ -23,6 +23,10 @@ class GPSUpdateScheduling
     uint32_t elapsedSearchMs();   // How long have we been searching so far?
     uint32_t predictedSearchDurationMs(); // How long do we expect to spend searching for a lock?
 
+    // A receiver that is never powered down gains no power from backing off, so let a board opt out.
+    void setFailureBackoff(bool enabled) { failureBackoff = enabled; }
+    uint32_t failureCount() const { return consecutiveFailures; }
+
   private:
     void updateLockTimePrediction(); // Called from informGotLock
     bool searching = false;          // Set by the inform*() calls; never inferred from stamp ordering
@@ -31,6 +35,7 @@ class GPSUpdateScheduling
     uint32_t searchCount = 0;
     uint32_t predictedMsToGetLock = 0;
     uint32_t consecutiveFailures = 0; // Count of search cycles that ended without a fix; reset on lock
+    bool failureBackoff = true;
 
     const float weighting = 0.2; // Controls exponential smoothing of lock-times prediction. 20% weighting of "latest lock-time".
 };
