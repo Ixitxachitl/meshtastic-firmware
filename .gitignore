@@ -54,6 +54,8 @@ flash.jlink
 rtt_*.txt
 idf_component.yml
 CMakeLists.txt
+# ...but the SiFli port is a west/CMake build, so its own CMakeLists is source.
+!zephyr/sifli/CMakeLists.txt
 /sdkconfig.*
 .dummy/*
 
