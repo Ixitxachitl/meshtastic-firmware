@@ -28,7 +28,11 @@ void drive(uint8_t level)
 {
     litLevel = level;
 #if HAS_PWM_BACKLIGHT
+#ifdef PWM_BACKLIGHT_ACTIVE_LOW
+    analogWrite(PIN_PWM_BACKLIGHT, 255 - level);
+#else
     analogWrite(PIN_PWM_BACKLIGHT, level);
+#endif
 #elif defined(PIN_EINK_EN)
     digitalWrite(PIN_EINK_EN, level > 0 ? HIGH : LOW);
 #elif defined(PCA_PIN_EINK_EN)
