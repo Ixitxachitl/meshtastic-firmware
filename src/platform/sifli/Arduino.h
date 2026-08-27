@@ -20,6 +20,16 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/time.h>
+
+// picolibc declares struct timezone only under __BSD_VISIBLE, which is off
+// here. SensorLib's SensorRTC.h names the type in a default argument.
+#if !defined(__BSD_VISIBLE) || !__BSD_VISIBLE
+struct timezone {
+    int tz_minuteswest;
+    int tz_dsttime;
+};
+#endif
 #include <string.h>
 #include <strings.h> /* strcasecmp, strncasecmp */
 

@@ -55,6 +55,9 @@ class SPIClass
     uint16_t transfer16(uint16_t data);
     void transfer(void *buf, size_t count);
     void transferBytes(const uint8_t *tx, uint8_t *rx, uint32_t count);
+    // ESP32-Arduino spelling of a write-only transfer; SensorLib's SPI comm
+    // layer reaches for it on any core it does not recognise.
+    void writeBytes(const uint8_t *tx, uint32_t count) { transferBytes(tx, nullptr, count); }
     uint8_t transfer(uint8_t tx, uint8_t *rx, uint32_t count)
     {
         transferBytes(&tx, rx, count);
