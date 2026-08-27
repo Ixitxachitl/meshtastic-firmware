@@ -14,6 +14,9 @@ namespace graphics
 #define textZeroLine 0
 // Consistent Line Spacing - this is standard for all display and the fall-back spacing
 #define textFirstLine (FONT_HEIGHT_SMALL - 1)
+// Rows the common header occupies, highlight plus its 2px underline. On low-res layouts the body's first
+// text line starts 2px inside this, so anything that paints a background must clip to it, not to textFirstLine.
+#define BASEUI_HEADER_HEIGHT (FONT_HEIGHT_SMALL + 1 + BASEUI_HEADER_MARGIN)
 #define textSecondLine (textFirstLine + (FONT_HEIGHT_SMALL - 5))
 #define textThirdLine (textSecondLine + (FONT_HEIGHT_SMALL - 5))
 #define textFourthLine (textThirdLine + (FONT_HEIGHT_SMALL - 5))

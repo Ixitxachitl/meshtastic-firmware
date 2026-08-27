@@ -368,8 +368,10 @@ static inline void drawTftCompass(OLEDDisplay *display, int16_t compassX, int16_
     const int16_t boxY = compassY - compassRadius - pad - labelPadY;
     const int16_t boxW = (compassRadius * 2) + (pad * 2) + 1 + (labelPadX * 2);
     const int16_t boxH = (compassRadius * 2) + (pad * 2) + 1 + (labelPadY * 2);
-    // Never let compass-local tint regions override the header role regions.
-    const int16_t bodyTop = static_cast<int16_t>(getTextPositions(display)[1]);
+    // Never let compass-local tint regions override the header role regions. The header runs 2px past
+    // the first text line on low-res layouts, so clip to its real height rather than to textPositions[1].
+    const int firstLine = getTextPositions(display)[1];
+    const int16_t bodyTop = static_cast<int16_t>(firstLine > BASEUI_HEADER_HEIGHT ? firstLine : BASEUI_HEADER_HEIGHT);
     int16_t clippedY = boxY;
     int16_t clippedH = boxH;
     if (clippedY < bodyTop) {
