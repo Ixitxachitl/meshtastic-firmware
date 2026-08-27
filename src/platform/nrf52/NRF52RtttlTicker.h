@@ -6,14 +6,13 @@
 
 #include <stdint.h>
 
-// Drives the NonBlockingRTTTL sequencer from a FreeRTOS software timer instead of the cooperative
-// main loop. tone() is hardware timed, so a note ends on time regardless; what stutters is the
-// start of the next note waiting behind a long display refresh. A 2 ms timer keeps that gap fixed.
+// Advances the NonBlockingRTTTL sequencer from a FreeRTOS timer, so the next note does not wait
+// behind the cooperative main loop. tone() is hardware timed, so only note starts need servicing.
 namespace NRF52RtttlTicker
 {
 void begin(uint8_t pin, const char *song);
 
-// Only advances the song if the timer could not be created; otherwise a no-op.
+// Only advances the song if the timer could not be created or started; otherwise a no-op.
 void pump();
 
 void stop();

@@ -110,6 +110,8 @@ int32_t ExternalNotificationModule::runOnce()
         return INT32_MAX; // we don't need this thread here...
     } else {
         uint32_t delay = EXT_NOTIFICATION_MODULE_OUTPUT_MS;
+        // Racy by design: the sequencer's flag is one byte, stale only for a cycle at song end, which
+        // just defers stopNow(). Locking it would block this loop on the timer task it hands work to.
         bool isRtttlPlaying = rtttl::isPlaying();
 #ifdef HAS_I2S
         // audioThread->isPlaying() also handles actually playing the RTTTL, needs to be called in loop
