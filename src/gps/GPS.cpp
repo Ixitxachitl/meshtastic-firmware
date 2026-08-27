@@ -82,6 +82,7 @@ static struct uBloxGnssModelInfo {
 
 // A healthy receiver emits at least one sentence per second, so this much silence means the port died.
 #define GPS_RX_STALL_MS 10000
+#define GPS_STATE_TRACE_MS 60000
 #define GPS_SOL_EXPIRY_MS 5000 // in millis. give 1 second time to combine different sentences. NMEA Frequency isn't higher anyway
 #define NMEA_MSG_GXGSA "GNGSA" // GSA message (GPGSA, GNGSA etc)
 
@@ -1570,6 +1571,17 @@ int32_t GPS::runOnce()
     //   --> If we have a time and a location --> publishUpdate
     //   --> If we had a location before but don't now --> publishUpdate
     //   --> down()
+#ifdef GPS_STATE_TRACE
+    if (Throttle::hasElapsed(lastTraceMs, GPS_STATE_TRACE_MS)) {
+        const uint32_t nowMs = Time::getMillis();
+        lastTraceMs = nowMs;
+        LOG_INFO("GPS trace: %s conn=%d loc=%d fixQ=%u sats=%u rx=%us fix=%us fails=%u due=%us",
+                 getGPSPowerStateString(powerState), isConnected(), hasValidLocation, fixQual, p.sats_in_view,
+                 (nowMs - lastRxMs) / 1000, lastFixMs ? (nowMs - lastFixMs) / 1000 : 0, scheduling.failureCount(),
+                 scheduling.msUntilNextSearch() / 1000);
+    }
+#endif
+
     if (whileActive()) {
         // if we have received valid NMEA claim we are connected
         setConnected();
@@ -1609,6 +1621,8 @@ int32_t GPS::runOnce()
 
         // 2. Got a lock for the first time, or 3. Got a lock after turning back on
         bool gotLoc = lookForLocation();
+        if (gotLoc)
+            lastFixMs = Time::getMillis();
         if (gotLoc) {
 #if GPS_DEBUG
             if (!hasValidLocation) { // declare that we have location ASAP

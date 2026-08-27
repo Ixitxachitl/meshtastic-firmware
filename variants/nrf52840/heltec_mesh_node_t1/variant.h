@@ -141,6 +141,8 @@ extern "C" {
 #define GPS_NO_HARDSLEEP
 // Recover a receiver already latched by that power cut; the battery is not removable.
 #define GPS_POWER_CYCLE_IF_UNRESPONSIVE
+// Once-a-minute GPS state line, so a failure is diagnosable from a log grabbed any time afterwards.
+#define GPS_STATE_TRACE
 #define PERIPHERAL_WARMUP_MS 1000 // Allow I2C bus to stabilise after sensor power-on
 #define PIN_GPS_PPS (32 + 9)      // Pulse per second input from the GPS
 #define GPS_TX_PIN (0 + 7)

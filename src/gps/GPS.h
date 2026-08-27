@@ -191,6 +191,8 @@ class GPS : private concurrency::OSThread
     uint8_t fixQual = 0; // fix quality from GPGGA
     uint32_t lastChecksumFailCount = 0;
     uint32_t lastRxMs = 0;
+    uint32_t lastFixMs = 0;
+    uint32_t lastTraceMs = 0;
     uint8_t currentStep = 0;
     int32_t currentDelay = 2000;
     bool gotTime = false;
