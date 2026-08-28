@@ -165,10 +165,11 @@ set_source_files_properties(${MT_SIFLI_HAL_MPI} PROPERTIES
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/drivers"
   COMPILE_OPTIONS "-include;${MESHTASTIC_ROOT}/src/platform/sifli/sifli_hal_aliases.h")
 
-# Both audio sources are wrapped in their module guard, so without these they
-# compile to an empty object and the driver fails to link.
+# No COMPILE_DEFINITIONS here: bf0_hal_conf_hcpu.h already enables the AUDPRC,
+# AUDCODEC and DMA modules for SF32LB52X, and defining them again on the
+# command line only earns a redefinition warning per file. The alias header is
+# still needed - bf0_hal_dma.c reaches for DMA1/DMA2.
 set_source_files_properties(${MT_SIFLI_HAL_AUDIO} PROPERTIES
-  COMPILE_DEFINITIONS "HAL_AUDPRC_MODULE_ENABLED;HAL_AUDCODEC_MODULE_ENABLED;HAL_DMA_MODULE_ENABLED"
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/drivers"
   COMPILE_OPTIONS "-include;${MESHTASTIC_ROOT}/src/platform/sifli/sifli_hal_aliases.h")
 

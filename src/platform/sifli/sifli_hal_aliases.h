@@ -15,3 +15,9 @@
 #define MPI2 hwp_mpi2
 #define BTIM1 hwp_btim1
 #define BTIM2 hwp_btim2
+
+// bf0_hal_dma.c compares hdma->Instance against DMA1_Channel1/DMA2_Channel1 to
+// work out which controller a handle belongs to, and those macros expand
+// through these.
+#define DMA1 hwp_dmac1
+#define DMA2 hwp_dmac2
