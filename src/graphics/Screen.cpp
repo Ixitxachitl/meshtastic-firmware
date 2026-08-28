@@ -1100,14 +1100,6 @@ static uint32_t lastScreenTransition;
 #define SCREEN_TOUCH_TRANSITION_TIME 150
 #endif
 
-// Frame changes animate for touch and snap for everything else. A finger gets a slide because it is
-// about to be steering that slide directly; a button press just wants the next frame, and an
-// animation there is added latency rather than feedback.
-static bool isTouchSourced(const InputEvent *event)
-{
-    return event && event->source && strcmp(event->source, "touchscreen1") == 0;
-}
-
 // ---- Finger-following frame transitions -------------------------------------------------------
 //
 // A drag steers the transition directly instead of deciding a page turn on release. The frames are
@@ -2491,9 +2483,13 @@ int Screen::handleInputEvent(const InputEvent *event)
         return 0;
 
 #if BASEUI_HAS_TOUCH_DRAG
-    // Decide up front, before any of the branches below can page a frame, so every route to a
+    // Frame changes animate for touch and snap for everything else. A finger gets a slide because
+    // it is about to be steering that slide directly; a button press just wants the next frame, and
+    // an animation there is added latency rather than feedback.
+    //
+    // Decided up front, before any of the branches below can page a frame, so every route to a
     // transition inherits the right answer for whatever kind of input caused it.
-    ui->setTimePerTransition(isTouchSourced(event) ? SCREEN_TOUCH_TRANSITION_TIME : 0);
+    ui->setTimePerTransition(inputEventIsTouch(event) ? SCREEN_TOUCH_TRANSITION_TIME : 0);
 #endif
 
     // Handle text input notifications specially - pass input to virtual keyboard
@@ -2587,8 +2583,8 @@ int Screen::handleInputEvent(const InputEvent *event)
             // have produced any drag report at all. Swallowed rather than left to fall through,
             // which the else-branch below would read as "not part of pan navigation" and use to drop
             // out of Pan Mode.
-            if (isTouchSourced(event) && (event->inputEvent == INPUT_BROKER_UP || event->inputEvent == INPUT_BROKER_DOWN ||
-                                          event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_RIGHT))
+            if (inputEventIsTouch(event) && (event->inputEvent == INPUT_BROKER_UP || event->inputEvent == INPUT_BROKER_DOWN ||
+                                             event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_RIGHT))
                 return 0;
 #endif
             if (event->inputEvent == INPUT_BROKER_BACK || event->inputEvent == INPUT_BROKER_CANCEL) {
@@ -2810,7 +2806,7 @@ int Screen::handleInputEvent(const InputEvent *event)
             }
 #endif
 #if BASEUI_HAS_TOUCH_DRAG
-            const bool fromTouch = isTouchSourced(event);
+            const bool fromTouch = inputEventIsTouch(event);
 #else
             const bool fromTouch = false;
 #endif
@@ -2827,10 +2823,18 @@ int Screen::handleInputEvent(const InputEvent *event)
             // keyboard, encoder, trackball - keeps its conventional meaning.
             const bool wantsNext = !fromTouch && event->inputEvent == INPUT_BROKER_RIGHT;
             const bool wantsPrevious = !fromTouch && event->inputEvent == INPUT_BROKER_LEFT;
+#if BASEUI_TAP_ADVANCES_FRAME
+            const bool tapAdvances = true;
+#else
+            // Only the screen's own tap stops paging - a physical button reports the same event and
+            // is never a near miss. Deliberately the raw test rather than fromTouch, which is pinned
+            // false without drag support so that a swipe still pages there.
+            const bool tapAdvances = !inputEventIsTouch(event);
+#endif
 
             if (wantsPrevious || event->inputEvent == INPUT_BROKER_ALT_PRESS) {
                 showFrame(FrameDirection::PREVIOUS);
-            } else if (wantsNext || event->inputEvent == INPUT_BROKER_USER_PRESS) {
+            } else if (wantsNext || (tapAdvances && event->inputEvent == INPUT_BROKER_USER_PRESS)) {
                 showFrame(FrameDirection::NEXT);
             } else if (event->inputEvent == INPUT_BROKER_FN_F1) {
                 this->ui->switchToFrame(0);

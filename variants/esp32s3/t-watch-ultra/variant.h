@@ -72,6 +72,9 @@
 // The CO5300 redraws fast enough to track a finger, so report drags continuously rather
 // than only classifying a direction on release.
 #define BASEUI_HAS_TOUCH_DRAG 1
+// Frames are swiped between here, and screens carry their own on-screen buttons, so a tap paging
+// to the next frame is a near miss waiting to happen rather than a shortcut. The beep goes with it.
+#define BASEUI_TAP_ADVANCES_FRAME 0
 #define HAS_SPI_TFT 1
 #define ENABLE_TOUCH_INT 1
 #define VARIANT_TOUCHSCREEN 1

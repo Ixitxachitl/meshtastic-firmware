@@ -539,6 +539,17 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #endif
 #define BASEUI_MAP_ONSCREEN_CONTROLS (BASEUI_HAS_MAP && BASEUI_HAS_TOUCH_DRAG)
 
+// A tap with nothing under it pages to the next frame, and the buzzer beeps to acknowledge it.
+// Set -DBASEUI_TAP_ADVANCES_FRAME=0 on a panel where that is more accident than shortcut: where
+// frames are already swiped between, and screens carry their own on-screen buttons, a tap that
+// misses its target should do nothing rather than move the screen out from under the finger.
+//
+// Only the touchscreen's tap is affected. A physical button reports the same USER_PRESS event and
+// keeps both the paging and the beep, since a button press is never a near miss.
+#ifndef BASEUI_TAP_ADVANCES_FRAME
+#define BASEUI_TAP_ADVANCES_FRAME 1
+#endif
+
 #ifndef HW_VENDOR
 #error HW_VENDOR must be defined
 #endif
