@@ -112,7 +112,10 @@ set(MT_SIFLI_HAL_LCDC ${ZEPHYR_HAL_SIFLI_MODULE_DIR}/hal/src/bf0_hal_lcdc.c)
 # src/platform/sifli/SiFliAudioOut.cpp drives these directly.
 set(MT_SIFLI_HAL_AUDIO
   ${ZEPHYR_HAL_SIFLI_MODULE_DIR}/hal/src/bf0_hal_audprc.c
-  ${ZEPHYR_HAL_SIFLI_MODULE_DIR}/hal/src/bf0_hal_audcodec.c
+  # _m, not the plain one: the AUDCODEC handle is #ifdef SF32LB52X down to a
+  # single Instance, and bf0_hal_audcodec.c drives an Instance_lp this SoC's
+  # headers do not define.
+  ${ZEPHYR_HAL_SIFLI_MODULE_DIR}/hal/src/bf0_hal_audcodec_m.c
 )
 
 set(MT_SIFLI_HAL_MPI
@@ -149,6 +152,13 @@ target_include_directories(app PRIVATE
 set_source_files_properties(${MT_SIFLI_HAL_MPI} PROPERTIES
   COMPILE_DEFINITIONS "HAL_MPI_MODULE_ENABLED"
   # drivers/ supplies the drv_io.h stub the vendor driver includes.
+  INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/drivers"
+  COMPILE_OPTIONS "-include;${MESHTASTIC_ROOT}/src/platform/sifli/sifli_hal_aliases.h")
+
+# Both audio sources are wrapped in their module guard, so without these they
+# compile to an empty object and the driver fails to link.
+set_source_files_properties(${MT_SIFLI_HAL_AUDIO} PROPERTIES
+  COMPILE_DEFINITIONS "HAL_AUDPRC_MODULE_ENABLED;HAL_AUDCODEC_MODULE_ENABLED"
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/drivers"
   COMPILE_OPTIONS "-include;${MESHTASTIC_ROOT}/src/platform/sifli/sifli_hal_aliases.h")
 
