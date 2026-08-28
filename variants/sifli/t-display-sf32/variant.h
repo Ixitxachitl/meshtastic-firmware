@@ -137,6 +137,10 @@
 #define PIN_3V3_EN 41
 #define PIN_PWR_INT 42
 
+// NS4150B speaker amplifier enable. There is no piezo on this board: tones,
+// RTTTL and speech all leave through the codec's DAC into this amp.
+#define PIN_SPK_CTRL 20
+
 // ── Buttons ─────────────────────────────────────────────────────────────────
 // Silkscreened C, A and B. Pins and polarity are from LilyGo's pin map and
 // examples/button: A is active-high with a pull-down, C and B active-low.

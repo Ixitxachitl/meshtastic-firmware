@@ -107,6 +107,14 @@ set(MT_SIFLI_HAL_LCDC ${ZEPHYR_HAL_SIFLI_MODULE_DIR}/hal/src/bf0_hal_lcdc.c)
 # Same story for the MPI controller: Zephyr describes QSPI NOR on it and
 # nothing else, so the in-package OPI PSRAM is brought up through the vendor
 # HAL by zephyr/sifli/drivers/psram_sf32lb.c.
+# And again for audio: Zephyr has no SiFli I2S or codec driver at all, and the
+# vendor's own path is RT-Thread's audio server rather than anything portable.
+# src/platform/sifli/SiFliAudioOut.cpp drives these directly.
+set(MT_SIFLI_HAL_AUDIO
+  ${ZEPHYR_HAL_SIFLI_MODULE_DIR}/hal/src/bf0_hal_audprc.c
+  ${ZEPHYR_HAL_SIFLI_MODULE_DIR}/hal/src/bf0_hal_audcodec.c
+)
+
 set(MT_SIFLI_HAL_MPI
   ${ZEPHYR_HAL_SIFLI_MODULE_DIR}/hal/src/bf0_hal_mpi.c
   ${ZEPHYR_HAL_SIFLI_MODULE_DIR}/hal/src/bf0_hal_mpi_ex.c
@@ -116,6 +124,7 @@ set(MT_SIFLI_HAL_MPI
 target_sources(app PRIVATE
   ${MT_SIFLI_HAL_LCDC}
   ${MT_SIFLI_HAL_MPI}
+  ${MT_SIFLI_HAL_AUDIO}
   ${CMAKE_CURRENT_LIST_DIR}/drivers/psram_sf32lb.c
   ${MT_SOURCES}
   ${MT_VARIANT_SOURCES}
@@ -199,6 +208,9 @@ target_compile_definitions(app PRIVATE
   # BaseUI map frame. Tiles come from a MAP.BIN on the LittleFS partition;
   # the SD path needs SdFat, which this build does not carry.
   BASEUI_HAS_MAP=1
+  # Audio gain must be a build flag: RtttlPcm.h never includes variant.h, so a
+  # define there is silently ignored. 0 is the codec's 0dB point.
+  AUDIO_DAC_VOLUME=0
   HAS_TOUCHSCREEN=1
   VARIANT_TOUCHSCREEN=1
   USE_TFTDISPLAY=1
