@@ -34,6 +34,19 @@ class AudioThread : public concurrency::OSThread
             _rtttl.reset();
     }
 
+    // A system melody is already frequency-and-duration pairs, so hand it
+    // straight to the synthesizer rather than encoding it as RTTTL and parsing
+    // it back. Returns immediately; playback continues from the DMA.
+    void beginTones(const ToneDuration *tones, size_t count)
+    {
+        stop();
+        if (!_rtttl.beginTones(tones, count))
+            return;
+        _playing = sifliAudioOut.begin(RtttlPcm::kSampleRate, 2, fill, this);
+        if (!_playing)
+            _rtttl.reset();
+    }
+
     // buzz.cpp spins on this. The DMA does the work, so unlike the
     // ESP8266Audio version there is nothing to pump here.
     bool isPlaying() { return _playing && sifliAudioOut.isRunning(); }

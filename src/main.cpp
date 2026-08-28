@@ -1193,6 +1193,10 @@ void setup()
     else
         playStartMelody();
 
+    // Hands over any melody requested before the audio thread existed. No-op
+    // where nothing was parked.
+    buzzOnAudioThreadReady();
+
 #if !MESHTASTIC_EXCLUDE_MQTT
     mqttInit();
 #endif

@@ -1,5 +1,9 @@
 #pragma once
 
+// Plays a melody that playStartMelody() requested before the audio thread
+// existed. A no-op on boards that do not park tones that way.
+void buzzOnAudioThreadReady();
+
 void playBeep();
 void playLongBeep();
 void playStartMelody();

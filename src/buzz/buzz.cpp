@@ -11,6 +11,9 @@
 
 #if defined(HAS_I2S)
 #include "main.h"
+#include <string.h>
+#endif
+#if defined(HAS_I2S) && !defined(ARCH_SIFLI)
 #include <unordered_map>
 #endif
 
@@ -57,7 +60,26 @@ const int DURATION_1_2 = 500;  // 1/2 note
 const int DURATION_3_4 = 750;  // 3/4 note
 const int DURATION_1_1 = 1000; // 1/1 note
 
-#ifdef HAS_I2S
+#if defined(HAS_I2S) && defined(ARCH_SIFLI)
+// Tones requested before audioThread exists have nowhere to go: a board with no
+// piezo drops them silently. Park the last request and let main() hand it over
+// once the thread is up.
+static ToneDuration pendingTones[RtttlPcm::kMaxTones];
+static size_t pendingToneCount = 0;
+#endif
+
+void buzzOnAudioThreadReady()
+{
+#if defined(HAS_I2S) && defined(ARCH_SIFLI)
+    size_t count = pendingToneCount;
+    pendingToneCount = 0;
+    if (!audioThread || count == 0)
+        return;
+    audioThread->beginTones(pendingTones, count);
+#endif
+}
+
+#if defined(HAS_I2S) && !defined(ARCH_SIFLI)
 void playTonesRTTTL(const ToneDuration *tone_durations, int size)
 {
     // translate ToneDuration[] to a single RTTTL string and play it via audioThread
@@ -111,7 +133,20 @@ void playTones(const ToneDuration *tone_durations, int size)
         // Buzzer is disabled or not set to system tones
         return;
     }
-#ifdef HAS_I2S
+#if defined(HAS_I2S) && defined(ARCH_SIFLI)
+    if (moduleConfig.external_notification.use_i2s_as_buzzer) {
+        if (audioThread) {
+            audioThread->beginTones(tone_durations, (size_t)size);
+        } else if (size > 0) {
+            // Too early for the audio thread; keep it for buzzOnAudioThreadReady().
+            // Only the most recent request is kept, which is all setup() ever makes.
+            size_t n = (size_t)size < RtttlPcm::kMaxTones ? (size_t)size : RtttlPcm::kMaxTones;
+            memcpy(pendingTones, tone_durations, n * sizeof(ToneDuration));
+            pendingToneCount = n;
+        }
+        return;
+    }
+#elif defined(HAS_I2S)
     if (moduleConfig.external_notification.use_i2s_as_buzzer && audioThread) {
         playTonesRTTTL(tone_durations, size);
         return;
