@@ -23,6 +23,7 @@
 #include "graphics/emotes.h"
 #include "graphics/images.h"
 #include "input/SerialKeyboard.h"
+#include "input/TouchHaptics.h"
 #include "input/TouchScreenImpl1.h" // for BASEUI_HAS_TOUCH_DRAG
 #include "main.h"                   // for cardkb_found
 #include "mesh/generated/meshtastic/cannedmessages.pb.h"
@@ -997,6 +998,10 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
         if (isKeyboardPanFingerSteering())
             return true;
         String keyTapped = keyForCoordinates(event->touchX, event->touchY);
+        // A key under the finger is what earns the buzz - and the gaps between keys, where a tap
+        // does nothing, correctly get none. Ahead of the branches below so every key shares it.
+        if (keyTapped != "")
+            touchHapticPulse(TouchHaptic::Activate);
         bool valid = false;
 
 #ifndef EXCLUDE_EMOJI
@@ -1087,6 +1092,7 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
     if (event->touchX != 0 || event->touchY != 0) {
         if (graphics::numEmotes > 0 && event->touchX >= displayWidth - EMOTE_BUTTON_SIZE - EMOTE_BUTTON_MARGIN &&
             event->touchY >= displayHeight - EMOTE_BUTTON_SIZE - EMOTE_BUTTON_MARGIN) {
+            touchHapticPulse(TouchHaptic::Activate);
             updateState(CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER, true);
             screen->forceDisplay(true);
             return true;
@@ -1470,6 +1476,7 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
         if (!isSelect) {
             if (touchedIdx != emotePickerIndex) {
                 emotePickerIndex = touchedIdx;
+                touchHapticPulse(TouchHaptic::Activate);
                 requestFocus();
                 screen->forceDisplay(true);
             }

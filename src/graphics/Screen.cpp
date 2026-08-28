@@ -75,6 +75,7 @@ extern NicheGraphics::BaseUIEInkDisplay *setupNicheGraphicsBaseUI();
 #include "graphics/TFTPalette.h"
 #include "graphics/emotes.h"
 #include "graphics/images.h"
+#include "input/TouchHaptics.h"
 #include "input/TouchScreenImpl1.h"
 #include "main.h"
 #include "mesh-pb-constants.h"
@@ -2494,6 +2495,8 @@ int Screen::handleInputEvent(const InputEvent *event)
 
     // Handle text input notifications specially - pass input to virtual keyboard
     if (NotificationRenderer::current_notification_type == notificationTypeEnum::text_input) {
+        if (event->inputEvent == INPUT_BROKER_USER_PRESS && inputEventIsTouch(event))
+            touchHapticPulse(TouchHaptic::Activate);
         NotificationRenderer::inEvent = *event;
         static OverlayCallback overlays[] = {graphics::UIRenderer::drawNavigationBar, NotificationRenderer::drawBannercallback};
         ui->setOverlays(overlays, 2);
@@ -2517,6 +2520,10 @@ int Screen::handleInputEvent(const InputEvent *event)
     }
 #endif
     if (NotificationRenderer::isOverlayBannerShowing()) {
+        // Every tap a banner consumes passes through here, so one pulse covers the lot rather than
+        // each of NotificationRenderer's own option handlers needing to know about the motor.
+        if (event->inputEvent == INPUT_BROKER_USER_PRESS && inputEventIsTouch(event))
+            touchHapticPulse(TouchHaptic::Activate);
         NotificationRenderer::inEvent = *event;
         static OverlayCallback overlays[] = {graphics::UIRenderer::drawNavigationBar, NotificationRenderer::drawBannercallback};
         ui->setOverlays(overlays, 2);
@@ -2540,6 +2547,7 @@ int Screen::handleInputEvent(const InputEvent *event)
         // frame - and the button under the finger would never be pressed at all.
         if (event->inputEvent == INPUT_BROKER_USER_PRESS && (event->touchX != 0 || event->touchY != 0) &&
             graphics::MapRenderer::handleControlTap((int16_t)event->touchX, (int16_t)event->touchY)) {
+            touchHapticPulse(TouchHaptic::Activate);
             setFastFramerate();
             return 0;
         }
@@ -2835,6 +2843,11 @@ int Screen::handleInputEvent(const InputEvent *event)
             if (wantsPrevious || event->inputEvent == INPUT_BROKER_ALT_PRESS) {
                 showFrame(FrameDirection::PREVIOUS);
             } else if (wantsNext || (tapAdvances && event->inputEvent == INPUT_BROKER_USER_PRESS)) {
+                // Paging the frame is the tap landing on something, so it earns the buzz. Where
+                // BASEUI_TAP_ADVANCES_FRAME is off this branch is never reached by a tap, and the
+                // gesture correctly ends up feeling like nothing at all.
+                if (event->inputEvent == INPUT_BROKER_USER_PRESS && inputEventIsTouch(event))
+                    touchHapticPulse(TouchHaptic::Activate);
                 showFrame(FrameDirection::NEXT);
             } else if (event->inputEvent == INPUT_BROKER_FN_F1) {
                 this->ui->switchToFrame(0);

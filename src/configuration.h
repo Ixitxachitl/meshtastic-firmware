@@ -546,6 +546,9 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 // Only the touchscreen's tap is affected. A physical button reports the same USER_PRESS event and
 // keeps both the paging and the beep, since a button press is never a near miss.
+//
+// The buzz needs no flag of its own: a pulse is spent where a tap is consumed (see TouchHaptics.h),
+// and with this off a tap on a plain frame is consumed by nothing.
 #ifndef BASEUI_TAP_ADVANCES_FRAME
 #define BASEUI_TAP_ADVANCES_FRAME 1
 #endif
