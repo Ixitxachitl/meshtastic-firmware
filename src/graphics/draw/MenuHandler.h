@@ -66,7 +66,13 @@ class menuHandler
         HamModeConfirm,
         LicensedToNormalConfirm,
 #if HAS_LORA_FEM
-        LoraFemLnaToggleMenu
+        LoraFemLnaToggleMenu,
+#endif
+#if BASEUI_HAS_MAP
+        MapBaseMenu,
+        MapFollowMeMenu,
+        MapZoomLevelMenu,
+        MapPanMenu,
 #endif
     };
     static screenMenus menuQueue;
@@ -133,6 +139,12 @@ class menuHandler
     static void textMessageMenu();
     static void hamModeConfirmMenu();
     static void licensedToNormalConfirmMenu();
+#if BASEUI_HAS_MAP
+    static void mapBaseMenu();
+    static void mapFollowMeMenu();
+    static void mapZoomLevelMenu();
+    static void mapPanMenu();
+#endif
 #if HAS_LORA_FEM
     static void LoRaFEMLNAToggleMenu();
 #endif
@@ -175,6 +187,8 @@ using NodeNameOption = MenuOption<bool>;
 using PositionMenuOption = MenuOption<int>;
 using ManageNodeOption = MenuOption<int>;
 using ClockFaceOption = MenuOption<bool>;
+using MapMenuOption = MenuOption<int>;
+using MapToggleOption = MenuOption<bool>;
 #if HAS_LORA_FEM
 using LoRaFEMLNAToggleOption = MenuOption<meshtastic_Config_LoRaConfig_FEM_LNA_Mode>;
 #endif

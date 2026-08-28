@@ -281,6 +281,10 @@ class Screen : public concurrency::OSThread
     // ignore D-pad input when the player has navigated to a different frame.
     bool isGamesFrameShown();
 
+    // True if the Map frame is the one currently on screen. Lets the map's hold-select zoom panel
+    // ignore input when the user has navigated to a different frame.
+    bool isMapFrameShown();
+
     bool isScreenOn() { return screenOn; }
 
     // Stores the last 4 of our hardware ID, to make finding the device for pairing easier
@@ -732,6 +736,7 @@ class Screen : public concurrency::OSThread
             uint8_t deviceFocused = 255;
             uint8_t system = 255;
             uint8_t gps = 255;
+            uint8_t map = 255;
             uint8_t home = 255;
             uint8_t games = 255;
             uint8_t textMessage = 255;
@@ -773,6 +778,7 @@ class Screen : public concurrency::OSThread
 #endif
         bool gps = false;
 #endif
+        bool map = false; // Doesn't need local GPS - it can show other nodes' positions regardless.
         bool lora = false;
         bool show_favorites = false;
         bool chirpy = true;
