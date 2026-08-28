@@ -10,6 +10,15 @@
 
 SiFliAudioOut sifliAudioOut;
 
+// The HAL's debug hook. The vendor's own definition is an empty __WEAK stub
+// behind USE_HAL_DRIVER, which this build does not set - so rather than
+// vendoring bf0_hal_hlp.c and a global define just to get a no-op, supply the
+// no-op. Only HAL_AUDCODEC_Config_DACPath_Volume calls it.
+extern "C" void HAL_DBG_printf(const char *fmt, ...)
+{
+    (void)fmt;
+}
+
 namespace
 {
 // One ring, refilled a half at a time from the HAL's half/full TX callbacks.

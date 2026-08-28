@@ -116,6 +116,9 @@ set(MT_SIFLI_HAL_AUDIO
   # single Instance, and bf0_hal_audcodec.c drives an Instance_lp this SoC's
   # headers do not define.
   ${ZEPHYR_HAL_SIFLI_MODULE_DIR}/hal/src/bf0_hal_audcodec_m.c
+  # Both of the above drive their DMA through the vendor HAL rather than
+  # Zephyr's, so its implementation has to come along too.
+  ${ZEPHYR_HAL_SIFLI_MODULE_DIR}/hal/src/bf0_hal_dma.c
 )
 
 set(MT_SIFLI_HAL_MPI
@@ -165,7 +168,7 @@ set_source_files_properties(${MT_SIFLI_HAL_MPI} PROPERTIES
 # Both audio sources are wrapped in their module guard, so without these they
 # compile to an empty object and the driver fails to link.
 set_source_files_properties(${MT_SIFLI_HAL_AUDIO} PROPERTIES
-  COMPILE_DEFINITIONS "HAL_AUDPRC_MODULE_ENABLED;HAL_AUDCODEC_MODULE_ENABLED"
+  COMPILE_DEFINITIONS "HAL_AUDPRC_MODULE_ENABLED;HAL_AUDCODEC_MODULE_ENABLED;HAL_DMA_MODULE_ENABLED"
   INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/drivers"
   COMPILE_OPTIONS "-include;${MESHTASTIC_ROOT}/src/platform/sifli/sifli_hal_aliases.h")
 
