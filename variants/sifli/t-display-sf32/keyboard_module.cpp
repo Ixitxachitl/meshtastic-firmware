@@ -17,7 +17,7 @@ constexpr uint8_t REG_CONFIG_1 = 0x07;
 constexpr uint8_t P_GPS_EN = 1 << 0;
 constexpr uint8_t P_LED_EN = 1 << 1;
 constexpr uint8_t P_WIFI_EN = 1 << 2;
-constexpr uint8_t P_M_RST = 1 << 3;
+constexpr uint8_t P_HAPTIC_RST = 1 << 3; // M_RST on the schematic; M is the motor
 constexpr uint8_t P_GPS_RST = 1 << 4;
 constexpr uint8_t P_WIFI_RST = 1 << 5;
 constexpr uint8_t P_MOD_SEL = 1 << 6;
@@ -60,6 +60,12 @@ bool KeyboardModule::begin()
     setKeypadReset(false);
     selectUart(UartTarget::Gnss);
 
+    // The AW86224 will not answer on I2C while this is asserted, and the
+    // expander powers up with every output low. LilyGo waits 200ms after
+    // releasing it before touching the chip.
+    setHapticReset(false);
+    delay(200);
+
     LOG_INFO("Keyboard module found (XL9555 at 0x%02x)", XL9555_ADDR);
     return true;
 }
@@ -101,10 +107,16 @@ void KeyboardModule::setKeypadReset(bool asserted)
     writeOutputs();
 }
 
+void KeyboardModule::setHapticReset(bool asserted)
+{
+    _out0 = asserted ? (uint8_t)(_out0 & ~P_HAPTIC_RST) : (uint8_t)(_out0 | P_HAPTIC_RST);
+    writeOutputs();
+}
+
 void KeyboardModule::selectUart(UartTarget target)
 {
-    // The RS2257 muxes put the GNSS on their NC input and the ESP32-C6 on NO,
-    // so a low select reaches the GNSS. Worth confirming on hardware.
+    // Confirmed by LilyGo's XL9555_GPS_ESP32C6_SEL_PIN: 0 selects the GNSS,
+    // 1 the ESP32-C6.
     if (target == UartTarget::Gnss) {
         _out0 &= ~P_MOD_SEL;
     } else {

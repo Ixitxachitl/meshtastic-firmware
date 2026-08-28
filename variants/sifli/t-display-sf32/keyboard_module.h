@@ -27,6 +27,7 @@ class KeyboardModule
     void setEspPower(bool on);
     void setBacklightPower(bool on);
     void setKeypadReset(bool asserted);
+    void setHapticReset(bool asserted);
     // The two targets are mutually exclusive: MOD_SEL drives a pair of RS2257
     // analog switches, so switching mid-stream silently truncates whatever the
     // other side was sending, and the baud rate has to change with it.
