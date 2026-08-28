@@ -2344,6 +2344,11 @@ int Screen::handleInputEvent(const InputEvent *event)
                             menuHandler::textMessageBaseMenu();
                         }
                     }
+                    // The waypoint frame is a module frame, so it has to be matched before the generic
+                    // module-frame branch below, which would otherwise swallow the press.
+                } else if (framesetInfo.positions.waypoint != 255 &&
+                           this->ui->getUiState()->currentFrame == framesetInfo.positions.waypoint) {
+                    menuHandler::waypointBaseMenu();
                     // moduleFrames.size() bounds the module-frame region, before favorites are appended; its leading
                     // slots are nullptr padding for the built-in frames, so only a non-null entry is a real module frame.
                 } else if (this->ui->getUiState()->currentFrame < moduleFrames.size() &&
@@ -2368,9 +2373,6 @@ int Screen::handleInputEvent(const InputEvent *event)
                     menuHandler::nodeListMenu();
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.wifi) {
                     menuHandler::wifiBaseMenu();
-                } else if (framesetInfo.positions.waypoint != 255 &&
-                           this->ui->getUiState()->currentFrame == framesetInfo.positions.waypoint) {
-                    menuHandler::waypointBaseMenu();
                 }
             } else if (event->inputEvent == INPUT_BROKER_BACK) {
                 showFrame(FrameDirection::PREVIOUS);
