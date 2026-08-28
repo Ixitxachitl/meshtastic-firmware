@@ -113,11 +113,13 @@ int32_t StatusLEDModule::runOnce()
     my_interval = 1000;
 
     if (power_state == charging) {
-#ifndef POWER_LED_HARDWARE_BLINKS_WHILE_CHARGING
+#if defined(LED_HEARTBEAT) && !defined(POWER_LED_HARDWARE_BLINKS_WHILE_CHARGING)
         CHARGE_LED_state = !CHARGE_LED_state;
 #endif
     } else if (power_state == charged) {
+#if defined(LED_HEARTBEAT)
         CHARGE_LED_state = LED_STATE_ON;
+#endif
     } else if (power_state == critical) {
         if (Throttle::hasElapsed(POWER_LED_starttime, 30000) && !doing_fast_blink) {
             doing_fast_blink = true;
@@ -139,9 +141,11 @@ int32_t StatusLEDModule::runOnce()
         CHARGE_LED_state = LED_STATE_OFF;
 #endif
     }
-// If we want a LED to be dedicated to the simple hearbeat, we can use that instead of the charge LED
+// If we want a LED to be dedicated to the simple hearbeat, we can use that instead of the charge LED.
+// Either way the beat runs in every power state: it is the node's "I am alive" signal, and external
+// watchdogs read a LED stuck on (or off) as a hung node.
 #if defined(LED_HEARTBEAT)
-    if (power_state != charging && power_state != charged && !doing_fast_blink && !config.device.led_heartbeat_disabled) {
+    if (!doing_fast_blink && !config.device.led_heartbeat_disabled) {
         if (HEARTBEAT_LED_state == LED_STATE_ON) {
             HEARTBEAT_LED_state = LED_STATE_OFF;
             my_interval = 999;
@@ -149,19 +153,26 @@ int32_t StatusLEDModule::runOnce()
             HEARTBEAT_LED_state = LED_STATE_ON;
             my_interval = 1;
         }
-        digitalWrite(LED_HEARTBEAT, HEARTBEAT_LED_state);
     } else {
         HEARTBEAT_LED_state = LED_STATE_OFF;
-        digitalWrite(LED_HEARTBEAT, HEARTBEAT_LED_state);
     }
+    digitalWrite(LED_HEARTBEAT, HEARTBEAT_LED_state);
 #else
-    if (power_state != charging && power_state != charged && !doing_fast_blink && !config.device.led_heartbeat_disabled) {
+    // No dedicated pin, so LED_POWER carries both jobs and charging only widens the duty cycle.
+    const bool chargeDuty = (power_state == charging || power_state == charged);
+#ifdef POWER_LED_HARDWARE_BLINKS_WHILE_CHARGING
+    // The board blinks this LED in hardware while charging, so don't fight it.
+    const bool ownsLed = !chargeDuty;
+#else
+    const bool ownsLed = true;
+#endif
+    if (ownsLed && !doing_fast_blink && !config.device.led_heartbeat_disabled) {
         if (CHARGE_LED_state == LED_STATE_ON) {
             CHARGE_LED_state = LED_STATE_OFF;
-            my_interval = 999;
+            my_interval = chargeDuty ? 1000 : 999;
         } else {
             CHARGE_LED_state = LED_STATE_ON;
-            my_interval = 1;
+            my_interval = chargeDuty ? 1000 : 1;
         }
     }
 #endif
