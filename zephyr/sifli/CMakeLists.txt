@@ -228,6 +228,12 @@ target_compile_definitions(app PRIVATE
   # Audio gain must be a build flag: RtttlPcm.h never includes variant.h, so a
   # define there is silently ignored. 0 is the codec's 0dB point.
   AUDIO_DAC_VOLUME=0
+  # Same rule for the digital amplitude RtttlPcm renders at. 1536 is the
+  # historical SetGain(0.2); raise it if the NS4150B turns out to be quiet.
+  AUDIO_RTTTL_AMPLITUDE=1536
+  # Routes buzz.cpp down the RTTTL-through-a-codec path and gets an AudioThread
+  # created in main(). There is no piezo here, so this is the only tone path.
+  HAS_I2S=1
   HAS_TOUCHSCREEN=1
   VARIANT_TOUCHSCREEN=1
   USE_TFTDISPLAY=1

@@ -6,6 +6,13 @@
 #include "sleep.h"
 #include <memory>
 
+// This board has no I2S DAC and no ESP8266Audio; it renders RTTTL to PCM and
+// pushes it through the SoC's own codec. Same class name and call contract,
+// different engine.
+#if defined(HAS_I2S) && defined(ARCH_SIFLI)
+#include "platform/sifli/SiFliAudioThread.h"
+#else
+
 #ifdef HAS_I2S
 #include <AudioFileSourcePROGMEM.h>
 #include <AudioGeneratorRTTTL.h>
@@ -118,3 +125,5 @@ class AudioThread : public concurrency::OSThread
 };
 
 #endif
+
+#endif // HAS_I2S && ARCH_SIFLI
