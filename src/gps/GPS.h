@@ -216,6 +216,8 @@ class GPS : private concurrency::OSThread
     bool hasProbeCache = false;
     // Ensures cached probe is attempted once per boot.
     bool triedProbeCache = false;
+    // Set once a cached probe verifies: this receiver still holds the configuration we gave it before.
+    bool configLikelyIntact = false;
 #ifdef GPS_POWER_CYCLE_IF_UNRESPONSIVE
     bool didPowerCycle = false;
 #endif

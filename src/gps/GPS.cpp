@@ -793,6 +793,7 @@ bool GPS::verifyCachedProbePresence()
 
     detectedBaud = cachedProbeBaud;
     gnssModel = cachedProbeModel;
+    configLikelyIntact = true;
     LOG_INFO("Using cached GPS probe: %s @ %d", cachedProbeModelName, detectedBaud);
     return true;
 }
@@ -813,6 +814,7 @@ void GPS::powerCycleIfUnresponsive()
     if (didPowerCycle || !en_gpio)
         return;
     didPowerCycle = true;
+    configLikelyIntact = false; // the rail dropped, so whatever we configured is gone
     LOG_WARN("GPS silent, power cycling for %ums", (unsigned)GPS_POWER_CYCLE_OFF_MS);
     _serial_gps->end();
     pinMode(tx_gpio, OUTPUT);
@@ -981,8 +983,12 @@ bool GPS::setup()
             // use GPS L1 & L5 + BDS B1I & B2a + GLONASS L1 + GALILEO E1 & E5a + SBAS + QZSS
             // This will reset the receiver, so wait a bit afterwards
             // The paranoid will wait for the OK*04 confirmation response after each command.
-            _serial_gps->write("$CFGSYS,h35155\r\n");
-            delay(750);
+            // Skipped when the receiver still holds this config, because the reset it triggers costs the
+            // ephemeris and turns every reboot into a cold start.
+            if (!configLikelyIntact) {
+                _serial_gps->write("$CFGSYS,h35155\r\n");
+                delay(750);
+            }
             // Must be done after the CFGSYS command
             // Turn off GSV messages, we don't really care about which and where the sats are, maybe someday.
             _serial_gps->write("$CFGMSG,0,3,0\r\n");
