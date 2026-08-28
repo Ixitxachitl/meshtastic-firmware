@@ -11,6 +11,8 @@
 #include "CardputerKeyboard.h"
 #elif defined(HACKADAY_COMMUNICATOR)
 #include "HackadayCommunicatorKeyboard.h"
+#elif defined(T_DISPLAY_SF32)
+#include "TDisplaySF32Keyboard.h"
 #else
 #include "TCA8418Keyboard.h"
 #endif
@@ -34,6 +36,8 @@ KbI2cBase::KbI2cBase(const char *name)
       TCAKeyboard(new CardputerKeyboard())
 #elif defined(HACKADAY_COMMUNICATOR)
       TCAKeyboard(new HackadayCommunicatorKeyboard())
+#elif defined(T_DISPLAY_SF32)
+      TCAKeyboard(new TDisplaySF32Keyboard())
 #else
       TCAKeyboard(new TCA8418Keyboard())
 #endif
