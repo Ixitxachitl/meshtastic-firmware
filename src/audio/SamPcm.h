@@ -82,8 +82,12 @@ class SamPcm
   private:
     /// Below the feeder (2) so rendering never delays a DMA refill, above idle so it still
     /// runs while the main loop is busy.
-    static constexpr UBaseType_t kTaskPriority = 1;
+    // Plain int: both k_thread_create and xTaskCreate take it, and the
+    // FreeRTOS typedefs do not exist on the Zephyr path.
+    static constexpr int kTaskPriority = 1;
+#if !defined(__ZEPHYR__)
     static constexpr BaseType_t kTaskCore = 1;
+#endif
 
     static void renderEntry(void *self);
 #if defined(__ZEPHYR__)

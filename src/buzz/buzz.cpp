@@ -1,6 +1,9 @@
 #include "buzz.h"
 #include "NodeDB.h"
 #include "configuration.h"
+// ToneDuration lives with the synthesizer that consumes it, so a melody can be
+// played directly rather than round-tripping through an RTTTL string.
+#include "audio/RtttlPcm.h"
 
 #if !defined(ARCH_ESP32) && !defined(ARCH_RP2040) && !defined(ARCH_PORTDUINO)
 #include "Tone.h"
@@ -18,11 +21,6 @@
 #if !defined(ARCH_PORTDUINO)
 extern "C" void delay(uint32_t dwMs);
 #endif
-
-struct ToneDuration {
-    int frequency_khz;
-    int duration_ms;
-};
 
 // Some common frequencies.
 #define NOTE_SILENT 1
