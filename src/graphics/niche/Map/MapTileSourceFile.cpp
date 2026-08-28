@@ -6,7 +6,7 @@
 #include "FSCommon.h"
 
 // BASEUI_HAS_MAP too - see MapTileSourceSD.h for why this source is BaseUI-only.
-#if BASEUI_HAS_MAP && (defined(ARCH_PORTDUINO) || defined(ARCH_ESP32))
+#if BASEUI_HAS_MAP && (defined(ARCH_PORTDUINO) || defined(ARCH_ESP32) || defined(ARCH_SIFLI))
 
 #include "./MapTileBlobFormat.h"
 

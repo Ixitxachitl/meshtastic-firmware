@@ -77,11 +77,56 @@
 #define TFT_WIDTH 480
 #define TFT_HEIGHT 480
 
+// ── BaseUI layout for the 480x480 panel ─────────────────────────────────────
+// Same CO5300 family as the T-Watch Ultra, so the knobs start from that
+// board's values. Every margin here is a starting point, not a measurement:
+// they keep artwork clear of the rounded corners, which is a physical property
+// nothing in the build can infer. Expect to retune against a real panel.
+#define OLED_HUGE
+#define ROUNDED_SCREEN true
+#define BASEUI_ICON_SCALE 2
+#define BASEUI_HEADER_MARGIN 15
+#define BASEUI_HEADER_LR_MARGIN 55
+#define BASEUI_BELOW_HEADER_MARGIN 15
+#define BASEUI_BODY_LR_MARGIN 35
+#define BASEUI_BODY_TOP_MARGIN 8
+#define BASEUI_SPLASH_CORNER_INSET_PCT 25
+
+// Nav bar: keep the current frame lit in the middle slot and rotate the rest
+// past it, rather than paging.
+#define BASEUI_NAV_ICONS_PER_PAGE 5
+#define BASEUI_NAV_INFINITE_SCROLL 1
+#define BASEUI_NAV_ICON_SIZE_PCT 75
+
+#define BASEUI_NODE_LIST_ROW_ADJUST -1
+#define BASEUI_FIXED_COMPASS_SIZE 1
+
+// A hard cap, not a hint: setFastFramerate() feeds this to setTargetFPS(), and
+// update() then refuses to redraw more often. The stock 5fps drew a drag five
+// times a second, which is what made finger-tracking feel bad on the watch.
+#define SCREEN_TRANSITION_FRAMERATE 15 // fps
+
+// Emote picker cells already have BASEUI_ICON_SCALE applied, so the artwork
+// needs drawing twice as large again to fill them.
+#define EMOTE_PICKER_SCALE_BOOST 2
+
+// On-screen keyboard, for when the keypad module is not attached. Drawn wider
+// than the screen so the keys are hittable, panned with a finger. No wrist
+// strap here, so it does not need lifting as far off the bottom as the watch.
+#define BASEUI_KEYBOARD_ZOOM_PCT 200
+#define BASEUI_KEYBOARD_KEY_HEIGHT_PCT 150
+#define BASEUI_KEYBOARD_LR_MARGIN_PCT 1
+#define BASEUI_KEYBOARD_BOTTOM_MARGIN_PCT 5
+
 // ── Touch (CST9220) ─────────────────────────────────────────────────────────
 #define TOUCH_RST 0
 #define TOUCH_INT 1
 #define TOUCH_I2C_ADDR 0x5A
 #define SCREEN_TOUCH_INT TOUCH_INT
+
+// Same panel family as the T-Watch Ultra, which redraws fast enough to track
+// a finger, so report drags continuously rather than classifying on release.
+#define BASEUI_HAS_TOUCH_DRAG 1
 
 // ── Keyboard module ─────────────────────────────────────────────────────────
 #define KEYBOARD_INT 11

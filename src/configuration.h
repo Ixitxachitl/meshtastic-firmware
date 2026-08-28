@@ -520,7 +520,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #if !(HAS_TFT || defined(HAS_SPI_TFT) || defined(HAS_HUB75_NATIVE) || defined(USE_EINK))
 #undef BASEUI_HAS_MAP
 #define BASEUI_HAS_MAP 0
-#elif !defined(HAS_SDCARD) && !defined(ARCH_PORTDUINO) && !defined(ARCH_ESP32)
+#elif !defined(HAS_SDCARD) && !defined(ARCH_PORTDUINO) && !defined(ARCH_ESP32) && !defined(ARCH_SIFLI)
 #undef BASEUI_HAS_MAP
 #define BASEUI_HAS_MAP 0
 #endif

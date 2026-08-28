@@ -84,6 +84,11 @@ foreach(pattern ${MT_EXCLUDE})
   list(FILTER MT_SOURCES EXCLUDE REGEX ${pattern})
 endforeach()
 
+# The map tile decoder and its file-backed source live under niche/ but are not
+# InkHUD; put them back after the blanket exclusion above has run.
+file(GLOB MT_MAP_SOURCES ${MESHTASTIC_ROOT}/src/graphics/niche/Map/*.cpp)
+list(APPEND MT_SOURCES ${MT_MAP_SOURCES})
+
 file(GLOB MT_VARIANT_SOURCES ${MESHTASTIC_ROOT}/variants/sifli/t-display-sf32/*.cpp)
 
 # Vendored nanopb runtime (nanopb-0.4.9/ at the repo root).
@@ -191,6 +196,9 @@ target_compile_definitions(app PRIVATE
   HAS_BHI260AP=1
   # AW86224 haptics, 0x58, on the keyboard module. Probed at runtime.
   HAS_AW86224=1
+  # BaseUI map frame. Tiles come from a MAP.BIN on the LittleFS partition;
+  # the SD path needs SdFat, which this build does not carry.
+  BASEUI_HAS_MAP=1
   HAS_TOUCHSCREEN=1
   VARIANT_TOUCHSCREEN=1
   USE_TFTDISPLAY=1

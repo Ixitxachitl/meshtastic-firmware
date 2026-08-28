@@ -11,7 +11,7 @@
 #include "graphics/images.h"
 #include "graphics/niche/Map/MapTileRenderer.h"
 
-#if defined(ARCH_PORTDUINO) || defined(ARCH_ESP32)
+#if defined(ARCH_PORTDUINO) || defined(ARCH_ESP32) || defined(ARCH_SIFLI)
 #include "graphics/niche/Map/MapTileSourceFile.h"
 #endif
 #if defined(HAS_SDCARD)
@@ -315,7 +315,7 @@ bool ensureIndicatorTileSourceInitialized()
 }
 #endif
 
-#if defined(ARCH_PORTDUINO) || defined(ARCH_ESP32)
+#if defined(ARCH_PORTDUINO) || defined(ARCH_ESP32) || defined(ARCH_SIFLI)
 // On platforms with a filesystem that has room to spare (ESP32's LittleFS, or portduino's host
 // filesystem passthrough), the basemap is just a normal file. Attempted once, lazily, on first
 // draw; if MAP.BIN isn't present this quietly leaves MapTiles with zero tiles (the existing "no
@@ -678,7 +678,7 @@ void MapRenderer::zoomOut()
 
 void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-#if defined(ARCH_PORTDUINO) || defined(ARCH_ESP32)
+#if defined(ARCH_PORTDUINO) || defined(ARCH_ESP32) || defined(ARCH_SIFLI)
     ensureFileTileSourceInitialized();
 #endif
 
