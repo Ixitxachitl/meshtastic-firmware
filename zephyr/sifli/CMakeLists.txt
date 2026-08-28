@@ -234,6 +234,11 @@ target_compile_definitions(app PRIVATE
   # Routes buzz.cpp down the RTTTL-through-a-codec path and gets an AudioThread
   # created in main(). There is no piezo here, so this is the only tone path.
   HAS_I2S=1
+  # Read Aloud. SAM is vendored under src/audio/sam and renders to PCM like
+  # RTTTL does; both readAloud() call sites are gated on this.
+  MESHTASTIC_ENABLE_TTS=1
+  # Speech amplitude, same build-flag rule as the RTTTL one.
+  AUDIO_SPEECH_GAIN=1.0f
   HAS_TOUCHSCREEN=1
   VARIANT_TOUCHSCREEN=1
   USE_TFTDISPLAY=1

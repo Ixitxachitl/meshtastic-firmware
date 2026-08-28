@@ -8,6 +8,9 @@
 // There is no piezo on this board, so this is the only way it makes a sound.
 
 #include "audio/RtttlPcm.h"
+#ifdef MESHTASTIC_ENABLE_TTS
+#include "audio/SamPcm.h"
+#endif
 #include "concurrency/OSThread.h"
 #include "configuration.h"
 #include "platform/sifli/SiFliAudioOut.h"
@@ -35,6 +38,21 @@ class AudioThread : public concurrency::OSThread
     // ESP8266Audio version there is nothing to pump here.
     bool isPlaying() { return _playing && sifliAudioOut.isRunning(); }
 
+#ifdef MESHTASTIC_ENABLE_TTS
+    // SAM renders on its own thread because its engine pushes samples rather
+    // than letting a caller pull them; SamPcm bridges that to the same
+    // generate() shape RtttlPcm has.
+    void readAloud(const char *text)
+    {
+        stop();
+        if (!_sam.begin(text))
+            return;
+        _playing = sifliAudioOut.begin(SamPcm::kSampleRate, 2, fillSam, this);
+        if (!_playing)
+            _sam.reset();
+    }
+#endif
+
     void stop()
     {
         if (_playing) {
@@ -42,6 +60,9 @@ class AudioThread : public concurrency::OSThread
             _playing = false;
         }
         _rtttl.reset();
+#ifdef MESHTASTIC_ENABLE_TTS
+        _sam.reset();
+#endif
     }
 
   protected:
@@ -53,6 +74,11 @@ class AudioThread : public concurrency::OSThread
     // Called from DMA context. A short return tells SiFliAudioOut to drain and
     // stop, which is exactly what the end of a melody should do.
     static size_t fill(int16_t *dst, size_t frames, void *ctx) { return ((AudioThread *)ctx)->_rtttl.generate(dst, frames); }
+
+#ifdef MESHTASTIC_ENABLE_TTS
+    static size_t fillSam(int16_t *dst, size_t frames, void *ctx) { return ((AudioThread *)ctx)->_sam.generate(dst, frames); }
+    SamPcm _sam;
+#endif
 
     RtttlPcm _rtttl;
     volatile bool _playing = false;
