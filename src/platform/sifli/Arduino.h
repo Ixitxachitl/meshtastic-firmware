@@ -70,6 +70,13 @@ typedef uint16_t word;
 #define RAD_TO_DEG 57.2957795130823208767
 #define EULER 2.71828182845904523536
 
+// picolibc hides the M_* family behind __GNU_VISIBLE, which this build turns
+// off by compiling with _POSIX_C_SOURCE. Arduino cores elsewhere get these
+// from math.h, and portable code reasonably expects it.
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 // ── Bit utilities ────────────────────────────────────────────────────────────
 #define bitRead(v, b) (((v) >> (b)) & 1)
 #define bitSet(v, b) ((v) |= (1UL << (b)))
