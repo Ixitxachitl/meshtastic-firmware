@@ -144,6 +144,13 @@ target_include_directories(app PRIVATE
   ${MESHTASTIC_ROOT}/src/platform/sifli
   ${MESHTASTIC_ROOT}/variants/sifli/t-display-sf32
   ${MESHTASTIC_ROOT}/nanopb-0.4.9
+)
+
+# SYSTEM, so the compiler stops diagnosing headers we do not maintain. SensorLib
+# alone lands in every translation unit - configuration.h probes for its
+# SensorRtcHelper.hpp with __has_include - and buried the build output in
+# double-promotion noise from code we are never going to change.
+target_include_directories(app SYSTEM PRIVATE
   ${MT_DEP_INCLUDES}
 )
 
