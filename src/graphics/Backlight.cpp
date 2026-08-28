@@ -65,7 +65,11 @@ void backlightInit()
     if (uiconfig.screen_brightness > 0)
         lastOnLevel = uiconfig.screen_brightness;
 
+#ifdef TFT_BACKLIGHT_AFTER_FIRST_FRAME
+    drive(0); // TFTDisplay::connect() lights it once GRAM has been cleared
+#else
     drive(uiconfig.screen_brightness);
+#endif
 }
 
 void backlightSet(uint8_t level)
