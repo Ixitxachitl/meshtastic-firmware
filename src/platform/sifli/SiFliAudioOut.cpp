@@ -171,7 +171,14 @@ bool SiFliAudioOut::configureProcessor(uint32_t sampleRate, uint8_t channels)
     // The HAL fills in the rest of the DMA config; it needs the channel and the
     // peripheral request line.
     memset(&htxdma, 0, sizeof(htxdma));
-    htxdma.Instance = DMA1_Channel1;
+    // Not DMA1_Channel1: sifli_soc_aliases.h retires the SoC header's short
+    // aliases, and that macro expands through DMA1. This is what it expands to.
+    //
+    // Channel 1 by hand, because the vendor HAL allocates nothing - the BSP
+    // hands it a channel from board config. Channel 0 is spoken for by mpi2 in
+    // the board DTS; nothing else in this port claims one, but Zephyr's own DMA
+    // driver is not consulted, so a future dma-using node could collide here.
+    htxdma.Instance = (DMA_Channel_TypeDef *)&hwp_dmac1->CCR1;
     htxdma.Init.Request = SF32LB52X_DMA_REQ_AUDPRC_TX_CH0;
     haudprc.hdma[HAL_AUDPRC_TX_CH0] = &htxdma;
 
