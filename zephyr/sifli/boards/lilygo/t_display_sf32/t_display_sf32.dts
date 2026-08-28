@@ -198,13 +198,29 @@
 };
 
 /* SX1262 CS (PA29) is driven by RadioLib through the Arduino shim, so only the
- * TF card's CS (PA44) is registered here.
+ * TF card's CS (PA43) is registered here.
  */
 &spi1 {
 	status = "okay";
 	pinctrl-0 = <&spi1_default>;
 	pinctrl-names = "default";
-	cs-gpios = <&gpioa_32_44 12 GPIO_ACTIVE_LOW>;
+	cs-gpios = <&gpioa_32_44 11 GPIO_ACTIVE_LOW>;
+
+	/* TF slot. Shares the bus with the radio, so every card access takes the
+	 * same SPI lock RadioLib does.
+	 */
+	sdhc0: sdhc@0 {
+		compatible = "zephyr,sdhc-spi-slot";
+		reg = <0>;
+		status = "okay";
+		spi-max-frequency = <12000000>;
+
+		mmc {
+			compatible = "zephyr,sdmmc-disk";
+			disk-name = "SD";
+			status = "okay";
+		};
+	};
 };
 
 /* The CO5300 is driven through the vendor LCDC HAL from

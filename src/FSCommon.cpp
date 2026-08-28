@@ -9,6 +9,9 @@
  *
  */
 #include "FSCommon.h"
+#ifdef ARCH_SIFLI
+#include "platform/sifli/InternalFileSystem.h"
+#endif
 #include "SPILock.h"
 #include "configuration.h"
 
@@ -423,6 +426,11 @@ void fsInit()
         LOG_ERROR("Filesystem mount failed");
         // assert(0); This auto-formats the partition, so no need to fail here.
     }
+#ifdef ARCH_SIFLI
+    // The TF card is a second volume, mounted after the internal one and under
+    // the same lock: it shares SPI1 with the radio.
+    sifliSdBegin();
+#endif
 #if defined(ARCH_ESP32)
     LOG_DEBUG("Filesystem files (%d/%d Bytes):", FSCom.usedBytes(), FSCom.totalBytes());
 #else

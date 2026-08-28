@@ -11,10 +11,10 @@
  *
  *   LoRa (HPB16B3 / SX1262)   MOSI PA24  MISO PA25  SCK PA28  NSS PA29
  *                             DIO1 PA30  BUSY PA31  RST PA32  VCC_EN PA26
- *   TF card (shares SPI1)     CS PA44
+ *   TF card (shares SPI1)     CS PA43
  *   NOR flash (MPI2, XIP)     PA12-PA17
  *   AMOLED CO5300, QSPI       TE PA2  CS PA3  CLK PA4  D0-D3 PA5-PA8
- *                             RST PA9  VCI_EN PA43
+ *                             RST PA9  VCI_EN PA44
  *   Touch CST9220 (0x5A)      RST PA0  INT PA1, on the 1V8 side of the
  *                             display FPC level shifter
  *   I2C1 (3V3)                SDA PA37  SCL PA38 - touch, QWIIC, sensor
@@ -60,7 +60,7 @@
 #define BHI260AP_INT 27
 
 // ── TF card, on the LoRa SPI bus ────────────────────────────────────────────
-#define SDCARD_CS 44
+#define SDCARD_CS 43
 
 // ── Display (CO5300 AMOLED, QSPI) ───────────────────────────────────────────
 // Kept as plain pin numbers until the LCDC quad path exists; the panel is
@@ -73,7 +73,7 @@
 #define LCD_D2 7
 #define LCD_D3 8
 #define LCD_RST 9
-#define LCD_VCI_EN 43
+#define LCD_VCI_EN 44
 #define TFT_WIDTH 480
 #define TFT_HEIGHT 480
 

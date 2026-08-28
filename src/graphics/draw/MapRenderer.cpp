@@ -10,6 +10,9 @@
 #include "graphics/TFTPalette.h"
 #include "graphics/images.h"
 #include "graphics/niche/Map/MapTileRenderer.h"
+#ifdef ARCH_SIFLI
+#include "platform/sifli/InternalFileSystem.h"
+#endif
 
 #if defined(ARCH_PORTDUINO) || defined(ARCH_ESP32) || defined(ARCH_SIFLI)
 #include "graphics/niche/Map/MapTileSourceFile.h"
@@ -335,6 +338,14 @@ void ensureFileTileSourceInitialized()
     if (attempted)
         return;
     attempted = true;
+#ifdef ARCH_SIFLI
+    // The TF card is a separate FAT volume rather than FSCom itself, so try it
+    // by name first and fall back to the internal filesystem.
+    if (sifliSdMounted() && source.begin(SIFLI_SD_MOUNT "/MAP.BIN")) {
+        NicheGraphics::MapTiles::setTileSource(&source);
+        return;
+    }
+#endif
     if (source.begin("/MAP.BIN"))
         NicheGraphics::MapTiles::setTileSource(&source);
 }

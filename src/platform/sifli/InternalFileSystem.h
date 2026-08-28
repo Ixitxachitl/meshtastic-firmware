@@ -30,6 +30,16 @@
 #endif
 
 #define SIFLI_FS_MOUNT "/lfs"
+
+// The TF card, mounted as a second FAT volume. Paths beginning with this are
+// passed through untouched instead of being rebased onto the LittleFS mount.
+#define SIFLI_SD_MOUNT "/SD"
+
+// Probes the slot and mounts the card, if one is fitted. Safe to call twice.
+void sifliSdBegin();
+
+// True once a card has been found, mounted and not since removed.
+bool sifliSdMounted();
 #define SIFLI_FS_PATHLEN 256
 
 namespace Adafruit_LittleFS_Namespace

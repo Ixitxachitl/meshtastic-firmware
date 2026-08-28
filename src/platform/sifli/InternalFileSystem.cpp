@@ -6,6 +6,8 @@
 
 #include "InternalFileSystem.h"
 #include "configuration.h"
+#include <ff.h>
+#include <zephyr/storage/disk_access.h>
 
 #include <zephyr/fs/fs.h>
 #include <zephyr/fs/littlefs.h>
@@ -33,6 +35,14 @@ Adafruit_LittleFS_Namespace::InternalFileSystem InternalFS;
 
 void InternalFileSystem::toabs(const char *rel, char *abs, size_t abssz)
 {
+    // Already names the SD volume: Zephyr's VFS resolves it by mount point, so
+    // rebasing it onto the LittleFS mount would break it.
+    if (strncmp(rel, SIFLI_SD_MOUNT "/", sizeof(SIFLI_SD_MOUNT)) == 0 || strcmp(rel, SIFLI_SD_MOUNT) == 0) {
+        strncpy(abs, rel, abssz - 1);
+        abs[abssz - 1] = '\0';
+        return;
+    }
+
     // Root "/" maps to the mount point itself (no trailing slash)
     if (rel[0] == '/' && rel[1] == '\0') {
         strncpy(abs, SIFLI_FS_MOUNT, abssz - 1);
@@ -92,6 +102,45 @@ bool InternalFileSystem::begin()
 
     LOG_ERROR("LittleFS mount failed after format (%d)", rc);
     return false;
+}
+
+// ── TF card ───────────────────────────────────────────────────────────────
+
+static bool sd_mounted = false;
+
+static FATFS sd_fatfs;
+static struct fs_mount_t sd_mnt = {
+    .type = FS_FATFS,
+    .mnt_point = SIFLI_SD_MOUNT,
+    .fs_data = &sd_fatfs,
+};
+
+bool sifliSdMounted()
+{
+    return sd_mounted;
+}
+
+// Called after the internal filesystem is up. A missing card is the normal
+// case, not an error: the slot is empty on most boards most of the time.
+void sifliSdBegin()
+{
+    if (sd_mounted)
+        return;
+
+    static const char *disk = "SD";
+    if (disk_access_init(disk) != 0) {
+        LOG_INFO("No SD card");
+        return;
+    }
+
+    int rc = fs_mount(&sd_mnt);
+    if (rc != 0) {
+        LOG_WARN("SD card present but FAT mount failed (%d)", rc);
+        return;
+    }
+
+    sd_mounted = true;
+    LOG_INFO("SD card mounted at %s", SIFLI_SD_MOUNT);
 }
 
 File InternalFileSystem::open(const char *path, const char *mode)
