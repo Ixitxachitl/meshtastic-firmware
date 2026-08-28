@@ -115,8 +115,12 @@ class SamPcm
     // where FreeRTOS allocates both itself.
     struct k_thread _thread;
     bool _taskRunning = false;
+    bool renderTaskLive() const { return _taskRunning; }
+    void forgetRenderTask() { _taskRunning = false; }
 #else
     TaskHandle_t _task = nullptr;
+    bool renderTaskLive() const { return _task != nullptr; }
+    void forgetRenderTask() { _task = nullptr; }
 #endif
     std::atomic<bool> _renderDone{true};
     std::atomic<bool> _stop{false};

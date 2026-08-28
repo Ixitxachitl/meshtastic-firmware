@@ -104,7 +104,7 @@ bool SamPcm::begin(const char *text)
     if (!text || !text[0])
         return false;
 
-    if (_task) {
+    if (renderTaskLive()) {
         // reset() could not join the previous renderer. Starting another would give two
         // tasks the same ring; refuse instead, and let the next attempt try again.
         LOG_ERROR("Speech: previous renderer still running, skipping");
@@ -202,7 +202,7 @@ size_t SamPcm::generate(int16_t *interleavedLR, size_t maxFrames)
 
 void SamPcm::reset()
 {
-    if (_task) {
+    if (renderTaskLive()) {
         _stop.store(true, std::memory_order_relaxed);
         // Unblock a producer waiting on a full ring, then let it unwind. It self-deletes.
         for (int i = 0; i < 500 && !_renderDone.load(std::memory_order_acquire); i++) {
@@ -210,7 +210,7 @@ void SamPcm::reset()
             SAM_SLEEP_1MS();
         }
         if (_renderDone.load(std::memory_order_acquire)) {
-            _task = nullptr;
+            forgetRenderTask();
         } else {
             // Keep the handle so begin() can refuse rather than stacking renderers.
             LOG_ERROR("Speech: render task did not exit");
