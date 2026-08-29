@@ -16,9 +16,9 @@
 // macros typically reference. Only tlora-pager and meshnology-w10 define it; on the other
 // four HAS_I2S boards the speaker is always connected, which is why MeshtasticI2SOut sets
 // auto_clear so the DMA emits silence rather than replaying its last buffer.
-#ifdef USE_XL9555
-#include "ExtensionIOXL9555.hpp"
-extern ExtensionIOXL9555 io;
+#ifdef USE_PCA95X5
+#include PCA95X5_INC
+extern PCA95X5_CLS io;
 #endif
 
 #ifdef USE_MCP23017
