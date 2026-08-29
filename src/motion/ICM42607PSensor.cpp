@@ -127,6 +127,10 @@ bool ICM42607PSensor::init()
         LOG_DEBUG("ICM-42607-P pedometer start error %d", status);
         return false;
     }
+    // The library leaves int_status3 uninitialised and startPedometer() only zeroes its overflow
+    // counter, so a stale STEP_CNT_OVF bit would add 65535 to the first step count read.
+    newSensor->updateApex(); // INT_STATUS3 is clear-on-read
+    newSensor->int_status3 = 0;
     LOG_DEBUG("ICM-42607-P pedometer ok");
 #endif
 
