@@ -1412,6 +1412,7 @@ int32_t Screen::runOnce()
 {
     // If we don't have a screen, don't ever spend any CPU for us.
     if (!useDisplay) {
+        textMessageFrameShown = false;
         enabled = false;
         return RUN_SAME;
     }
@@ -1552,6 +1553,7 @@ int32_t Screen::runOnce()
 
     if (!screenOn) { // If we didn't just wake and the screen is still off, then
                      // stop updating until it is on again
+        textMessageFrameShown = false;
         enabled = false;
         return 0;
     }
@@ -1615,6 +1617,9 @@ int32_t Screen::runOnce()
             handleOnPress();
         }
     }
+
+    textMessageFrameShown = showingNormalScreen && framesetInfo.positions.textMessage != 255 && ui &&
+                            ui->getUiState()->currentFrame == framesetInfo.positions.textMessage;
 
     // LOG_DEBUG("want fps %d, fixed=%d", targetFramerate,
     // ui->getUiState()->frameState); If we are scrolling we need to be called
@@ -2991,6 +2996,11 @@ int Screen::handleAdminMessage(AdminModule_ObserverData *arg)
 bool Screen::isOverlayBannerShowing()
 {
     return NotificationRenderer::isOverlayBannerShowing();
+}
+
+bool Screen::isTextMessageFrameShown() const
+{
+    return textMessageFrameShown.load();
 }
 
 bool Screen::isGamesFrameShown()
