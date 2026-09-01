@@ -116,6 +116,9 @@
 // Measured from the gravity vector: the part's own axes already line up with the watch (X at 3
 // o'clock, Y at 12, Z out of the screen), so no remapping. Required for the wrist-tilt gesture.
 #define BHI260AP_REMAP_AXES TOP_LAYER_LEFT_CORNER
+// The RAM firmware image is re-uploaded over I2C on every boot, so the bus clock is what sets how
+// long boot stalls. Reclocked for the upload only, then handed back to the 100kHz the bus runs at.
+#define BHI260AP_I2C_CLOCK_SPEED 400000
 #undef MESHTASTIC_EXCLUDE_ACCELEROMETER
 #define SHOW_STEP_COUNTER
 
