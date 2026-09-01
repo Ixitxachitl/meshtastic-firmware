@@ -68,6 +68,9 @@ bool PositionModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, mes
     // FIXME this can in fact happen with packets sent from EUD (src=RX_SRC_USER)
     // to set fixed location, EUD-GPS location or just the time (see also issue #900)
     bool isLocal = false;
+    // No coordinates means this is a position request rather than a report - ours looping back
+    // through Router::sendLocal(), or someone else's that we overheard. Never store it as a fix.
+    const bool hasCoordinates = p.latitude_i || p.longitude_i;
     if (isFromUs(&mp)) {
         isLocal = true;
         if (config.position.fixed_position) {
@@ -83,9 +86,11 @@ bool PositionModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, mes
 
             nodeDB->setLocalPosition(p, true);
             return false;
-        } else {
+        } else if (hasCoordinates) {
             LOG_TRACE("Incoming update from MYSELF");
             nodeDB->setLocalPosition(p);
+        } else if (p.time) {
+            nodeDB->setLocalPosition(p, true);
         }
     }
 

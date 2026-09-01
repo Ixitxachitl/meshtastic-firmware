@@ -3475,11 +3475,12 @@ void NodeDB::updatePosition(uint32_t nodeId, const meshtastic_Position &p, RxSou
 
             setLocalPosition(p);
             slot = TypeConversions::ConvertToPositionLite(p);
-        } else if ((p.time > 0) && !p.latitude_i && !p.longitude_i && !p.timestamp && !p.location_source) {
-            // FIXME SPECIAL TIME SETTING PACKET FROM EUD TO RADIO
-            // (stop-gap fix for issue #900)
-            LOG_DEBUG("updatePosition SPECIAL time setting time=%u", p.time);
-            slot.time = p.time;
+        } else if (!p.latitude_i && !p.longitude_i) {
+            // Carries no coordinates: a position request, or the EUD's time-setting packet (#900).
+            // Take the time it brought, but never let it clear a position we already hold.
+            LOG_DEBUG("updatePosition no coords, keep stored: time=%u", p.time);
+            if (p.time)
+                slot.time = p.time;
         } else {
             // Be careful to only update fields that have been set by the REMOTE sender
             // A lot of position reports don't have time populated.  In that case, be careful to not blow away the time we
