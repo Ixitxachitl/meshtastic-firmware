@@ -125,6 +125,9 @@ NRF54L15Bluetooth *nrf54l15Bluetooth = nullptr;
 #endif
 
 #ifdef ARCH_ESP32
+#if defined(LORA_DIO1_EXTENDED_IO)
+#include "esp_log.h" // DIAGNOSTIC, not for merge - see the esp_log_level_set() call in setup()
+#endif
 #ifdef DEBUG_PARTITION_TABLE
 #include "esp_partition.h"
 
@@ -604,6 +607,12 @@ void setup()
 #elif defined(I2C_SDA) && !defined(ARCH_RP2040)
     LOG_INFO("Starting Bus with (SDA) %d and (SCL) %d: ", I2C_SDA, I2C_SCL);
     Wire.begin(I2C_SDA, I2C_SCL);
+#if defined(LORA_DIO1_EXTENDED_IO) && defined(ARCH_ESP32)
+    // DIAGNOSTIC, not for merge: i2cInit() silences the "i2c.master" tag, which hides whether a
+    // failed transaction was a NACK or a hardware timeout/arbitration loss. Both surface as
+    // ESP_ERR_INVALID_STATE to the caller, so the tag is the only thing that distinguishes them.
+    esp_log_level_set("i2c.master", ESP_LOG_DEBUG);
+#endif
 #elif defined(ARCH_PORTDUINO)
     if (portduino_config.i2cdev != "") {
         LOG_INFO("Use %s as I2C device", portduino_config.i2cdev.c_str());
