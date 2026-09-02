@@ -488,7 +488,7 @@ bool EnvironmentTelemetryModule::wantUIFrame()
 void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     // === Setup display ===
-    display->clear();
+    graphics::clearForFrame(display, state);
     display->setFont(FONT_SMALL);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     int line = 1;
@@ -500,12 +500,16 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     graphics::drawCommonHeader(display, x, y, titleStr);
 
     // === Row spacing setup ===
+    // getTextPositions() only clears the header itself, so add the below-header margin
+    // other screens reserve - without it the first row sits flush against the header.
     const int rowHeight = FONT_HEIGHT_SMALL - 4;
-    int currentY = graphics::getTextPositions(display)[line++];
+    int currentY = graphics::getTextPositions(display)[line++] + BASEUI_BELOW_HEADER_MARGIN + BASEUI_BODY_TOP_MARGIN;
+    // Inset the body columns so they clear the panel edges (rounded screens clip them).
+    const int bodyX = x + BASEUI_BODY_LR_MARGIN;
 
     // === Show "No Telemetry" if no data available ===
     if (!lastMeasurementPacket) {
-        display->drawString(x, currentY, "No Telemetry");
+        display->drawString(bodyX, currentY, "No Telemetry");
         return;
     }
 
@@ -513,7 +517,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     const meshtastic_Data &p = lastMeasurementPacket->decoded;
     meshtastic_Telemetry telemetry;
     if (!pb_decode_from_bytes(p.payload.bytes, p.payload.size, &meshtastic_Telemetry_msg, &telemetry)) {
-        display->drawString(x, currentY, "No Telemetry");
+        display->drawString(bodyX, currentY, "No Telemetry");
         return;
     }
 
@@ -540,7 +544,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
                   m.current != 0 || m.lux != 0 || m.white_lux != 0 || m.weight != 0 || m.distance != 0 || m.radiation != 0;
 
     if (!hasAny) {
-        display->drawString(x, currentY, "No Telemetry");
+        display->drawString(bodyX, currentY, "No Telemetry");
         return;
     }
 
@@ -556,7 +560,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
                                            : String(agoSecs) + "s";
         leftStr += " (" + agoStr + ")";
     }
-    display->drawString(x, currentY, leftStr); // Left side: who and when
+    display->drawString(bodyX, currentY, leftStr); // Left side: who and when
 
     // === Collect sensor readings as label strings (no icons) ===
     std::vector<String> entries;
@@ -631,7 +635,7 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     // === Show first available metric on top-right of first line ===
     if (!entries.empty()) {
         String valueStr = entries.front();
-        int rightX = SCREEN_WIDTH - display->getStringWidth(valueStr);
+        int rightX = x + SCREEN_WIDTH - BASEUI_BODY_LR_MARGIN - display->getStringWidth(valueStr);
         display->drawString(rightX, currentY, valueStr);
         entries.erase(entries.begin()); // Remove from queue
     }
@@ -642,11 +646,11 @@ void EnvironmentTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSt
     // === Draw remaining entries in 2-column format (left and right) ===
     for (size_t i = 0; i < entries.size(); i += 2) {
         // Left column
-        display->drawString(x, currentY, entries[i]);
+        display->drawString(bodyX, currentY, entries[i]);
 
         // Right column if it exists
         if (i + 1 < entries.size()) {
-            int rightX = SCREEN_WIDTH / 2;
+            int rightX = x + SCREEN_WIDTH / 2;
             display->drawString(rightX, currentY, entries[i + 1]);
         }
 

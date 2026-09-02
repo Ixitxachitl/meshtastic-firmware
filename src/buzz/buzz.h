@@ -1,5 +1,13 @@
 #pragma once
 
+#include "configuration.h"
+
+#ifdef HAS_I2S
+/// Play the system melody that was requested before audioThread existed, if any.
+/// Call once from setup(), after lateInitVariant().
+void buzzOnAudioThreadReady();
+#endif
+
 void playBeep();
 void playLongBeep();
 void playStartMelody();
@@ -14,3 +22,9 @@ void playChirp();
 void playClick();
 bool playNextLeadUpNote();  // Play the next note in the lead-up sequence
 void resetLeadUpSequence(); // Reset the lead-up sequence to start from beginning
+
+#ifdef HAS_I2S
+/// Hand over any melody requested before audioThread existed. Call once, right
+/// after creating it.
+void buzzOnAudioThreadReady();
+#endif

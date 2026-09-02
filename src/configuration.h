@@ -506,6 +506,63 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define USE_TFTDISPLAY 0
 #endif
 
+// Opt-in: build the BaseUI map frame (basemap tiles + node markers, with pan/zoom/follow-me).
+// Off by default because it costs real flash and needs a provisioned MAP.BIN to be useful; enable
+// per build/variant with -DBASEUI_HAS_MAP=1. Independent of InkHUD's own map applet, which shares
+// the tile decoder in graphics/niche/Map/ and is always built.
+#ifndef BASEUI_HAS_MAP
+#define BASEUI_HAS_MAP 0
+#endif
+#if BASEUI_HAS_MAP
+// Two hard requirements on top of the opt-in. Both silently force the flag back off rather than
+// failing the build, so a blanket -DBASEUI_HAS_MAP=1 across a build matrix stays usable - the map
+// simply doesn't appear on targets that can't carry it.
+//
+// 1. A display with the pixels to make a map worth drawing: color TFT or E-Ink. Monochrome OLED is
+//    excluded. The TFT half mirrors GRAPHICS_TFT_COLORING_ENABLED in graphics/TFTColorRegions.h,
+//    spelled out from the same underlying macros because that header includes this one - keep the
+//    two in sync.
+// 2. Somewhere to keep a basemap, i.e. a target one of the two tile sources actually covers: a real
+//    SD card (MapTileSourceSD), or a filesystem with room to spare - ESP32's LittleFS and
+//    portduino's host filesystem (MapTileSourceFile). This is what rules out nRF52 boards with no
+//    SD slot: FSCom there is InternalFS, a ~28KB partition nowhere near a usable bake, so the frame
+//    could only ever show the empty marker-only fallback.
+#if !(HAS_TFT || defined(HAS_SPI_TFT) || defined(HAS_HUB75_NATIVE) || defined(USE_EINK))
+#undef BASEUI_HAS_MAP
+#define BASEUI_HAS_MAP 0
+#elif !defined(HAS_SDCARD) && !defined(ARCH_PORTDUINO) && !defined(ARCH_ESP32)
+#undef BASEUI_HAS_MAP
+#define BASEUI_HAS_MAP 0
+#endif
+#endif
+
+// Where a finger can reach them, the map's pan/zoom/follow-me controls are buttons drawn on the
+// frame itself rather than entries in the Map menu - see MapRenderer::handleControlTap(). Never
+// both: the buttons exist precisely to replace that menu, which then has nothing left in it, so
+// the Map frame opens no menu at all on these boards. Zoom Mode goes the same way - two buttons
+// step the zoom directly, leaving no mode to hold.
+//
+// Keyed on the same flag as every other finger-tracked interaction, so a board opts into all of
+// them together. BASEUI_HAS_TOUCH_DRAG is a variant define, hence the default here.
+#ifndef BASEUI_HAS_TOUCH_DRAG
+#define BASEUI_HAS_TOUCH_DRAG 0
+#endif
+#define BASEUI_MAP_ONSCREEN_CONTROLS (BASEUI_HAS_MAP && BASEUI_HAS_TOUCH_DRAG)
+
+// A tap with nothing under it pages to the next frame, and the buzzer beeps to acknowledge it.
+// Set -DBASEUI_TAP_ADVANCES_FRAME=0 on a panel where that is more accident than shortcut: where
+// frames are already swiped between, and screens carry their own on-screen buttons, a tap that
+// misses its target should do nothing rather than move the screen out from under the finger.
+//
+// Only the touchscreen's tap is affected. A physical button reports the same USER_PRESS event and
+// keeps both the paging and the beep, since a button press is never a near miss.
+//
+// The buzz needs no flag of its own: a pulse is spent where a tap is consumed (see TouchHaptics.h),
+// and with this off a tap on a plain frame is consumed by nothing.
+#ifndef BASEUI_TAP_ADVANCES_FRAME
+#define BASEUI_TAP_ADVANCES_FRAME 1
+#endif
+
 #ifndef HW_VENDOR
 #error HW_VENDOR must be defined
 #endif

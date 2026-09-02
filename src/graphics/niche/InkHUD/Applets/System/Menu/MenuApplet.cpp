@@ -327,9 +327,8 @@ static void applyLoRaRegion(meshtastic_Config_LoRaConfig_RegionCode region)
     auto changes = SEGMENT_CONFIG;
 
 #if !(MESHTASTIC_EXCLUDE_PKI_KEYGEN || MESHTASTIC_EXCLUDE_PKI)
-    // Minting the key moves our node num with it, and the reboot below only re-derives after the save.
-    if (nodeDB->ensurePkiIdentity()) {
-        changes |= SEGMENT_DEVICESTATE | SEGMENT_NODEDATABASE;
+    if (crypto) {
+        crypto->ensurePkiKeys(config.security, owner);
     }
 #endif
 

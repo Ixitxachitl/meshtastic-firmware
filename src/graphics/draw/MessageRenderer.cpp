@@ -42,6 +42,49 @@ static std::vector<std::string> cachedLines;
 static std::vector<int> cachedHeights;
 static bool manualScrolling = false;
 
+// One message's span of lines, so its bubble can be drawn as a single rounded rect.
+struct MessageBlock {
+    size_t start;
+    size_t end;
+    bool mine;
+};
+
+// The rest of the laid-out message list, cached alongside cachedLines/cachedHeights.
+//
+// Building this is the expensive part of drawing the frame - it word-wraps every visible message
+// and allocates up to MAX_CACHED_LINES std::strings - and it used to run on every single redraw,
+// which on a screen that scrolls continuously means constantly. Bubbles make it worse twice over:
+// they narrow the text column so messages wrap into more lines, and each bubble registers a TFT
+// colour region that TFTDisplay::display() then overprints per row.
+//
+// So it is now keyed on everything that can change a laid-out line (see MessageLayoutKey) and
+// rebuilt only when one of those actually moves. Scrolling, which is what runs every frame, no
+// longer rebuilds anything.
+static std::vector<bool> cachedIsMine;
+static std::vector<bool> cachedIsHeader;
+static std::vector<AckStatus> cachedAckForLine;
+static std::vector<MessageBlock> cachedBlocks;
+
+struct MessageLayoutKey {
+    uint32_t contentHash = 0;
+    uint32_t messageCount = 0xFFFFFFFFu; // Sentinel: never matches a real first pass
+    int mode = -1;
+    int channel = -1;
+    uint32_t peer = 0;
+    int16_t width = 0, height = 0;
+    bool bubbles = false;
+    bool compact = false;
+    bool newestLast = false;
+
+    bool operator==(const MessageLayoutKey &o) const
+    {
+        return contentHash == o.contentHash && messageCount == o.messageCount && mode == o.mode && channel == o.channel &&
+               peer == o.peer && width == o.width && height == o.height && bubbles == o.bubbles && compact == o.compact &&
+               newestLast == o.newestLast;
+    }
+};
+static MessageLayoutKey cachedLayoutKey;
+
 // Scroll state (file scope so we can reset on new message)
 float scrollY = 0.0f;
 uint32_t lastTime = 0;
@@ -52,9 +95,62 @@ bool scrollStarted = false;
 static bool didReset = false;
 static constexpr int MESSAGE_BLOCK_GAP = 6;
 
+// True when the newest message sits at the bottom of the list and history runs upwards off the top
+// (chat style), rather than the default of newest at the top with history running downwards.
+static inline bool isNewestLast()
+{
+    return config.display.message_order == meshtastic_Config_DisplayConfig_MessageOrder_NEWEST_LAST;
+}
+
+// The list is anchored on the newest message, so which end of the scroll range that is flips with
+// the order: the top in newest-first, the bottom in newest-last. resetScrollState() can't work the
+// bottom out for itself - it runs before the lines it would have to measure exist - so it just
+// raises this and drawTextMessageFrame() applies it once the layout is built.
+static bool pendingScrollToEnd = false;
+
+// Scroll geometry as drawTextMessageFrame() actually laid it out, published here so everything that
+// scrolls clamps against the same numbers the renderer draws with.
+//
+// Each scroll entry point used to estimate the viewport for itself - displayHeight minus one line
+// in nudgeScroll()/scrollByFingerDelta(), minus two in scrollDown() - but the real figure is
+// scrollBottom minus firstLineTop, and on variants with generous header and nav margins (t-watch
+// ultra reserves 15px above and below the header alone) those estimates run tens of pixels long.
+// A too-large viewport yields a too-small scroll limit, so the clamp stopped short of where the
+// list really rests. Newest-first hid it: it rests at the top, and the shortfall only cost you the
+// tail of the oldest message. Newest-last rests at the *bottom*, so the same shortfall meant a
+// finger could never get the newest message fully back on screen - it stayed clipped by the panel
+// edge, which is the one message that must always be readable.
+static int laidOutTotalHeight = 0;
+static int laidOutUsableHeight = 0;
+
+// Furthest the list is allowed to scroll from its resting position.
+//
+// Newest-first deliberately runs one line past the bottom: the auto-scroll sweep pauses there, and
+// the extra line is what lifts the final line clear of the panel edge. Newest-last has no such
+// slack to give - its resting position *is* the bottom - so overscrolling would park the newest
+// message off-screen.
+static int scrollLimit()
+{
+    if (laidOutUsableHeight <= 0)
+        return 0; // Nothing laid out yet; the next draw sets the anchor.
+
+    int limit = laidOutTotalHeight - laidOutUsableHeight;
+    if (!isNewestLast() && !cachedHeights.empty())
+        limit += cachedHeights.back();
+    return std::max(0, limit);
+}
+
 void scrollUp()
 {
     manualScrolling = true;
+
+    if (isNewestLast() && graphics::isCompactPanel(screen->getDisplayDevice()) && scrollY <= 0) {
+        // Compact panels: scrolling past the oldest message wraps back to the newest, mirroring the
+        // wrap scrollDown() gives the default order.
+        scrollY = (float)scrollLimit();
+        return;
+    }
+
     scrollY -= 12;
     if (scrollY < 0)
         scrollY = 0;
@@ -64,16 +160,10 @@ void scrollDown()
 {
     manualScrolling = true;
 
-    int totalHeight = 0;
-    for (int h : cachedHeights)
-        totalHeight += h;
+    const int maxScroll = scrollLimit();
 
-    int visibleHeight = screen->getHeight() - (FONT_HEIGHT_SMALL * 2);
-    int maxScroll = totalHeight - visibleHeight;
-    if (maxScroll < 0)
-        maxScroll = 0;
-
-    if (graphics::isCompactPanel(screen->getDisplayDevice()) && scrollY >= maxScroll) {
+    // Newest-last already wraps at the other end (see scrollUp), so it must not wrap here too.
+    if (!isNewestLast() && graphics::isCompactPanel(screen->getDisplayDevice()) && scrollY >= maxScroll) {
         // Compact panels: scrolling past the bottom wraps back to the top.
         scrollY = 0;
         return;
@@ -93,6 +183,7 @@ void drawStringWithEmotes(OLEDDisplay *display, int x, int y, const std::string 
 void resetScrollState()
 {
     scrollY = 0.0f;
+    pendingScrollToEnd = isNewestLast(); // Resolved once the layout below gives us a bottom to snap to
     scrollStarted = false;
     waitingToReset = false;
     scrollStartDelay = millis();
@@ -111,22 +202,13 @@ void nudgeScroll(int8_t direction)
         return;
     }
 
-    OLEDDisplay *display = (screen != nullptr) ? screen->getDisplayDevice() : nullptr;
-    const int displayHeight = display ? display->getHeight() : 64;
-    const int navHeight = FONT_HEIGHT_SMALL;
-    const int usableHeight = std::max(0, displayHeight - navHeight);
-
-    int totalHeight = 0;
-    for (int h : cachedHeights)
-        totalHeight += h;
-
-    if (totalHeight <= usableHeight) {
+    const int scrollStop = scrollLimit();
+    if (scrollStop <= 0) {
         scrollY = 0.0f;
         return;
     }
 
-    const int scrollStop = std::max(0, totalHeight - usableHeight + cachedHeights.back());
-    const int step = std::max(FONT_HEIGHT_SMALL, usableHeight / 3);
+    const int step = std::max(FONT_HEIGHT_SMALL, laidOutUsableHeight / 3);
 
     float newScroll = scrollY + static_cast<float>(direction) * static_cast<float>(step);
     if (newScroll < 0.0f)
@@ -136,6 +218,38 @@ void nudgeScroll(int8_t direction)
 
     if (newScroll != scrollY) {
         scrollY = newScroll;
+        pendingScrollToEnd = false; // The user has chosen a position; don't snap it back to the newest message
+        waitingToReset = false;
+        scrollStarted = false;
+        scrollStartDelay = millis();
+        lastTime = millis();
+    }
+}
+
+void scrollByFingerDelta(float dyPx)
+{
+    if (dyPx == 0.0f || cachedHeights.empty())
+        return;
+
+    manualScrolling = true; // Claim the view from the auto-scroll animation, as nudgeScroll does.
+
+    // The text follows the finger, so dragging down (dyPx > 0, screen y grows downward) walks back
+    // towards the top of the list. Same sense as the map pan, opposite to a scroll-down button.
+    const int scrollStop = scrollLimit();
+    if (scrollStop <= 0) {
+        scrollY = 0.0f;
+        return;
+    }
+    float newScroll = scrollY - dyPx;
+    if (newScroll < 0.0f)
+        newScroll = 0.0f;
+    if (newScroll > (float)scrollStop)
+        newScroll = (float)scrollStop;
+
+    if (newScroll != scrollY) {
+        scrollY = newScroll;
+        pendingScrollToEnd = false; // The user has chosen a position; don't snap it back to the newest message
+        // Don't let the auto-scroll's reset-to-top timer fire under a finger that is still moving.
         waitingToReset = false;
         scrollStarted = false;
         scrollStartDelay = millis();
@@ -148,6 +262,13 @@ void clearMessageCache()
 {
     std::vector<std::string>().swap(cachedLines);
     std::vector<int>().swap(cachedHeights);
+    std::vector<bool>().swap(cachedIsMine);
+    std::vector<bool>().swap(cachedIsHeader);
+    std::vector<AckStatus>().swap(cachedAckForLine);
+    std::vector<MessageBlock>().swap(cachedBlocks);
+    cachedLayoutKey = MessageLayoutKey{}; // Its sentinel count can't collide with a real rebuild.
+    laidOutTotalHeight = 0;
+    laidOutUsableHeight = 0; // Nothing to clamp against until the next draw republishes it.
 
     // Reset scroll so we rebuild cleanly next time we enter the screen
     resetScrollState();
@@ -224,48 +345,50 @@ static int centerYForRow(int y, int size)
 }
 
 // Helpers for drawing status marks (thickened strokes)
+// The marks were drawn for an 8px box with a 2px stroke; both the stroke and the
+// glyph's internal details scale with `size` so they stay legible when enlarged.
+static inline int markStroke(int size)
+{
+    return std::max(1, size / 8);
+}
+
 static void drawCheckMark(OLEDDisplay *display, int x, int y, int size)
 {
     int topY = centerYForRow(y, size);
     display->setColor(WHITE);
-    display->drawLine(x, topY + size / 2, x + size / 3, topY + size);
-    display->drawLine(x, topY + size / 2 + 1, x + size / 3, topY + size + 1);
-    display->drawLine(x + size / 3, topY + size, x + size, topY);
-    display->drawLine(x + size / 3, topY + size + 1, x + size, topY + 1);
+    for (int t = 0; t <= markStroke(size); ++t) {
+        display->drawLine(x, topY + size / 2 + t, x + size / 3, topY + size + t);
+        display->drawLine(x + size / 3, topY + size + t, x + size, topY + t);
+    }
 }
 
 static void drawXMark(OLEDDisplay *display, int x, int y, int size = 8)
 {
     int topY = centerYForRow(y, size);
     display->setColor(WHITE);
-    display->drawLine(x, topY, x + size, topY + size);
-    display->drawLine(x, topY + 1, x + size, topY + size + 1);
-    display->drawLine(x + size, topY, x, topY + size);
-    display->drawLine(x + size, topY + 1, x, topY + size + 1);
+    for (int t = 0; t <= markStroke(size); ++t) {
+        display->drawLine(x, topY + t, x + size, topY + size + t);
+        display->drawLine(x + size, topY + t, x, topY + size + t);
+    }
 }
 
 static void drawRelayMark(OLEDDisplay *display, int x, int y, int size = 8)
 {
     int r = size / 2;
+    int u = markStroke(size);
     int centerY = centerYForRow(y, size) + r;
     int centerX = x + r;
     display->setColor(WHITE);
     display->drawCircle(centerX, centerY, r);
-    display->drawLine(centerX, centerY - 2, centerX, centerY);
-    display->setPixel(centerX, centerY + 2);
-    display->drawLine(centerX - 1, centerY - 4, centerX + 1, centerY - 4);
+    display->fillRect(centerX, centerY - 2 * u, u, 2 * u);
+    display->fillRect(centerX, centerY + 2 * u, u, u);
+    display->fillRect(centerX - u, centerY - 4 * u, 3 * u, u);
 }
 
 static inline int getRenderedLineWidth(OLEDDisplay *display, const std::string &line, const Emote *emotes, int emoteCount)
 {
     return graphics::EmoteRenderer::analyzeLine(display, line, 0, emotes, emoteCount).width;
 }
-
-struct MessageBlock {
-    size_t start;
-    size_t end;
-    bool mine;
-};
 
 #if GRAPHICS_TFT_COLORING_ENABLED
 static void setDarkModeBubbleRoleColors(uint32_t themeId, bool mine)
@@ -382,12 +505,13 @@ static std::vector<MessageBlock> buildMessageBlocks(const std::vector<bool> &isH
     return blocks;
 }
 
-static void drawMessageScrollbar(OLEDDisplay *display, int visibleHeight, int totalHeight, int scrollOffset, int startY)
+static void drawMessageScrollbar(OLEDDisplay *display, int visibleHeight, int totalHeight, int scrollOffset, int startY,
+                                 int16_t x)
 {
     if (totalHeight <= visibleHeight)
         return; // no scrollbar needed
 
-    int scrollbarX = display->getWidth() - 2;
+    int scrollbarX = x + display->getWidth() - 2;
     int scrollbarHeight = visibleHeight;
     int thumbHeight = std::max(6, (scrollbarHeight * visibleHeight) / totalHeight);
     int maxScroll = std::max(1, totalHeight - visibleHeight);
@@ -434,34 +558,71 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             filtered.push_back(m);
     }
 
-    display->clear();
+    clearForFrame(display, state);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
     const bool compactPanel = graphics::isCompactPanel(display);
-    // Compact panels: no bottom nav row anymore (see UIRenderer::drawNavigationBar), full height available.
+    // Compact panels: no header and no bottom nav row anymore (see UIRenderer::drawNavigationBar), full height available.
     const int navHeight = compactPanel ? 0 : FONT_HEIGHT_SMALL + BASEUI_BELOW_HEADER_MARGIN + BASEUI_HEADER_MARGIN;
     const int scrollBottom = SCREEN_HEIGHT - navHeight;
-    // Rounded screens start the body below the header margin; getTextPositions(display)[1] + BASEUI_BELOW_HEADER_MARGIN
-    const int contentTop = compactPanel ? 0 : navHeight;
-    const int usableHeight = compactPanel ? scrollBottom - contentTop : scrollBottom;
     constexpr int LEFT_MARGIN = 2 + BASEUI_BODY_LR_MARGIN;
     constexpr int RIGHT_MARGIN = 2 + BASEUI_BODY_LR_MARGIN;
     constexpr int SCROLLBAR_WIDTH = 3;
     constexpr int BUBBLE_PAD_X = 3;
     constexpr int BUBBLE_PAD_Y = 4;
+    constexpr int BUBBLE_PAD_TOP_HEADER = 1;
     constexpr int BUBBLE_RADIUS = 4;
     constexpr int BUBBLE_MIN_W = 24;
     constexpr int BUBBLE_TEXT_INDENT = 2;
 
+    // Vertical anchor for the first line of content.
+#if BASEUI_BELOW_HEADER_MARGIN > 0
+    // These variants draw a header taller than the generic first-line offset, so anchoring
+    // there tucked the topmost bubble - and the text inside it - underneath it. Sit directly
+    // on the header's painted bottom edge (drawCommonHeader fills down to headerHeight) and
+    // deliberately skip the below-header margin other screens reserve, leaving only enough
+    // room for the bubble's own top padding so the clamp further down is a no-op.
+    const int contentTop = FONT_HEIGHT_SMALL + 1 + BASEUI_HEADER_MARGIN;
+    const int firstLineTop = contentTop + 1 + BUBBLE_PAD_TOP_HEADER;
+#else
+    // Compact panels draw no header, so content starts at the very top of the panel.
+    const int contentTop = navHeight;
+    const int firstLineTop = compactPanel ? 0 : getTextPositions(display)[1];
+#endif
+
+    // The viewport is the band actually drawn into: firstLineTop down to scrollBottom. Deliberately
+    // shared by both branches above - this used to be scrollBottom alone wherever
+    // BASEUI_BELOW_HEADER_MARGIN was 0, which overstated it by the header offset on every board
+    // that leaves the margin at its default (t-deck among them). An overstated viewport understates
+    // scrollLimit(), and since newest-last *rests* at that limit, the newest message - the one that
+    // must always be readable - sat clipped by the panel edge by exactly the header offset. Compact
+    // panels are unaffected either way: their firstLineTop is 0, so this is the same scrollBottom
+    // they always got.
+    const int usableHeight = scrollBottom - firstLineTop;
+
     // Check if bubbles are enabled
     const bool showBubbles = config.display.enable_message_bubbles && !compactPanel;
+    const bool orderNewestLast = isNewestLast();
     const int textIndent = showBubbles ? (BUBBLE_PAD_X + BUBBLE_TEXT_INDENT) : LEFT_MARGIN;
-    // Bubbles carry their own padding, so the rounded-screen inset has to come from here
-    const int contentLeft = x + (showBubbles ? BASEUI_BODY_LR_MARGIN : 0);
+
+    // Centred boxes live in a band that is symmetric about the panel centre, so both
+    // senders wrap to the same width - otherwise the scrollbar side wraps wider than the
+    // band and the box gets clipped rather than centred.
+    constexpr int BUBBLE_EDGE_INSET =
+        (LEFT_MARGIN > (SCROLLBAR_WIDTH + RIGHT_MARGIN)) ? LEFT_MARGIN : (SCROLLBAR_WIDTH + RIGHT_MARGIN);
 
     // Derived widths
-    const int leftTextWidth = SCREEN_WIDTH - LEFT_MARGIN - RIGHT_MARGIN - (showBubbles ? (BUBBLE_PAD_X * 2) : 0);
-    const int rightTextWidth = SCREEN_WIDTH - LEFT_MARGIN - RIGHT_MARGIN - SCROLLBAR_WIDTH;
+#if BASEUI_CENTER_MESSAGE_BUBBLES
+    const int leftTextWidth = SCREEN_WIDTH - (BUBBLE_EDGE_INSET * 2) - (showBubbles ? (textIndent * 2) : 0);
+    const int rightTextWidth = leftTextWidth;
+#else
+    // Wrap to the same budget the bubble is capped at below, or a long message would wrap wider
+    // than the bubble containing it and be clipped instead of the bubble growing to fit.
+    const int leftTextWidth = ((SCREEN_WIDTH - LEFT_MARGIN - RIGHT_MARGIN) * BASEUI_MESSAGE_BUBBLE_MAX_PCT / 100) -
+                              (showBubbles ? (BUBBLE_PAD_X * 2) : 0);
+    const int rightTextWidth =
+        (SCREEN_WIDTH - LEFT_MARGIN - RIGHT_MARGIN - SCROLLBAR_WIDTH) * BASEUI_MESSAGE_BUBBLE_MAX_PCT / 100;
+#endif
 
     // Title string depending on mode
     char titleStr[48];
@@ -502,255 +663,349 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         graphics::drawCommonHeader(display, x, y, titleStr);
         didReset = false;
         const char *messageString = "No messages";
-        int center_text = (SCREEN_WIDTH / 2) - (display->getStringWidth(messageString) / 2);
+        int center_text = x + (SCREEN_WIDTH / 2) - (display->getStringWidth(messageString) / 2);
         display->drawString(center_text, getTextPositions(display)[2], messageString);
         graphics::drawCommonFooter(display, x, y);
         return;
     }
 
-    // Build lines for filtered messages (newest first)
-    std::vector<std::string> allLines;
-    std::vector<bool> isMine;   // track alignment
-    std::vector<bool> isHeader; // track header lines
-    std::vector<AckStatus> ackForLine;
-    // Hard limit on total cached lines to prevent unbounded growth from a single long message.
-    // Reserve to the actual cache cap up front, because a single message can expand to many more
-    // wrapped display lines than a small per-message estimate would predict. For a display
-    // rendering only ~5-30 lines at a time, caching more than this limit wastes heap. Stop
-    // appending once we reach MAX_CACHED_LINES to prevent a single message from blowing out the
-    // heap.
-    constexpr size_t MAX_CACHED_LINES = 100U; // ~5-6KB for std::string overhead on 32-bit (if each ~50-60 bytes avg)
-    allLines.reserve(MAX_CACHED_LINES);
-    isMine.reserve(MAX_CACHED_LINES);
-    isHeader.reserve(MAX_CACHED_LINES);
-    ackForLine.reserve(MAX_CACHED_LINES);
+    // Everything the laid-out lines depend on. Rebuilding is the expensive part of this frame, so
+    // it only happens when one of these actually changes - see cachedLines and friends. The hash
+    // covers ack status because a delivery receipt changes the mark drawn on a line.
+    MessageLayoutKey layoutKey;
+    layoutKey.messageCount = (uint32_t)filtered.size();
+    layoutKey.mode = (int)currentMode;
+    layoutKey.channel = currentChannel;
+    layoutKey.peer = currentPeer;
+    layoutKey.width = (int16_t)SCREEN_WIDTH;
+    layoutKey.height = (int16_t)SCREEN_HEIGHT;
+    layoutKey.bubbles = showBubbles;
+    layoutKey.compact = compactPanel;
+    layoutKey.newestLast = orderNewestLast;
+    {
+        uint32_t h = 2166136261u; // FNV-1a
+        for (const auto &m : filtered) {
+            const uint32_t words[] = {
+                m.timestamp,           m.sender, m.dest, (uint32_t)m.channelIndex, (uint32_t)m.ackStatus, (uint32_t)m.textOffset,
+                (uint32_t)m.textLength};
+            for (uint32_t w : words) {
+                h ^= w;
+                h *= 16777619u;
+            }
+        }
+        layoutKey.contentHash = h;
+    }
 
-    for (auto it = filtered.rbegin(); it != filtered.rend(); ++it) {
-        const auto &m = *it;
+    const bool layoutValid = !cachedLines.empty() && cachedLayoutKey == layoutKey;
 
-        // Channel / destination labeling
-        char chanType[32] = "";
-        if (currentMode == ThreadMode::ALL) {
-            if (m.dest == NODENUM_BROADCAST) {
-                const char *name = channels.getName(m.channelIndex);
-                if (currentResolution == ScreenResolution::Low || currentResolution == ScreenResolution::UltraLow) {
-                    if (strcmp(name, "ShortTurbo") == 0)
-                        name = "ShortT";
-                    else if (strcmp(name, "ShortSlow") == 0)
-                        name = "ShortS";
-                    else if (strcmp(name, "ShortFast") == 0)
-                        name = "ShortF";
-                    else if (strcmp(name, "MediumSlow") == 0)
-                        name = "MedS";
-                    else if (strcmp(name, "MediumFast") == 0)
-                        name = "MedF";
-                    else if (strcmp(name, "LongSlow") == 0)
-                        name = "LongS";
-                    else if (strcmp(name, "LongFast") == 0)
-                        name = "LongF";
-                    else if (strcmp(name, "LongTurbo") == 0)
-                        name = "LongT";
-                    else if (strcmp(name, "LongMod") == 0)
-                        name = "LongM";
+    // Bound to the caches so the drawing code below is unchanged whether we rebuilt or not.
+    std::vector<bool> &isMine = cachedIsMine;
+    std::vector<bool> &isHeader = cachedIsHeader;
+    std::vector<AckStatus> &ackForLine = cachedAckForLine;
+    std::vector<MessageBlock> &blocks = cachedBlocks;
+
+    if (!layoutValid) {
+        // Build lines for filtered messages (newest first)
+        std::vector<std::string> allLines;
+        isMine.clear();
+        isHeader.clear();
+        ackForLine.clear();
+        // Hard limit on total cached lines to prevent unbounded growth from a single long message.
+        // Reserve to the actual cache cap up front, because a single message can expand to many more
+        // wrapped display lines than a small per-message estimate would predict. For a display
+        // rendering only ~5-30 lines at a time, caching more than this limit wastes heap. Stop
+        // appending once we reach MAX_CACHED_LINES to prevent a single message from blowing out the
+        // heap.
+        constexpr size_t MAX_CACHED_LINES = 100U; // ~5-6KB for std::string overhead on 32-bit (if each ~50-60 bytes avg)
+        allLines.reserve(MAX_CACHED_LINES);
+        isMine.reserve(MAX_CACHED_LINES);
+        isHeader.reserve(MAX_CACHED_LINES);
+        ackForLine.reserve(MAX_CACHED_LINES);
+
+        // First line index of each message, in the order they're emitted below (always newest-first).
+        // Newest-last order is produced by reversing these groups afterwards - see below for why.
+        std::vector<size_t> groupStart;
+        groupStart.reserve(filtered.size());
+
+        for (auto it = filtered.rbegin(); it != filtered.rend(); ++it) {
+            const auto &m = *it;
+            groupStart.push_back(allLines.size());
+
+            // Channel / destination labeling
+            char chanType[32] = "";
+            if (currentMode == ThreadMode::ALL) {
+                if (m.dest == NODENUM_BROADCAST) {
+                    const char *name = channels.getName(m.channelIndex);
+                    if (currentResolution == ScreenResolution::Low || currentResolution == ScreenResolution::UltraLow) {
+                        if (strcmp(name, "ShortTurbo") == 0)
+                            name = "ShortT";
+                        else if (strcmp(name, "ShortSlow") == 0)
+                            name = "ShortS";
+                        else if (strcmp(name, "ShortFast") == 0)
+                            name = "ShortF";
+                        else if (strcmp(name, "MediumSlow") == 0)
+                            name = "MedS";
+                        else if (strcmp(name, "MediumFast") == 0)
+                            name = "MedF";
+                        else if (strcmp(name, "LongSlow") == 0)
+                            name = "LongS";
+                        else if (strcmp(name, "LongFast") == 0)
+                            name = "LongF";
+                        else if (strcmp(name, "LongTurbo") == 0)
+                            name = "LongT";
+                        else if (strcmp(name, "LongMod") == 0)
+                            name = "LongM";
+                    }
+                    snprintf(chanType, sizeof(chanType), "#%s", name);
+                } else {
+                    snprintf(chanType, sizeof(chanType), "(DM)");
                 }
-                snprintf(chanType, sizeof(chanType), "#%s", name);
-            } else {
-                snprintf(chanType, sizeof(chanType), "(DM)");
             }
-        }
 
-        // Calculate how long ago
-        uint32_t nowSecs = getValidTime(RTCQuality::RTCQualityDevice, true);
-        uint32_t seconds = 0;
-        bool invalidTime = true;
+            // Calculate how long ago
+            uint32_t nowSecs = getValidTime(RTCQuality::RTCQualityDevice, true);
+            uint32_t seconds = 0;
+            bool invalidTime = true;
 
-        if (m.timestamp > 0 && nowSecs > 0) {
-            if (nowSecs >= m.timestamp) {
-                seconds = nowSecs - m.timestamp;
-                invalidTime = (seconds > 315360000); // >10 years
-            } else {
-                uint32_t ahead = m.timestamp - nowSecs;
-                if (ahead <= 600) { // allow small skew
-                    seconds = 0;
-                    invalidTime = false;
-                }
-            }
-        } else if (m.timestamp > 0 && nowSecs == 0) {
-            // RTC not valid: only trust boot-relative if same boot
-            uint32_t bootNow = Time::getUptimeSecs();
-            if (m.isBootRelative && m.timestamp <= bootNow) {
-                seconds = bootNow - m.timestamp;
-                invalidTime = false;
-            } else {
-                invalidTime = true; // old persisted boot-relative, ignore until healed
-            }
-        }
-
-        char timeBuf[16];
-        if (invalidTime) {
-            snprintf(timeBuf, sizeof(timeBuf), "???");
-        } else if (seconds < 60) {
-            snprintf(timeBuf, sizeof(timeBuf), "%us", seconds);
-        } else if (seconds < 3600) {
-            snprintf(timeBuf, sizeof(timeBuf), "%um", seconds / 60);
-        } else if (seconds < 86400) {
-            snprintf(timeBuf, sizeof(timeBuf), "%uh", seconds / 3600);
-        } else {
-            snprintf(timeBuf, sizeof(timeBuf), "%ud", seconds / 86400);
-        }
-
-        // Build header line for this message
-        meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(m.sender);
-        meshtastic_NodeInfoLite *node_recipient = nodeDB->getMeshNode(m.dest);
-
-        char senderName[64] = "";
-        if (nodeInfoLiteHasUser(node)) {
-            if (node->long_name[0]) {
-                strncpy(senderName, node->long_name, sizeof(senderName) - 1);
-            } else if (node->short_name[0]) {
-                strncpy(senderName, node->short_name, sizeof(senderName) - 1);
-            }
-            senderName[sizeof(senderName) - 1] = '\0';
-        }
-        if (!senderName[0]) {
-            snprintf(senderName, sizeof(senderName), "(%08x)", m.sender);
-        }
-
-        // If this is *our own* message, override senderName to who the recipient was
-        bool mine = (m.sender == nodeDB->getNodeNum());
-        if (mine && nodeInfoLiteHasUser(node_recipient)) {
-            if (node_recipient->long_name[0]) {
-                strncpy(senderName, node_recipient->long_name, sizeof(senderName) - 1);
-                senderName[sizeof(senderName) - 1] = '\0';
-            } else if (node_recipient->short_name[0]) {
-                strncpy(senderName, node_recipient->short_name, sizeof(senderName) - 1);
-                senderName[sizeof(senderName) - 1] = '\0';
-            }
-        }
-        // If recipient info is missing/empty, prefer a recipient identifier for outbound messages.
-        if (mine && (!nodeInfoLiteHasUser(node_recipient) || (!node_recipient->long_name[0] && !node_recipient->short_name[0]))) {
-            snprintf(senderName, sizeof(senderName), "(%08x)", m.dest);
-        }
-
-        // Shrink Sender name if needed; compact panels put it on its own line, so no sharing with timeBuf/chanType.
-        int availWidth = compactPanel ? (mine ? rightTextWidth : leftTextWidth)
-                                      : (mine ? rightTextWidth : leftTextWidth) - display->getStringWidth(timeBuf) -
-                                            display->getStringWidth(chanType);
-        // Compact panels hard-cut (no "...") so drop its width reservation too.
-        availWidth -= graphics::UIRenderer::measureStringWithEmotes(display, compactPanel ? "*@" : "  *@...");
-        if (availWidth < 0)
-            availWidth = 0;
-        char truncatedSender[64];
-        graphics::UIRenderer::truncateStringWithEmotes(display, senderName, truncatedSender, sizeof(truncatedSender), availWidth,
-                                                       compactPanel ? "" : "...");
-
-        // Determine signed-message prefix before building the header line, since it needs to go
-        // at the front of headerStr rather than appended after (strncat only appends at the end).
-        const char *signPrefix = "";
-#if !(MESHTASTIC_EXCLUDE_PKI_KEYGEN || MESHTASTIC_EXCLUDE_PKI)
-        bool is_xeddsa_signed = m.xeddsaSigned;
-        if (is_xeddsa_signed) {
-            signPrefix = "*";
-        }
-#endif
-
-        if (compactPanel) {
-            // Time and sender don't fit on one line at this width - time first, name below.
-            allLines.push_back(timeBuf);
-            isMine.push_back(mine);
-            isHeader.push_back(true);
-            ackForLine.push_back(AckStatus::NONE); // ack mark shown on the name line instead
-
-            char nameLine[80] = "";
-            if (mine) {
-                if (currentMode == ThreadMode::ALL) {
-                    if (strcmp(chanType, "(DM)") == 0) {
-                        snprintf(nameLine, sizeof(nameLine), "to %s", truncatedSender);
-                    } else {
-                        snprintf(nameLine, sizeof(nameLine), "to %s", chanType);
+            if (m.timestamp > 0 && nowSecs > 0) {
+                if (nowSecs >= m.timestamp) {
+                    seconds = nowSecs - m.timestamp;
+                    invalidTime = (seconds > 315360000); // >10 years
+                } else {
+                    uint32_t ahead = m.timestamp - nowSecs;
+                    if (ahead <= 600) { // allow small skew
+                        seconds = 0;
+                        invalidTime = false;
                     }
                 }
-            } else {
-                snprintf(nameLine, sizeof(nameLine), chanType[0] ? "%s%s@%s" : "%s%s", signPrefix, truncatedSender, chanType);
+            } else if (m.timestamp > 0 && nowSecs == 0) {
+                // RTC not valid: only trust boot-relative if same boot
+                uint32_t bootNow = Time::getUptimeSecs();
+                if (m.isBootRelative && m.timestamp <= bootNow) {
+                    seconds = bootNow - m.timestamp;
+                    invalidTime = false;
+                } else {
+                    invalidTime = true; // old persisted boot-relative, ignore until healed
+                }
             }
 
-            if (nameLine[0]) {
-                allLines.push_back(nameLine);
+            char timeBuf[16];
+            if (invalidTime) {
+                snprintf(timeBuf, sizeof(timeBuf), "???");
+            } else if (seconds < 60) {
+                snprintf(timeBuf, sizeof(timeBuf), "%us", seconds);
+            } else if (seconds < 3600) {
+                snprintf(timeBuf, sizeof(timeBuf), "%um", seconds / 60);
+            } else if (seconds < 86400) {
+                snprintf(timeBuf, sizeof(timeBuf), "%uh", seconds / 3600);
+            } else {
+                snprintf(timeBuf, sizeof(timeBuf), "%ud", seconds / 86400);
+            }
+
+            // Build header line for this message
+            meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(m.sender);
+            meshtastic_NodeInfoLite *node_recipient = nodeDB->getMeshNode(m.dest);
+
+            char senderName[64] = "";
+            if (nodeInfoLiteHasUser(node)) {
+                if (node->long_name[0]) {
+                    strncpy(senderName, node->long_name, sizeof(senderName) - 1);
+                } else if (node->short_name[0]) {
+                    strncpy(senderName, node->short_name, sizeof(senderName) - 1);
+                }
+                senderName[sizeof(senderName) - 1] = '\0';
+            }
+            if (!senderName[0]) {
+                snprintf(senderName, sizeof(senderName), "(%08x)", m.sender);
+            }
+
+            // If this is *our own* message, override senderName to who the recipient was
+            bool mine = (m.sender == nodeDB->getNodeNum());
+            if (mine && nodeInfoLiteHasUser(node_recipient)) {
+                if (node_recipient->long_name[0]) {
+                    strncpy(senderName, node_recipient->long_name, sizeof(senderName) - 1);
+                    senderName[sizeof(senderName) - 1] = '\0';
+                } else if (node_recipient->short_name[0]) {
+                    strncpy(senderName, node_recipient->short_name, sizeof(senderName) - 1);
+                    senderName[sizeof(senderName) - 1] = '\0';
+                }
+            }
+            // If recipient info is missing/empty, prefer a recipient identifier for outbound messages.
+            if (mine &&
+                (!nodeInfoLiteHasUser(node_recipient) || (!node_recipient->long_name[0] && !node_recipient->short_name[0]))) {
+                snprintf(senderName, sizeof(senderName), "(%08x)", m.dest);
+            }
+
+            // Shrink Sender name if needed; compact panels put it on its own line, so no sharing with timeBuf/chanType.
+            int availWidth = compactPanel ? (mine ? rightTextWidth : leftTextWidth)
+                                          : (mine ? rightTextWidth : leftTextWidth) - display->getStringWidth(timeBuf) -
+                                                display->getStringWidth(chanType);
+            // Compact panels hard-cut (no "...") so drop its width reservation too.
+            availWidth -= graphics::UIRenderer::measureStringWithEmotes(display, compactPanel ? "*@" : "  *@...");
+            if (availWidth < 0)
+                availWidth = 0;
+            char truncatedSender[64];
+            graphics::UIRenderer::truncateStringWithEmotes(display, senderName, truncatedSender, sizeof(truncatedSender),
+                                                           availWidth, compactPanel ? "" : "...");
+
+            // Determine signed-message prefix before building the header line, since it needs to go
+            // at the front of headerStr rather than appended after (strncat only appends at the end).
+            const char *signPrefix = "";
+#if !(MESHTASTIC_EXCLUDE_PKI_KEYGEN || MESHTASTIC_EXCLUDE_PKI)
+            bool is_xeddsa_signed = m.xeddsaSigned;
+            if (is_xeddsa_signed) {
+                signPrefix = "*";
+            }
+#endif
+
+            if (compactPanel) {
+                // Time and sender don't fit on one line at this width - time first, name below.
+                allLines.push_back(timeBuf);
+                isMine.push_back(mine);
+                isHeader.push_back(true);
+                ackForLine.push_back(AckStatus::NONE); // ack mark shown on the name line instead
+
+                char nameLine[80] = "";
+                if (mine) {
+                    if (currentMode == ThreadMode::ALL) {
+                        if (strcmp(chanType, "(DM)") == 0) {
+                            snprintf(nameLine, sizeof(nameLine), "to %s", truncatedSender);
+                        } else {
+                            snprintf(nameLine, sizeof(nameLine), "to %s", chanType);
+                        }
+                    }
+                } else {
+                    snprintf(nameLine, sizeof(nameLine), chanType[0] ? "%s%s@%s" : "%s%s", signPrefix, truncatedSender, chanType);
+                }
+
+                if (nameLine[0]) {
+                    allLines.push_back(nameLine);
+                    isMine.push_back(mine);
+                    isHeader.push_back(true);
+                    ackForLine.push_back(m.ackStatus);
+                } else {
+                    // Nothing to show on a second line (e.g. "mine" in ALL mode) - move the ack mark back.
+                    ackForLine.back() = m.ackStatus;
+                }
+            } else {
+                // Final header line
+                char headerStr[128];
+                if (mine) {
+                    if (currentMode == ThreadMode::ALL) {
+                        if (strcmp(chanType, "(DM)") == 0) {
+                            snprintf(headerStr, sizeof(headerStr), "%s to %s", timeBuf, truncatedSender);
+                        } else {
+                            snprintf(headerStr, sizeof(headerStr), "%s to %s", timeBuf, chanType);
+                        }
+                    } else {
+                        snprintf(headerStr, sizeof(headerStr), "%s", timeBuf);
+                    }
+                } else {
+                    snprintf(headerStr, sizeof(headerStr), chanType[0] ? "%s %s@%s %s" : "%s %s@%s", timeBuf, signPrefix,
+                             truncatedSender, chanType);
+                }
+
+                allLines.push_back(headerStr);
                 isMine.push_back(mine);
                 isHeader.push_back(true);
                 ackForLine.push_back(m.ackStatus);
-            } else {
-                // Nothing to show on a second line (e.g. "mine" in ALL mode) - move the ack mark back.
-                ackForLine.back() = m.ackStatus;
             }
-        } else {
-            // Final header line
-            char headerStr[128];
-            if (mine) {
-                if (currentMode == ThreadMode::ALL) {
-                    if (strcmp(chanType, "(DM)") == 0) {
-                        snprintf(headerStr, sizeof(headerStr), "%s to %s", timeBuf, truncatedSender);
-                    } else {
-                        snprintf(headerStr, sizeof(headerStr), "%s to %s", timeBuf, chanType);
-                    }
-                } else {
-                    snprintf(headerStr, sizeof(headerStr), "%s", timeBuf);
+
+            const char *msgText = MessageStore::getText(m);
+
+            int wrapWidth = mine ? rightTextWidth : leftTextWidth;
+            std::vector<std::string> wrapped = generateLines(display, "", msgText, wrapWidth);
+            // Per-message wrap-line limit: even if wrapping produces many lines, cap them to prevent
+            // a single long message from consuming most or all of the cache.
+            constexpr size_t MAX_WRAPPED_LINES_PER_MSG = 20U;
+            size_t wrappedCount = 0;
+            for (auto &ln : wrapped) {
+                if (allLines.size() >= MAX_CACHED_LINES || wrappedCount >= MAX_WRAPPED_LINES_PER_MSG)
+                    break; // Cache limit or per-message limit reached; stop adding lines from this message
+                allLines.emplace_back(std::move(ln));
+                isMine.push_back(mine);
+                isHeader.push_back(false);
+                ackForLine.push_back(AckStatus::NONE);
+                ++wrappedCount;
+            }
+        }
+
+        // Messages are always *collected* newest-first, because that is what makes the
+        // MAX_CACHED_LINES / MAX_WRAPPED_LINES_PER_MSG caps above spend the budget on the newest
+        // messages and drop the oldest. Walking `filtered` forwards instead would invert that and
+        // truncate away exactly the messages the user came to read, so newest-last order is built
+        // by reversing whole messages here, once the caps have already been applied.
+        if (orderNewestLast && groupStart.size() > 1) {
+            std::vector<std::string> orderedLines;
+            std::vector<bool> orderedMine, orderedHeader;
+            std::vector<AckStatus> orderedAck;
+            orderedLines.reserve(allLines.size());
+            orderedMine.reserve(allLines.size());
+            orderedHeader.reserve(allLines.size());
+            orderedAck.reserve(allLines.size());
+
+            for (size_t g = groupStart.size(); g-- > 0;) {
+                const size_t from = groupStart[g];
+                const size_t to = (g + 1 < groupStart.size()) ? groupStart[g + 1] : allLines.size();
+                for (size_t i = from; i < to; ++i) {
+                    orderedLines.emplace_back(std::move(allLines[i]));
+                    orderedMine.push_back(isMine[i]);
+                    orderedHeader.push_back(isHeader[i]);
+                    orderedAck.push_back(ackForLine[i]);
                 }
-            } else {
-                snprintf(headerStr, sizeof(headerStr), chanType[0] ? "%s %s@%s %s" : "%s %s@%s", timeBuf, signPrefix,
-                         truncatedSender, chanType);
             }
 
-            allLines.push_back(headerStr);
-            isMine.push_back(mine);
-            isHeader.push_back(true);
-            ackForLine.push_back(m.ackStatus);
+            allLines.swap(orderedLines);
+            isMine.swap(orderedMine);
+            isHeader.swap(orderedHeader);
+            ackForLine.swap(orderedAck);
         }
 
-        const char *msgText = MessageStore::getText(m);
-
-        int wrapWidth = mine ? rightTextWidth : leftTextWidth;
-        std::vector<std::string> wrapped = generateLines(display, "", msgText, wrapWidth);
-        // Per-message wrap-line limit: even if wrapping produces many lines, cap them to prevent
-        // a single long message from consuming most or all of the cache.
-        constexpr size_t MAX_WRAPPED_LINES_PER_MSG = 20U;
-        size_t wrappedCount = 0;
-        for (auto &ln : wrapped) {
-            if (allLines.size() >= MAX_CACHED_LINES || wrappedCount >= MAX_WRAPPED_LINES_PER_MSG)
-                break; // Cache limit or per-message limit reached; stop adding lines from this message
-            allLines.emplace_back(std::move(ln));
-            isMine.push_back(mine);
-            isHeader.push_back(false);
-            ackForLine.push_back(AckStatus::NONE);
-            ++wrappedCount;
-        }
-    }
-
-    // Cache lines and heights
-    cachedLines.swap(allLines);
-    cachedHeights = calculateLineHeights(cachedLines, emotes, isHeader);
-    if (compactPanel) {
-        for (size_t i = 0; i < cachedHeights.size(); ++i) {
-            if (isHeader[i]) {
-                cachedHeights[i] = 10;
+        // Cache lines and heights
+        cachedLines.swap(allLines);
+        cachedHeights = calculateLineHeights(cachedLines, emotes, isHeader);
+        if (compactPanel) {
+            for (size_t i = 0; i < cachedHeights.size(); ++i) {
+                if (isHeader[i]) {
+                    cachedHeights[i] = 10;
+                }
             }
         }
-    }
 
-    std::vector<MessageBlock> blocks = buildMessageBlocks(isHeader, isMine);
+        blocks = buildMessageBlocks(isHeader, isMine);
+        cachedLayoutKey = layoutKey;
+    }
 
     // Scrolling logic (unchanged)
     int totalHeight = 0;
     for (size_t i = 0; i < cachedHeights.size(); ++i)
         totalHeight += cachedHeights[i];
     int usableScrollHeight = usableHeight;
-    int scrollStop = std::max(0, totalHeight - usableScrollHeight + cachedHeights.back());
+
+    // Publish the geometry the scroll handlers clamp against, so a finger can land the list exactly
+    // where the renderer rests it instead of on its own estimate of the viewport.
+    laidOutTotalHeight = totalHeight;
+    laidOutUsableHeight = usableScrollHeight;
+
+    int scrollStop = scrollLimit();
+
+    // Where the list sits at rest, and which way the auto-scroll sweep then walks away from it.
+    // Newest-first rests at the top and sweeps down through history; newest-last rests at the
+    // bottom and sweeps up. Both end the sweep at the opposite end and snap back after the pause.
+    const float restScroll = orderNewestLast ? (float)scrollStop : 0.0f;
+
+    if (pendingScrollToEnd) {
+        // resetScrollState() left scrollY at 0 because it had no laid-out lines to measure. Now we do.
+        pendingScrollToEnd = false;
+        scrollY = restScroll;
+    }
 
 #ifndef USE_EINK
     uint32_t now = millis();
     float delta = (now - lastTime) / 400.0f;
     lastTime = now;
     const float scrollSpeed = 2.0f;
+    const float sweepEnd = orderNewestLast ? 0.0f : (float)scrollStop;
 
     if (scrollStartDelay == 0)
         scrollStartDelay = now;
@@ -760,34 +1015,49 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     if (!manualScrolling && totalHeight > usableScrollHeight) {
         if (scrollStarted) {
             if (!waitingToReset) {
-                scrollY += delta * scrollSpeed;
-                if (scrollY >= scrollStop) {
-                    scrollY = scrollStop;
+                scrollY += orderNewestLast ? -(delta * scrollSpeed) : (delta * scrollSpeed);
+                if (orderNewestLast ? (scrollY <= sweepEnd) : (scrollY >= sweepEnd)) {
+                    scrollY = sweepEnd;
                     waitingToReset = true;
                     pauseStart = lastTime;
                 }
             } else if (lastTime - pauseStart > 3000) {
-                scrollY = 0;
+                scrollY = restScroll;
                 waitingToReset = false;
                 scrollStarted = false;
                 scrollStartDelay = lastTime;
             }
         }
     } else if (!manualScrolling) {
-        scrollY = 0;
+        scrollY = restScroll;
     }
 #else
-    // E-Ink: disable autoscroll
-    scrollY = 0.0f;
+    // E-Ink: disable autoscroll, parking the list on the newest message at whichever end it lives.
+    scrollY = restScroll;
     waitingToReset = false;
     scrollStarted = false;
     lastTime = millis();
 #endif
 
     int finalScroll = (int)scrollY;
-    int yOffset = -finalScroll + contentTop;
-    const int contentBottom = scrollBottom; // already excludes nav line
-    const int rightEdge = SCREEN_WIDTH - SCROLLBAR_WIDTH - RIGHT_MARGIN;
+    int yOffset = -finalScroll + firstLineTop;
+    // Culling boundary - deliberately the panel edge, not scrollBottom.
+    //
+    // scrollBottom sits navHeight above the bottom, which on variants with generous header margins
+    // is ~50px of otherwise empty panel. Culling there meant a line or bubble was skipped entirely
+    // until its top crossed that boundary and then drawn in full the instant it did, so content
+    // appeared to pop into existence part-way up the screen rather than sliding in from the edge.
+    // Nothing paints that band to hide the effect either: drawCommonFooter() only draws when the
+    // API is connected, and the nav bar is a brief, icon-width overlay.
+    //
+    // Only culling changes. usableHeight above still measures from scrollBottom, so how far the
+    // list scrolls, and where it stops, are exactly as before.
+    const int contentBottom = SCREEN_HEIGHT;
+    const int rightEdge = x + SCREEN_WIDTH - SCROLLBAR_WIDTH - RIGHT_MARGIN;
+    // The left end of the content span. rightEdge already insets for the scrollbar and RIGHT_MARGIN,
+    // so anchoring left-hand blocks at plain x left them flush against the panel while right-hand
+    // ones were inset - and made blockSpan LEFT_MARGIN wider than the area actually available.
+    const int contentLeft = x + LEFT_MARGIN;
     const int bubbleGapY = std::max(1, MESSAGE_BLOCK_GAP / 2);
 #if GRAPHICS_TFT_COLORING_ENABLED
     const uint32_t themeId = getActiveTheme().id;
@@ -805,6 +1075,47 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         }
     }
 
+    // Horizontal geometry per message block, resolved once so the bubble outline and the
+    // text inside it can never drift apart. innerPad is the bubble's own padding, or 0 when
+    // bubbles are off and the "box" is just the text extent.
+    const int innerPad = showBubbles ? textIndent : 0;
+    const int blockSpan = rightEdge - contentLeft;
+    std::vector<int> blockLeft(blocks.size(), contentLeft);
+    std::vector<int> blockWidth(blocks.size(), blockSpan);
+    std::vector<int> lineBlock(cachedLines.size(), -1);
+    for (size_t bi = 0; bi < blocks.size(); ++bi) {
+        const auto &b = blocks[bi];
+        if (b.start >= cachedLines.size() || b.end >= cachedLines.size() || b.start > b.end)
+            continue;
+
+        int maxLineW = 0;
+        for (size_t i = b.start; i <= b.end; ++i) {
+            lineBlock[i] = static_cast<int>(bi);
+            int w;
+            if (isHeader[i]) {
+                w = graphics::UIRenderer::measureStringWithEmotes(display, cachedLines[i].c_str());
+                if (b.mine)
+                    w += 12 * BASEUI_ICON_SCALE; // room for ACK/NACK/relay mark
+            } else {
+                w = getRenderedLineWidth(display, cachedLines[i], emotes, numEmotes);
+            }
+            maxLineW = std::max(maxLineW, w);
+        }
+
+        int width = showBubbles ? std::max(BUBBLE_MIN_W, maxLineW + (innerPad * 2)) : maxLineW;
+#if BASEUI_CENTER_MESSAGE_BUBBLES
+        // Centre on the panel's own midpoint, not the midpoint of the content span - the
+        // scrollbar makes that span asymmetric, which is what left boxes looking off-centre.
+        width = std::min(width, SCREEN_WIDTH - (BUBBLE_EDGE_INSET * 2));
+        blockLeft[bi] = x + (SCREEN_WIDTH - width) / 2;
+#else
+        // Anchored to its sender's edge, leaving the rest of the span as a gutter on the far side.
+        width = std::min(width, blockSpan * BASEUI_MESSAGE_BUBBLE_MAX_PCT / 100);
+        blockLeft[bi] = b.mine ? (rightEdge - width) : contentLeft;
+#endif
+        blockWidth[bi] = width;
+    }
+
     // Draw bubbles (only if enabled)
     if (showBubbles) {
         for (size_t bi = 0; bi < blocks.size(); ++bi) {
@@ -817,7 +1128,6 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             int topY;
             if (isHeader[b.start]) {
                 // Header start
-                constexpr int BUBBLE_PAD_TOP_HEADER = 1; // try 1 or 2
                 topY = visualTop - BUBBLE_PAD_TOP_HEADER;
             } else {
                 // Body start
@@ -857,33 +1167,9 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
             if (bottomY < contentTop || topY > contentBottom - 1)
                 continue;
 
-            int maxLineW = 0;
-
-            for (size_t i = b.start; i <= b.end; ++i) {
-                int w = 0;
-                if (isHeader[i]) {
-                    w = graphics::UIRenderer::measureStringWithEmotes(display, cachedLines[i].c_str());
-                    if (b.mine)
-                        w += 12; // room for ACK/NACK/relay mark
-                } else {
-                    w = getRenderedLineWidth(display, cachedLines[i], emotes, numEmotes);
-                }
-                if (w > maxLineW)
-                    maxLineW = w;
-            }
-
-            int bubbleW = std::max(BUBBLE_MIN_W, maxLineW + (textIndent * 2));
-            int bubbleH = (bottomY - topY) + 1;
-            int bubbleX = 0;
-            if (b.mine) {
-                bubbleX = rightEdge - bubbleW;
-            } else {
-                bubbleX = contentLeft;
-            }
-            if (bubbleX < contentLeft)
-                bubbleX = contentLeft;
-            if (bubbleX + bubbleW > rightEdge)
-                bubbleW = std::max(1, rightEdge - bubbleX);
+            const int bubbleX = blockLeft[bi];
+            const int bubbleW = blockWidth[bi];
+            const int bubbleH = (bottomY - topY) + 1;
 
             // Draw rounded rectangle bubble
             if (bubbleW > BUBBLE_RADIUS * 2 && bubbleH > BUBBLE_RADIUS * 2) {
@@ -947,18 +1233,23 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     int lineY = yOffset;
     for (size_t i = 0; i < cachedLines.size(); ++i) {
 
-        if (lineY > -cachedHeights[i] && lineY < scrollBottom) {
+        if (lineY > -cachedHeights[i] && lineY < contentBottom) {
+            // Text follows its block's box, so centred boxes carry their contents with them.
+            const int bi = lineBlock[i];
+            const int boxLeft = (bi >= 0) ? blockLeft[bi] : contentLeft;
+            const int boxRight = (bi >= 0) ? (boxLeft + blockWidth[bi]) : rightEdge;
+
             if (isHeader[i]) {
 
                 int w = graphics::UIRenderer::measureStringWithEmotes(display, cachedLines[i].c_str());
                 int headerX;
                 if (isMine[i]) {
-                    // push header left to avoid overlap with scrollbar
-                    headerX = (SCREEN_WIDTH - SCROLLBAR_WIDTH - RIGHT_MARGIN) - w - (showBubbles ? textIndent : 0);
-                    if (headerX < LEFT_MARGIN)
-                        headerX = LEFT_MARGIN;
+                    // right-aligned inside the box, leaving room for the ACK mark to its left
+                    headerX = boxRight - innerPad - w;
+                    if (headerX < contentLeft)
+                        headerX = contentLeft;
                 } else {
-                    headerX = contentLeft + textIndent;
+                    headerX = boxLeft + innerPad;
                 }
                 graphics::UIRenderer::drawStringWithEmotes(display, headerX, lineY, cachedLines[i].c_str(), FONT_HEIGHT_SMALL, 1,
                                                            true);
@@ -981,17 +1272,18 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 
                 // Draw ACK/NACK mark for our own messages
                 if (isMine[i]) {
-                    int markX = headerX - 10;
+                    constexpr int markSize = 8 * BASEUI_ICON_SCALE;
+                    int markX = headerX - (markSize + 2);
                     int markY = lineY;
                     if (ackForLine[i] == AckStatus::ACKED) {
                         // Destination ACK
-                        drawCheckMark(display, markX, markY, 8);
+                        drawCheckMark(display, markX, markY, markSize);
                     } else if (ackForLine[i] == AckStatus::NACKED || ackForLine[i] == AckStatus::TIMEOUT) {
                         // Failure or timeout
-                        drawXMark(display, markX, markY, 8);
+                        drawXMark(display, markX, markY, markSize);
                     } else if (ackForLine[i] == AckStatus::RELAYED) {
                         // Relay ACK
-                        drawRelayMark(display, markX, markY, 8);
+                        drawRelayMark(display, markX, markY, markSize);
                     }
                     // AckStatus::NONE → show nothing
                 }
@@ -1001,13 +1293,13 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 if (isMine[i]) {
                     // Calculate actual rendered width including emotes
                     int renderedWidth = getRenderedLineWidth(display, cachedLines[i], emotes, numEmotes);
-                    int rightX = (SCREEN_WIDTH - SCROLLBAR_WIDTH - RIGHT_MARGIN) - renderedWidth - (showBubbles ? textIndent : 0);
-                    if (rightX < LEFT_MARGIN)
-                        rightX = LEFT_MARGIN;
+                    int rightX = boxRight - innerPad - renderedWidth;
+                    if (rightX < contentLeft)
+                        rightX = contentLeft;
 
                     drawStringWithEmotes(display, rightX, lineY, cachedLines[i], emotes, numEmotes);
                 } else {
-                    drawStringWithEmotes(display, contentLeft + textIndent, lineY, cachedLines[i], emotes, numEmotes);
+                    drawStringWithEmotes(display, boxLeft + innerPad, lineY, cachedLines[i], emotes, numEmotes);
                 }
             }
         }
@@ -1016,7 +1308,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     }
 
     // Draw scrollbar
-    drawMessageScrollbar(display, usableHeight, totalHeight, finalScroll, contentTop);
+    drawMessageScrollbar(display, usableHeight, totalHeight, finalScroll, firstLineTop, x);
     if (!compactPanel) {
         graphics::drawCommonHeader(display, x, y, titleStr);
     }

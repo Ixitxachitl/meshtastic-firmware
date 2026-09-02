@@ -28,7 +28,9 @@ class TouchScreenBase : public Observable<const InputEvent *>, public concurrenc
         TOUCH_ACTION_LEFT,
         TOUCH_ACTION_RIGHT,
         TOUCH_ACTION_TAP,
-        TOUCH_ACTION_LONG_PRESS
+        TOUCH_ACTION_LONG_PRESS,
+        TOUCH_ACTION_DRAG,    // finger held down and moving - repeats, carries the current point
+        TOUCH_ACTION_DRAG_END // finger lifted after a drag
     };
 
     virtual int32_t runOnce() override;
@@ -37,10 +39,12 @@ class TouchScreenBase : public Observable<const InputEvent *>, public concurrenc
     virtual void onEvent(const TouchEvent &event) = 0;
     virtual bool fastTapModeEnabled() const;
     virtual bool longPressEnabled() const;
+    // Whether to report TOUCH_ACTION_DRAG while the finger moves. Off in the base class so touch
+    // panels that can't usefully redraw mid-gesture keep the release-only swipe behaviour.
+    virtual bool dragEventsEnabled() const;
 
     volatile TouchScreenBaseStateType _state = TOUCH_EVENT_CLEARED;
     volatile TouchScreenBaseEventType _action = TOUCH_ACTION_NONE;
-    void hapticFeedback();
 
   protected:
     uint16_t _display_width;
@@ -54,6 +58,10 @@ class TouchScreenBase : public Observable<const InputEvent *>, public concurrenc
     uint32_t _lastTouchSeenMs; // helps suppress brief touch-controller dropouts
     bool _tapped;              // for DOUBLE_TAP
     uint32_t _lastRun = 0;     // helps suppress too fast consecutive runOnce() executions
+
+    bool _dragging = false; // a drag has been reported for the gesture currently in progress
+    int16_t _drag_x = 0;    // last point reported as TOUCH_ACTION_DRAG, for the step threshold
+    int16_t _drag_y = 0;
 
     const char *_originName;
 };

@@ -256,11 +256,11 @@ If you need to create several similar applets, it might make sense to create a r
 
 #### Map Applet Base
 
-`MapApplet` (`src/graphics/niche/InkHUD/Applets/Bases/Map/MapApplet.h`) is a base class for applets that plot node positions on a map. It handles tile rendering, zoom control, scale bars, and GPS tracking. `PositionsApplet` and `FavoritesMapApplet` both inherit from it.
+`MapApplet` (`src/graphics/niche/InkHUD/Applets/Bases/Map/MapApplet.h`) is a base class for applets that plot node positions on a map. It handles zoom control, scale bars, and GPS tracking. `PositionsApplet` and `FavoritesMapApplet` both inherit from it. Tile rendering (LZ4 decode, Mercator projection, tile-blit math) lives in the framework-agnostic `NicheGraphics::MapTiles` module (`src/graphics/niche/Map/MapTileRenderer.h`), shared with BaseUI's non-InkHUD map screen so the tile format only needs to be implemented once.
 
 ##### Map Tiles
 
-Map tiles are stored in `MapTile.h` (`src/graphics/niche/InkHUD/Applets/Bases/Map/MapTile.h`). The file committed to the repository contains no tile data by default - the map applets work without tiles, falling back to the original marker-only display.
+Map tiles are stored in `MapTile.h` (`src/graphics/niche/Map/MapTile.h`). The file committed to the repository contains no tile data by default - the map applets work without tiles, falling back to the original marker-only display.
 
 Tiles are 256×256 pixels, 1-bit (column-major bit packing), compressed per tile with LZ4 to keep flash usage low.
 
@@ -790,7 +790,7 @@ This mapping of emoji to control characters is fairly arbitrary. Selection was i
 | `0x05`     | 👋                                             |
 | `0x06`     | ☀                                              |
 | ~~`0x07`~~ | (bell char, unused)                            |
-| `0x08`     | 🌧                                             |
+| `0x08`     | 🌧                                              |
 | `0x09`     | ☁                                              |
 | ~~`0x0A`~~ | (line feed, unused)                            |
 | `0x0B`     | ♥                                              |

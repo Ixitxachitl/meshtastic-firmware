@@ -32,33 +32,17 @@ namespace NodeListRenderer
 // drawNodeListScreen(). Used by entry renderers that need to special-case the top row.
 static int16_t firstRowY = 0;
 
-// Function moved from Screen.cpp to NodeListRenderer.cpp since it's primarily used here
+// Function moved from Screen.cpp to NodeListRenderer.cpp since it's primarily used here.
+// The 16x16/3x names describe the drawn size of the 8x8 glyphs these started out
+// with; BASEUI_ICON_SCALE multiplies that again on displays with oversized artwork.
 void drawScaledXBitmap16x16(int x, int y, int width, int height, const uint8_t *bitmapXBM, OLEDDisplay *display)
 {
-    for (int row = 0; row < height; row++) {
-        uint8_t rowMask = (1 << row);
-        for (int col = 0; col < width; col++) {
-            uint8_t colData = pgm_read_byte(&bitmapXBM[col]);
-            if (colData & rowMask) {
-                // Note: rows become X, columns become Y after transpose
-                display->fillRect(x + row * 2, y + col * 2, 2, 2);
-            }
-        }
-    }
+    drawScaledXbm(display, x, y, width, height, bitmapXBM, 2 * BASEUI_ICON_SCALE);
 }
 
 void drawScaledXBitmap3x(int x, int y, int width, int height, const uint8_t *bitmapXBM, OLEDDisplay *display)
 {
-    for (int row = 0; row < height; row++) {
-        uint8_t rowMask = (1 << row);
-        for (int col = 0; col < width; col++) {
-            uint8_t colData = pgm_read_byte(&bitmapXBM[col]);
-            if (colData & rowMask) {
-                // Note: rows become X, columns become Y after transpose
-                display->fillRect(x + row * 3, y + col * 3, 3, 3);
-            }
-        }
-    }
+    drawScaledXbm(display, x, y, width, height, bitmapXBM, 3 * BASEUI_ICON_SCALE);
 }
 
 // Static variables for dynamic cycling
@@ -203,7 +187,8 @@ void drawColumnSeparator(OLEDDisplay *display, int16_t x, int16_t yStart, int16_
     }
 }
 
-void drawScrollbar(OLEDDisplay *display, int visibleNodeRows, int totalEntries, int scrollIndex, int columns, int scrollStartY)
+void drawScrollbar(OLEDDisplay *display, int visibleNodeRows, int totalEntries, int scrollIndex, int columns, int scrollStartY,
+                   int16_t x)
 {
     if (totalEntries <= visibleNodeRows * columns)
         return;
@@ -213,7 +198,7 @@ void drawScrollbar(OLEDDisplay *display, int visibleNodeRows, int totalEntries, 
     int thumbY = scrollStartY + (scrollIndex * (scrollbarHeight - thumbHeight)) /
                                     max(1, max(0, (totalEntries - 1) / (visibleNodeRows * columns)));
 
-    int scrollbarX = display->getWidth() - 2;
+    int scrollbarX = x + display->getWidth() - 2;
     for (int i = 0; i < thumbHeight; i++) {
         display->setPixel(scrollbarX, thumbY + i);
     }
@@ -256,7 +241,7 @@ void drawEntryLastHeard(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int
     int nameMaxWidth = getNodeNameMaxWidth(columnWidth, columnWidth - 25);
     int timeOffset = (currentResolution == ScreenResolution::High) ? (isLeftCol ? 7 : 10) : (isLeftCol ? 3 : 7);
 
-    const int nameX = x + ((currentResolution == ScreenResolution::High) ? 6 : 3);
+    const int nameX = x + ((currentResolution == ScreenResolution::High) ? 6 * BASEUI_ICON_SCALE : 3);
     char nodeName[96];
     UIRenderer::truncateStringWithEmotes(display, getSafeNodeName(display, node, columnWidth).c_str(), nodeName, sizeof(nodeName),
                                          nameMaxWidth, graphics::isCompactPanel(display) ? "" : "...");
@@ -292,7 +277,7 @@ void drawEntryLastHeard(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int
     }
     if (nodeInfoLiteIsIgnored(node) || isMuted) {
         if (currentResolution == ScreenResolution::High) {
-            display->drawLine(x + 8, y + 8, (isLeftCol ? 0 : x - 4) + nameMaxWidth - 17, y + 8);
+            display->drawLine(x + 8 * BASEUI_ICON_SCALE, y + 8, (isLeftCol ? 0 : x - 4) + nameMaxWidth - 17, y + 8);
         } else {
             display->drawLine(x + 4, y + 6, (isLeftCol ? 0 : x - 3) + nameMaxWidth - 4, y + 6);
         }
@@ -318,7 +303,7 @@ void drawEntryHopSignal(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int
     int barsXOffset = columnWidth - barsOffset;
     int barsRightEdge = x + barsXOffset + ((kBarCount - 1) * (kBarWidth + kBarGap)) + kBarWidth;
 
-    const int nameX = x + ((currentResolution == ScreenResolution::High) ? 6 : 3);
+    const int nameX = x + ((currentResolution == ScreenResolution::High) ? 6 * BASEUI_ICON_SCALE : 3);
     char nodeName[96];
     UIRenderer::truncateStringWithEmotes(display, getSafeNodeName(display, node, columnWidth).c_str(), nodeName, sizeof(nodeName),
                                          nameMaxWidth, graphics::isCompactPanel(display) ? "" : "...");
@@ -340,7 +325,7 @@ void drawEntryHopSignal(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int
     }
     if (nodeInfoLiteIsIgnored(node) || isMuted) {
         if (currentResolution == ScreenResolution::High) {
-            display->drawLine(x + 8, y + 8, (isLeftCol ? 0 : x - 4) + nameMaxWidth - 17, y + 8);
+            display->drawLine(x + 8 * BASEUI_ICON_SCALE, y + 8, (isLeftCol ? 0 : x - 4) + nameMaxWidth - 17, y + 8);
         } else {
             display->drawLine(x + 4, y + 6, (isLeftCol ? 0 : x - 3) + nameMaxWidth - 4, y + 6);
         }
@@ -382,20 +367,20 @@ void drawEntryHopSignal(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int
 
         const int hopCountWidth = display->getStringWidth(hopCount);
         const int gap = 1;
-        const int totalWidth = hopCountWidth + gap + hop_width;
+        const int totalWidth = hopCountWidth + gap + hop_width * BASEUI_ICON_SCALE;
         const int hopX = barsRightEdge - totalWidth;
 
 #if defined(BICOLOR_OLED_DISPLAY)
-        int iconY = y + (FONT_HEIGHT_SMALL - hop_height) / 2;
+        int iconY = y + (FONT_HEIGHT_SMALL - hop_height * BASEUI_ICON_SCALE) / 2;
         if (y == firstRowY) {
             iconY += 1; // Nudge the hop icon down 1px on the top row to avoid the two color display
         }
 #else
-        const int iconY = y + (FONT_HEIGHT_SMALL - hop_height) / 2;
+        const int iconY = y + (FONT_HEIGHT_SMALL - hop_height * BASEUI_ICON_SCALE) / 2;
 #endif
 
         display->drawString(hopX, y, hopCount);
-        display->drawXbm(hopX + hopCountWidth + gap, iconY, hop_width, hop_height, imghop);
+        drawScaledXbm(display, hopX + hopCountWidth + gap, iconY, hop_width, hop_height, imghop);
     }
 }
 
@@ -406,7 +391,7 @@ void drawNodeDistance(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
         getNodeNameMaxWidth(columnWidth, columnWidth - ((currentResolution == ScreenResolution::High) ? (isLeftCol ? 25 : 28)
                                                                                                       : (isLeftCol ? 20 : 22)));
 
-    const int nameX = x + ((currentResolution == ScreenResolution::High) ? 6 : 3);
+    const int nameX = x + ((currentResolution == ScreenResolution::High) ? 6 * BASEUI_ICON_SCALE : 3);
     char nodeName[96];
     UIRenderer::truncateStringWithEmotes(display, getSafeNodeName(display, node, columnWidth).c_str(), nodeName, sizeof(nodeName),
                                          nameMaxWidth, graphics::isCompactPanel(display) ? "" : "...");
@@ -480,7 +465,7 @@ void drawNodeDistance(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
     }
     if (nodeInfoLiteIsIgnored(node) || isMuted) {
         if (currentResolution == ScreenResolution::High) {
-            display->drawLine(x + 8, y + 8, (isLeftCol ? 0 : x - 4) + nameMaxWidth - 17, y + 8);
+            display->drawLine(x + 8 * BASEUI_ICON_SCALE, y + 8, (isLeftCol ? 0 : x - 4) + nameMaxWidth - 17, y + 8);
         } else {
             display->drawLine(x + 4, y + 6, (isLeftCol ? 0 : x - 3) + nameMaxWidth - 4, y + 6);
         }
@@ -518,7 +503,7 @@ void drawEntryCompass(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
         getNodeNameMaxWidth(columnWidth, columnWidth - ((currentResolution == ScreenResolution::High) ? (isLeftCol ? 25 : 28)
                                                                                                       : (isLeftCol ? 20 : 22)));
 
-    const int nameX = x + ((currentResolution == ScreenResolution::High) ? 6 : 3);
+    const int nameX = x + ((currentResolution == ScreenResolution::High) ? 6 * BASEUI_ICON_SCALE : 3);
     char nodeName[96];
     UIRenderer::truncateStringWithEmotes(display, getSafeNodeName(display, node, columnWidth).c_str(), nodeName, sizeof(nodeName),
                                          nameMaxWidth, graphics::isCompactPanel(display) ? "" : "...");
@@ -539,7 +524,7 @@ void drawEntryCompass(OLEDDisplay *display, meshtastic_NodeInfoLite *node, int16
     }
     if (nodeInfoLiteIsIgnored(node) || isMuted) {
         if (currentResolution == ScreenResolution::High) {
-            display->drawLine(x + 8, y + 8, (isLeftCol ? 0 : x - 4) + nameMaxWidth - 17, y + 8);
+            display->drawLine(x + 8 * BASEUI_ICON_SCALE, y + 8, (isLeftCol ? 0 : x - 4) + nameMaxWidth - 17, y + 8);
         } else {
             display->drawLine(x + 4, y + 6, (isLeftCol ? 0 : x - 3) + nameMaxWidth - 4, y + 6);
         }
@@ -633,7 +618,7 @@ void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
         locationScreen = true;
     else if (strcmp(title, "Distance") == 0)
         locationScreen = true;
-    display->clear();
+    clearForFrame(display, state);
 
     // Draw the battery/time header
     graphics::drawCommonHeader(display, x, y, title);
@@ -666,7 +651,9 @@ void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
     int columnWidth = display->getWidth() / totalColumns;
 
     int totalEntries = nodeDB->getNumMeshNodes();
-    int totalRowsAvailable = (display->getHeight() - y) / rowYOffset;
+    int totalRowsAvailable = (display->getHeight() - y) / rowYOffset + BASEUI_NODE_LIST_ROW_ADJUST;
+    if (totalRowsAvailable < 1)
+        totalRowsAvailable = 1;
     int numskipped = 0;
     int visibleNodeRows = totalRowsAvailable;
 
@@ -745,12 +732,12 @@ void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
     if (currentResolution != ScreenResolution::UltraLow && shownCount > 0) {
         const int firstNodeY = y + 3;
         for (int horizontal_offset = 1; horizontal_offset < totalColumns; horizontal_offset++) {
-            drawColumnSeparator(display, columnWidth * horizontal_offset, firstNodeY, lastNodeY);
+            drawColumnSeparator(display, x + columnWidth * horizontal_offset, firstNodeY, lastNodeY);
         }
     }
 
     const int scrollStartY = y + 3;
-    drawScrollbar(display, visibleNodeRows, totalEntries, scrollIndex, totalColumns, scrollStartY);
+    drawScrollbar(display, visibleNodeRows, totalEntries, scrollIndex, totalColumns, scrollStartY, x);
     graphics::drawCommonFooter(display, x, y);
 
     // Scroll Popup Overlay

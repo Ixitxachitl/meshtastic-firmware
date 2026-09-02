@@ -98,6 +98,21 @@ const unsigned char icon_compass[] PROGMEM = {
     0x3C  // Row 7: ..####..
 };
 
+// Map Screen
+const unsigned char icon_map[] PROGMEM = {0x07, 0x07, 0x1D, 0x15, 0xFC, 0xB4, 0xE0, 0x20};
+
+// Map Screen: other-node marker - a ring with a center dot, in place of a plain filled square
+const unsigned char icon_map_node[] PROGMEM = {
+    0x00, // Row 0: ........
+    0x3C, // Row 1: ..####..
+    0x42, // Row 2: .#....#.
+    0x5A, // Row 3: .#.##.#.
+    0x5A, // Row 4: .#.##.#.
+    0x42, // Row 5: .#....#.
+    0x3C, // Row 6: ..####..
+    0x00  // Row 7: ........
+};
+
 const uint8_t icon_radio[] PROGMEM = {
     0x0F, // Row 0: ####....
     0x10, // Row 1: ....#...
@@ -206,6 +221,18 @@ const uint8_t icon_module[] PROGMEM = {
     0b01111110, // ░██████░
     0b00111100, // ░░████░░
     0b00011000  // ░░░██░░░
+};
+
+// 📍 Waypoint map pin
+const uint8_t icon_waypoint[] PROGMEM = {
+    0x38, // ░░░███░░
+    0x7C, // ░░█████░
+    0x5C, // ░░███░█░
+    0x4C, // ░░██░░█░
+    0x38, // ░░░███░░
+    0x10, // ░░░░█░░░
+    0x10, // ░░░░█░░░
+    0x10  // ░░░░█░░░
 };
 
 #define mute_symbol_width 8

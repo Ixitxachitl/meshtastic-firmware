@@ -99,6 +99,10 @@ class MapApplet : public Applet
     void drawMapTileBackground(int zoom);               // Draw georeferenced tile at zoom
     void drawCross(int16_t x, int16_t y, uint8_t size); // Draw the X used for most markers
 
+    // Callback passed to MapTiles::drawTileBackground - routes plotted pixels back into
+    // this applet's (protected) drawPixel, since the shared tile renderer knows nothing of Applet.
+    static void plotBlackPixel(void *ctx, int16_t x, int16_t y);
+
     float metersToPx = 0;         // Conversion factor for meters to pixels
     float latCenter = 0;          // Map center: latitude
     float lngCenter = 0;          // Map center: longitude

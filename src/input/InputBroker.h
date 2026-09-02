@@ -3,6 +3,7 @@
 #include "Observer.h"
 #include "concurrency/OSThread.h"
 #include "freertosinc.h"
+#include <string.h>
 
 #ifdef InputBrokerDebug
 #define LOG_INPUT(...) LOG_DEBUG(__VA_ARGS__)
@@ -25,6 +26,11 @@ enum input_broker_event {
     INPUT_BROKER_USER_PRESS,
     INPUT_BROKER_ALT_PRESS,
     INPUT_BROKER_ALT_LONG,
+    // Continuous touch drag (BASEUI_HAS_TOUCH_DRAG only). _TOUCH_DRAG repeats while the finger is
+    // held down and moving, carrying the current position in touchX/touchY - deltas are the
+    // consumer's job, since touchX/touchY are unsigned and a drag runs in both directions.
+    INPUT_BROKER_TOUCH_DRAG = 31,
+    INPUT_BROKER_TOUCH_DRAG_END = 32,
     INPUT_BROKER_FACTORY_RST = 0x9a,
     INPUT_BROKER_SHUTDOWN = 0x9b,
     INPUT_BROKER_GPS_TOGGLE = 0x9e,
@@ -57,6 +63,14 @@ typedef struct _InputEvent {
     uint16_t touchX;
     uint16_t touchY;
 } InputEvent;
+
+// True when the event came from the touchscreen rather than a button, keyboard, encoder or
+// trackball. The name is the one TouchScreenImpl1 is constructed with, and several consumers need
+// to tell the two apart: a gesture and a button press can arrive as the same input_broker_event.
+static inline bool inputEventIsTouch(const InputEvent *event)
+{
+    return event && event->source && strcmp(event->source, "touchscreen1") == 0;
+}
 
 class InputPollable
 {

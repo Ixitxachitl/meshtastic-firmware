@@ -16,7 +16,16 @@
 #define TFT_OFFSET_X 22
 #define TFT_OFFSET_Y 0
 #define TFT_OFFSET_ROTATION 0
-#define SCREEN_TRANSITION_FRAMERATE 5 // fps
+// This is a hard cap, not a hint: setFastFramerate() feeds it to OLEDDisplayUi::setTargetFPS(),
+// which turns it into updateInterval, and update() then refuses to redraw more often than that no
+// matter how many times the thread runs. At 5 a drag was drawn five times a second, which is what
+// made a finger-tracked swipe here feel worse than the T-Deck (30).
+//
+// 15 is sized to what the panel measurably does: a full repaint costs ~26 ms idle and ~46 ms
+// mid-transition, when both the outgoing and incoming frame register colour regions to overprint.
+// Going higher just saturates the cooperative scheduler and starves the touch poll, since these
+// threads cannot preempt each other.
+#define SCREEN_TRANSITION_FRAMERATE 15 // fps
 #define USE_TFTDISPLAY 1
 #define HAS_SCREEN 1
 #define TFT_RESET_AFTER_SLEEP
@@ -26,8 +35,46 @@
 #define BASEUI_HEADER_LR_MARGIN 55
 #define BASEUI_BELOW_HEADER_MARGIN 15
 #define BASEUI_BODY_LR_MARGIN 35
+#define BASEUI_BODY_TOP_MARGIN 8
+#define BASEUI_NAV_ICONS_PER_PAGE 5
+// Swipe navigation: keep the current frame lit in the middle slot and rotate the rest
+// past it, rather than paging. Paging made the highlight look wrong mid-swipe.
+#define BASEUI_NAV_INFINITE_SCROLL 1
+#define BASEUI_NAV_ICON_SIZE_PCT 75
+#define BASEUI_NODE_LIST_ROW_ADJUST -1
+#define BASEUI_FIXED_COMPASS_SIZE 1
+#define BASEUI_SPLASH_CORNER_INSET_PCT 25
+#define BASEUI_ICON_SCALE 2
+// Emote picker cells are sized with BASEUI_ICON_SCALE already applied, so at scale 2 the
+// artwork filled only half its cell. Draw it twice as large to fill the space.
+#define EMOTE_PICKER_SCALE_BOOST 2
+// Draw the on-screen keyboard twice as wide as the screen so the keys are big enough to hit on
+// this panel, and pan it left/right with a finger to reach the rest.
+#define BASEUI_KEYBOARD_ZOOM_PCT 200
+// ...and half again as tall, which this panel has the vertical room for.
+#define BASEUI_KEYBOARD_KEY_HEIGHT_PCT 150
+// The virtual keyboard is the only screen that puts touch targets hard against the panel edges. The
+// strap crowds the bottom of a watch, so the key block is lifted clear of it; the sides need only a
+// hair, since fourteen columns are already narrow and the panel does not round away far enough
+// there to swallow a key. Much smaller than BASEUI_BODY_LR_MARGIN, and deliberately so.
+// Custom boot splash, shown for the second half of the boot screen. The artwork is already drawn at
+// panel resolution, so pin it to 1:1 - BASEUI_ICON_SCALE would blow 216x300 up to 432x600 and clip
+// it against this 410x502 panel.
+#define USERPREFS_OEM_TEXT "Ixitxachitl Build"
+#define USERPREFS_OEM_FONT_SIZE 1
+#define USERPREFS_OEM_IMAGE_SCALE 1
+#include "oem_splash.h"
+
+#define BASEUI_KEYBOARD_LR_MARGIN_PCT 1
+#define BASEUI_KEYBOARD_BOTTOM_MARGIN_PCT 10
 
 #define HAS_TOUCHSCREEN 1
+// The CO5300 redraws fast enough to track a finger, so report drags continuously rather
+// than only classifying a direction on release.
+#define BASEUI_HAS_TOUCH_DRAG 1
+// Frames are swiped between here, and screens carry their own on-screen buttons, so a tap paging
+// to the next frame is a near miss waiting to happen rather than a shortcut. The beep goes with it.
+#define BASEUI_TAP_ADVANCES_FRAME 0
 #define HAS_SPI_TFT 1
 #define ENABLE_TOUCH_INT 1
 #define VARIANT_TOUCHSCREEN 1
@@ -64,6 +111,14 @@
 
 #define HAS_BHI260AP
 #define BHI260AP_INT 8
+#define BHI260AP_WAKE_ON_MOTION 1
+#define BHI260AP_WRIST_WORN 1
+// Measured from the gravity vector: the part's own axes already line up with the watch (X at 3
+// o'clock, Y at 12, Z out of the screen), so no remapping. Required for the wrist-tilt gesture.
+#define BHI260AP_REMAP_AXES TOP_LAYER_LEFT_CORNER
+// The RAM firmware image is re-uploaded over I2C on every boot, so the bus clock is what sets how
+// long boot stalls. Reclocked for the upload only, then handed back to the 100kHz the bus runs at.
+#define BHI260AP_I2C_CLOCK_SPEED 400000
 #undef MESHTASTIC_EXCLUDE_ACCELEROMETER
 #define SHOW_STEP_COUNTER
 

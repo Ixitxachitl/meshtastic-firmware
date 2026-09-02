@@ -1,6 +1,13 @@
 #include "buzz.h"
 #include "NodeDB.h"
 #include "configuration.h"
+// ToneDuration lives with the synthesizer that consumes it, so the I2S path can play a
+// melody directly instead of round-tripping it through an RTTTL string.
+#include "audio/RtttlPcm.h"
+
+#if defined(USE_SDL_AUDIO)
+#include "platform/portduino/SdlAudio.h"
+#endif
 
 #if !defined(ARCH_ESP32) && !defined(ARCH_RP2040) && !defined(ARCH_PORTDUINO)
 #include "Tone.h"
@@ -8,21 +15,21 @@
 
 #if defined(HAS_I2S)
 #include "main.h"
-#include <unordered_map>
+#include <string.h>
 #endif
 
 #if defined(HAS_I2S_SPEAKER_NRF52)
 #include "platform/nrf52/NRF52I2SOutput.h"
 #endif
 
+#if defined(SENSECAP_INDICATOR)
+#include "mesh/IndicatorSerial.h"
+extern SensecapIndicator *sensecapIndicator;
+#endif
+
 #if !defined(ARCH_PORTDUINO)
 extern "C" void delay(uint32_t dwMs);
 #endif
-
-struct ToneDuration {
-    int frequency_khz;
-    int duration_ms;
-};
 
 // Some common frequencies.
 #define NOTE_SILENT 1
@@ -60,49 +67,19 @@ const int DURATION_3_4 = 750;  // 3/4 note
 const int DURATION_1_1 = 1000; // 1/1 note
 
 #ifdef HAS_I2S
-void playTonesRTTTL(const ToneDuration *tone_durations, int size)
+// Tones requested before audioThread exists have nowhere to go: boards without a piezo
+// fall through to the PIN_BUZZER path and drop them silently. Park the last one here and
+// let main() hand it over from buzzOnAudioThreadReady(), once the thread is up.
+static ToneDuration pendingTones[RtttlPcm::kMaxTones];
+static size_t pendingToneCount = 0;
+
+void buzzOnAudioThreadReady()
 {
-    // translate ToneDuration[] to a single RTTTL string and play it via audioThread
-    static std::unordered_map<int, const char *> freqToNote = {
-        {NOTE_SILENT, "p"}, // rest
-        {NOTE_C3, "c4"},    {NOTE_CS3, "c#4"}, {NOTE_D3, "d4"},   {NOTE_DS3, "d#4"}, {NOTE_E3, "e4"},   {NOTE_F3, "f4"},
-        {NOTE_FS3, "f#4"},  {NOTE_G3, "g4"},   {NOTE_GS3, "g#4"}, {NOTE_A3, "a4"},   {NOTE_AS3, "a#4"}, {NOTE_B3, "b4"},
-        {NOTE_C4, "c5"},    {NOTE_CS4, "c#5"}, {NOTE_E4, "e5"},   {NOTE_G4, "g5"},   {NOTE_A4, "a5"},   {NOTE_B4, "b5"},
-        {NOTE_C5, "c6"},    {NOTE_E5, "e6"},   {NOTE_G5, "g6"},   {NOTE_F5, "f6"},   {NOTE_G6, "g7"},   {NOTE_E7, "e8"}};
-
-    char rtttl[128] = "tone:d=32,o=4,b=240:"; // b=240 makes 240000/(bpm*d) match the ms durations above
-    for (int i = 0; i < size; i++) {
-        const auto &td = tone_durations[i];
-        int dur = 32; // default duration
-        if (td.duration_ms >= 1000)
-            dur = 1;
-        else if (td.duration_ms >= 500)
-            dur = 2;
-        else if (td.duration_ms >= 250)
-            dur = 4;
-        else if (td.duration_ms >= 125)
-            dur = 8;
-        else if (td.duration_ms >= 62)
-            dur = 16;
-        else
-            dur = 32;
-
-        auto it = freqToNote.find(td.frequency_khz);
-        const char *note = (it != freqToNote.end()) ? it->second : "p"; // unknown freq -> rest
-
-        // RTTTL grammar puts duration before the note; notes are comma-separated
-        char noteStr[64];
-        snprintf(noteStr, sizeof(noteStr), "%s%d%s", i ? "," : "", dur, note);
-        strncat(rtttl, noteStr, sizeof(rtttl) - strlen(rtttl) - 1);
-    }
-    // trailing rest flushes the last note out of the I2S DMA buffer before teardown
-    strncat(rtttl, ",32p", sizeof(rtttl) - strlen(rtttl) - 1);
-
-    audioThread->beginRttl(rtttl, strlen(rtttl));
-    while (audioThread->isPlaying()) {
-        delay(10);
-    }
-    audioThread->stop(); // release I2S so the amp goes silent instead of looping the last buffer
+    size_t count = pendingToneCount;
+    pendingToneCount = 0;
+    if (!audioThread || count == 0)
+        return;
+    audioThread->beginTones(pendingTones, count);
 }
 #endif
 
@@ -113,9 +90,26 @@ void playTones(const ToneDuration *tone_durations, int size)
         // Buzzer is disabled or not set to system tones
         return;
     }
+#if defined(USE_SDL_AUDIO)
+    // Native (PC) builds have no buzzer GPIO; render the melody through host audio instead.
+    for (int i = 0; i < size; i++)
+        portduino_audio::tone((uint16_t)tone_durations[i].frequency_khz, (uint16_t)tone_durations[i].duration_ms);
+    return;
+#endif
 #ifdef HAS_I2S
-    if (moduleConfig.external_notification.use_i2s_as_buzzer && audioThread) {
-        playTonesRTTTL(tone_durations, size);
+    if (moduleConfig.external_notification.use_i2s_as_buzzer) {
+        if (audioThread) {
+            // Hand the melody straight to the synthesizer - frequency and duration are already
+            // in hand, so there is no reason to encode them as RTTTL and parse them back. This
+            // returns immediately; playback continues from the audio thread.
+            audioThread->beginTones(tone_durations, (size_t)size);
+        } else if (size > 0) {
+            // Too early for the audio thread; remember it for buzzOnAudioThreadReady().
+            // Only the most recent request is kept, which is all setup() ever makes.
+            size_t n = (size_t)size < RtttlPcm::kMaxTones ? (size_t)size : RtttlPcm::kMaxTones;
+            memcpy(pendingTones, tone_durations, n * sizeof(ToneDuration));
+            pendingToneCount = n;
+        }
         return;
     }
 #endif
@@ -144,6 +138,20 @@ void playTones(const ToneDuration *tone_durations, int size)
     digitalWrite(SPEAKER_EN_2, LOW);
 #endif
     return;
+#endif
+#if defined(SENSECAP_INDICATOR)
+    // The buzzer hangs off the RP2040 co-processor, driven over the interdevice link. The stock
+    // co-processor firmware beeps at a fixed pitch, so a melody plays as rhythm only: one beep per
+    // note, rests for silent notes. Same blocking note spacing as the GPIO path below.
+    if (sensecapIndicator) {
+        for (int i = 0; i < size; i++) {
+            const auto &t = tone_durations[i];
+            if (t.frequency_khz > NOTE_SILENT)
+                sensecapIndicator->beep(t.duration_ms);
+            delay(1.3 * t.duration_ms);
+        }
+        return;
+    }
 #endif
 #if defined(PIN_BUZZER)
     if (!config.device.buzzer_gpio)

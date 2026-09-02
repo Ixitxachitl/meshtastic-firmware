@@ -20,6 +20,14 @@ int BuzzerFeedbackThread::handleInputEvent(const InputEvent *event)
         return 0; // Let other handlers process the event
     }
 
+#if !BASEUI_TAP_ADVANCES_FRAME
+    // The tap this would acknowledge no longer does anything, so a beep would be the only thing
+    // left claiming it did - worse than silence. Physical buttons report the same event and keep
+    // theirs, since they still page the frame.
+    if (event->inputEvent == INPUT_BROKER_USER_PRESS && inputEventIsTouch(event))
+        return 0;
+#endif
+
     // Handle different input events with appropriate buzzer feedback
     switch (event->inputEvent) {
 #ifdef INPUTDRIVER_ENCODER_TYPE

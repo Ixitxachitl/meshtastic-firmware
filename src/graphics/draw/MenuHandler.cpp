@@ -5,6 +5,9 @@
 #include "DisplayFormatters.h"
 #include "GPS.h"
 #include "MenuHandler.h"
+#if BASEUI_HAS_MAP
+#include "MapRenderer.h"
+#endif
 #include "MeshRadio.h"
 #include "MeshService.h"
 #include "MessageStore.h"
@@ -809,7 +812,7 @@ void menuHandler::clockMenu()
 }
 void menuHandler::messageResponseMenu()
 {
-    enum optionsNumbers { Back = 0, ViewMode, DeleteMenu, ReplyMenu, MuteChannel, Aloud, enumEnd };
+    enum optionsNumbers { Back = 0, ViewMode, MessageOrder, DeleteMenu, ReplyMenu, MuteChannel, Aloud, enumEnd };
 
     static const char *optionsArray[enumEnd];
     static int optionsEnumArray[enumEnd];
@@ -828,6 +831,9 @@ void menuHandler::messageResponseMenu()
     optionsArray[options] = "View Chats";
     optionsEnumArray[options++] = ViewMode;
 
+    optionsArray[options] = "Message Order";
+    optionsEnumArray[options++] = MessageOrder;
+
     // If viewing ALL chats, hide “Mute Chat”
     if (mode != graphics::MessageRenderer::ThreadMode::ALL && mode != graphics::MessageRenderer::ThreadMode::DIRECT) {
         const uint8_t chIndex = (threadChannel != 0) ? (uint8_t)threadChannel : channels.getPrimaryIndex();
@@ -841,7 +847,7 @@ void menuHandler::messageResponseMenu()
     optionsArray[options] = "Delete";
     optionsEnumArray[options++] = DeleteMenu;
 
-#ifdef HAS_I2S
+#ifdef MESHTASTIC_ENABLE_TTS
     optionsArray[options] = "Read Aloud";
     optionsEnumArray[options++] = Aloud;
 #endif
@@ -867,6 +873,10 @@ void menuHandler::messageResponseMenu()
             menuHandler::menuQueue = menuHandler::MessageViewModeMenu;
             screen->runNow();
 
+        } else if (selected == MessageOrder) {
+            menuHandler::menuQueue = menuHandler::MessageOrderMenu;
+            screen->runNow();
+
             // Reply submenu
         } else if (selected == ReplyMenu) {
             menuHandler::menuQueue = menuHandler::ReplyMenu;
@@ -884,7 +894,7 @@ void menuHandler::messageResponseMenu()
             menuHandler::menuQueue = menuHandler::DeleteMessagesMenu;
             screen->runNow();
 
-#ifdef HAS_I2S
+#ifdef MESHTASTIC_ENABLE_TTS
         } else if (selected == Aloud) {
             if (const StoredMessage *latest = getNewestMessageForActiveThread()) {
                 const char *msg = MessageStore::getText(*latest);
@@ -1270,6 +1280,39 @@ void menuHandler::homeBaseMenu()
 void menuHandler::textMessageMenu()
 {
     cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST);
+}
+
+// Flips which end of the message list the newest message lives at. The renderer keys its cached
+// layout on this, so it relaminates on the next draw; resetScrollState() re-anchors the view on the
+// newest message at whichever end that now is, rather than leaving it parked mid-history.
+void menuHandler::messageOrderMenu()
+{
+    enum optionsNumbers { Back, NewestFirst, NewestLast };
+
+    static const char *optionsArray[] = {"Back", "Newest on Top", "Newest on Bottom"};
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = "Message Order";
+    bannerOptions.optionsArrayPtr = optionsArray;
+    bannerOptions.optionsCount = 3;
+    bannerOptions.InitialSelected =
+        (config.display.message_order == meshtastic_Config_DisplayConfig_MessageOrder_NEWEST_LAST) ? 2 : 1;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        if (selected == NewestFirst) {
+            config.display.message_order = meshtastic_Config_DisplayConfig_MessageOrder_NEWEST_FIRST;
+            graphics::MessageRenderer::resetScrollState();
+            service->reloadConfig(SEGMENT_CONFIG);
+            LOG_INFO("Message order: newest first");
+        } else if (selected == NewestLast) {
+            config.display.message_order = meshtastic_Config_DisplayConfig_MessageOrder_NEWEST_LAST;
+            graphics::MessageRenderer::resetScrollState();
+            service->reloadConfig(SEGMENT_CONFIG);
+            LOG_INFO("Message order: newest last");
+        } else {
+            menuHandler::menuQueue = menuHandler::MessageResponseMenu;
+            screen->runNow();
+        }
+    };
+    screen->showOverlayBanner(bannerOptions);
 }
 
 void menuHandler::textMessageBaseMenu()
@@ -2632,7 +2675,7 @@ void menuHandler::testMenu()
             screen->setFrames(Screen::FOCUS_SYSTEM);
 
         } else if (selected == TestAnnounce) {
-#ifdef HAS_I2S
+#ifdef MESHTASTIC_ENABLE_TTS
             audioThread->readAloud("This is a test of the emergency broadcast system. This is only a test.");
 #endif
         } else {
@@ -3293,6 +3336,9 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
     case MessageViewModeMenu:
         messageViewModeMenu();
         break;
+    case MessageOrderMenu:
+        messageOrderMenu();
+        break;
     case MessageBubblesMenu:
         messageBubblesMenu();
         break;
@@ -3305,6 +3351,20 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
     case LicensedToNormalConfirm:
         licensedToNormalConfirmMenu();
         break;
+#if BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
+    case MapBaseMenu:
+        mapBaseMenu();
+        break;
+    case MapFollowMeMenu:
+        mapFollowMeMenu();
+        break;
+    case MapZoomLevelMenu:
+        mapZoomLevelMenu();
+        break;
+    case MapPanMenu:
+        mapPanMenu();
+        break;
+#endif
 #if HAS_LORA_FEM
     case LoraFemLnaToggleMenu:
         LoRaFEMLNAToggleMenu();
@@ -3333,6 +3393,190 @@ void menuHandler::saveUIConfig()
 {
     nodeDB->saveProto("/prefs/uiconfig.proto", meshtastic_DeviceUIConfig_size, &meshtastic_DeviceUIConfig_msg, &uiconfig);
 }
+
+#if BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
+void menuHandler::mapBaseMenu()
+{
+    enum class MapAction { PanMode, FollowMe, ZoomLevel };
+
+    static const MapMenuOption baseOptions[] = {
+        {"Back", OptionsAction::Back},
+        {"Pan", OptionsAction::Select, static_cast<int>(MapAction::PanMode)},
+        {"Zoom", OptionsAction::Select, static_cast<int>(MapAction::ZoomLevel)},
+        {"Follow Me", OptionsAction::Select, static_cast<int>(MapAction::FollowMe)},
+    };
+    constexpr size_t baseCount = sizeof(baseOptions) / sizeof(baseOptions[0]);
+    static std::array<const char *, baseCount> baseLabels{};
+
+    auto bannerOptions = createStaticBannerOptions("Map", baseOptions, baseLabels, [](const MapMenuOption &option, int) -> void {
+        if (option.action == OptionsAction::Back || !option.hasValue)
+            return;
+
+        switch (static_cast<MapAction>(option.value)) {
+        case MapAction::PanMode:
+#if HAS_DIRECTIONAL_INPUT
+            // Entered directly, held until Back is pressed on the Map frame itself (see
+            // Screen::handleInputEvent) - not a picker like Follow Me.
+            graphics::MapRenderer::setPanModeEnabled(true);
+#else
+            // No joystick/keyboard to hold a direction on - offer each
+            // direction as its own menu option instead (see mapPanMenu()).
+            menuQueue = MapPanMenu;
+            screen->runNow();
+#endif
+            break;
+        case MapAction::FollowMe:
+            menuQueue = MapFollowMeMenu;
+            screen->runNow();
+            break;
+        case MapAction::ZoomLevel:
+#if HAS_DIRECTIONAL_INPUT
+            // Entered directly; up/down adjust zoom and a ruler is drawn until Back is
+            // pressed (see Screen::handleInputEvent) - not a discrete-level picker.
+            graphics::MapRenderer::setZoomModeEnabled(true);
+#else
+            // No up/down to hold on a two-button device - pick a level directly instead (see
+            // mapZoomLevelMenu()).
+            menuQueue = MapZoomLevelMenu;
+            screen->runNow();
+#endif
+            break;
+        }
+    });
+
+    screen->showOverlayBanner(bannerOptions);
+}
+
+void menuHandler::mapFollowMeMenu()
+{
+    static const MapToggleOption options[] = {
+        {"Back", OptionsAction::Back},
+        {"Enabled", OptionsAction::Select, true},
+        {"Disabled", OptionsAction::Select, false},
+    };
+    constexpr size_t count = sizeof(options) / sizeof(options[0]);
+    static std::array<const char *, count> labels{};
+
+    auto bannerOptions = createStaticBannerOptions("Follow Me", options, labels, [](const MapToggleOption &option, int) -> void {
+        if (option.action == OptionsAction::Back) {
+            menuQueue = MapBaseMenu;
+            screen->runNow();
+            return;
+        }
+        if (!option.hasValue)
+            return;
+        graphics::MapRenderer::setFollowMeEnabled(option.value);
+    });
+
+    for (size_t i = 0; i < count; ++i) {
+        if (options[i].hasValue && options[i].value == graphics::MapRenderer::isFollowMeEnabled()) {
+            bannerOptions.InitialSelected = i;
+            break;
+        }
+    }
+
+    screen->showOverlayBanner(bannerOptions);
+}
+
+void menuHandler::mapZoomLevelMenu()
+{
+    // One literal entry per level rather than generating labels at runtime, matching every other
+    // menu in this file - kept in sync with MapRenderer's actual [kMinZoom, kMaxZoom] range by the
+    // static_assert below, so a future change to those bounds fails loudly here instead of quietly
+    // drifting out of sync with the Zoom Level menu it's meant to fully cover.
+    static_assert(graphics::MapRenderer::kMinZoom == 0 && graphics::MapRenderer::kMaxZoom == 18,
+                  "zoomOptions below must be regenerated to match MapRenderer::kMinZoom/kMaxZoom");
+    static const MapMenuOption zoomOptions[] = {
+        {"Back", OptionsAction::Back},      {"Z0", OptionsAction::Select, 0},   {"Z1", OptionsAction::Select, 1},
+        {"Z2", OptionsAction::Select, 2},   {"Z3", OptionsAction::Select, 3},   {"Z4", OptionsAction::Select, 4},
+        {"Z5", OptionsAction::Select, 5},   {"Z6", OptionsAction::Select, 6},   {"Z7", OptionsAction::Select, 7},
+        {"Z8", OptionsAction::Select, 8},   {"Z9", OptionsAction::Select, 9},   {"Z10", OptionsAction::Select, 10},
+        {"Z11", OptionsAction::Select, 11}, {"Z12", OptionsAction::Select, 12}, {"Z13", OptionsAction::Select, 13},
+        {"Z14", OptionsAction::Select, 14}, {"Z15", OptionsAction::Select, 15}, {"Z16", OptionsAction::Select, 16},
+        {"Z17", OptionsAction::Select, 17}, {"Z18", OptionsAction::Select, 18},
+    };
+    constexpr size_t zoomCount = sizeof(zoomOptions) / sizeof(zoomOptions[0]);
+    static std::array<const char *, zoomCount> zoomLabels{};
+
+    auto bannerOptions =
+        createStaticBannerOptions("Zoom Level", zoomOptions, zoomLabels, [](const MapMenuOption &option, int) -> void {
+            if (option.action == OptionsAction::Back) {
+                menuQueue = MapBaseMenu;
+                screen->runNow();
+                return;
+            }
+            if (!option.hasValue)
+                return;
+            graphics::MapRenderer::setZoom(option.value);
+        });
+
+    const int cur = graphics::MapRenderer::zoom();
+    for (size_t i = 0; i < zoomCount; ++i) {
+        if (zoomOptions[i].hasValue && zoomOptions[i].value == cur) {
+            bannerOptions.InitialSelected = i;
+            break;
+        }
+    }
+
+    screen->showOverlayBanner(bannerOptions);
+}
+
+void menuHandler::mapPanMenu()
+{
+    enum class PanDirection { Up, Down, Left, Right };
+
+    static const MapMenuOption panOptions[] = {
+        {"Back", OptionsAction::Back},
+        {"Pan Up", OptionsAction::Select, static_cast<int>(PanDirection::Up)},
+        {"Pan Down", OptionsAction::Select, static_cast<int>(PanDirection::Down)},
+        {"Pan Left", OptionsAction::Select, static_cast<int>(PanDirection::Left)},
+        {"Pan Right", OptionsAction::Select, static_cast<int>(PanDirection::Right)},
+    };
+    constexpr size_t panCount = sizeof(panOptions) / sizeof(panOptions[0]);
+    static std::array<const char *, panCount> panLabels{};
+
+    // Remembers the last direction picked (as an index into panOptions) so reopening the menu
+    // below highlights it again - repeated panning in the same direction is then just "press
+    // SELECT again", not "reselect the direction from the top every time".
+    static size_t lastSelected = 0;
+
+    auto bannerOptions =
+        createStaticBannerOptions("Pan", panOptions, panLabels, [](const MapMenuOption &option, int selected) -> void {
+            if (option.action == OptionsAction::Back) {
+                menuQueue = MapBaseMenu;
+                screen->runNow();
+                return;
+            }
+            if (!option.hasValue)
+                return;
+
+            switch (static_cast<PanDirection>(option.value)) {
+            case PanDirection::Up:
+                graphics::MapRenderer::panUp();
+                break;
+            case PanDirection::Down:
+                graphics::MapRenderer::panDown();
+                break;
+            case PanDirection::Left:
+                graphics::MapRenderer::panLeft();
+                break;
+            case PanDirection::Right:
+                graphics::MapRenderer::panRight();
+                break;
+            }
+
+            lastSelected = (size_t)selected;
+            // No joystick to hold a direction on - reopen so another tap keeps panning without
+            // re-navigating from the Map's base menu for every single step.
+            menuQueue = MapPanMenu;
+            screen->runNow();
+        });
+
+    bannerOptions.InitialSelected = (int8_t)lastSelected;
+
+    screen->showOverlayBanner(bannerOptions);
+}
+#endif // BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
 
 } // namespace graphics
 

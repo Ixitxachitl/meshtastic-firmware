@@ -44,6 +44,7 @@ extern NicheGraphics::BaseUIEInkDisplay *setupNicheGraphicsBaseUI();
 #include "TimeFormatters.h"
 #include "draw/ClockRenderer.h"
 #include "draw/DebugRenderer.h"
+#include "draw/MapRenderer.h"
 #include "draw/MenuHandler.h"
 #include "draw/MessageRenderer.h"
 #include "draw/NodeListRenderer.h"
@@ -74,6 +75,7 @@ extern NicheGraphics::BaseUIEInkDisplay *setupNicheGraphicsBaseUI();
 #include "graphics/TFTPalette.h"
 #include "graphics/emotes.h"
 #include "graphics/images.h"
+#include "input/TouchHaptics.h"
 #include "input/TouchScreenImpl1.h"
 #include "main.h"
 #include "mesh-pb-constants.h"
@@ -452,22 +454,20 @@ void Screen::showTextInput(const char *header, const char *initialText, uint32_t
 
 static void drawModuleFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-    uint8_t module_frame;
-    // there's a little but in the UI transition code
-    // where it invokes the function at the correct offset
-    // in the array of "drawScreen" functions; however,
-    // the passed-state doesn't quite reflect the "current"
-    // screen, so we have to detect it.
-    if (state->frameState == IN_TRANSITION && state->transitionFrameRelationship == TransitionRelationship_INCOMING) {
-        // if we're transitioning from the end of the frame list back around to the first
-        // frame, then we want this to be `0`
-        module_frame = state->transitionFrameTarget;
-    } else {
-        // otherwise, just display the module frame that's aligned with the current frame
-        module_frame = state->currentFrame;
-    }
-    MeshModule &pi = *moduleFrames.at(module_frame);
-    pi.drawFrame(display, state, x, y);
+    // state->currentFrame names the outgoing frame for the whole of a transition, so it can't be
+    // used directly to pick the module - see frameIndexFor().
+    const uint8_t module_frame = graphics::frameIndexFor(state, screen ? screen->frameCount : 0);
+
+    // moduleFrames is padded with nullptr up to the first module slot and ends before whatever
+    // frames follow the module region, so an index that isn't a live module is both reachable and
+    // fatal: .at() throws past the end, and a padding entry dereferences to null. Neither could
+    // happen while transitions were disabled, because this INCOMING branch never ran.
+    if (module_frame >= moduleFrames.size())
+        return;
+    MeshModule *pi = moduleFrames[module_frame];
+    if (!pi)
+        return;
+    pi->drawFrame(display, state, x, y);
 }
 
 #if BASEUI_HAS_GAMES
@@ -873,7 +873,12 @@ void Screen::setup()
     displayWidth = dispdev->width();
     displayHeight = dispdev->height();
 
-    ui->setTimePerTransition(0);           // Disable animation delays
+    // Snap by default. A non-zero transition time is what makes OLEDDisplayUi's IN_TRANSITION state
+    // render at all (at 0, tick() completes the transition before drawFrame() runs, so the
+    // two-frames-sliding branch never executes) - and that is only wanted for touch, where the
+    // slide is feedback for a gesture that will shortly be dragging frames directly. Button and
+    // keyboard navigation opts back out per-event in handleInputEvent().
+    ui->setTimePerTransition(0);
     ui->setIndicatorPosition(BOTTOM);      // Not used (indicators disabled below)
     ui->setIndicatorDirection(LEFT_RIGHT); // Not used (indicators disabled below)
     ui->setFrameAnimation(SLIDE_LEFT);     // Used only when indicators are active
@@ -1079,6 +1084,330 @@ void Screen::forceDisplay(bool forceUiUpdate)
 
 static uint32_t lastScreenTransition;
 
+// Framerate used while a transition is running. Defined here rather than beside setFastFramerate()
+// further down because the drag driver below calls setTargetFPS() with it, and a macro has to be
+// defined before the line that uses it. Outside the BASEUI_HAS_TOUCH_DRAG guard: setFastFramerate()
+// uses it on every board, drag support or not.
+#ifndef SCREEN_TRANSITION_FRAMERATE
+#define SCREEN_TRANSITION_FRAMERATE 30 // fps
+#endif
+
+#if BASEUI_HAS_TOUCH_DRAG
+// Nominal transition length for touch-initiated frame changes. Not milliseconds on screen:
+// ticksPerTransition = time / updateInterval, updateInterval starts at 33ms but drops to 16ms once
+// any banner or picker has called setTargetFPS(60), and the redraw cadence during a transition is
+// ~30fps. Net result is roughly this many ms on a fresh boot and about double that afterwards.
+#ifndef SCREEN_TOUCH_TRANSITION_TIME
+#define SCREEN_TOUCH_TRANSITION_TIME 150
+#endif
+
+// ---- Finger-following frame transitions -------------------------------------------------------
+//
+// A drag steers the transition directly instead of deciding a page turn on release. The frames are
+// already drawn at an offset by OLEDDisplayUi::drawFrame(), driven entirely by
+//     progress = ticksSinceLastStateSwitch / ticksPerTransition
+// so following the finger just means writing that counter from the finger's displacement.
+//
+// ticksPerTransition is private, so rather than read it we make it deterministic: setTargetFPS()
+// fixes updateInterval, and setTimePerTransition() then derives ticksPerTransition from it, so
+// calling them in that order gives a tick count we know. Both are re-applied on every drag report
+// because Screen changes the target framerate on its own as the frame state changes.
+#define SCREEN_DRAG_UPDATE_INTERVAL (1000 / SCREEN_TRANSITION_FRAMERATE) // what setTargetFPS() stores
+#define SCREEN_DRAG_HOLD_TIME 33000                                      // nominal, while the finger is down
+#define SCREEN_DRAG_TICKS (SCREEN_DRAG_HOLD_TIME / SCREEN_DRAG_UPDATE_INTERVAL)
+
+// Travel before the gesture commits to an axis. Vertical drags are then left entirely alone, so the
+// swipe the touch layer still classifies on release reaches games, menus and list scrolling as
+// before - this only ever claims horizontal movement.
+#define SCREEN_DRAG_AXIS_LOCK_PX 10
+
+// Fraction of the screen the finger must cover for a released drag to settle on the new frame
+// rather than springing back.
+#define SCREEN_DRAG_COMMIT_FRACTION 0.35f
+
+// ...or this much absolute travel, whichever comes first. Matches the distance the touch layer
+// uses to call a gesture a swipe (TOUCH_THRESHOLD_X), so a short decisive flick pages the frame
+// exactly as it did before drag tracking existed. Without this, whether a flick paged depended on
+// whether it happened to last long enough to produce a drag sample: too quick and the release-time
+// swipe paged it, slow enough to track and it snapped back instead.
+#ifndef SCREEN_DRAG_COMMIT_PX
+#define SCREEN_DRAG_COMMIT_PX 30
+#endif
+
+// Denominator the nav bar animates its slide against. ticksPerTransition is private (see the
+// note above), so whoever pins the scale publishes it here; 0 means "not ours", and callers
+// should fall back to snapping rather than guessing.
+static uint16_t sTransitionTicks = 0;
+
+uint16_t frameTransitionTicks()
+{
+    return sTransitionTicks;
+}
+
+static uint16_t dragAnchorX = 0;
+static uint16_t dragAnchorY = 0;
+static bool dragAnchorValid = false;
+static uint32_t dragAnchorMs = 0;
+static int8_t dragAxis = 0; // 0 undecided, 1 horizontal (ours), -1 vertical (not ours)
+static bool dragTransitionActive = false;
+static int8_t dragDirection = 0; // +1 advancing, -1 going back - latched with the transition
+static bool dragSuppressNextSwipe = false;
+
+// A drag we anchored can end somewhere we never see - a module can start intercepting input
+// mid-gesture - so treat a report arriving long after the previous one as a new gesture.
+#define DRAG_ANCHOR_STALE_MS 1000
+
+// True while a finger is steering, or is about to steer, a frame transition. runOnce() uses this to
+// leave the framerate alone mid-gesture.
+//
+// Deliberately derived from how recently a drag report arrived, rather than from a flag set on drag
+// start and cleared on drag end. A gesture can end somewhere we never see - a module can begin
+// intercepting input mid-drag, which is why the anchor already carries a staleness timeout - and a
+// flag left stuck true would pin the screen at the transition framerate indefinitely. That is a
+// battery leak rather than a cosmetic bug, so this self-heals instead.
+#if BASEUI_HAS_MAP
+// ---- Finger-tracked map panning ---------------------------------------------------------------
+//
+// Pan Mode moves the map with the finger instead of stepping a fixed fraction of the view per
+// classified swipe. Unlike the frame transitions above this never commits to an axis: panning is
+// two-dimensional, so both components of every drag report are used.
+//
+// Only the delta between consecutive reports is applied, never the offset from where the finger
+// landed. That keeps the map tracking the finger exactly even though the first report already
+// arrives some pixels into the gesture (TOUCH_DRAG_START_THRESHOLD), which an absolute offset
+// would show up as a jump on the first move.
+static bool mapPanAnchorValid = false;
+static uint16_t mapPanLastX = 0;
+static uint16_t mapPanLastY = 0;
+static uint32_t mapPanLastMs = 0;
+
+static void mapPanDragUpdate(const InputEvent *event)
+{
+    const uint32_t now = millis();
+    // Same staleness reasoning as the frame drag above - a gesture can end somewhere we never see.
+    if (!mapPanAnchorValid || (now - mapPanLastMs) > DRAG_ANCHOR_STALE_MS) {
+        mapPanAnchorValid = true;
+        mapPanLastX = event->touchX;
+        mapPanLastY = event->touchY;
+        mapPanLastMs = now;
+        return; // this report only establishes where the finger currently is
+    }
+
+    const float dx = (float)((int32_t)event->touchX - (int32_t)mapPanLastX);
+    const float dy = (float)((int32_t)event->touchY - (int32_t)mapPanLastY);
+    mapPanLastX = event->touchX;
+    mapPanLastY = event->touchY;
+    mapPanLastMs = now;
+
+    graphics::MapRenderer::panByFingerDelta(dx, dy);
+}
+
+static void mapPanDragEnd()
+{
+    mapPanAnchorValid = false;
+}
+#endif // BASEUI_HAS_MAP
+
+// ---- Finger-tracked list scrolling ------------------------------------------------------------
+//
+// A scrolling list shares its frame with normal left/right paging, so this commits to an axis
+// exactly as screenDragUpdate() does and claims only the vertical half. The two are complementary:
+// a drag locked vertical here is one screenDragUpdate() would drop anyway.
+//
+// One instance per list rather than one shared tracker: a gesture that started on one frame must
+// not be picked up and continued by the next.
+struct ListScrollDrag {
+    bool anchorValid = false;
+    uint16_t anchorX = 0;
+    uint16_t anchorY = 0;
+    uint16_t lastY = 0;
+    uint32_t lastMs = 0;
+    int8_t axis = 0; // 0 undecided, 1 vertical (ours), -1 horizontal (not ours)
+
+    // Returns true if this report belongs to the list, false to leave it for the frame transition.
+    bool update(const InputEvent *event, void (*scrollBy)(float))
+    {
+        const uint32_t now = millis();
+        if (!anchorValid || (now - lastMs) > DRAG_ANCHOR_STALE_MS) {
+            anchorValid = true;
+            anchorX = event->touchX;
+            anchorY = event->touchY;
+            lastY = event->touchY;
+            lastMs = now;
+            axis = 0;
+            return false; // this report only establishes where the finger started
+        }
+        lastMs = now;
+
+        if (axis == 0) {
+            const int32_t dx = (int32_t)event->touchX - (int32_t)anchorX;
+            const int32_t dy = (int32_t)event->touchY - (int32_t)anchorY;
+            if (abs(dx) < SCREEN_DRAG_AXIS_LOCK_PX && abs(dy) < SCREEN_DRAG_AXIS_LOCK_PX)
+                return false; // too early to tell which way this gesture is going
+            axis = (abs(dy) > abs(dx)) ? 1 : -1;
+        }
+        if (axis < 0)
+            return false; // horizontal: the frame transition owns it
+
+        const float dy = (float)((int32_t)event->touchY - (int32_t)lastY);
+        lastY = event->touchY;
+        scrollBy(dy);
+        return true;
+    }
+
+    bool end()
+    {
+        const bool claimed = anchorValid && axis > 0;
+        anchorValid = false;
+        axis = 0;
+        return claimed;
+    }
+
+    // Still steering, so runOnce() must not demote the framerate out from under the gesture.
+    bool steering(uint32_t now) const { return anchorValid && (now - lastMs) <= DRAG_ANCHOR_STALE_MS; }
+};
+
+static ListScrollDrag messageScrollDrag;
+static ListScrollDrag waypointScrollDrag;
+
+static bool screenDragOwnsFramerate()
+{
+    const uint32_t now = millis();
+    if (dragAnchorValid && (now - dragAnchorMs) <= DRAG_ANCHOR_STALE_MS)
+        return true;
+#if BASEUI_HAS_MAP
+    // Panning never starts a frame transition, so frameState stays FIXED for the whole gesture and
+    // the demote in runOnce() would otherwise fire on every single drag report.
+    if (mapPanAnchorValid && (now - mapPanLastMs) <= DRAG_ANCHOR_STALE_MS)
+        return true;
+#endif
+    // Scrolling a list starts no transition either, so frameState stays FIXED for the whole
+    // gesture and the demote in runOnce() would otherwise fire on every drag report.
+    if (messageScrollDrag.steering(now) || waypointScrollDrag.steering(now))
+        return true;
+    // As does the emote picker's grid, whose drag is driven from inside CannedMessageModule - a
+    // module sees input before the screen does, so that one cannot live here with the rest.
+    if (isEmoteScrollFingerSteering())
+        return true;
+    // Same for the on-screen keyboard's horizontal pan, driven from the same module.
+    if (isKeyboardPanFingerSteering())
+        return true;
+    return false;
+}
+
+// Steer the in-progress transition from the finger's displacement.
+static void screenDragUpdate(OLEDDisplayUi *ui, const InputEvent *event, int16_t frameWidth)
+{
+    const uint32_t now = millis();
+    if (!dragAnchorValid || (now - dragAnchorMs) > DRAG_ANCHOR_STALE_MS) {
+        dragAnchorX = event->touchX;
+        dragAnchorY = event->touchY;
+        dragAnchorValid = true;
+        dragAxis = 0;
+        dragTransitionActive = false;
+        dragDirection = 0;
+    }
+    dragAnchorMs = now;
+
+    const int32_t dx = (int32_t)event->touchX - (int32_t)dragAnchorX;
+    const int32_t dy = (int32_t)event->touchY - (int32_t)dragAnchorY;
+
+    if (dragAxis == 0) {
+        if (abs(dx) < SCREEN_DRAG_AXIS_LOCK_PX && abs(dy) < SCREEN_DRAG_AXIS_LOCK_PX)
+            return; // too early to tell which way this gesture is going
+        dragAxis = (abs(dx) > abs(dy)) ? 1 : -1;
+    }
+    if (dragAxis < 0)
+        return; // vertical: not ours, the release-time swipe still handles it
+
+    // Frames follow the finger - dragging left pulls the next frame in from the right, dragging
+    // right pulls the previous one in from the left. Deliberately the opposite of the old swipe,
+    // where a left-to-right gesture advanced.
+    const int8_t want = (dx < 0) ? 1 : -1;
+
+    // The incoming frame is chosen when the transition begins and cannot be swapped mid-flight, so
+    // a reversal past the anchor means abandoning this one and opening a fresh transition.
+    if (dragTransitionActive && want != dragDirection) {
+        ui->getUiState()->frameState = FIXED;
+        ui->getUiState()->ticksSinceLastStateSwitch = 0;
+        dragTransitionActive = false;
+    }
+
+    if (!dragTransitionActive && ui->getUiState()->frameState != FIXED)
+        return; // something else is already transitioning - don't fight it, and don't restretch its
+                // transition time on the way out
+
+    // Re-applied every report: Screen changes the target framerate on its own as the frame state
+    // changes, and ticksPerTransition is derived from it - so pin both together to keep the tick
+    // count that the progress below is scaled against predictable.
+    ui->setTargetFPS(SCREEN_TRANSITION_FRAMERATE);
+    ui->setTimePerTransition(SCREEN_DRAG_HOLD_TIME);
+    sTransitionTicks = SCREEN_DRAG_TICKS;
+
+    if (!dragTransitionActive) {
+        // Point the direction at where we are going before opening the transition.
+        // OLEDDisplayUi::nextFrame() fills transitionFrameTarget from getNextFrameNumber(),
+        // which reads frameTransitionDirection - and only sets that field afterwards. A
+        // transition opened straight after one going the other way (a spring-back, or a finger
+        // reversing past the anchor, both of which land here with the old direction still set)
+        // therefore targeted the frame on the wrong side. tick() recomputes it correctly when
+        // the transition completes, so the frame itself landed right; it was everything reading
+        // transitionFrameTarget mid-flight - the navigation bar especially - that was one out
+        // for the length of the gesture and then snapped straight.
+        ui->getUiState()->frameTransitionDirection = want;
+        if (want > 0)
+            ui->nextFrame();
+        else
+            ui->previousFrame();
+        dragDirection = want;
+        dragTransitionActive = true;
+    }
+
+    float progress = (frameWidth > 0) ? ((float)abs(dx) / (float)frameWidth) : 0.0f;
+    if (progress > 0.999f)
+        progress = 0.999f; // 1.0 would let tick() complete the transition out from under the finger
+    ui->getUiState()->ticksSinceLastStateSwitch = (uint16_t)(progress * SCREEN_DRAG_TICKS);
+}
+
+// Finger lifted: settle on the new frame or spring back to the old one.
+static void screenDragEnd(OLEDDisplayUi *ui, const InputEvent *event, int16_t frameWidth)
+{
+    const int32_t dx = (int32_t)event->touchX - (int32_t)dragAnchorX;
+    const bool wasDriving = dragTransitionActive;
+
+    dragAnchorValid = false;
+    dragAxis = 0;
+    dragTransitionActive = false;
+    dragDirection = 0;
+
+    if (!wasDriving)
+        return; // never claimed this gesture (too short, or vertical) - leave it entirely alone
+
+    // We drove this one, so the swipe the touch layer classifies on release would page a second
+    // time on top of where we just settled. Swallow it.
+    dragSuppressNextSwipe = true;
+
+    float progress = (frameWidth > 0) ? ((float)abs(dx) / (float)frameWidth) : 0.0f;
+    ui->setTargetFPS(SCREEN_TRANSITION_FRAMERATE);
+    ui->setTimePerTransition(SCREEN_TOUCH_TRANSITION_TIME);
+
+    if (progress >= SCREEN_DRAG_COMMIT_FRACTION || abs(dx) > SCREEN_DRAG_COMMIT_PX) {
+        // Carry on from where the finger left off rather than restarting the slide.
+        const uint16_t ticks = SCREEN_TOUCH_TRANSITION_TIME / SCREEN_DRAG_UPDATE_INTERVAL;
+        sTransitionTicks = ticks;
+        if (progress > 0.999f)
+            progress = 0.999f;
+        ui->getUiState()->ticksSinceLastStateSwitch = (uint16_t)(progress * ticks);
+    } else {
+        // Not far enough. currentFrame never advanced, so returning to FIXED is the whole snap-back
+        // - the library only ever drives a transition forwards, so there is no reverse animation to
+        // run and this lands immediately.
+        ui->getUiState()->frameState = FIXED;
+        ui->getUiState()->ticksSinceLastStateSwitch = 0;
+    }
+}
+#endif // BASEUI_HAS_TOUCH_DRAG
+
 int32_t Screen::runOnce()
 {
     // If we don't have a screen, don't ever spend any CPU for us.
@@ -1254,7 +1583,18 @@ int32_t Screen::runOnce()
     }
 #endif
 
-    if (targetFramerate != desiredFramerate && ui->getUiState()->frameState == FIXED) {
+#if BASEUI_HAS_TOUCH_DRAG
+    // A finger steering a transition owns the framerate. Without this the reset below fires during
+    // the first few pixels of a drag - before SCREEN_DRAG_AXIS_LOCK_PX commits an axis there is no
+    // transition yet, so frameState is still FIXED - and it does more than slow the thread down:
+    // it calls setTargetFPS(), which OLEDDisplayUi turns into updateInterval, so update() then
+    // refuses to redraw at all until a full second has passed.
+    const bool dragOwnsFramerate = screenDragOwnsFramerate();
+#else
+    const bool dragOwnsFramerate = false;
+#endif
+
+    if (targetFramerate != desiredFramerate && ui->getUiState()->frameState == FIXED && !dragOwnsFramerate) {
         // oldFrameState = ui->getUiState()->frameState;
         targetFramerate = desiredFramerate;
 
@@ -1495,6 +1835,16 @@ void Screen::setFrames(FrameFocus focus)
         PUSH_FRAME_TITLE("GPS");
     }
 #endif
+    // Map doesn't need local GPS - it can show other nodes' positions regardless, and falls back to
+    // their centroid when we have no fix of our own. Opt-in via -DBASEUI_HAS_MAP=1, which also
+    // enforces a color-TFT-or-E-Ink display and somewhere to store a basemap (see configuration.h).
+#if BASEUI_HAS_MAP
+    if (!hiddenFrames.map) {
+        fsi.positions.map = numframes;
+        normalFrames[numframes++] = graphics::MapRenderer::drawMapFrame;
+        indicatorIcons.push_back(icon_map);
+    }
+#endif
     if (RadioLibInterface::instance && !hiddenFrames.lora) {
         fsi.positions.lora = numframes;
         normalFrames[numframes++] = graphics::DebugRenderer::drawLoRaFocused;
@@ -1559,8 +1909,9 @@ void Screen::setFrames(FrameFocus focus)
             if (m && m == waypointModule)
                 fsi.positions.waypoint = numframes;
 
-            indicatorIcons.push_back(icon_module);
-            PUSH_FRAME_TITLE("Module");
+            const bool isWaypointFrame = (m && m == waypointModule);
+            indicatorIcons.push_back(isWaypointFrame ? icon_waypoint : icon_module);
+            PUSH_FRAME_TITLE(isWaypointFrame ? "Waypoint" : "Module");
             numframes++;
         }
     }
@@ -1700,6 +2051,9 @@ void Screen::toggleFrameVisibility(const std::string &frameName)
         hiddenFrames.gps = !hiddenFrames.gps;
     }
 #endif
+    if (frameName == "map") {
+        hiddenFrames.map = !hiddenFrames.map;
+    }
     if (frameName == "lora") {
         hiddenFrames.lora = !hiddenFrames.lora;
     }
@@ -1741,6 +2095,8 @@ bool Screen::isFrameHidden(const std::string &frameName) const
     if (frameName == "gps")
         return hiddenFrames.gps;
 #endif
+    if (frameName == "map")
+        return hiddenFrames.map;
     if (frameName == "lora")
         return hiddenFrames.lora;
     if (frameName == "clock")
@@ -1785,6 +2141,7 @@ enum FrameVisBit : uint8_t {
     FVBIT_LORA = 13,
     FVBIT_SHOW_FAVORITES = 14,
     FVBIT_CHIRPY = 15,
+    FVBIT_MAP = 16,
 };
 
 struct __attribute__((packed)) FrameVisFile {
@@ -1831,6 +2188,7 @@ uint32_t Screen::packHiddenFrames() const
 #endif
     setBit(mask, FVBIT_GPS, hiddenFrames.gps);
 #endif
+    setBit(mask, FVBIT_MAP, hiddenFrames.map);
     setBit(mask, FVBIT_LORA, hiddenFrames.lora);
     setBit(mask, FVBIT_SHOW_FAVORITES, hiddenFrames.show_favorites);
     setBit(mask, FVBIT_CHIRPY, hiddenFrames.chirpy);
@@ -1860,6 +2218,7 @@ void Screen::applyHiddenFramesMask(uint32_t mask)
 #endif
     hiddenFrames.gps = getBit(mask, FVBIT_GPS);
 #endif
+    hiddenFrames.map = getBit(mask, FVBIT_MAP);
     hiddenFrames.lora = getBit(mask, FVBIT_LORA);
     hiddenFrames.show_favorites = getBit(mask, FVBIT_SHOW_FAVORITES);
     hiddenFrames.chirpy = getBit(mask, FVBIT_CHIRPY);
@@ -1973,6 +2332,11 @@ void Screen::handleOnPress()
     // If screen was off, just wake it, otherwise advance to next frame
     // If we are in a transition, the press must have bounced, drop it.
     if (ui->getUiState()->frameState == FIXED) {
+#if BASEUI_HAS_TOUCH_DRAG
+        // Only reached by the auto-carousel, which is nobody's gesture - snap, and don't inherit an
+        // animated transition time left behind by the last touch event.
+        ui->setTimePerTransition(0);
+#endif
         ui->nextFrame();
         lastScreenTransition = millis();
         setFastFramerate();
@@ -2060,10 +2424,6 @@ void Screen::showFrame(FrameDirection direction)
         setFastFramerate();
     }
 }
-
-#ifndef SCREEN_TRANSITION_FRAMERATE
-#define SCREEN_TRANSITION_FRAMERATE 30 // fps
-#endif
 
 void Screen::setFastFramerate()
 {
@@ -2160,8 +2520,20 @@ int Screen::handleInputEvent(const InputEvent *event)
     if (!screenOn)
         return 0;
 
+#if BASEUI_HAS_TOUCH_DRAG
+    // Frame changes animate for touch and snap for everything else. A finger gets a slide because
+    // it is about to be steering that slide directly; a button press just wants the next frame, and
+    // an animation there is added latency rather than feedback.
+    //
+    // Decided up front, before any of the branches below can page a frame, so every route to a
+    // transition inherits the right answer for whatever kind of input caused it.
+    ui->setTimePerTransition(inputEventIsTouch(event) ? SCREEN_TOUCH_TRANSITION_TIME : 0);
+#endif
+
     // Handle text input notifications specially - pass input to virtual keyboard
     if (NotificationRenderer::current_notification_type == notificationTypeEnum::text_input) {
+        if (event->inputEvent == INPUT_BROKER_USER_PRESS && inputEventIsTouch(event))
+            touchHapticPulse(TouchHaptic::Activate);
         NotificationRenderer::inEvent = *event;
         static OverlayCallback overlays[] = {graphics::UIRenderer::drawNavigationBar, NotificationRenderer::drawBannercallback};
         ui->setOverlays(overlays, 2);
@@ -2185,6 +2557,10 @@ int Screen::handleInputEvent(const InputEvent *event)
     }
 #endif
     if (NotificationRenderer::isOverlayBannerShowing()) {
+        // Every tap a banner consumes passes through here, so one pulse covers the lot rather than
+        // each of NotificationRenderer's own option handlers needing to know about the motor.
+        if (event->inputEvent == INPUT_BROKER_USER_PRESS && inputEventIsTouch(event))
+            touchHapticPulse(TouchHaptic::Activate);
         NotificationRenderer::inEvent = *event;
         static OverlayCallback overlays[] = {graphics::UIRenderer::drawNavigationBar, NotificationRenderer::drawBannercallback};
         ui->setOverlays(overlays, 2);
@@ -2194,8 +2570,136 @@ int Screen::handleInputEvent(const InputEvent *event)
         menuHandler::handleMenuSwitch(dispdev);
         return 0;
     }
+    // Pan Mode and Zoom Mode are entered directly from the Map's own menu and held until Back or
+    // Cancel is pressed (not enabled/disabled toggles) - while either is active, the joystick is
+    // claimed entirely so it can't also page between frames underneath. Devices with a single
+    // physical button (e.g. Wio Tracker L1) send INPUT_BROKER_CANCEL for it, not _BACK, so both
+    // need to exit these modes - otherwise Cancel falls through to its device-wide "turn off
+    // screen" meaning further down instead.
+#if BASEUI_HAS_MAP
+    if (framesetInfo.positions.map != 255 && ui->getUiState()->currentFrame == framesetInfo.positions.map) {
+#if BASEUI_MAP_ONSCREEN_CONTROLS
+        // The map's own buttons get first refusal on a tap, before either mode block below: a tap
+        // is not pan navigation, so Pan Mode's fall-through would drop the mode and then page the
+        // frame - and the button under the finger would never be pressed at all.
+        if (event->inputEvent == INPUT_BROKER_USER_PRESS && (event->touchX != 0 || event->touchY != 0) &&
+            graphics::MapRenderer::handleControlTap((int16_t)event->touchX, (int16_t)event->touchY)) {
+            touchHapticPulse(TouchHaptic::Activate);
+            setFastFramerate();
+            return 0;
+        }
+        // A tap that missed every button is not an escape hatch from Pan Mode here - the latch is
+        // drawn on screen and its button is the only thing that clears it. Swallowed rather than
+        // left to fall through, where Pan Mode's else-branch below would drop the mode and the tap
+        // would then go on to page the frame, all from a press that hit nothing.
+        if (graphics::MapRenderer::isPanModeEnabled() && event->inputEvent == INPUT_BROKER_USER_PRESS)
+            return 0;
+#endif
+#if BASEUI_HAS_TOUCH_DRAG
+        // Where the hardware reports a continuous drag, Pan Mode tracks the finger directly rather
+        // than waiting for a swipe to be classified and jumping a fixed fraction of the view.
+        if (graphics::MapRenderer::isPanModeEnabled()) {
+            if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG) {
+                mapPanDragUpdate(event);
+                setFastFramerate();
+                return 0;
+            }
+            if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG_END) {
+                mapPanDragEnd();
+                setFastFramerate();
+                return 0;
+            }
+        }
+#endif
+        // A touch drag arrives as a continuous stream of reports alongside the swipe the touch
+        // layer still classifies on release. While Zoom Mode is held it is that swipe which zooms -
+        // there is no continuous equivalent of a zoom step - so the drag reports are neither a
+        // navigation command nor evidence the user did something else. Swallow them here, or the
+        // else-branches below read them as "not part of pan navigation" and drop out of the mode -
+        // which made any touch at all cancel it. Pan Mode only reaches this on builds without
+        // BASEUI_HAS_TOUCH_DRAG, where the swipe is still what pans.
+        if ((graphics::MapRenderer::isPanModeEnabled() || graphics::MapRenderer::isZoomModeEnabled()) &&
+            (event->inputEvent == INPUT_BROKER_TOUCH_DRAG || event->inputEvent == INPUT_BROKER_TOUCH_DRAG_END))
+            return 0;
+        if (graphics::MapRenderer::isPanModeEnabled()) {
+#if BASEUI_HAS_TOUCH_DRAG
+            // Panning is finger-tracked here, so the swipe classified on release must never also
+            // step the view - not after a drag we already applied, and not for a flick too quick to
+            // have produced any drag report at all. Swallowed rather than left to fall through,
+            // which the else-branch below would read as "not part of pan navigation" and use to drop
+            // out of Pan Mode.
+            if (inputEventIsTouch(event) && (event->inputEvent == INPUT_BROKER_UP || event->inputEvent == INPUT_BROKER_DOWN ||
+                                             event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_RIGHT))
+                return 0;
+#endif
+            if (event->inputEvent == INPUT_BROKER_BACK || event->inputEvent == INPUT_BROKER_CANCEL) {
+                graphics::MapRenderer::setPanModeEnabled(false);
+                setFastFramerate();
+                return 0;
+            } else if (event->inputEvent == INPUT_BROKER_UP) {
+                graphics::MapRenderer::panUp();
+                setFastFramerate();
+                return 0;
+            } else if (event->inputEvent == INPUT_BROKER_DOWN) {
+                graphics::MapRenderer::panDown();
+                setFastFramerate();
+                return 0;
+            } else if (event->inputEvent == INPUT_BROKER_LEFT) {
+                graphics::MapRenderer::panLeft();
+                setFastFramerate();
+                return 0;
+            } else if (event->inputEvent == INPUT_BROKER_RIGHT) {
+                graphics::MapRenderer::panRight();
+                setFastFramerate();
+                return 0;
+            } else {
+                // Anything else (SELECT opening the menu, a frame-switch key, ...) isn't part of
+                // pan navigation - drop out of Pan Mode so it doesn't linger silently once the menu
+                // opens or the frame changes underneath it, then let the event fall through below
+                // for its normal handling.
+                graphics::MapRenderer::setPanModeEnabled(false);
+            }
+        } else if (graphics::MapRenderer::isZoomModeEnabled()) {
+            if (event->inputEvent == INPUT_BROKER_BACK || event->inputEvent == INPUT_BROKER_CANCEL) {
+                graphics::MapRenderer::setZoomModeEnabled(false);
+                setFastFramerate();
+                return 0;
+            } else if (event->inputEvent == INPUT_BROKER_UP) {
+                graphics::MapRenderer::zoomIn();
+                setFastFramerate();
+                return 0;
+            } else if (event->inputEvent == INPUT_BROKER_DOWN) {
+                graphics::MapRenderer::zoomOut();
+                setFastFramerate();
+                return 0;
+            } else if (event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_RIGHT) {
+                // Swallow - don't let these page frames out from under Zoom Mode.
+                setFastFramerate();
+                return 0;
+            } else {
+                // Same reasoning as Pan Mode above - e.g. SELECT opening the menu.
+                graphics::MapRenderer::setZoomModeEnabled(false);
+            }
+        }
+    }
+#endif // BASEUI_HAS_MAP
+
     // UP/DOWN in message screen scrolls through message threads
     if (ui->getUiState()->currentFrame == framesetInfo.positions.textMessage) {
+#if BASEUI_HAS_TOUCH_DRAG
+        if (messageStore.hasVisibleMessages()) {
+            // Only swallowed when the list claimed it; a horizontal drag falls through to page.
+            if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG &&
+                messageScrollDrag.update(event, graphics::MessageRenderer::scrollByFingerDelta)) {
+                setFastFramerate();
+                return 0;
+            }
+            if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG_END && messageScrollDrag.end()) {
+                setFastFramerate();
+                return 0;
+            }
+        }
+#endif
 
         if (event->inputEvent == INPUT_BROKER_UP) {
             if (!messageStore.hasVisibleMessages()) {
@@ -2217,6 +2721,25 @@ int Screen::handleInputEvent(const InputEvent *event)
             }
         }
     }
+#if BASEUI_HAS_TOUCH_DRAG
+    // Finger-tracked scrolling of the waypoint list, on the same terms as the message list above.
+    // The list is only as tall as the waypoints we hold, so scrollByFingerDelta() is a no-op when
+    // it already fits and the drag is simply swallowed.
+    if (framesetInfo.positions.waypoint != 255 && ui->getUiState()->currentFrame == framesetInfo.positions.waypoint) {
+        const auto scrollWaypoints = [](float dy) {
+            if (waypointModule)
+                waypointModule->scrollByFingerDelta(dy);
+        };
+        if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG && waypointScrollDrag.update(event, scrollWaypoints)) {
+            setFastFramerate();
+            return 0;
+        }
+        if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG_END && waypointScrollDrag.end()) {
+            setFastFramerate();
+            return 0;
+        }
+    }
+#endif
     // UP/DOWN in node list screens scrolls through node pages
     if (ui->getUiState()->currentFrame == framesetInfo.positions.nodelist_nodes ||
         ui->getUiState()->currentFrame == framesetInfo.positions.nodelist_location ||
@@ -2305,9 +2828,63 @@ int Screen::handleInputEvent(const InputEvent *event)
                 return 0;
             }
 #endif
-            if (event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_ALT_PRESS) {
+#if BASEUI_HAS_TOUCH_DRAG
+            // A gesture we steered is followed by the touch layer's own swipe classification (see
+            // TouchScreenBase::runOnce, which reports both). Drop that one - we already settled the
+            // frame. Cleared on the first event after the drag whatever it turns out to be, so a
+            // gesture that ended below the swipe threshold cannot leave it armed.
+            if (dragSuppressNextSwipe) {
+                dragSuppressNextSwipe = false;
+                if (event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_RIGHT)
+                    return 0;
+            }
+            if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG) {
+                screenDragUpdate(ui, event, displayWidth);
+                setFastFramerate();
+                return 0;
+            }
+            if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG_END) {
+                screenDragEnd(ui, event, displayWidth);
+                lastScreenTransition = millis();
+                setFastFramerate();
+                return 0;
+            }
+#endif
+#if BASEUI_HAS_TOUCH_DRAG
+            const bool fromTouch = inputEventIsTouch(event);
+#else
+            const bool fromTouch = false;
+#endif
+            // Where a finger-tracked transition exists, it is the only thing that pages frames -
+            // the swipe the touch layer classifies on release never does, whether or not the drag
+            // handler claimed the gesture.
+            //
+            // The alternative was letting a flick too quick to produce a drag sample page via this
+            // path, which meant an identical-looking gesture behaved differently depending on how
+            // fast it happened, and needed its direction inverted here to agree with the drag (a
+            // flick left brings the NEXT frame in from the right, where INPUT_BROKER_LEFT has always
+            // meant "go back"). A gesture that produces no drag report at all now simply does
+            // nothing, which is the more predictable of the two. Physical directional input -
+            // keyboard, encoder, trackball - keeps its conventional meaning.
+            const bool wantsNext = !fromTouch && event->inputEvent == INPUT_BROKER_RIGHT;
+            const bool wantsPrevious = !fromTouch && event->inputEvent == INPUT_BROKER_LEFT;
+#if BASEUI_TAP_ADVANCES_FRAME
+            const bool tapAdvances = true;
+#else
+            // Only the screen's own tap stops paging - a physical button reports the same event and
+            // is never a near miss. Deliberately the raw test rather than fromTouch, which is pinned
+            // false without drag support so that a swipe still pages there.
+            const bool tapAdvances = !inputEventIsTouch(event);
+#endif
+
+            if (wantsPrevious || event->inputEvent == INPUT_BROKER_ALT_PRESS) {
                 showFrame(FrameDirection::PREVIOUS);
-            } else if (event->inputEvent == INPUT_BROKER_RIGHT || event->inputEvent == INPUT_BROKER_USER_PRESS) {
+            } else if (wantsNext || (tapAdvances && event->inputEvent == INPUT_BROKER_USER_PRESS)) {
+                // Paging the frame is the tap landing on something, so it earns the buzz. Where
+                // BASEUI_TAP_ADVANCES_FRAME is off this branch is never reached by a tap, and the
+                // gesture correctly ends up feeling like nothing at all.
+                if (event->inputEvent == INPUT_BROKER_USER_PRESS && inputEventIsTouch(event))
+                    touchHapticPulse(TouchHaptic::Activate);
                 showFrame(FrameDirection::NEXT);
             } else if (event->inputEvent == INPUT_BROKER_FN_F1) {
                 this->ui->switchToFrame(0);
@@ -2366,6 +2943,11 @@ int Screen::handleInputEvent(const InputEvent *event)
 #if HAS_GPS
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.gps && gps) {
                     menuHandler::positionBaseMenu();
+#endif
+#if BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
+                } else if (framesetInfo.positions.map != 255 &&
+                           this->ui->getUiState()->currentFrame == framesetInfo.positions.map) {
+                    menuHandler::mapBaseMenu();
 #endif
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.clock) {
                     menuHandler::clockMenu();
@@ -2441,6 +3023,11 @@ bool Screen::isTextMessageFrameShown() const
 bool Screen::isGamesFrameShown()
 {
     return framesetInfo.positions.games != 255 && ui && ui->getUiState()->currentFrame == framesetInfo.positions.games;
+}
+
+bool Screen::isMapFrameShown()
+{
+    return framesetInfo.positions.map != 255 && ui && ui->getUiState()->currentFrame == framesetInfo.positions.map;
 }
 
 } // namespace graphics

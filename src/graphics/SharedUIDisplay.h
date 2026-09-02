@@ -1,6 +1,7 @@
 #pragma once
 
 #include <OLEDDisplay.h>
+#include <OLEDDisplayUi.h>
 #include <stdint.h>
 #include <string>
 
@@ -51,6 +52,63 @@ namespace graphics
 #ifndef ROUNDED_SCREEN
 #define ROUNDED_SCREEN false
 #endif
+// Breathing room around the body text on the list-style screens (favorites, waypoint,
+// telemetry): BASEUI_BODY_TOP_MARGIN adds to BASEUI_BELOW_HEADER_MARGIN above the first
+// row, and BASEUI_BODY_LR_MARGIN insets it from the left edge. Kept separate from
+// BASEUI_BELOW_HEADER_MARGIN because that one also sizes the bottom nav reserve and the
+// node list rows.
+#ifndef BASEUI_BODY_TOP_MARGIN
+#define BASEUI_BODY_TOP_MARGIN 0
+#endif
+// Fixed number of frame icons the navigation bar shows per page. 0 fits as many as
+// the usable width allows.
+#ifndef BASEUI_NAV_ICONS_PER_PAGE
+#define BASEUI_NAV_ICONS_PER_PAGE 0
+#endif
+// Navigation bar icon size as a percentage of what BASEUI_ICON_SCALE would otherwise
+// give it, for variants that want the bar lighter than the rest of the artwork.
+#ifndef BASEUI_NAV_ICON_SIZE_PCT
+#define BASEUI_NAV_ICON_SIZE_PCT 100
+#endif
+// Navigation bar as a continuously scrolling strip instead of fixed pages: the middle
+// slot is always the current frame and the others wrap past it. Suits swipe-driven
+// boards, where paging makes the highlight appear to jump whenever the current frame
+// crosses a page boundary. Off by default - it changes the look of the bar.
+#ifndef BASEUI_NAV_INFINITE_SCROLL
+#define BASEUI_NAV_INFINITE_SCROLL 0
+#endif
+// When set, message bubbles are centred horizontally instead of being pushed to the left or right
+// edge by sender. Text keeps its sender-dependent alignment inside them.
+#ifndef BASEUI_CENTER_MESSAGE_BUBBLES
+#define BASEUI_CENTER_MESSAGE_BUBBLES 0
+#endif
+// Widest a left/right-aligned message bubble may grow, as a percentage of the content span. Below
+// 100 this leaves a gutter on the side the bubble is not anchored to, which is what makes the
+// incoming/outgoing split readable rather than two columns of near-full-width blocks. Applies to
+// both the bubble and the width its text wraps to. Ignored when BASEUI_CENTER_MESSAGE_BUBBLES is set.
+#ifndef BASEUI_MESSAGE_BUBBLE_MAX_PCT
+#define BASEUI_MESSAGE_BUBBLE_MAX_PCT 100
+#endif
+// Trims (negative) or grows (positive) how many entry rows the node list screens fit.
+#ifndef BASEUI_NODE_LIST_ROW_ADJUST
+#define BASEUI_NODE_LIST_ROW_ADJUST 0
+#endif
+// When set, the favorite-node compass is sized from the full text budget instead of the
+// rows a given node happens to fill, so it stays the same size across favorites.
+#ifndef BASEUI_FIXED_COMPASS_SIZE
+#define BASEUI_FIXED_COMPASS_SIZE 0
+#endif
+// Pulls the splash screen's corner text (region, version, short name) toward the centre
+// by this percentage of the half-width, for screens whose rounded corners clip them.
+#ifndef BASEUI_SPLASH_CORNER_INSET_PCT
+#define BASEUI_SPLASH_CORNER_INSET_PCT 0
+#endif
+// Multiplier applied to every embedded bitmap (status icons, emotes, node/GPS
+// glyphs, nav bar, logos) and to the layout offsets around them. Variants with a
+// display far larger than the artwork was drawn for bump this up.
+#ifndef BASEUI_ICON_SCALE
+#define BASEUI_ICON_SCALE 1
+#endif
 
 // Quick screen access
 #define SCREEN_WIDTH display->getWidth()
@@ -67,6 +125,32 @@ void decomposeTime(uint32_t rtc_sec, int &hour, int &minute, int &second);
 // Rounded highlight (used for inverted headers)
 void drawRoundedHighlight(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r);
 
+// Rounded button caps. drawRect() reads as a plain box at the sizes a dense control layout forces;
+// rounding the corners is what lets something only ~25px wide still read as a button. Used by the
+// on-screen keyboard's keys and by the map's on-screen controls, so the two look like one family.
+// r is clamped to half the shorter side, and degenerates to a plain rect when there's no room.
+void drawRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r);
+
+// Filled counterpart, for a cap that is pressed or latched on.
+void fillRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r);
+
+// Nearest-neighbour XBM blit. Falls through to the library's drawXbm() at scale 1,
+// so callers can use it unconditionally. w/h are the bitmap's own dimensions; the
+// drawn area is w*scale by h*scale.
+void drawScaledXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm,
+                   int scale = BASEUI_ICON_SCALE);
+
+// Nearest-neighbour XBM blit into an arbitrary destination box, for target sizes that
+// aren't an integer multiple of the source. Identical output to drawScaledXbm() when
+// destW/destH happen to be exact multiples of w/h.
+// As drawStretchedXbm(), but drops columns outside [clipLeft, clipRight). Lets a glyph slide
+// in or out of a bounded strip a column at a time instead of appearing whole.
+void drawStretchedXbmClipped(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm, int16_t destW,
+                             int16_t destH, int16_t clipLeft, int16_t clipRight);
+
+void drawStretchedXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm, int16_t destW,
+                      int16_t destH);
+
 // Shared battery/time/mail header
 void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *titleStr = "", bool force_no_invert = false,
                       bool show_date = false, bool transparent_background = false, bool use_title_color_override = false,
@@ -74,6 +158,73 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
 
 // Shared battery/time/mail header
 void drawCommonFooter(OLEDDisplay *display, int16_t x, int16_t y);
+
+// Frame renderers must clear through this rather than calling display->clear() directly.
+//
+// While OLEDDisplayUi is IN_TRANSITION it draws *two* frames into the same buffer before
+// committing: the outgoing one first at a sliding offset, then the incoming one on top. A frame
+// that clears unconditionally therefore wipes the outgoing frame that was just drawn, so the
+// transition renders as a blank screen instead of two frames sliding past each other. Only the
+// first draw of a cycle owns the clear - the outgoing frame mid-transition, or the current frame
+// when there is no transition at all (relationship NONE).
+//
+// Inline so this stays free: with transitions off the branch folds away to the original clear.
+static inline void clearForFrame(OLEDDisplay *display, const OLEDDisplayUiState *state)
+{
+    if (!state || state->transitionFrameRelationship != TransitionRelationship_INCOMING)
+        display->clear();
+}
+
+// The frame index this callback is drawing for.
+//
+// state->currentFrame names the *outgoing* frame for the entire duration of a transition, so any
+// frame that identifies itself from it - to pick which module, which favourite node, which page -
+// picks the wrong one while it is sliding in, and typically bails out and draws nothing until the
+// transition completes. transitionFrameTarget is only maintained by nextFrame(), never by
+// previousFrame(), so going backwards the incoming index has to be derived from the direction.
+// frameCount resolves the backwards wrap off frame 0, whose incoming frame is the *last* one.
+// Callers that identify themselves by index must pass it. The 0 default keeps the old, wrong answer
+// rather than a plausible-looking one, so a missing argument shows up as the same blank frame
+// instead of silently drawing the wrong content.
+static inline uint8_t frameIndexFor(const OLEDDisplayUiState *state, size_t frameCount = 0)
+{
+    if (!state)
+        return 0;
+    if (state->frameState == IN_TRANSITION && state->transitionFrameRelationship == TransitionRelationship_INCOMING) {
+        if (state->frameTransitionDirection < 0) {
+            if (state->currentFrame > 0)
+                return state->currentFrame - 1;
+            // Wrapping backwards from the first frame lands on the last. Forward wrap needs no
+            // special case: nextFrame() stores the wrapped index in transitionFrameTarget, which is
+            // why last-to-first always worked and first-to-last did not.
+            return frameCount > 0 ? (uint8_t)(frameCount - 1) : state->currentFrame;
+        }
+        return state->transitionFrameTarget;
+    }
+    return state->currentFrame;
+}
+
+// Ticks a frame transition is scaled against, published by the drag driver in Screen.cpp
+// because OLEDDisplayUi::ticksPerTransition is private. 0 means the current transition was
+// not started by a drag, so its progress cannot be derived and callers should not animate.
+uint16_t frameTransitionTicks();
+
+// Progress through the current frame transition, 0..1. Returns 0 when nothing is sliding or
+// when the scale is unknown, which reads as "sitting on the current frame".
+static inline float frameTransitionProgress(const OLEDDisplayUiState *state)
+{
+    if (!state || state->frameState != IN_TRANSITION)
+        return 0.0f;
+    const uint16_t ticks = frameTransitionTicks();
+    if (!ticks)
+        return 0.0f;
+    float p = (float)state->ticksSinceLastStateSwitch / (float)ticks;
+    if (p < 0.0f)
+        p = 0.0f;
+    if (p > 1.0f)
+        p = 1.0f;
+    return p;
+}
 
 // Inline so non-compact boards fold this to a constant false at every call site, cost-free.
 static inline bool isCompactPanel(OLEDDisplay *display)
