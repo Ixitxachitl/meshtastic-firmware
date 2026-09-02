@@ -1406,6 +1406,13 @@ static void screenDragEnd(OLEDDisplayUi *ui, const InputEvent *event, int16_t fr
         ui->getUiState()->ticksSinceLastStateSwitch = 0;
     }
 }
+#else
+// No drag driver, so no transition is ever finger-scaled - but frameTransitionProgress() in
+// SharedUIDisplay.h calls this unconditionally, so the symbol must exist in every screen build.
+uint16_t frameTransitionTicks()
+{
+    return 0;
+}
 #endif // BASEUI_HAS_TOUCH_DRAG
 
 int32_t Screen::runOnce()
