@@ -125,6 +125,9 @@ NRF54L15Bluetooth *nrf54l15Bluetooth = nullptr;
 #endif
 
 #ifdef ARCH_ESP32
+#if defined(SENSECAP_INDICATOR)
+#include <driver/i2c_master.h>
+#endif
 #ifdef DEBUG_PARTITION_TABLE
 #include "esp_partition.h"
 
@@ -1169,6 +1172,12 @@ void setup()
     SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, -1); // CS is an IO-expander pin, driven by RadioLib
     SPI.setFrequency(4000000);
     LOG_DEBUG("SPI2 restarted after ST7701 init (SCK=%d, MISO=%d, MOSI=%d)", LORA_SCK, LORA_MISO, LORA_MOSI);
+
+    // It also leaves I2C holding an aborted transaction that the next transfer trips over. Reset the
+    // FSM, not Wire.end(): deleting a bus the IO expander is still attached to is refused.
+    i2c_master_bus_handle_t i2cBus = NULL;
+    if (i2c_master_get_bus_handle(0, &i2cBus) == ESP_OK && i2c_master_bus_reset(i2cBus) == ESP_OK)
+        LOG_DEBUG("I2C bus 0 reset after ST7701 init");
 #endif
 
     auto rIf = initLoRa();
