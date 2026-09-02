@@ -13,6 +13,10 @@
 
 #include "Throttle.h"
 
+#if defined(LORA_DIO1_EXTENDED_IO) && defined(ARCH_ESP32)
+#include <Wire.h> // DIAGNOSTIC, not for merge - expander probe around lora.begin()
+#endif
+
 // Particular boards might define a different max power based on what their hardware can do, default to max power output if not
 // specified (may be dangerous if using external PA and SX126x power config forgotten)
 #if ARCH_PORTDUINO
@@ -107,7 +111,24 @@ template <typename T> bool SX126xInterface<T>::reinitChip()
     // FIXME: May want to set depending on a definition, currently all SX126x variant files use the DC-DC regulator option
     bool useRegulatorLDO = false; // Seems to depend on the connection to pin 9/DCC_SW - if an inductor DCDC?
 
+#if defined(LORA_DIO1_EXTENDED_IO) && defined(ARCH_ESP32)
+    // DIAGNOSTIC, not for merge. The expander write inside begin() fails with ESP_ERR_INVALID_STATE,
+    // which is either a NACK or an unserviced transaction; the IDF logs that would say which are
+    // compiled out (CONFIG_LOG_MAXIMUM_LEVEL=1). A NACK returns fast, an unserviced transaction
+    // burns the full 1000ms I2C_TIMEOUT_MS - so time begin(), and probe the expander either side to
+    // see whether it is acknowledging its address at all. endTransmission: 0=ok 2=addr NACK 5=timeout
+    Wire.beginTransmission(0x20);
+    uint8_t diagPre = Wire.endTransmission();
+    uint32_t diagT0 = millis();
+#endif
     int res = lora.begin(getFreq(), bw, sf, cr, syncWord, power, preambleLength, tcxoVoltage, useRegulatorLDO);
+#if defined(LORA_DIO1_EXTENDED_IO) && defined(ARCH_ESP32)
+    uint32_t diagBeginMs = millis() - diagT0;
+    uint32_t diagT1 = millis();
+    Wire.beginTransmission(0x20);
+    uint8_t diagPost = Wire.endTransmission();
+    LOG_INFO("DIAG expander 0x20: pre=%u post=%u (%ums), begin() took %ums", diagPre, diagPost, millis() - diagT1, diagBeginMs);
+#endif
 
 #ifdef SX126X_PA_RAMP_US
     // Set custom PA ramp time for boards requiring longer stabilization (e.g., T-Beam 1W needs >800us)
