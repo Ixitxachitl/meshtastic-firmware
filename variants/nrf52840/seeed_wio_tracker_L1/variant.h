@@ -83,6 +83,7 @@ static const uint8_t SCL = PIN_WIRE_SCL;
 
 #define HAS_SCREEN 1
 #define USE_SSD1306 1
+#define WAYPOINT_LIST_TINY_FONT // 64px of height fits one waypoint card in FONT_SMALL, two in FONT_TINY
 
 // SPI Configuration (SX1262)
 
