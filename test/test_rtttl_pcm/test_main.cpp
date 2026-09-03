@@ -385,6 +385,80 @@ void test_begin_tones_zero_duration_is_skipped()
     TEST_ASSERT_EQUAL_UINT32(2205, pcm.size());
 }
 
+// --- Note-level playback (the SenseCAP Indicator hands notes to its co-processor) ---
+
+// Pull a whole song as notes, so a case can assert on pitches and durations directly.
+static std::vector<ToneDuration> drainNotes(RtttlPcm &gen)
+{
+    std::vector<ToneDuration> out;
+    ToneDuration note;
+    for (int guard = 0; guard < 1000 && gen.nextNoteEvent(&note); guard++)
+        out.push_back(note);
+    return out;
+}
+
+void test_note_events_report_pitch_and_duration()
+{
+    // b=120 -> whole note 2000ms, so d=4 is 500ms and an 8th is 250ms.
+    const char *song = "t:d=4,o=5,b=120:c,8e,g";
+    RtttlPcm gen;
+    TEST_ASSERT_TRUE(gen.begin(song, strlen(song)));
+    auto notes = drainNotes(gen);
+    TEST_ASSERT_EQUAL_UINT32(3, notes.size());
+    TEST_ASSERT_EQUAL_INT(523, notes[0].frequency_khz);
+    TEST_ASSERT_EQUAL_INT(500, notes[0].duration_ms);
+    TEST_ASSERT_EQUAL_INT(659, notes[1].frequency_khz);
+    TEST_ASSERT_EQUAL_INT(250, notes[1].duration_ms);
+    TEST_ASSERT_EQUAL_INT(784, notes[2].frequency_khz);
+    TEST_ASSERT_EQUAL_INT(500, notes[2].duration_ms);
+    TEST_ASSERT_TRUE(gen.done());
+}
+
+void test_note_events_report_rest_as_zero_frequency()
+{
+    const char *song = "t:d=4,o=5,b=120:c,8p,c";
+    RtttlPcm gen;
+    TEST_ASSERT_TRUE(gen.begin(song, strlen(song)));
+    auto notes = drainNotes(gen);
+    TEST_ASSERT_EQUAL_UINT32(3, notes.size());
+    TEST_ASSERT_EQUAL_INT(0, notes[1].frequency_khz);
+    TEST_ASSERT_EQUAL_INT(250, notes[1].duration_ms);
+}
+
+void test_note_events_end_after_last_note()
+{
+    const char *song = "t:d=4,o=5,b=120:c";
+    RtttlPcm gen;
+    TEST_ASSERT_TRUE(gen.begin(song, strlen(song)));
+    ToneDuration note;
+    TEST_ASSERT_TRUE(gen.nextNoteEvent(&note));
+    TEST_ASSERT_FALSE(gen.nextNoteEvent(&note));
+    TEST_ASSERT_TRUE(gen.done());
+}
+
+void test_note_events_from_tone_list()
+{
+    // NOTE_SILENT (1Hz) is a rest here just as it is for the sample path.
+    const ToneDuration melody[] = {{440, 100}, {1, 50}, {880, 25}};
+    RtttlPcm gen;
+    TEST_ASSERT_TRUE(gen.beginTones(melody, 3));
+    auto notes = drainNotes(gen);
+    TEST_ASSERT_EQUAL_UINT32(3, notes.size());
+    TEST_ASSERT_EQUAL_INT(440, notes[0].frequency_khz);
+    TEST_ASSERT_EQUAL_INT(100, notes[0].duration_ms);
+    TEST_ASSERT_EQUAL_INT(0, notes[1].frequency_khz);
+    TEST_ASSERT_EQUAL_INT(50, notes[1].duration_ms);
+    TEST_ASSERT_EQUAL_INT(880, notes[2].frequency_khz);
+    TEST_ASSERT_EQUAL_INT(25, notes[2].duration_ms);
+}
+
+void test_note_events_rejected_before_begin()
+{
+    RtttlPcm gen;
+    ToneDuration note;
+    TEST_ASSERT_FALSE(gen.nextNoteEvent(&note));
+}
+
 void setup()
 {
     UNITY_BEGIN();
@@ -424,6 +498,12 @@ void setup()
     RUN_TEST(test_begin_tones_clamps_count);
     RUN_TEST(test_begin_tones_rejects_empty);
     RUN_TEST(test_begin_tones_zero_duration_is_skipped);
+
+    RUN_TEST(test_note_events_report_pitch_and_duration);
+    RUN_TEST(test_note_events_report_rest_as_zero_frequency);
+    RUN_TEST(test_note_events_end_after_last_note);
+    RUN_TEST(test_note_events_from_tone_list);
+    RUN_TEST(test_note_events_rejected_before_begin);
 
     exit(UNITY_END());
 }

@@ -22,7 +22,7 @@ typedef enum _meshtastic_InterdeviceVersion {
     /* Never use 1: ping/pong were bools before the handshake existed, and a
  bool true is the same varint on the wire as the number 1, so firmware
  predating the handshake would pass it. */
-    meshtastic_InterdeviceVersion_INTERDEVICE_VERSION_CURRENT = 2
+    meshtastic_InterdeviceVersion_INTERDEVICE_VERSION_CURRENT = 3
 } meshtastic_InterdeviceVersion;
 
 /* Defines the supported file operations */
@@ -162,13 +162,36 @@ typedef struct _meshtastic_I2CResult {
     meshtastic_I2CResult_read_data_t read_data; /* Data read from the device, empty for write-only transactions */
 } meshtastic_I2CResult;
 
+/* One step of a melody: hold `frequency` for `duration_ms`. A frequency of
+ zero is a rest, which is not the same as leaving the step out: a rest is
+ what tells two notes of the same pitch apart from one note twice as long. */
+typedef struct _meshtastic_Note {
+    uint16_t frequency; /* Hz, 0 = rest (stays silent for the duration) */
+    uint16_t duration_ms; /* how long the note or rest is held */
+} meshtastic_Note;
+
+/* Play a melody on the buzzer of the co-processor. A whole tune travels in
+ one message, so the player is handed a finite list instead of having to
+ guess from a gap in arrival times where a run of single beeps ended. */
+typedef struct _meshtastic_Beep {
+    /* The notes, played back to back in the order given. An empty list stops
+ playback and drops whatever is still queued. */
+    pb_size_t notes_count;
+    meshtastic_Note notes[64];
+    /* Queue these notes behind what is already playing instead of replacing
+ it, so a tune longer than the per-message limit (the max_count in
+ interdevice.options) can be sent in several messages and still play
+ gaplessly. Ignored when notes is empty: a stop takes effect at once. */
+    bool append;
+} meshtastic_Beep;
+
 typedef PB_BYTES_ARRAY_T(128) meshtastic_InterdeviceMessage_i2c_scan_result_t;
 /* Main message for interdevice communication */
 typedef struct _meshtastic_InterdeviceMessage {
     pb_size_t which_data;
     union {
         char nmea[1024];
-        uint16_t beep;
+        meshtastic_Beep beep;
         meshtastic_I2CTransaction i2c_transaction;
         meshtastic_I2CResult i2c_result;
         bool i2c_scan; /* Request: scan the secondary I2C bus */
@@ -245,6 +268,8 @@ extern "C" {
 
 #define meshtastic_I2CResult_status_ENUMTYPE meshtastic_I2CResult_Status
 
+
+
 #define meshtastic_InterdeviceMessage_data_ping_ENUMTYPE meshtastic_InterdeviceVersion
 #define meshtastic_InterdeviceMessage_data_pong_ENUMTYPE meshtastic_InterdeviceVersion
 #define meshtastic_InterdeviceMessage_data_sd_command_ENUMTYPE meshtastic_SdCommand
@@ -256,12 +281,16 @@ extern "C" {
 #define meshtastic_I2CTransaction_init_default   {0, {0, {0}}, 0}
 #define meshtastic_SdCardInfo_init_default       {0, _meshtastic_SdCardInfo_CardType_MIN, _meshtastic_SdCardInfo_FatType_MIN, 0, 0, 0, 0, 0, 0}
 #define meshtastic_I2CResult_init_default        {_meshtastic_I2CResult_Status_MIN, {0, {0}}}
+#define meshtastic_Note_init_default             {0, 0}
+#define meshtastic_Beep_init_default             {0, {meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default}, 0}
 #define meshtastic_InterdeviceMessage_init_default {0, {""}, 0}
 #define meshtastic_FileTransfer_init_zero        {_meshtastic_FileOperation_MIN, "", {0, {0}}, _meshtastic_FileStatus_MIN, "", 0, 0, 0}
 #define meshtastic_DirectoryListing_init_zero    {"", 0, {"", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}, _meshtastic_FileStatus_MIN, "", 0, 0}
 #define meshtastic_I2CTransaction_init_zero      {0, {0, {0}}, 0}
 #define meshtastic_SdCardInfo_init_zero          {0, _meshtastic_SdCardInfo_CardType_MIN, _meshtastic_SdCardInfo_FatType_MIN, 0, 0, 0, 0, 0, 0}
 #define meshtastic_I2CResult_init_zero           {_meshtastic_I2CResult_Status_MIN, {0, {0}}}
+#define meshtastic_Note_init_zero                {0, 0}
+#define meshtastic_Beep_init_zero                {0, {meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero, meshtastic_Note_init_zero}, 0}
 #define meshtastic_InterdeviceMessage_init_zero  {0, {""}, 0}
 
 /* Field tags (for use in manual encoding/decoding) */
@@ -293,6 +322,10 @@ extern "C" {
 #define meshtastic_SdCardInfo_unformatted_tag    9
 #define meshtastic_I2CResult_status_tag          1
 #define meshtastic_I2CResult_read_data_tag       2
+#define meshtastic_Note_frequency_tag            1
+#define meshtastic_Note_duration_ms_tag          2
+#define meshtastic_Beep_notes_tag                1
+#define meshtastic_Beep_append_tag               2
 #define meshtastic_InterdeviceMessage_nmea_tag   1
 #define meshtastic_InterdeviceMessage_beep_tag   2
 #define meshtastic_InterdeviceMessage_i2c_transaction_tag 3
@@ -358,9 +391,22 @@ X(a, STATIC,   SINGULAR, BYTES,    read_data,         2)
 #define meshtastic_I2CResult_CALLBACK NULL
 #define meshtastic_I2CResult_DEFAULT NULL
 
+#define meshtastic_Note_FIELDLIST(X, a) \
+X(a, STATIC,   SINGULAR, UINT32,   frequency,         1) \
+X(a, STATIC,   SINGULAR, UINT32,   duration_ms,       2)
+#define meshtastic_Note_CALLBACK NULL
+#define meshtastic_Note_DEFAULT NULL
+
+#define meshtastic_Beep_FIELDLIST(X, a) \
+X(a, STATIC,   REPEATED, MESSAGE,  notes,             1) \
+X(a, STATIC,   SINGULAR, BOOL,     append,            2)
+#define meshtastic_Beep_CALLBACK NULL
+#define meshtastic_Beep_DEFAULT NULL
+#define meshtastic_Beep_notes_MSGTYPE meshtastic_Note
+
 #define meshtastic_InterdeviceMessage_FIELDLIST(X, a) \
 X(a, STATIC,   ONEOF,    STRING,   (data,nmea,data.nmea),   1) \
-X(a, STATIC,   ONEOF,    UINT32,   (data,beep,data.beep),   2) \
+X(a, STATIC,   ONEOF,    MESSAGE,  (data,beep,data.beep),   2) \
 X(a, STATIC,   ONEOF,    MESSAGE,  (data,i2c_transaction,data.i2c_transaction),   3) \
 X(a, STATIC,   ONEOF,    MESSAGE,  (data,i2c_result,data.i2c_result),   4) \
 X(a, STATIC,   ONEOF,    BOOL,     (data,i2c_scan,data.i2c_scan),   5) \
@@ -376,6 +422,7 @@ X(a, STATIC,   ONEOF,    UENUM,    (data,sd_command,data.sd_command),  14) \
 X(a, STATIC,   SINGULAR, UINT32,   id,               15)
 #define meshtastic_InterdeviceMessage_CALLBACK NULL
 #define meshtastic_InterdeviceMessage_DEFAULT NULL
+#define meshtastic_InterdeviceMessage_data_beep_MSGTYPE meshtastic_Beep
 #define meshtastic_InterdeviceMessage_data_i2c_transaction_MSGTYPE meshtastic_I2CTransaction
 #define meshtastic_InterdeviceMessage_data_i2c_result_MSGTYPE meshtastic_I2CResult
 #define meshtastic_InterdeviceMessage_data_file_transfer_MSGTYPE meshtastic_FileTransfer
@@ -387,6 +434,8 @@ extern const pb_msgdesc_t meshtastic_DirectoryListing_msg;
 extern const pb_msgdesc_t meshtastic_I2CTransaction_msg;
 extern const pb_msgdesc_t meshtastic_SdCardInfo_msg;
 extern const pb_msgdesc_t meshtastic_I2CResult_msg;
+extern const pb_msgdesc_t meshtastic_Note_msg;
+extern const pb_msgdesc_t meshtastic_Beep_msg;
 extern const pb_msgdesc_t meshtastic_InterdeviceMessage_msg;
 
 /* Defines for backwards compatibility with code written before nanopb-0.4.0 */
@@ -395,15 +444,19 @@ extern const pb_msgdesc_t meshtastic_InterdeviceMessage_msg;
 #define meshtastic_I2CTransaction_fields &meshtastic_I2CTransaction_msg
 #define meshtastic_SdCardInfo_fields &meshtastic_SdCardInfo_msg
 #define meshtastic_I2CResult_fields &meshtastic_I2CResult_msg
+#define meshtastic_Note_fields &meshtastic_Note_msg
+#define meshtastic_Beep_fields &meshtastic_Beep_msg
 #define meshtastic_InterdeviceMessage_fields &meshtastic_InterdeviceMessage_msg
 
 /* Maximum encoded size of messages (where known) */
 #define MESHTASTIC_MESHTASTIC_INTERDEVICE_PB_H_MAX_SIZE meshtastic_InterdeviceMessage_size
+#define meshtastic_Beep_size                     642
 #define meshtastic_DirectoryListing_size         4657
 #define meshtastic_FileTransfer_size             4646
 #define meshtastic_I2CResult_size                261
 #define meshtastic_I2CTransaction_size           271
 #define meshtastic_InterdeviceMessage_size       4666
+#define meshtastic_Note_size                     8
 #define meshtastic_SdCardInfo_size               45
 
 #ifdef __cplusplus

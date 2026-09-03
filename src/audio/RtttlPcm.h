@@ -58,6 +58,12 @@ class RtttlPcm
     /// written, which is less than maxFrames only when the song has ended.
     size_t generate(int16_t *interleavedLR, size_t maxFrames);
 
+    /// Pull the next note as a pitch and a duration instead of as samples, for a sink
+    /// that makes the tone itself: the SenseCAP Indicator's buzzer hangs off a
+    /// co-processor that is handed notes. A rest is reported as frequency 0. Returns
+    /// false once the song has ended. Do not mix with generate() on the same song.
+    bool nextNoteEvent(ToneDuration *out);
+
     /// True once every note has been generated.
     bool done() const { return _done; }
 
@@ -91,6 +97,11 @@ class RtttlPcm
     int _defaultDuration = 4;
     int _defaultOctave = 6;
     int _wholeNoteMs = 0;
+
+    // The note startNote() last armed, kept for nextNoteEvent(): the synthesis state
+    // below has already been folded into sample counts and cannot be read back.
+    int _noteFreqHz = 0;
+    int _noteDurationMs = 0;
 
     // Samples per wave period in 22.10 fixed point; 0 means the note is a rest.
     int32_t _samplesPerWaveFP10 = 0;
