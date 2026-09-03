@@ -396,12 +396,7 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         const char *expireLabel = expireStr[0] ? expireStr : "--";
         const uint16_t metaWidth =
             std::max<uint16_t>(display->getStringWidth(distanceLabel), display->getStringWidth(expireLabel)) + 4;
-        // The arrow is drawn on the description row when there is one, so only a card without a
-        // description has it sharing a meta row. Everywhere else the column takes the full width,
-        // which is what keeps the coordinates on one line.
-        const bool arrowSharesMetaRow = showCompass && !hasDescription;
-        const int16_t metaRight = arrowSharesMetaRow ? compactContentRight : (int16_t)(display->getWidth() - 1);
-        const int16_t metaLeft = std::max<int16_t>(nameX + 16, metaRight - metaWidth + 1);
+        const int16_t metaLeft = std::max<int16_t>(nameX + 16, compactContentRight - metaWidth);
         const int16_t textRight = metaLeft - 4;
         const uint16_t nameWidth = (textRight > nameX) ? (textRight - nameX) : 0;
         const std::string shownName = graphics::UIRenderer::truncateStringWithEmotes(display, safeName, nameWidth);
@@ -450,8 +445,8 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
             display->drawString(nameX, coordRow2Y,
                                 graphics::UIRenderer::truncateStringWithEmotes(display, coordLine2, nameWidth).c_str());
         display->setTextAlignment(TEXT_ALIGN_RIGHT);
-        display->drawString(metaRight, row1Y, distanceLabel);
-        display->drawString(metaRight, rowMetaY, expireLabel);
+        display->drawString(metaLeft + metaWidth - 1, row1Y, distanceLabel);
+        display->drawString(metaLeft + metaWidth - 1, rowMetaY, expireLabel);
         display->setTextAlignment(TEXT_ALIGN_LEFT);
 
         const int16_t separatorY = cardBottom + 1;
