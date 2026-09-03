@@ -405,7 +405,8 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
 
         drawWaypointIcon(display, wp, 0, row1Y, iconBox);
         graphics::UIRenderer::drawStringWithEmotes(display, nameX, row1Y, shownName, WAYPOINT_LIST_FONT_HEIGHT, 1, false);
-        const int16_t underlineY = row1Y + WAYPOINT_LIST_FONT_HEIGHT;
+        // One inside the row, so the rule sits under the glyphs rather than against the next line.
+        const int16_t underlineY = row1Y + WAYPOINT_LIST_FONT_HEIGHT - 1;
         const int16_t underlineRight =
             std::min<int16_t>(textRight, nameX + graphics::UIRenderer::measureStringWithEmotes(display, shownName) - 1);
         if (underlineRight >= nameX)
