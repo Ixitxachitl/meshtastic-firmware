@@ -1299,7 +1299,13 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
             // maxTextLines is 5 or 6; getTextPositions() holds 7 slots, so this stays in range.
             const int yBelowContent = row(maxTextLines) + FONT_HEIGHT_SMALL + 2;
 #else
-            const int yBelowContent = (line > 0 && line <= 5) ? (row(line - 1) + FONT_HEIGHT_SMALL + 2) : row(1);
+            // Sit below the rows this node actually filled, clamped to the text budget. The
+            // old fallback aimed at row(1) once more than 5 slots were used - but `line` is
+            // the next free slot, so five drawn rows already trip it, and on a High screen
+            // (six slots) most favorites do. That put the compass top right under the header
+            // and it swallowed the whole body.
+            const int usedLines = (line > 1) ? (line - 1) : 1;
+            const int yBelowContent = row(usedLines < maxTextLines ? usedLines : maxTextLines) + FONT_HEIGHT_SMALL + 2;
 #endif
 #if defined(USE_EINK)
             const int iconSize = (currentResolution == ScreenResolution::High) ? 16 : 8;

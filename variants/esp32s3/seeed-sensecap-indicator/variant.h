@@ -85,6 +85,11 @@
 #define TCXO_OPTIONAL // handle Indicator V1 and V2
 #define SX126X_DIO3_TCXO_VOLTAGE 2.4
 
+// Reserve the full text budget for the favorites compass instead of sizing it to whatever
+// rows the current node happened to fill, so it stays the size the position screen's compass
+// is rather than growing to fill the body on sparse nodes.
+#define BASEUI_FIXED_COMPASS_SIZE 1
+
 #define USE_VIRTUAL_KEYBOARD 1
 #define DISPLAY_CLOCK_FRAME 1
 
