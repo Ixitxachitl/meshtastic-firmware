@@ -18,6 +18,8 @@ void RtttlPcm::reset()
     _toneCount = 0;
     _toneIndex = 0;
     _toneMode = false;
+    _noteFreqHz = 0;
+    _noteDurationMs = 0;
     _samplesPerWaveFP10 = 0;
     _phaseFP10 = 0;
     _noteSamples = 0;
@@ -285,10 +287,26 @@ void RtttlPcm::startNote(int freqHz, int durationMs)
     if (durationMs < 0)
         durationMs = 0;
 
+    _noteFreqHz = freqHz;
+    _noteDurationMs = durationMs;
     _samplesPerWaveFP10 = freqHz > 0 ? (int32_t)((kSampleRate << 10) / (uint32_t)freqHz) : 0;
     _phaseFP10 = 0;
     _noteSamples = (kSampleRate * (uint32_t)durationMs) / 1000;
     _samplesSent = 0;
+}
+
+bool RtttlPcm::nextNoteEvent(ToneDuration *out)
+{
+    if (_done || !out)
+        return false;
+
+    // begin()/beginTones() already armed the first note, so hand out the armed one
+    // and arm the next; the song ends when there is nothing left to arm.
+    out->frequency_khz = _noteFreqHz;
+    out->duration_ms = _noteDurationMs;
+    if (!advance())
+        _done = true;
+    return true;
 }
 
 bool RtttlPcm::advance()

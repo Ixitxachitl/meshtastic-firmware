@@ -324,12 +324,29 @@ bool SensecapIndicator::wait_ready(uint32_t timeout_ms)
     return link_compatible;
 }
 
-bool SensecapIndicator::beep(uint32_t duration_ms)
+bool SensecapIndicator::beep(const meshtastic_Note *notes, size_t count, bool append)
 {
-    meshtastic_InterdeviceMessage msg = meshtastic_InterdeviceMessage_init_zero;
+    if (count > max_notes)
+        count = max_notes;
+    if (count && !notes)
+        return false;
+
+    InFlight busy(requests_in_flight);
+    concurrency::LockGuard guard(&link_lock);
+    if (!link_ready())
+        return false;
+
+    // Staged in the shared tx_message like every other request: an
+    // InterdeviceMessage is ~4.6KB, too large to build on a task stack
+    meshtastic_InterdeviceMessage &msg = tx_message;
+    memset(&msg, 0, sizeof(msg));
     msg.which_data = meshtastic_InterdeviceMessage_beep_tag;
-    msg.data.beep = duration_ms;
-    return send_uplink(msg);
+    msg.data.beep.notes_count = count;
+    msg.data.beep.append = append;
+    if (count)
+        memcpy(msg.data.beep.notes, notes, count * sizeof(meshtastic_Note));
+    // no response to wait for, so the request keeps the unsolicited id 0
+    return send_uplink_unlocked(msg);
 }
 
 bool SensecapIndicator::send_uplink(const meshtastic_InterdeviceMessage &message)

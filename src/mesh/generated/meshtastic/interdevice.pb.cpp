@@ -21,6 +21,12 @@ PB_BIND(meshtastic_SdCardInfo, meshtastic_SdCardInfo, AUTO)
 PB_BIND(meshtastic_I2CResult, meshtastic_I2CResult, 2)
 
 
+PB_BIND(meshtastic_Note, meshtastic_Note, AUTO)
+
+
+PB_BIND(meshtastic_Beep, meshtastic_Beep, 2)
+
+
 PB_BIND(meshtastic_InterdeviceMessage, meshtastic_InterdeviceMessage, 4)
 
 

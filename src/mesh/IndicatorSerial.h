@@ -27,9 +27,13 @@ class SensecapIndicator : public concurrency::OSThread
     // serialize the shared TX buffer against the request methods
     bool send_uplink(const meshtastic_InterdeviceMessage &message);
 
-    // Drive the RP2040's buzzer: beep for duration_ms (fixed pitch on the stock co-processor
-    // firmware), 0 stops an in-progress beep. Fire-and-forget, no response expected.
-    bool beep(uint32_t duration_ms);
+    // Notes that fit in one Beep message; a longer melody continues in appended frames
+    static constexpr size_t max_notes = pb_arraysize(meshtastic_Beep, notes);
+    // Play a melody on the RP2040's buzzer: pitch (Hz, 0 for a rest) and duration
+    // pairs, played back to back. `append` queues them behind what is already
+    // sounding, a count of 0 stops playback and drops the queue. Fire-and-forget,
+    // no response expected.
+    bool beep(const meshtastic_Note *notes, size_t count, bool append = false);
 
     // Run one tunneled I2C transaction: an optional write of wlen bytes
     // followed by an optional read of rlen bytes with repeated start. The

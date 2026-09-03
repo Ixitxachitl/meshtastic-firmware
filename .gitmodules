@@ -1,7 +1,7 @@
 [submodule "protobufs"]
 	path = protobufs
 	url = https://github.com/Ixitxachitl/meshtastic-protobufs.git
-	branch = message-order
+	branch = beep-tones
 [submodule "meshtestic"]
 	path = meshtestic
 	url = https://github.com/meshtastic/meshTestic
