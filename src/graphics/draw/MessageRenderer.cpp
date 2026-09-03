@@ -465,7 +465,10 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     const int scrollBottom = SCREEN_HEIGHT - navHeight;
     // Rounded screens start the body below the header margin; getTextPositions(display)[1] + BASEUI_BELOW_HEADER_MARGIN
     const int contentTop = compactPanel ? 0 : navHeight;
-    const int usableHeight = compactPanel ? scrollBottom - contentTop : scrollBottom;
+    // The band actually drawn into: contentTop down to scrollBottom. Off compact panels this used to
+    // be scrollBottom alone, overstating the viewport by contentTop - and newest-last *rests* at the
+    // scroll limit, so the newest message sat clipped by the panel edge by exactly that much.
+    const int usableHeight = scrollBottom - contentTop;
     constexpr int LEFT_MARGIN = 2 + BASEUI_BODY_LR_MARGIN;
     constexpr int RIGHT_MARGIN = 2 + BASEUI_BODY_LR_MARGIN;
     constexpr int SCROLLBAR_WIDTH = 3;
