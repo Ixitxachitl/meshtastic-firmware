@@ -1331,7 +1331,7 @@ void NodeDB::installDefaultModuleConfig()
 #define HAS_NOTIFICATION_LED
 #endif
 #if defined(PIN_BUZZER) || defined(PIN_VIBRATION) || defined(HAS_NOTIFICATION_LED) ||                                            \
-    defined(NEOPIXEL_STATUS_NOTIFICATION_PIN) || defined(HAS_I2S_SPEAKER_NRF52)
+    defined(NEOPIXEL_STATUS_NOTIFICATION_PIN) || defined(HAS_I2S_SPEAKER_NRF52) || defined(SENSECAP_INDICATOR)
     moduleConfig.external_notification.enabled = true;
 #endif
 
@@ -1342,6 +1342,9 @@ void NodeDB::installDefaultModuleConfig()
 #elif defined(HAS_I2S_SPEAKER_NRF52)
     // No PWM piezo pin - alert playback goes through NRF52RtttlPlayer/I2S instead,
     // gated only on alert_message_buzzer + canBuzz(), not output_buzzer/use_pwm.
+    moduleConfig.external_notification.alert_message_buzzer = true;
+#elif defined(SENSECAP_INDICATOR)
+    // Buzzer is on the RP2040, so there is no PIN_BUZZER to key off; same gating as above.
     moduleConfig.external_notification.alert_message_buzzer = true;
 #endif
 

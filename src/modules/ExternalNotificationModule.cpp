@@ -46,6 +46,10 @@ bool ascending = true;
 #include "platform/nrf52/NRF52RtttlPlayer.h"
 #endif
 
+#if defined(SENSECAP_INDICATOR)
+#include "audio/IndicatorBuzzer.h"
+#endif
+
 /*
     Documentation:
         https://meshtastic.org/docs/configuration/module/external-notification
@@ -87,6 +91,9 @@ int32_t ExternalNotificationModule::runOnce()
 #endif
 #if defined(HAS_I2S_SPEAKER_NRF52)
         isRtttlPlaying = isRtttlPlaying || nrf52RtttlPlayer.isPlaying();
+#endif
+#if defined(SENSECAP_INDICATOR)
+        isRtttlPlaying = isRtttlPlaying || indicatorBuzzer.isPlaying();
 #endif
         // isNagging is the armed flag; nagCycleCutoff holds a real deadline only while it is set
         // (UINT32_MAX once stopped, 1 at boot), so short-circuit before the comparison.
@@ -171,8 +178,17 @@ int32_t ExternalNotificationModule::runOnce()
             delay = EXT_NOTIFICATION_FAST_THREAD_MS;
         }
 #endif
-#if !MESHTASTIC_EXCLUDE_RTTTL
-        // now let the PWM buzzer play
+#if defined(SENSECAP_INDICATOR) && !MESHTASTIC_EXCLUDE_RTTTL
+        // The co-processor holds the whole ringtone and times it itself, so there is
+        // nothing to tick here: each nag cycle only has to hand it over again.
+        if (canBuzz() && buzzerShouldAlert && !indicatorBuzzer.isPlaying() && isNagging &&
+            !Throttle::deadlinePassed(nagCycleCutoff)) {
+            indicatorBuzzer.beginRtttl(rtttlConfig.ringtone, strlen(rtttlConfig.ringtone));
+        }
+#endif
+#if !MESHTASTIC_EXCLUDE_RTTTL && !defined(SENSECAP_INDICATOR)
+        // now let the PWM buzzer play (never on the Indicator: every GPIO a config could
+        // name there belongs to the panel or the RP2040 link, see triggerBuzzerOutput)
         if (moduleConfig.external_notification.use_pwm && config.device.buzzer_gpio && canBuzz() && buzzerShouldAlert) {
             if (rtttl::isPlaying()) {
                 rtttl::play();
@@ -296,6 +312,9 @@ void ExternalNotificationModule::stopNow()
 #endif
 #if defined(HAS_I2S_SPEAKER_NRF52)
     nrf52RtttlPlayer.stop();
+#endif
+#if defined(SENSECAP_INDICATOR)
+    indicatorBuzzer.stop();
 #endif
     // Turn off all outputs
     LOG_INFO("Turning off setExternalStates");
@@ -479,11 +498,21 @@ ProcessMessage ExternalNotificationModule::handleReceived(const meshtastic_MeshP
 
 void ExternalNotificationModule::triggerBuzzerOutput()
 {
+#if defined(SENSECAP_INDICATOR) && !MESHTASTIC_EXCLUDE_RTTTL
+    // The only buzzer on this board is on the RP2040. use_pwm/use_i2s in a saved config
+    // describe hardware it does not have, and following them is destructive: the PWM branch
+    // with no buzzer_gpio configured plays the ringtone as PWM on GPIO0, which here is the
+    // panel's red MSB - silent buzzer, and every white on the screen turns pale blue.
+    indicatorBuzzer.beginRtttl(rtttlConfig.ringtone, strlen(rtttlConfig.ringtone));
+    return;
+#endif
     if (moduleConfig.external_notification.use_i2s_as_buzzer) {
 #if defined(HAS_I2S) && !MESHTASTIC_EXCLUDE_RTTTL
         audioThread->beginRttl(rtttlConfig.ringtone, strlen_P(rtttlConfig.ringtone));
 #endif
-    } else if (moduleConfig.external_notification.use_pwm) {
+    } else if (moduleConfig.external_notification.use_pwm && config.device.buzzer_gpio) {
+        // buzzer_gpio guard: with use_pwm set but no pin configured this called
+        // rtttl::begin(0, ...), and tone(0) claims GPIO0 on whatever board this is
 #if !MESHTASTIC_EXCLUDE_RTTTL
         rtttl::begin(config.device.buzzer_gpio, rtttlConfig.ringtone);
 #endif
