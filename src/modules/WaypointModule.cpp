@@ -369,7 +369,7 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         const int16_t row1Y = rowTop;
         const int16_t row2Y = row1Y + WAYPOINT_LIST_FONT_HEIGHT + 1;
         const int16_t rowMetaY = hasDescription ? (row2Y + WAYPOINT_LIST_FONT_HEIGHT + 1) : row2Y;
-        const int16_t cardBottom = rowMetaY + WAYPOINT_LIST_FONT_HEIGHT;
+        int16_t cardBottom = rowMetaY + WAYPOINT_LIST_FONT_HEIGHT; // grows below if the fix has to wrap
         if (cardBottom > contentBottom)
             break;
 
@@ -396,12 +396,34 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         const char *expireLabel = expireStr[0] ? expireStr : "--";
         const uint16_t metaWidth =
             std::max<uint16_t>(display->getStringWidth(distanceLabel), display->getStringWidth(expireLabel)) + 4;
-        const int16_t metaLeft = std::max<int16_t>(nameX + 16, compactContentRight - metaWidth);
+        // The arrow is drawn on the description row when there is one, so only a card without a
+        // description has it sharing a meta row. Everywhere else the column takes the full width,
+        // which is what keeps the coordinates on one line.
+        const bool arrowSharesMetaRow = showCompass && !hasDescription;
+        const int16_t metaRight = arrowSharesMetaRow ? compactContentRight : (int16_t)(display->getWidth() - 1);
+        const int16_t metaLeft = std::max<int16_t>(nameX + 16, metaRight - metaWidth + 1);
         const int16_t textRight = metaLeft - 4;
         const uint16_t nameWidth = (textRight > nameX) ? (textRight - nameX) : 0;
         const std::string shownName = graphics::UIRenderer::truncateStringWithEmotes(display, safeName, nameWidth);
         const std::string shownDescription =
             hasDescription ? graphics::UIRenderer::truncateStringWithEmotes(display, description, nameWidth) : std::string();
+
+        // Half a fix is no use, so a coordinate pair too wide for the column wraps at its comma and
+        // the card grows to match. Wrapping inside a card sized for one line is what used to put it
+        // over the divider and into the next waypoint.
+        std::string coordLine1 = coordStr;
+        std::string coordLine2;
+        const char *coordSplit = strchr(coordStr, ',');
+        if (coordSplit && nameWidth > 0 && display->getStringWidth(coordStr) > nameWidth) {
+            coordLine1.assign(coordStr, (size_t)(coordSplit - coordStr) + 1); // keep the comma on the first line
+            coordLine2.assign(coordSplit + 1);
+        }
+        const int16_t coordRow2Y = rowMetaY + WAYPOINT_LIST_FONT_HEIGHT + 1;
+        if (!coordLine2.empty()) {
+            cardBottom = coordRow2Y + WAYPOINT_LIST_FONT_HEIGHT;
+            if (cardBottom > contentBottom)
+                break;
+        }
 
         drawWaypointIcon(display, wp, 0, row1Y, iconBox);
         graphics::UIRenderer::drawStringWithEmotes(display, nameX, row1Y, shownName, WAYPOINT_LIST_FONT_HEIGHT, 1, false);
@@ -420,10 +442,16 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
             graphics::NodeListRenderer::drawRelativeCompassArrow(display, compactArrowCenterX, compactArrowCenterY,
                                                                  graphics::CompassRenderer::radiansToDegrees360(bearingToOther));
 
-        display->drawStringMaxWidth(nameX, rowMetaY, nameWidth, coordStr);
+        // Truncated rather than wrapped: a second line would be drawn past cardBottom, over the
+        // divider and into the next waypoint.
+        display->drawString(nameX, rowMetaY,
+                            graphics::UIRenderer::truncateStringWithEmotes(display, coordLine1, nameWidth).c_str());
+        if (!coordLine2.empty())
+            display->drawString(nameX, coordRow2Y,
+                                graphics::UIRenderer::truncateStringWithEmotes(display, coordLine2, nameWidth).c_str());
         display->setTextAlignment(TEXT_ALIGN_RIGHT);
-        display->drawString(metaLeft + metaWidth - 1, row1Y, distanceLabel);
-        display->drawString(metaLeft + metaWidth - 1, rowMetaY, expireLabel);
+        display->drawString(metaRight, row1Y, distanceLabel);
+        display->drawString(metaRight, rowMetaY, expireLabel);
         display->setTextAlignment(TEXT_ALIGN_LEFT);
 
         const int16_t separatorY = cardBottom + 1;
