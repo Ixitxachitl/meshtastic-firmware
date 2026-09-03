@@ -2218,6 +2218,19 @@ int Screen::handleInputEvent(const InputEvent *event)
             }
         }
     }
+    // UP/DOWN scrolls the waypoint list, which is taller than the panel once a card wraps
+    if (framesetInfo.positions.waypoint != 255 && ui->getUiState()->currentFrame == framesetInfo.positions.waypoint) {
+        if (event->inputEvent == INPUT_BROKER_UP) {
+            WaypointModule::scrollUp();
+            setFastFramerate();
+            return 0;
+        }
+        if (event->inputEvent == INPUT_BROKER_DOWN) {
+            WaypointModule::scrollDown();
+            setFastFramerate();
+            return 0;
+        }
+    }
     // UP/DOWN in node list screens scrolls through node pages
     if (ui->getUiState()->currentFrame == framesetInfo.positions.nodelist_nodes ||
         ui->getUiState()->currentFrame == framesetInfo.positions.nodelist_location ||
