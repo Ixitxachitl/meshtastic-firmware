@@ -35,6 +35,9 @@ namespace
 {
 
 constexpr int16_t WAYPOINT_ROW_GAP = 2;
+// Breathing room under the header bar. getTextPositions() is queried with the body font selected,
+// so on a tiny-font variant its body top sits tight against the FONT_SMALL header.
+constexpr int16_t WAYPOINT_HEADER_GAP = 2;
 
 // Short panels fit one card in the body font. WAYPOINT_LIST_TINY_FONT trades legibility
 // for rows; the header keeps FONT_SMALL either way, so textPos still sizes the body top.
@@ -55,6 +58,18 @@ void drawFallbackWaypointIcon(OLEDDisplay *display, int16_t left, int16_t top, u
     display->drawLine(cx, circleY + r, cx, top + boxSize - 2);
     display->setPixel(cx - 1, top + boxSize - 2);
     display->setPixel(cx + 1, top + boxSize - 2);
+}
+
+// drawStringWithEmotes blits emote bitmaps at their native size - the height argument only centres
+// them - so this, not the font height, is what an icon actually occupies.
+uint16_t widestEmoteWidth()
+{
+    static uint16_t widest = 0;
+    if (widest == 0) {
+        for (int i = 0; i < graphics::numEmotes; ++i)
+            widest = std::max<uint16_t>(widest, (uint16_t)graphics::emotes[i].width);
+    }
+    return widest;
 }
 
 void drawWaypointIcon(OLEDDisplay *display, const meshtastic_Waypoint &wp, int16_t left, int16_t top, uint16_t boxSize)
@@ -320,11 +335,14 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     meshtastic_PositionLite ownPos = meshtastic_PositionLite_init_zero;
     const bool haveOwnPos = ourNode && nodeDB->copyNodePosition(ourNode->num, ownPos);
 
-    const uint16_t iconWidth = WAYPOINT_LIST_FONT_HEIGHT;
+    // The fallback pin is drawn geometry and follows the font; an emote does not, so the column is
+    // reserved at whichever is wider or the name is drawn over the icon.
+    const uint16_t iconBox = WAYPOINT_LIST_FONT_HEIGHT;
+    const uint16_t iconWidth = std::max<uint16_t>(iconBox, widestEmoteWidth());
     const uint16_t iconGap = 3;
     const uint16_t nameX = iconWidth + iconGap;
     const int16_t contentBottom = display->getHeight() - 1;
-    int16_t rowTop = textPos[1];
+    int16_t rowTop = textPos[1] + WAYPOINT_HEADER_GAP;
 
     for (size_t i = 0; i < totalWaypoints; ++i) {
         const StoredWaypoint &entry = *entries[i];
@@ -385,7 +403,7 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         const std::string shownDescription =
             hasDescription ? graphics::UIRenderer::truncateStringWithEmotes(display, description, nameWidth) : std::string();
 
-        drawWaypointIcon(display, wp, 0, row1Y, iconWidth);
+        drawWaypointIcon(display, wp, 0, row1Y, iconBox);
         graphics::UIRenderer::drawStringWithEmotes(display, nameX, row1Y, shownName, WAYPOINT_LIST_FONT_HEIGHT, 1, false);
         const int16_t underlineY = row1Y + WAYPOINT_LIST_FONT_HEIGHT;
         const int16_t underlineRight =
