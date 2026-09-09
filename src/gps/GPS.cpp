@@ -1416,7 +1416,7 @@ void GPS::up()
 // We've finished a GPS search cycle (lock or timeout). Enter a low power state, potentially.
 void GPS::down()
 {
-    if (hasValidLocation)
+    if (scheduling.hasValidFixSinceSearchStarted())
         scheduling.informGotLock();
     else
         scheduling.informSearchFailed();
@@ -1630,6 +1630,7 @@ int32_t GPS::runOnce()
         if (gotLoc)
             lastFixMs = Time::getMillis();
         if (gotLoc) {
+            scheduling.informValidFix();
 #if GPS_DEBUG
             if (!hasValidLocation) { // declare that we have location ASAP
                 LOG_DEBUG("hasValidLocation RISING EDGE");
@@ -1652,7 +1653,7 @@ int32_t GPS::runOnce()
         }
 
         bool tooLong = scheduling.searchedTooLong();
-        if (tooLong && !gotLoc) {
+        if (tooLong && !scheduling.hasValidFixSinceSearchStarted()) {
             LOG_WARN("Can't publish valid location: no GPS lock in time");
             // we didn't get a location during this ack window, therefore declare loss of lock
             if (hasValidLocation) {
