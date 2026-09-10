@@ -15,6 +15,9 @@ class WaypointModule : public SinglePortModule, public Observable<const UIFrameE
 #if HAS_SCREEN
     bool shouldDraw();
     void onDeviceTimeChanged();
+    /// Scroll the list a text row at a time. Driven from UP/DOWN on the waypoint frame.
+    static void scrollUp();
+    static void scrollDown();
 #endif
 #if !MESHTASTIC_EXCLUDE_WAYPOINT
     /// Broadcast an expired copy of the waypoint so the mesh (and we) discard it.

@@ -1930,8 +1930,9 @@ void Screen::setFrames(FrameFocus focus)
             if (m && m == waypointModule)
                 fsi.positions.waypoint = numframes;
 
-            indicatorIcons.push_back(icon_module);
-            PUSH_FRAME_TITLE("Module");
+            const bool isWaypointFrame = (m && m == waypointModule);
+            indicatorIcons.push_back(isWaypointFrame ? icon_waypoint : icon_module);
+            PUSH_FRAME_TITLE(isWaypointFrame ? "Waypoint" : "Module");
             numframes++;
         }
     }
@@ -2618,6 +2619,19 @@ int Screen::handleInputEvent(const InputEvent *event)
                 setFastFramerate();
                 return 0;
             }
+        }
+    }
+    // UP/DOWN scrolls the waypoint list, which is taller than the panel once a card wraps
+    if (framesetInfo.positions.waypoint != 255 && ui->getUiState()->currentFrame == framesetInfo.positions.waypoint) {
+        if (event->inputEvent == INPUT_BROKER_UP) {
+            WaypointModule::scrollUp();
+            setFastFramerate();
+            return 0;
+        }
+        if (event->inputEvent == INPUT_BROKER_DOWN) {
+            WaypointModule::scrollDown();
+            setFastFramerate();
+            return 0;
         }
     }
     // UP/DOWN in node list screens scrolls through node pages

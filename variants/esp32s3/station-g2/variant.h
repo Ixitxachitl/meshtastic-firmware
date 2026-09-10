@@ -4,6 +4,9 @@ Board Information: https://wiki.uniteng.com/en/meshtastic/station-g2
 
 #include "station_common.h"
 
+// Same 64px panel height as the other short displays: one waypoint card in FONT_SMALL, two in FONT_TINY
+#define WAYPOINT_LIST_TINY_FONT
+
 #ifdef USE_SX1262
 // Ensure the PA does not exceed the saturation output power. More
 // Info:https://wiki.uniteng.com/en/meshtastic/station-g2#summary-for-lora-power-amplifier-conduction-test

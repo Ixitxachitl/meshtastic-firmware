@@ -9,6 +9,15 @@
 #include "platform/portduino/SdlAudio.h"
 #endif
 
+#if !MESHTASTIC_EXCLUDE_I2C
+#include "I2CBuzzer.h"
+#endif
+
+#if !defined(ARCH_PORTDUINO) && !defined(ARCH_STM32WL)
+#include <NonBlockingRtttl.h>
+#define HAS_PWM_RTTTL 1
+#endif
+
 #if !defined(ARCH_ESP32) && !defined(ARCH_RP2040) && !defined(ARCH_PORTDUINO)
 #include "Tone.h"
 #endif
@@ -115,6 +124,17 @@ void playTones(const ToneDuration *tone_durations, int size)
         return;
     }
 #endif
+#if !MESHTASTIC_EXCLUDE_I2C
+    if (i2cBuzzer) {
+        for (int i = 0; i < size; i++) {
+            const auto &tone_duration = tone_durations[i];
+            i2cBuzzer->tone(tone_duration.frequency_khz, tone_duration.duration_ms);
+            // to distinguish the notes, set a minimum time between them.
+            delay(1.3 * tone_duration.duration_ms);
+        }
+        return;
+    }
+#endif
 #if defined(HAS_I2S_SPEAKER_NRF52)
     // Native I2S speaker path (no ESP AudioThread/RTTTL needed here).
     pinMode(SPEAKER_EN, OUTPUT);
@@ -160,6 +180,10 @@ void playTones(const ToneDuration *tone_durations, int size)
         config.device.buzzer_gpio = PIN_BUZZER;
 #endif
     if (config.device.buzzer_gpio) {
+#ifdef HAS_PWM_RTTTL
+        if (rtttl::isPlaying())
+            return; // a notification ringtone owns the PWM, don't reprogram it mid-note
+#endif
         for (int i = 0; i < size; i++) {
             const auto &tone_duration = tone_durations[i];
             tone(config.device.buzzer_gpio, tone_duration.frequency_khz, tone_duration.duration_ms);

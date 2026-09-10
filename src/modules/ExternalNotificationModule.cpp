@@ -29,7 +29,9 @@
 #if defined(USE_SDL_AUDIO)
 #include "platform/portduino/SdlAudio.h"
 #endif
-
+#if !MESHTASTIC_EXCLUDE_I2C
+#include "buzz/I2CBuzzer.h"
+#endif
 #if defined(HAS_RGB_LED)
 #include "AmbientLightingThread.h"
 uint8_t red = 0;
@@ -49,6 +51,9 @@ bool ascending = true;
 #if defined(HAS_I2S_SPEAKER_NRF52)
 #include "platform/nrf52/NRF52RtttlPlayer.h"
 #endif
+#ifdef ARCH_NRF52
+#include "platform/nrf52/NRF52RtttlTicker.h"
+#endif
 
 /*
     Documentation:
@@ -64,6 +69,35 @@ bool ascending = true;
 #define EXT_NOTIFICATION_MODULE_OUTPUT_MS 1000
 
 #define EXT_NOTIFICATION_FAST_THREAD_MS 25
+
+// The PWM buzzer sequencer is normally polled from this cooperative thread, so a slow display refresh
+// delays the next note. nRF52 runs it from a FreeRTOS timer instead (NRF52RtttlTicker).
+static void pwmRtttlBegin(uint8_t pin, const char *song)
+{
+#ifdef ARCH_NRF52
+    NRF52RtttlTicker::begin(pin, song);
+#else
+    rtttl::begin(pin, song);
+#endif
+}
+
+static void pwmRtttlPump()
+{
+#ifdef ARCH_NRF52
+    NRF52RtttlTicker::pump();
+#else
+    rtttl::play();
+#endif
+}
+
+static void pwmRtttlStop()
+{
+#ifdef ARCH_NRF52
+    NRF52RtttlTicker::stop();
+#else
+    rtttl::stop();
+#endif
+}
 
 #define ASCII_BELL 0x07
 
@@ -84,11 +118,17 @@ int32_t ExternalNotificationModule::runOnce()
         return INT32_MAX; // we don't need this thread here...
     } else {
         uint32_t delay = EXT_NOTIFICATION_MODULE_OUTPUT_MS;
+        // Racy by design: the sequencer's flag is one byte, stale only for a cycle at song end, which
+        // just defers stopNow(). Locking it would block this loop on the timer task it hands work to.
         bool isRtttlPlaying = rtttl::isPlaying();
 #ifdef HAS_I2S
         // audioThread->isPlaying() also services the I2S DMA, and stays true until the
         // queued audio has drained, so keep calling it from the loop
         isRtttlPlaying = isRtttlPlaying || audioThread->isPlaying();
+#endif
+#if !MESHTASTIC_EXCLUDE_I2C
+        if (i2cBuzzer)
+            isRtttlPlaying = isRtttlPlaying || i2cBuzzer->isRtttlPlaying();
 #endif
 #if defined(HAS_I2S_SPEAKER_NRF52)
         isRtttlPlaying = isRtttlPlaying || nrf52RtttlPlayer.isPlaying();
@@ -165,6 +205,17 @@ int32_t ExternalNotificationModule::runOnce()
             delay = EXT_NOTIFICATION_FAST_THREAD_MS;
         }
 #endif
+#if !MESHTASTIC_EXCLUDE_I2C && !MESHTASTIC_EXCLUDE_RTTTL
+        // Play RTTTL on an I2C buzzer found by the scanner.
+        if (i2cBuzzer && canBuzz() && buzzerShouldAlert) {
+            if (i2cBuzzer->isRtttlPlaying()) {
+                i2cBuzzer->playRtttl();
+            } else if (isNagging && !Throttle::deadlinePassed(nagCycleCutoff)) {
+                i2cBuzzer->beginRtttl(rtttlConfig.ringtone);
+            }
+            delay = EXT_NOTIFICATION_FAST_THREAD_MS;
+        }
+#endif
 #if defined(HAS_I2S_SPEAKER_NRF52) && !MESHTASTIC_EXCLUDE_RTTTL
         // Play RTTTL over the I2S speaker (no piezo on this board).
         if (canBuzz() && buzzerShouldAlert) {
@@ -180,10 +231,10 @@ int32_t ExternalNotificationModule::runOnce()
         // now let the PWM buzzer play
         if (moduleConfig.external_notification.use_pwm && config.device.buzzer_gpio && canBuzz() && buzzerShouldAlert) {
             if (rtttl::isPlaying()) {
-                rtttl::play();
+                pwmRtttlPump();
             } else if (isNagging && !Throttle::deadlinePassed(nagCycleCutoff)) {
                 // start the song again if we have time left
-                rtttl::begin(config.device.buzzer_gpio, rtttlConfig.ringtone);
+                pwmRtttlBegin(config.device.buzzer_gpio, rtttlConfig.ringtone);
             }
             // we need fast updates to play the RTTTL
             delay = EXT_NOTIFICATION_FAST_THREAD_MS;
@@ -305,13 +356,17 @@ void ExternalNotificationModule::stopNow()
 {
     LOG_INFO("Turning off external notification: ");
     LOG_INFO("Stop RTTTL playback");
-    rtttl::stop();
+    pwmRtttlStop();
 #if defined(USE_SDL_AUDIO)
     portduino_audio::stop();
 #endif
 #ifdef HAS_I2S
     LOG_INFO("Stop audioThread playback");
     audioThread->stop();
+#endif
+#if !MESHTASTIC_EXCLUDE_I2C
+    if (i2cBuzzer)
+        i2cBuzzer->stopRtttl();
 #endif
 #if defined(HAS_I2S_SPEAKER_NRF52)
     nrf52RtttlPlayer.stop();
@@ -505,9 +560,17 @@ void ExternalNotificationModule::triggerBuzzerOutput()
 #endif
     } else if (moduleConfig.external_notification.use_pwm) {
 #if !MESHTASTIC_EXCLUDE_RTTTL
-        rtttl::begin(config.device.buzzer_gpio, rtttlConfig.ringtone);
+        pwmRtttlBegin(config.device.buzzer_gpio, rtttlConfig.ringtone);
 #endif
     } else {
+#if !MESHTASTIC_EXCLUDE_I2C && !MESHTASTIC_EXCLUDE_RTTTL
+        // Start here, not in runOnce(): with nag_timeout and output_ms at 0 the nag window is already
+        // closed by the first tick, but the ringtone should still play once.
+        if (i2cBuzzer) {
+            i2cBuzzer->beginRtttl(rtttlConfig.ringtone);
+            return;
+        }
+#endif
         setExternalState(2, true);
     }
 }

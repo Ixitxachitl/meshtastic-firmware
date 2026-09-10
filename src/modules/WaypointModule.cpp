@@ -35,6 +35,24 @@ namespace
 {
 
 constexpr int16_t WAYPOINT_ROW_GAP = 2;
+// Breathing room under the header bar. getTextPositions() is queried with the body font selected,
+// so on a tiny-font variant its body top sits tight against the FONT_SMALL header.
+constexpr int16_t WAYPOINT_HEADER_GAP = 2;
+
+// Scroll offset in pixels, and the furthest it may travel. drawFrame() publishes the limit because
+// card heights vary with description and coordinate wrapping, so only the layout pass knows it.
+int16_t waypointScrollY = 0;
+int16_t waypointMaxScroll = 0;
+
+// Short panels fit one card in the body font. WAYPOINT_LIST_TINY_FONT trades legibility
+// for rows; the header keeps FONT_SMALL either way, so textPos still sizes the body top.
+#ifdef WAYPOINT_LIST_TINY_FONT
+#define WAYPOINT_LIST_FONT FONT_TINY
+#define WAYPOINT_LIST_FONT_HEIGHT FONT_HEIGHT_TINY
+#else
+#define WAYPOINT_LIST_FONT FONT_SMALL
+#define WAYPOINT_LIST_FONT_HEIGHT FONT_HEIGHT_SMALL
+#endif
 
 void drawFallbackWaypointIcon(OLEDDisplay *display, int16_t left, int16_t top, uint16_t boxSize)
 {
@@ -45,6 +63,18 @@ void drawFallbackWaypointIcon(OLEDDisplay *display, int16_t left, int16_t top, u
     display->drawLine(cx, circleY + r, cx, top + boxSize - 2);
     display->setPixel(cx - 1, top + boxSize - 2);
     display->setPixel(cx + 1, top + boxSize - 2);
+}
+
+// drawStringWithEmotes blits emote bitmaps at their native size - the height argument only centres
+// them - so this, not the font height, is what an icon actually occupies.
+uint16_t widestEmoteWidth()
+{
+    static uint16_t widest = 0;
+    if (widest == 0) {
+        for (int i = 0; i < graphics::numEmotes; ++i)
+            widest = std::max<uint16_t>(widest, (uint16_t)graphics::emotes[i].width);
+    }
+    return widest;
 }
 
 void drawWaypointIcon(OLEDDisplay *display, const meshtastic_Waypoint &wp, int16_t left, int16_t top, uint16_t boxSize)
@@ -60,7 +90,7 @@ void drawWaypointIcon(OLEDDisplay *display, const meshtastic_Waypoint &wp, int16
         return;
     }
 
-    graphics::UIRenderer::drawStringWithEmotes(display, left, top, utf8, FONT_HEIGHT_SMALL, 1, false);
+    graphics::UIRenderer::drawStringWithEmotes(display, left, top, utf8, boxSize, 1, false);
 }
 
 void formatWaypointDistance(char *out, size_t outSize, float meters)
@@ -301,7 +331,7 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         return;
 
     const char *titleStr = (totalWaypoints == 1) ? "Waypoint" : "Waypoints";
-    graphics::drawCommonHeader(display, x, y, titleStr);
+    display->setFont(WAYPOINT_LIST_FONT); // textPos has to be measured in the body font
     const int *textPos = graphics::getTextPositions(display);
 
     const meshtastic_NodeInfoLite *ourNode = nodeDB->getMeshNode(nodeDB->getNodeNum());
@@ -309,14 +339,21 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     meshtastic_PositionLite ownPos = meshtastic_PositionLite_init_zero;
     const bool haveOwnPos = ourNode && nodeDB->copyNodePosition(ourNode->num, ownPos);
 
-    // getTextPositions() only clears the header itself; add the margins other screens reserve
-    // so the first row does not sit flush against it or the panel edge.
-    const int16_t bodyX = x + BASEUI_BODY_LR_MARGIN;
-    const uint16_t iconWidth = FONT_HEIGHT_SMALL;
+    // The fallback pin is drawn geometry and follows the font; an emote does not, so the column is
+    // reserved at whichever is wider or the name is drawn over the icon.
+    const uint16_t iconBox = WAYPOINT_LIST_FONT_HEIGHT;
+    const uint16_t iconWidth = std::max<uint16_t>(iconBox, widestEmoteWidth());
     const uint16_t iconGap = 3;
+    // Inset the body so it clears the panel edges, and start below the margin other screens
+    // reserve - getTextPositions() only clears the header itself.
+    const int16_t bodyX = x + BASEUI_BODY_LR_MARGIN;
     const int16_t nameX = bodyX + iconWidth + iconGap;
     const int16_t contentBottom = display->getHeight() - 1;
-    int16_t rowTop = textPos[1] + BASEUI_BELOW_HEADER_MARGIN + BASEUI_BODY_TOP_MARGIN;
+    const int16_t bodyTop = textPos[1] + BASEUI_BELOW_HEADER_MARGIN + BASEUI_BODY_TOP_MARGIN + WAYPOINT_HEADER_GAP;
+    // Cards are laid out from bodyTop and shifted by the scroll offset. One straddling either edge
+    // is drawn clipped instead of dropped - that half-card is the cue that the list continues.
+    int16_t rowTop = bodyTop - waypointScrollY;
+    int16_t contentEnd = bodyTop; // unscrolled bottom of the last card, for the scroll clamp
 
     for (size_t i = 0; i < totalWaypoints; ++i) {
         const StoredWaypoint &entry = *entries[i];
@@ -341,11 +378,9 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         const std::string description = trimmedWaypointText(safeDescription);
         const bool hasDescription = !description.empty();
         const int16_t row1Y = rowTop;
-        const int16_t row2Y = row1Y + FONT_HEIGHT_SMALL + 1;
-        const int16_t rowMetaY = hasDescription ? (row2Y + FONT_HEIGHT_SMALL + 1) : row2Y;
-        const int16_t cardBottom = rowMetaY + FONT_HEIGHT_SMALL;
-        if (cardBottom > contentBottom)
-            break;
+        const int16_t row2Y = row1Y + WAYPOINT_LIST_FONT_HEIGHT + 1;
+        const int16_t rowMetaY = hasDescription ? (row2Y + WAYPOINT_LIST_FONT_HEIGHT + 1) : row2Y;
+        int16_t cardBottom = rowMetaY + WAYPOINT_LIST_FONT_HEIGHT; // grows below if the fix has to wrap
 
         bool showCompass = false;
         float myHeading = 0.0f;
@@ -363,8 +398,9 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
             }
         }
 
-        const int16_t compactArrowCenterX = display->getWidth() - BASEUI_BODY_LR_MARGIN - ((FONT_HEIGHT_SMALL > 10) ? 9 : 7);
-        const int16_t compactArrowCenterY = (hasDescription ? row2Y : row1Y) + (FONT_HEIGHT_SMALL / 2);
+        const int16_t compactArrowCenterX =
+            display->getWidth() - BASEUI_BODY_LR_MARGIN - ((WAYPOINT_LIST_FONT_HEIGHT > 10) ? 9 : 7);
+        const int16_t compactArrowCenterY = (hasDescription ? row2Y : row1Y) + (WAYPOINT_LIST_FONT_HEIGHT / 2);
         const int16_t compactContentRight = compactArrowCenterX - 8;
         const char *distanceLabel = distStr[0] ? distStr : "--";
         const char *expireLabel = expireStr[0] ? expireStr : "--";
@@ -377,38 +413,89 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         const std::string shownDescription =
             hasDescription ? graphics::UIRenderer::truncateStringWithEmotes(display, description, nameWidth) : std::string();
 
-        drawWaypointIcon(display, wp, bodyX, row1Y, iconWidth);
-        graphics::UIRenderer::drawStringWithEmotes(display, nameX, row1Y, shownName, FONT_HEIGHT_SMALL, 1, false);
-        const int16_t underlineY = row1Y + FONT_HEIGHT_SMALL;
-        const int16_t underlineRight =
-            std::min<int16_t>(textRight, nameX + graphics::UIRenderer::measureStringWithEmotes(display, shownName) - 1);
-        if (underlineRight >= nameX)
-            display->drawLine(nameX, underlineY, underlineRight, underlineY);
+        // Half a fix is no use, so a coordinate pair too wide for the column wraps at its comma and
+        // the card grows to match. Wrapping inside a card sized for one line is what used to put it
+        // over the divider and into the next waypoint.
+        std::string coordLine1 = coordStr;
+        std::string coordLine2;
+        const char *coordSplit = strchr(coordStr, ',');
+        if (coordSplit && nameWidth > 0 && display->getStringWidth(coordStr) > nameWidth) {
+            coordLine1.assign(coordStr, (size_t)(coordSplit - coordStr) + 1); // keep the comma on the first line
+            coordLine2.assign(coordSplit + 1);
+        }
+        // A continuation of the same line rather than a new row, so it sits one row height below
+        // instead of taking the full inter-row pitch.
+        const int16_t coordRow2Y = rowMetaY + WAYPOINT_LIST_FONT_HEIGHT;
+        if (!coordLine2.empty())
+            cardBottom = coordRow2Y + WAYPOINT_LIST_FONT_HEIGHT;
 
-        if (hasDescription)
-            graphics::UIRenderer::drawStringWithEmotes(display, nameX, row2Y, shownDescription, FONT_HEIGHT_SMALL, 1, false);
+        const bool cardVisible = (cardBottom >= bodyTop) && (rowTop <= contentBottom);
 
-        if (showCompass)
-            graphics::NodeListRenderer::drawRelativeCompassArrow(display, compactArrowCenterX, compactArrowCenterY,
-                                                                 graphics::CompassRenderer::radiansToDegrees360(bearingToOther));
+        if (cardVisible) {
+            drawWaypointIcon(display, wp, bodyX, row1Y, iconBox);
+            graphics::UIRenderer::drawStringWithEmotes(display, nameX, row1Y, shownName, WAYPOINT_LIST_FONT_HEIGHT, 1, false);
+            // One inside the row, so the rule sits under the glyphs rather than against the next line.
+            const int16_t underlineY = row1Y + WAYPOINT_LIST_FONT_HEIGHT - 1;
+            const int16_t underlineRight =
+                std::min<int16_t>(textRight, nameX + graphics::UIRenderer::measureStringWithEmotes(display, shownName) - 1);
+            if (underlineRight >= nameX)
+                display->drawLine(nameX, underlineY, underlineRight, underlineY);
 
-        display->drawStringMaxWidth(nameX, rowMetaY, nameWidth, coordStr);
-        display->setTextAlignment(TEXT_ALIGN_RIGHT);
-        display->drawString(metaLeft + metaWidth - 1, row1Y, distanceLabel);
-        display->drawString(metaLeft + metaWidth - 1, rowMetaY, expireLabel);
-        display->setTextAlignment(TEXT_ALIGN_LEFT);
+            if (hasDescription)
+                graphics::UIRenderer::drawStringWithEmotes(display, nameX, row2Y, shownDescription, WAYPOINT_LIST_FONT_HEIGHT, 1,
+                                                           false);
+
+            if (showCompass)
+                graphics::NodeListRenderer::drawRelativeCompassArrow(
+                    display, compactArrowCenterX, compactArrowCenterY,
+                    graphics::CompassRenderer::radiansToDegrees360(bearingToOther));
+
+            // Each line truncated to the column; the pair itself wrapped at its comma further up,
+            // where the card was grown to hold the second line.
+            display->drawString(nameX, rowMetaY,
+                                graphics::UIRenderer::truncateStringWithEmotes(display, coordLine1, nameWidth).c_str());
+            if (!coordLine2.empty())
+                display->drawString(nameX, coordRow2Y,
+                                    graphics::UIRenderer::truncateStringWithEmotes(display, coordLine2, nameWidth).c_str());
+            display->setTextAlignment(TEXT_ALIGN_RIGHT);
+            display->drawString(metaLeft + metaWidth - 1, row1Y, distanceLabel);
+            display->drawString(metaLeft + metaWidth - 1, rowMetaY, expireLabel);
+            display->setTextAlignment(TEXT_ALIGN_LEFT);
+        }
+
+        contentEnd = cardBottom + waypointScrollY;
 
         const int16_t separatorY = cardBottom + 1;
-        const int16_t nextRowTop = separatorY + WAYPOINT_ROW_GAP;
-        if (i + 1 < totalWaypoints && nextRowTop + ((FONT_HEIGHT_SMALL * 2) + 1) <= contentBottom) {
-            drawDottedHorizontalDivider(display, bodyX, display->getWidth() - 1 - BASEUI_BODY_LR_MARGIN, separatorY);
-            rowTop = nextRowTop;
-        } else {
-            break;
+        if (i + 1 < totalWaypoints) {
+            if (separatorY >= bodyTop && separatorY <= contentBottom)
+                drawDottedHorizontalDivider(display, bodyX, display->getWidth() - 1 - BASEUI_BODY_LR_MARGIN, separatorY);
+            rowTop = separatorY + WAYPOINT_ROW_GAP;
         }
     }
 
+    // Only the layout pass knows how tall the list came out, so the clamp is published from here.
+    waypointMaxScroll = std::max<int16_t>(0, contentEnd - contentBottom);
+    if (waypointScrollY > waypointMaxScroll)
+        waypointScrollY = waypointMaxScroll;
+
+    // Drawn last so a card scrolled up beneath it is painted over rather than showing through.
+    display->setFont(FONT_SMALL);
+    graphics::drawCommonHeader(display, x, y, titleStr);
     graphics::drawCommonFooter(display, x, y);
+#endif
+}
+
+void WaypointModule::scrollUp()
+{
+#if HAS_SCREEN && !MESHTASTIC_EXCLUDE_WAYPOINT
+    waypointScrollY = std::max<int16_t>(0, waypointScrollY - (WAYPOINT_LIST_FONT_HEIGHT + 1));
+#endif
+}
+
+void WaypointModule::scrollDown()
+{
+#if HAS_SCREEN && !MESHTASTIC_EXCLUDE_WAYPOINT
+    waypointScrollY = std::min<int16_t>(waypointMaxScroll, waypointScrollY + (WAYPOINT_LIST_FONT_HEIGHT + 1));
 #endif
 }
 #endif

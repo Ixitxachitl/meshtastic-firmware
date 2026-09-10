@@ -223,6 +223,18 @@ const uint8_t icon_module[] PROGMEM = {
     0b00011000  // ░░░██░░░
 };
 
+// 📍 Waypoint map pin
+const uint8_t icon_waypoint[] PROGMEM = {
+    0x38, // ░░░███░░
+    0x7C, // ░░█████░
+    0x5C, // ░░███░█░
+    0x4C, // ░░██░░█░
+    0x38, // ░░░███░░
+    0x10, // ░░░░█░░░
+    0x10, // ░░░░█░░░
+    0x10  // ░░░░█░░░
+};
+
 #define mute_symbol_width 8
 #define mute_symbol_height 8
 const uint8_t mute_symbol[] PROGMEM = {

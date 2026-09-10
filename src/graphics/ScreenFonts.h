@@ -28,6 +28,11 @@
 #include "graphics/fonts/HugeDisplayFonts.h"
 #endif
 
+// Tom Thumb 4x6: a tiny fixed-width face for dense layouts on small screens.
+// Deliberately not wired into FONT_SMALL/MEDIUM/LARGE - renderers opt in per call site.
+#include "graphics/fonts/OLEDDisplayFontsTomThumb.h"
+#define FONT_TINY TomThumb4x6
+
 #ifdef OLED_GR
 #define FONT_SMALL_LOCAL ArialMT_Plain_10_GR // Height: 13
 #else
@@ -142,3 +147,4 @@
 #define FONT_HEIGHT_SMALL _fontHeight(FONT_SMALL)
 #define FONT_HEIGHT_MEDIUM _fontHeight(FONT_MEDIUM)
 #define FONT_HEIGHT_LARGE _fontHeight(FONT_LARGE)
+#define FONT_HEIGHT_TINY _fontHeight(FONT_TINY)
