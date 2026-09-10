@@ -19,9 +19,11 @@
 #include "NodeDB.h"
 #include "PowerFSM.h"
 #include "Throttle.h"
+#include "WaypointStore.h"
 #include "buzz/buzz.h"
 #include "configuration.h"
 #include "main.h"
+#include "memory/MemAudit.h"
 #include "meshUtils.h"
 #include "power/PowerHAL.h"
 #include "power/SGM41562.h"
@@ -39,6 +41,10 @@
 #include "api/WiFiServerAPI.h"
 #include "input/LinuxInputImpl.h"
 #include "input/LinuxJoystick.h"
+#endif
+
+#ifdef HAS_ADS1115
+#include <Adafruit_ADS1X15.h>
 #endif
 
 // Working USB detection for powered/charging states on the RAK platform
@@ -595,13 +601,8 @@ class AnalogBatteryLevel : public HasBatteryLevel
             return (rak9154Sensor.isCharging()) ? OptTrue : OptFalse;
         }
 #endif
-#if defined(ELECROW_ThinkNode_M6)
-        return digitalRead(EXT_CHRG_DETECT) == EXT_CHRG_DETECT_VALUE || isVbusIn();
-#elif defined(EXT_CHRG_DETECT)
-        return digitalRead(EXT_CHRG_DETECT) == EXT_CHRG_DETECT_VALUE;
-#elif defined(BATTERY_CHARGING_INV)
-        return !digitalRead(BATTERY_CHARGING_INV);
-#else
+        // A configured INA outranks the board's own charge-status pin, as it does BATTERY_PIN in
+        // getBattVoltage(): an external charger leaves that pin idle, reading "not charging" forever.
 #if HAS_TELEMETRY && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR && !defined(DISABLE_INA_CHARGING_DETECTION)
         if (hasINA()) {
             // get current flow from INA sensor - negative value means power flowing
@@ -614,6 +615,16 @@ class AnalogBatteryLevel : public HasBatteryLevel
             return getINACurrent() < 0;
 #endif
         }
+#endif
+#if defined(ELECROW_ThinkNode_M6)
+        return digitalRead(EXT_CHRG_DETECT) == EXT_CHRG_DETECT_VALUE || isVbusIn();
+#elif defined(EXT_CHRG_DETECT)
+        return digitalRead(EXT_CHRG_DETECT) == EXT_CHRG_DETECT_VALUE;
+#elif defined(BATTERY_CHARGING_INV)
+        return !digitalRead(BATTERY_CHARGING_INV);
+#else
+#if HAS_TELEMETRY && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR && !defined(DISABLE_INA_CHARGING_DETECTION)
+        // No charge-status pin and no INA: infer from battery presence plus external power.
         return isBatteryConnect() && isVbusIn();
 #endif
 #endif
@@ -680,6 +691,9 @@ class AnalogBatteryLevel : public HasBatteryLevel
         } else if (nodeTelemetrySensorsMap[meshtastic_TelemetrySensorType_INA226].first ==
                    config.power.device_battery_ina_address) {
             return ina226Sensor.getCurrentMa();
+        } else if (nodeTelemetrySensorsMap[meshtastic_TelemetrySensorType_INA260].first ==
+                   config.power.device_battery_ina_address) {
+            return ina260Sensor.getCurrentMa();
         } else if (nodeTelemetrySensorsMap[meshtastic_TelemetrySensorType_INA3221].first ==
                    config.power.device_battery_ina_address) {
             return ina3221Sensor.getCurrentMa();
@@ -687,30 +701,29 @@ class AnalogBatteryLevel : public HasBatteryLevel
         return 0;
     }
 
+    // Open the sensor if it isn't open yet, then report whether it is actually running. runOnce()
+    // answers with a poll interval, so only isRunning() tells us the device replied.
+    static bool sensorReady(TelemetrySensor &sensor)
+    {
+        if (!sensor.isInitialized())
+            sensor.runOnce();
+        return sensor.isRunning();
+    }
+
     bool hasINA()
     {
-        if (!config.power.device_battery_ina_address) {
+        const uint8_t inaAddress = config.power.device_battery_ina_address;
+        if (!inaAddress) {
             return false;
         }
-        if (nodeTelemetrySensorsMap[meshtastic_TelemetrySensorType_INA219].first == config.power.device_battery_ina_address) {
-            if (!ina219Sensor.isInitialized())
-                return ina219Sensor.runOnce() > 0;
-            return ina219Sensor.isRunning();
-        } else if (nodeTelemetrySensorsMap[meshtastic_TelemetrySensorType_INA226].first ==
-                   config.power.device_battery_ina_address) {
-            if (!ina226Sensor.isInitialized())
-                return ina226Sensor.runOnce() > 0;
-            return ina226Sensor.isRunning();
-        } else if (nodeTelemetrySensorsMap[meshtastic_TelemetrySensorType_INA260].first ==
-                   config.power.device_battery_ina_address) {
-            if (!ina260Sensor.isInitialized())
-                return ina260Sensor.runOnce() > 0;
-            return ina260Sensor.isRunning();
-        } else if (nodeTelemetrySensorsMap[meshtastic_TelemetrySensorType_INA3221].first ==
-                   config.power.device_battery_ina_address) {
-            if (!ina3221Sensor.isInitialized())
-                return ina3221Sensor.runOnce() > 0;
-            return ina3221Sensor.isRunning();
+        if (nodeTelemetrySensorsMap[meshtastic_TelemetrySensorType_INA219].first == inaAddress) {
+            return sensorReady(ina219Sensor);
+        } else if (nodeTelemetrySensorsMap[meshtastic_TelemetrySensorType_INA226].first == inaAddress) {
+            return sensorReady(ina226Sensor);
+        } else if (nodeTelemetrySensorsMap[meshtastic_TelemetrySensorType_INA260].first == inaAddress) {
+            return sensorReady(ina260Sensor);
+        } else if (nodeTelemetrySensorsMap[meshtastic_TelemetrySensorType_INA3221].first == inaAddress) {
+            return sensorReady(ina3221Sensor);
         }
         return false;
     }
@@ -718,6 +731,119 @@ class AnalogBatteryLevel : public HasBatteryLevel
 };
 
 static AnalogBatteryLevel analogLevel;
+
+#ifdef HAS_ADS1115
+#include "SPILock.h"
+#include <AW35615.h>
+
+/**
+ * @brief Battery level sensor using an ADS1115 16-bit ADC on I2C.
+ * Channel 0 measures battery voltage through a 1:2 resistive divider.
+ * USB / Charging status is managed via an AW35615 USB-C CC controller.
+ */
+class ADS1115BatteryLevel : public AnalogBatteryLevel
+{
+  public:
+    bool init()
+    {
+        {
+            concurrency::LockGuard guard(spiLock);
+            if (!_ads.begin(ADS1115_ADDR, &Wire)) {
+                LOG_WARN("ADS1115 not found on I2C bus - battery sensor unavailable");
+                return false;
+            }
+            _ads.setGain(GAIN_ONE);                // ±4.096 V FSR matches standard 1:2 voltage-divider
+            _ads.setDataRate(RATE_ADS1115_860SPS); // Maximize conversion speed to keep bus locking minimal
+        }
+
+        initialized = true;
+        LOG_INFO("[ADS1115] battery sensor initialized");
+
+        if (_aw35615.begin(Wire)) {
+            LOG_INFO("[AW35615] USB-C CC controller initialized");
+        } else {
+            LOG_WARN("[AW35615] not found at 0x22");
+        }
+        getBattVoltage(); // initial read cached_mv
+        return true;
+    }
+
+    virtual bool isBatteryConnect() override { return true; }
+    virtual uint16_t getBattVoltage() override
+    {
+        if (!initialized)
+            return 0;
+
+        static constexpr uint32_t MIN_READ_INTERVAL_MS = 30000;
+        if (!initial_read_done || !Throttle::isWithinTimespanMs(last_read_ms, MIN_READ_INTERVAL_MS)) {
+            last_read_ms = millis();
+            float sum = 0;
+            {
+                concurrency::LockGuard guard(spiLock);
+                for (uint8_t i = 0; i < SAMPLE_COUNT; i++) {
+                    int16_t raw = _ads.readADC_SingleEnded(0);
+                    sum += _ads.computeVolts(raw);
+                }
+            }
+
+            // Voltage divider scales by 2.0; convert volts to millivolts
+            float v = (sum / (float)SAMPLE_COUNT) * 2.0f * 1000.0f;
+
+            if (!initial_read_done) {
+                cached_mv = static_cast<uint16_t>(v);
+                initial_read_done = true;
+            } else {
+                // Exponential moving average filter (50% smoothing)
+                cached_mv = static_cast<uint16_t>(cached_mv + (v - cached_mv) * 0.5f);
+            }
+        }
+        return cached_mv;
+    }
+
+    virtual bool isVbusIn() override
+    {
+        if (_aw35615.isReady()) {
+            concurrency::LockGuard guard(spiLock);
+            return _aw35615.isVbusPresent() && cached_mv >= 4200;
+        }
+        // Fallback to base GPIO/board checks (or false) if CC chip is absent
+        return false;
+    }
+
+    virtual bool isCharging() override
+    {
+        if (!isBatteryConnect())
+            return false;
+
+        if (_aw35615.isReady()) {
+            concurrency::LockGuard guard(spiLock);
+            return _aw35615.isSinkAttached() && cached_mv >= 4200;
+        }
+        return isVbusIn();
+    }
+
+  private:
+    static constexpr uint8_t SAMPLE_COUNT = 3;
+    Adafruit_ADS1115 _ads;
+    AW35615 _aw35615;
+
+    bool initialized = false;
+    bool initial_read_done = false;
+    uint16_t cached_mv = 0;
+    uint32_t last_read_ms = 0;
+};
+
+static ADS1115BatteryLevel ads1115BattLevel;
+
+bool Power::ads1115Init()
+{
+    if (ads1115BattLevel.init()) {
+        batteryLevel = &ads1115BattLevel;
+        return true;
+    }
+    return false;
+}
+#endif // HAS_ADS1115
 
 Power::Power() : OSThread("Power")
 {
@@ -815,6 +941,10 @@ bool Power::setup()
         found = true;
     } else if (meshSolarInit()) {
         found = true;
+#ifdef HAS_ADS1115
+    } else if (ads1115Init()) {
+        found = true;
+#endif
     } else if (analogInit()) {
         found = true;
     } else {
@@ -848,11 +978,22 @@ void Power::powerCommandsCheck()
         shutdownAtMsec = 0;
         shutdown();
     }
+
+#ifdef ARCH_STM32
+    // Deferred DFU entry; the delay is armed by AdminModule's enter_dfu handler (rationale there).
+    if (enterDfuAtMsec && Throttle::deadlinePassed(enterDfuAtMsec)) {
+        enterDfuAtMsec = 0;
+        enterDfuMode(); // never returns
+    }
+#endif
 }
 
 void Power::reboot()
 {
     notifyReboot.notifyObservers(NULL);
+#if !MESHTASTIC_EXCLUDE_WAYPOINT
+    waypointStore.saveToFlash();
+#endif
 #if defined(ARCH_ESP32)
     ESP.restart();
 #elif defined(ARCH_NRF52)
@@ -916,6 +1057,9 @@ void Power::shutdown()
     nodeDB->saveToDisk();
 #if HAS_SCREEN
     messageStore.saveToFlash();
+#endif
+#if !MESHTASTIC_EXCLUDE_WAYPOINT
+    waypointStore.saveToFlash();
 #endif
 #if defined(ARCH_NRF52) || defined(ARCH_ESP32) || defined(ARCH_RP2040) || defined(ARCH_STM32WL)
 #ifdef PIN_LED1
@@ -1104,6 +1248,14 @@ void Power::logHeapUsage()
     // The first line has no earlier sample to difference against
     const int32_t delta = lastHeapLogTime ? (int32_t)(heapFree - lastHeapLogFree) : 0;
 
+    // min only ever falls: one step down is a transient alloc, repeated new lows are a leak.
+    // A steady min with a shrinking largest block is fragmentation. Empty where unsupported.
+    char detail[64] = "";
+    const uint32_t minFree = memGet.getMinFreeHeap();
+    const uint32_t maxAlloc = memGet.getMaxAllocHeap();
+    if (minFree || maxAlloc)
+        snprintf(detail, sizeof(detail), ", min %u, largest block %u", minFree, maxAlloc);
+
     const uint32_t psramTotal = memGet.getPsramSize();
 #ifdef ARCH_ESP32
     // Internal free and the largest DMA-capable block, separately from the pooled total above.
@@ -1114,18 +1266,21 @@ void Power::logHeapUsage()
     const uint32_t internalFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     const uint32_t largestDma = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     if (psramTotal)
-        LOG_INFO("Heap: %u/%u bytes free (%d since last), internal %u (largest DMA blk %u), PSRAM: %u/%u bytes free", heapFree,
-                 heapTotal, delta, internalFree, largestDma, memGet.getFreePsram(), psramTotal);
+        LOG_INFO("Heap: %u/%u bytes free (%d since last)%s, internal %u (largest DMA blk %u), PSRAM: %u/%u bytes free", heapFree,
+                 heapTotal, delta, detail, internalFree, largestDma, memGet.getFreePsram(), psramTotal);
     else
-        LOG_INFO("Heap: %u/%u bytes free (%d since last), internal %u (largest DMA blk %u)", heapFree, heapTotal, delta,
+        LOG_INFO("Heap: %u/%u bytes free (%d since last)%s, internal %u (largest DMA blk %u)", heapFree, heapTotal, delta, detail,
                  internalFree, largestDma);
 #else
     if (psramTotal)
-        LOG_INFO("Heap: %u/%u bytes free (%d since last), PSRAM: %u/%u bytes free", heapFree, heapTotal, delta,
+        LOG_INFO("Heap: %u/%u bytes free (%d since last)%s, PSRAM: %u/%u bytes free", heapFree, heapTotal, delta, detail,
                  memGet.getFreePsram(), psramTotal);
     else
-        LOG_INFO("Heap: %u/%u bytes free (%d since last)", heapFree, heapTotal, delta);
+        LOG_INFO("Heap: %u/%u bytes free (%d since last)%s", heapFree, heapTotal, delta, detail);
 #endif
+
+    // Which tagged subsystem moved since boot
+    memaudit::logBreakdown("periodic");
 
     lastHeapLogFree = heapFree;
     lastHeapLogTime = millis();

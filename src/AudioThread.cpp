@@ -2,6 +2,7 @@
 
 #ifdef HAS_I2S
 
+#include "SPILock.h"
 #include "platform/esp32/MeshtasticI2SOut.h"
 #include "sleep.h"
 #include <cstring>
@@ -13,12 +14,12 @@
 // A board with an I2S amplifier opts in by defining AUDIO_AMP_ENABLE(on) in its
 // variant.h to power the amp on/off around playback (e.g. an enable pin on an I/O
 // expander). The includes below expose the expander instances (io / mcpIoExpander) those
-// macros typically reference. Only tlora-pager and meshnology-w10 define it; on the other
-// four HAS_I2S boards the speaker is always connected, which is why MeshtasticI2SOut sets
-// auto_clear so the DMA emits silence rather than replaying its last buffer.
-#ifdef USE_XL9555
-#include "ExtensionIOXL9555.hpp"
-extern ExtensionIOXL9555 io;
+// macros typically reference. Boards without one keep the speaker permanently connected,
+// which is why MeshtasticI2SOut sets auto_clear so the DMA emits silence rather than
+// replaying its last buffer.
+#ifdef USE_PCA95X5
+#include PCA95X5_INC
+extern PCA95X5_CLS io;
 #endif
 
 #ifdef USE_MCP23017
@@ -52,10 +53,15 @@ void AudioThread::ampEnable(bool on)
     ampOn = on;
 
 #ifdef AUDIO_AMP_ENABLE
-    // Must stay on this thread: on both boards that have an amp enable this is a blocking
+    // Must stay on this thread: on every board that has an amp enable this is a blocking
     // I2C expander write, and issuing it from another task would race the main loop's
     // other I2C users.
     AUDIO_AMP_ENABLE(on);
+    // Amps that need longer than the silent lead-in to leave shutdown say so in variant.h.
+#ifdef AUDIO_AMP_SETTLE_MS
+    if (on)
+        delay(AUDIO_AMP_SETTLE_MS);
+#endif
 #endif
 }
 
