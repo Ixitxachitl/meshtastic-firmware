@@ -1092,6 +1092,47 @@ static uint32_t lastScreenTransition;
 #define SCREEN_TRANSITION_FRAMERATE 30 // fps
 #endif
 
+// Opt-in: page frames with a slide when a left/right press navigates, instead of snapping straight
+// to the new frame. Off by default - the animation is only worth its added latency on a panel that
+// can actually draw it, so variants ask for it with -D SCREEN_ANIMATE_FRAME_NAV=1.
+#ifndef SCREEN_ANIMATE_FRAME_NAV
+#define SCREEN_ANIMATE_FRAME_NAV 0
+#endif
+
+// What setTargetFPS(SCREEN_TRANSITION_FRAMERATE) stores as updateInterval, and so the length of one
+// transition tick.
+#define SCREEN_TRANSITION_UPDATE_INTERVAL (1000 / SCREEN_TRANSITION_FRAMERATE)
+
+#if SCREEN_ANIMATE_FRAME_NAV
+// The arrow-key slide, measured in redraws rather than milliseconds: a transition is only as smooth
+// as the number of frames drawn during it, and SCREEN_TRANSITION_FRAMERATE varies by an order of
+// magnitude between variants. Fixing the frame count keeps the slide readable on all of them.
+#ifndef SCREEN_NAV_TRANSITION_FRAMES
+#define SCREEN_NAV_TRANSITION_FRAMES 5
+#endif
+#define SCREEN_NAV_TRANSITION_TIME (SCREEN_NAV_TRANSITION_FRAMES * SCREEN_TRANSITION_UPDATE_INTERVAL)
+#endif
+
+#if BASEUI_HAS_TOUCH_DRAG || SCREEN_ANIMATE_FRAME_NAV
+// Denominator the nav bar animates its slide against. ticksPerTransition is private (see the note
+// on the drag driver below), so whoever pins the scale publishes it here; 0 means "not ours", and
+// callers should fall back to snapping rather than guessing.
+static uint16_t sTransitionTicks = 0;
+
+uint16_t frameTransitionTicks()
+{
+    return sTransitionTicks;
+}
+#else
+// No animated transition in this build, but frameTransitionProgress() in SharedUIDisplay.h calls
+// this unconditionally, so the symbol has to exist for every screen build. 0 is the header's
+// documented "scale unknown", which makes callers snap instead of animate.
+uint16_t frameTransitionTicks()
+{
+    return 0;
+}
+#endif
+
 #if BASEUI_HAS_TOUCH_DRAG
 // Nominal transition length for touch-initiated frame changes. Not milliseconds on screen:
 // ticksPerTransition = time / updateInterval, updateInterval starts at 33ms but drops to 16ms once
@@ -1120,9 +1161,8 @@ static bool isTouchSourced(const InputEvent *event)
 // fixes updateInterval, and setTimePerTransition() then derives ticksPerTransition from it, so
 // calling them in that order gives a tick count we know. Both are re-applied on every drag report
 // because Screen changes the target framerate on its own as the frame state changes.
-#define SCREEN_DRAG_UPDATE_INTERVAL (1000 / SCREEN_TRANSITION_FRAMERATE) // what setTargetFPS() stores
-#define SCREEN_DRAG_HOLD_TIME 33000                                      // nominal, while the finger is down
-#define SCREEN_DRAG_TICKS (SCREEN_DRAG_HOLD_TIME / SCREEN_DRAG_UPDATE_INTERVAL)
+#define SCREEN_DRAG_HOLD_TIME 33000 // nominal, while the finger is down
+#define SCREEN_DRAG_TICKS (SCREEN_DRAG_HOLD_TIME / SCREEN_TRANSITION_UPDATE_INTERVAL)
 
 // Travel before the gesture commits to an axis. Vertical drags are then left entirely alone, so the
 // swipe the touch layer still classifies on release reaches games, menus and list scrolling as
@@ -1141,16 +1181,6 @@ static bool isTouchSourced(const InputEvent *event)
 #ifndef SCREEN_DRAG_COMMIT_PX
 #define SCREEN_DRAG_COMMIT_PX 30
 #endif
-
-// Denominator the nav bar animates its slide against. ticksPerTransition is private (see the
-// note above), so whoever pins the scale publishes it here; 0 means "not ours", and callers
-// should fall back to snapping rather than guessing.
-static uint16_t sTransitionTicks = 0;
-
-uint16_t frameTransitionTicks()
-{
-    return sTransitionTicks;
-}
 
 static uint16_t dragAnchorX = 0;
 static uint16_t dragAnchorY = 0;
@@ -1258,7 +1288,7 @@ static void screenDragEnd(OLEDDisplayUi *ui, const InputEvent *event, int16_t fr
 
     if (progress >= SCREEN_DRAG_COMMIT_FRACTION || abs(dx) > SCREEN_DRAG_COMMIT_PX) {
         // Carry on from where the finger left off rather than restarting the slide.
-        const uint16_t ticks = SCREEN_TOUCH_TRANSITION_TIME / SCREEN_DRAG_UPDATE_INTERVAL;
+        const uint16_t ticks = SCREEN_TOUCH_TRANSITION_TIME / SCREEN_TRANSITION_UPDATE_INTERVAL;
         sTransitionTicks = ticks;
         if (progress > 0.999f)
             progress = 0.999f;
@@ -1397,14 +1427,6 @@ static bool screenDragOwnsFramerate()
     if (isKeyboardPanFingerSteering())
         return true;
     return false;
-}
-#else
-// Without a drag driver no transition is ever finger-scaled, but frameTransitionProgress() in
-// SharedUIDisplay.h calls this unconditionally, so the symbol has to exist for every screen build.
-// 0 is the header's documented "scale unknown", which makes callers snap instead of animate.
-uint16_t frameTransitionTicks()
-{
-    return 0;
 }
 #endif // BASEUI_HAS_TOUCH_DRAG
 
@@ -2353,10 +2375,11 @@ void Screen::handleOnPress()
     // If screen was off, just wake it, otherwise advance to next frame
     // If we are in a transition, the press must have bounced, drop it.
     if (ui->getUiState()->frameState == FIXED) {
-#if BASEUI_HAS_TOUCH_DRAG
+#if BASEUI_HAS_TOUCH_DRAG || SCREEN_ANIMATE_FRAME_NAV
         // Only reached by the auto-carousel, which is nobody's gesture - snap, and don't inherit an
-        // animated transition time left behind by the last touch event.
+        // animated transition time left behind by the last touch event or arrow press.
         ui->setTimePerTransition(0);
+        sTransitionTicks = 0;
 #endif
         ui->nextFrame();
         lastScreenTransition = millis();
@@ -2418,7 +2441,7 @@ void Screen::logFrameChange(const char *reason, uint8_t targetIdx)
 }
 #endif
 
-void Screen::showFrame(FrameDirection direction)
+void Screen::showFrame(FrameDirection direction, bool animate)
 {
     // Only advance frames when UI is stable
     if (ui->getUiState()->frameState == FIXED) {
@@ -2433,6 +2456,19 @@ void Screen::showFrame(FrameDirection direction)
                                  : (uint8_t)((curr + framesetInfo.frameCount - 1) % framesetInfo.frameCount);
             logFrameChange(direction == FrameDirection::NEXT ? "next" : "prev", target);
         }
+#endif
+
+#if SCREEN_ANIMATE_FRAME_NAV
+        // Pin the framerate before the transition time, not after: setTimePerTransition() derives
+        // ticksPerTransition from the current updateInterval, so the count published here only
+        // holds if both are set in that order (same reasoning as the drag driver above).
+        if (animate) {
+            ui->setTargetFPS(SCREEN_TRANSITION_FRAMERATE);
+            ui->setTimePerTransition(SCREEN_NAV_TRANSITION_TIME);
+            sTransitionTicks = SCREEN_NAV_TRANSITION_FRAMES;
+        }
+#else
+        (void)animate;
 #endif
 
         if (direction == FrameDirection::NEXT) {
@@ -2545,6 +2581,12 @@ int Screen::handleInputEvent(const InputEvent *event)
     // Decide up front, before any of the branches below can page a frame, so every route to a
     // transition inherits the right answer for whatever kind of input caused it.
     ui->setTimePerTransition(isTouchSourced(event) ? SCREEN_TOUCH_TRANSITION_TIME : 0);
+#elif SCREEN_ANIMATE_FRAME_NAV
+    // Same up-front decision, but here only showFrame() ever asks for the slide - so every other
+    // route to a transition (switchToFrame, the frame commands) starts from a snap rather than
+    // inheriting the time the last arrow press left behind.
+    ui->setTimePerTransition(0);
+    sTransitionTicks = 0;
 #endif
 
     // Handle text input notifications specially - pass input to virtual keyboard
@@ -2856,11 +2898,14 @@ int Screen::handleInputEvent(const InputEvent *event)
             const bool wantsNext = !fromTouch && event->inputEvent == INPUT_BROKER_RIGHT;
             const bool wantsPrevious = !fromTouch && event->inputEvent == INPUT_BROKER_LEFT;
 
+            // Directional input is the only kind that gets the slide (SCREEN_ANIMATE_FRAME_NAV):
+            // left and right say which way the frames move, which is what the animation shows. A
+            // button press or space just means "next", so it snaps.
             if (wantsPrevious || event->inputEvent == INPUT_BROKER_ALT_PRESS) {
-                showFrame(FrameDirection::PREVIOUS);
+                showFrame(FrameDirection::PREVIOUS, wantsPrevious);
             } else if (wantsNext || (event->inputEvent == INPUT_BROKER_USER_PRESS && !tapFromTouchscreen) ||
                        (event->inputEvent == INPUT_BROKER_ANYKEY && event->kbchar == ' ')) {
-                showFrame(FrameDirection::NEXT);
+                showFrame(FrameDirection::NEXT, wantsNext);
             } else if (event->inputEvent == INPUT_BROKER_FN_F1) {
                 this->ui->switchToFrame(0);
 #ifdef USERPREFS_UI_TEST_LOG

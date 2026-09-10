@@ -332,7 +332,9 @@ class Screen : public concurrency::OSThread
     void onPress() { enqueueCmd(ScreenCmd{.cmd = Cmd::ON_PRESS}); }
     void showPrevFrame() { enqueueCmd(ScreenCmd{.cmd = Cmd::SHOW_PREV_FRAME}); }
     void showNextFrame() { enqueueCmd(ScreenCmd{.cmd = Cmd::SHOW_NEXT_FRAME}); }
-    void showFrame(FrameDirection direction);
+    // animate slides the outgoing frame off instead of snapping, on builds that opted into
+    // SCREEN_ANIMATE_FRAME_NAV. Ignored everywhere else.
+    void showFrame(FrameDirection direction, bool animate = false);
 
     // generic alert start
     void startAlert(FrameCallback _alertFrame)
