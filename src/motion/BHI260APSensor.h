@@ -15,10 +15,12 @@ class BHI260APSensor : public MotionSensor
 {
   private:
     SensorBHI260AP sensor;
-    volatile bool BHI_IRQ = false;
     SensorStepCounter *stepCounter;
     SensorStepDetector *stepDetector;
     uint32_t steps = 0;
+#ifdef BHI260AP_INT
+    uint32_t lastPollMs = 0;
+#endif
 
     // Virtual sensor driving wake-on-motion, or 0 if the loaded firmware image offers none. Plain
     // uint8_t, which is what the SensorLib sensor-id API takes.

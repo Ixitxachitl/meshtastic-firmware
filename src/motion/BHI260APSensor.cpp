@@ -3,6 +3,7 @@
 #if !defined(ARCH_STM32WL) && !MESHTASTIC_EXCLUDE_I2C && defined(HAS_BHI260AP) && __has_include(<SensorBHI260AP.hpp>)
 #define BOSCH_BHI260_KLIO
 
+#include "mesh/Throttle.h"
 #include <BoschFirmware.h>
 #include <bosch/bhi260x/bhi3_defs.h>
 #include <bosch/bhi260x/bhi3_multi_tap_defs.h>
@@ -39,7 +40,12 @@ static const uint8_t wakeGestureCandidates[] = {
 #define BHI260AP_REMAP_AXES TOP_LAYER_BOTTOM_RIGHT_CORNER
 #endif
 
+#ifdef BHI260AP_INT
+static volatile bool BHI_IRQ = false;
+#endif
+
 BHI260APSensor::BHI260APSensor(ScanI2C::FoundDevice foundDevice) : MotionSensor::MotionSensor(foundDevice) {}
+
 // https://github.com/lewisxhe/SensorLib/blob/master/examples/Sensors/IMU/BHI260AP_InterruptSettings/BHI260AP_InterruptSettings.ino
 
 bool BHI260APSensor::init()
@@ -64,16 +70,14 @@ bool BHI260APSensor::init()
 
         // sensor.configAccelerometer(sensor.RANGE_2G, sensor.ODR_100HZ, sensor.BW_NORMAL_AVG4, sensor.PERF_CONTINUOUS_MODE);
         // sensor.enableAccelerometer();
-        // sensor.configInterrupt();
 
 #ifdef BHI260AP_INT
+        // Defaults: active-high, level-triggered, push-pull, FIFO sources unmasked.
+        InterruptConfig intConfig;
+        sensor.configureInterrupt(intConfig);
         pinMode(BHI260AP_INT, INPUT);
         attachInterrupt(
-            BHI260AP_INT,
-            [] {
-                // Set interrupt to set irq value to true
-            },
-            RISING); // Select the interrupt mode according to the actual circuit
+            BHI260AP_INT, [] { BHI_IRQ = true; }, RISING);
 #endif
 
         // stepDetector->enable(1.0, 0);
@@ -136,6 +140,14 @@ void BHI260APSensor::onWakeGesture(uint8_t sensor_id, const uint8_t *data, uint3
 
 int32_t BHI260APSensor::runOnce()
 {
+#ifdef BHI260AP_INT
+    // The INT line is the fast path; the keepalive keeps the step counter alive without it.
+    if (!BHI_IRQ && !Throttle::hasElapsed(lastPollMs, MOTION_SENSOR_IRQ_KEEPALIVE_MS))
+        return MOTION_SENSOR_CHECK_INTERVAL_MS;
+    BHI_IRQ = false;
+    lastPollMs = millis();
+#endif
+
     sensor.update();
     if (stepCounter->hasUpdated()) {
         steps = stepCounter->getStepCount();
@@ -154,8 +166,13 @@ int32_t BHI260APSensor::runOnce()
         sensor.configure(wakeGesture, wakeGestureRate, 0);
     }
 
-    // Only the wake gesture needs a fast poll; the step counter is happy once a second
+#ifdef BHI260AP_INT
+    // Tick fast for gesture latency; the IRQ check above keeps each tick cheap.
+    return MOTION_SENSOR_CHECK_INTERVAL_MS;
+#else
+    // Without the INT line only an armed wake gesture justifies polling the part 20x a second
     return (wakeGesture && config.display.wake_on_tap_or_motion) ? MOTION_SENSOR_CHECK_INTERVAL_MS : 1000;
+#endif
 }
 
 #endif
