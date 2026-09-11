@@ -1,13 +1,17 @@
-#include "NRF52RtttlTicker.h"
+#include "RtttlTicker.h"
 
-#ifdef ARCH_NRF52
+#if HAS_RTTTL_TICKER
 
 #include "DebugConfiguration.h"
 #include "freertosinc.h"
 #include <NonBlockingRtttl.h>
+#ifdef ARCH_ESP32
+#include <freertos/timers.h> // freertosinc.h stops short of timers on ESP32
+#else
 #include <timers.h>
+#endif
 
-namespace NRF52RtttlTicker
+namespace RtttlTicker
 {
 namespace
 {
@@ -27,8 +31,9 @@ void onTick(TimerHandle_t)
     // The main thread holds the lock only across begin()/stop(); skip this tick rather than block the timer task.
     if (xSemaphoreTake(lock, 0) != pdTRUE)
         return;
-    // onTick -> rtttl::play -> tone -> applyConfiguration is the deepest chain on the timer daemon's
-    // 256 word stack, shared with Bluefruit; measured 61 words peak on a T-Echo Plus.
+    // onTick -> rtttl::play -> tone is the deepest chain on the timer daemon: 256 words shared with Bluefruit on
+    // nRF52 (61 peak, T-Echo Plus), 3120 bytes on ESP32-S3. It must not block, which rules out the ESP32 core's
+    // queue-backed tone(); NonBlockingRTTTL's own ESP32 tone() is a direct ledcWriteTone() instead.
     if (rtttl::isPlaying())
         rtttl::play();
     else
@@ -98,6 +103,6 @@ void stop()
     rtttl::stop();
     xSemaphoreGive(lock);
 }
-} // namespace NRF52RtttlTicker
+} // namespace RtttlTicker
 
 #endif

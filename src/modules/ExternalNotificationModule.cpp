@@ -51,9 +51,7 @@ bool ascending = true;
 #if defined(HAS_I2S_SPEAKER_NRF52)
 #include "platform/nrf52/NRF52RtttlPlayer.h"
 #endif
-#ifdef ARCH_NRF52
-#include "platform/nrf52/NRF52RtttlTicker.h"
-#endif
+#include "buzz/RtttlTicker.h"
 
 /*
     Documentation:
@@ -70,12 +68,12 @@ bool ascending = true;
 
 #define EXT_NOTIFICATION_FAST_THREAD_MS 25
 
-// The PWM buzzer sequencer is normally polled from this cooperative thread, so a slow display refresh
-// delays the next note. nRF52 runs it from a FreeRTOS timer instead (NRF52RtttlTicker).
+// The PWM buzzer sequencer runs from a FreeRTOS timer (RtttlTicker), so a slow redraw or a busy loop can't
+// delay the next note. Only platforms without a verified timer daemon still poll it from this thread.
 static void pwmRtttlBegin(uint8_t pin, const char *song)
 {
-#ifdef ARCH_NRF52
-    NRF52RtttlTicker::begin(pin, song);
+#if HAS_RTTTL_TICKER
+    RtttlTicker::begin(pin, song);
 #else
     rtttl::begin(pin, song);
 #endif
@@ -83,8 +81,8 @@ static void pwmRtttlBegin(uint8_t pin, const char *song)
 
 static void pwmRtttlPump()
 {
-#ifdef ARCH_NRF52
-    NRF52RtttlTicker::pump();
+#if HAS_RTTTL_TICKER
+    RtttlTicker::pump();
 #else
     rtttl::play();
 #endif
@@ -92,8 +90,8 @@ static void pwmRtttlPump()
 
 static void pwmRtttlStop()
 {
-#ifdef ARCH_NRF52
-    NRF52RtttlTicker::stop();
+#if HAS_RTTTL_TICKER
+    RtttlTicker::stop();
 #else
     rtttl::stop();
 #endif
