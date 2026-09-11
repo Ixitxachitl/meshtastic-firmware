@@ -398,8 +398,9 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
             }
         }
 
+        // Offset by x like the left column, or the right one stays put while the frame slides in or out.
         const int16_t compactArrowCenterX =
-            display->getWidth() - BASEUI_BODY_LR_MARGIN - ((WAYPOINT_LIST_FONT_HEIGHT > 10) ? 9 : 7);
+            x + display->getWidth() - BASEUI_BODY_LR_MARGIN - ((WAYPOINT_LIST_FONT_HEIGHT > 10) ? 9 : 7);
         const int16_t compactArrowCenterY = (hasDescription ? row2Y : row1Y) + (WAYPOINT_LIST_FONT_HEIGHT / 2);
         const int16_t compactContentRight = compactArrowCenterX - 8;
         const char *distanceLabel = distStr[0] ? distStr : "--";
@@ -468,7 +469,7 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         const int16_t separatorY = cardBottom + 1;
         if (i + 1 < totalWaypoints) {
             if (separatorY >= bodyTop && separatorY <= contentBottom)
-                drawDottedHorizontalDivider(display, bodyX, display->getWidth() - 1 - BASEUI_BODY_LR_MARGIN, separatorY);
+                drawDottedHorizontalDivider(display, bodyX, x + display->getWidth() - 1 - BASEUI_BODY_LR_MARGIN, separatorY);
             rowTop = separatorY + WAYPOINT_ROW_GAP;
         }
     }
