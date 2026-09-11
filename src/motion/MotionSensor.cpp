@@ -82,7 +82,10 @@ bool MotionSensor::saveMagnetometerCalibration(const char *filePath, float highe
         return false;
     }
 
-    FSCom.mkdir("/prefs");
+    {
+        concurrency::LockGuard g(spiLock);
+        FSCom.mkdir("/prefs");
+    }
     CompassCalibrationRecord record = {
         COMPASS_CALIBRATION_MAGIC, COMPASS_CALIBRATION_VERSION, 0, highestX, lowestX, highestY, lowestY, highestZ, lowestZ};
 
@@ -156,7 +159,18 @@ void MotionSensor::finishCalibrationIfExpired(bool &showingScreen, const char *f
     doCalibration = false;
     endCalibrationAt = 0;
     showingScreen = false;
-    saveMagnetometerCalibration(filePath, highestX, lowestX, highestY, lowestY, highestZ, lowestZ);
+    // The result was discarded here, which made a rejected calibration indistinguishable from a
+    // saved one until the next reboot came up on the old numbers. The usual cause is an axis that
+    // never moved during the window, leaving highest == lowest - isRangeValid() then refuses the
+    // whole record rather than storing a degenerate one.
+    if (saveMagnetometerCalibration(filePath, highestX, lowestX, highestY, lowestY, highestZ, lowestZ)) {
+        LOG_INFO("Compass calibration saved to %s: X=(%.3f, %.3f), Y=(%.3f, %.3f), Z=(%.3f, %.3f)", filePath, lowestX, highestX,
+                 lowestY, highestY, lowestZ, highestZ);
+    } else {
+        LOG_ERROR("Compass calibration NOT saved - rotate through all three axes so each one sees a "
+                  "range. X=(%.3f, %.3f), Y=(%.3f, %.3f), Z=(%.3f, %.3f)",
+                  lowestX, highestX, lowestY, highestY, lowestZ, highestZ);
+    }
 
 #if !defined(MESHTASTIC_EXCLUDE_SCREEN) && HAS_SCREEN
     if (screen) {

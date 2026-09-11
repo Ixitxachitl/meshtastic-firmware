@@ -19,6 +19,7 @@
 #include "STC8HKeyboard.h"
 #include "graphics/Screen.h"                    // for the global `screen` + FrameFocus
 #include "graphics/draw/NotificationRenderer.h" // for resetBanner()
+#include "modules/CannedMessageModule.h"        // for the global `cannedMessageModule`
 #endif
 
 extern ScanI2C::DeviceAddress cardkb_found;
@@ -574,9 +575,15 @@ int32_t KbI2cBase::runOnce()
         e.source = this->_originName;
         uint8_t c = Stc8HKeyBoard.bsp_get_key_value(); // unsigned so the 0x8x/0xbx codes match
         switch (c) {
-        case 0x81: // Mute
+        case 0x81: // Chat
+            // The composer opens itself (LaunchFreetextWithDestination regenerates the frameset);
+            // the event is raised purely to wake the screen, as the other function keys do. A
+            // kbchar of 0 is inert in freetext, which only acts on 32..126 and its own 0x09/0x8f.
             e.inputEvent = INPUT_BROKER_ANYKEY;
-            e.kbchar = INPUT_BROKER_MSG_MUTE_TOGGLE;
+            e.kbchar = 0;
+            graphics::NotificationRenderer::resetBanner();
+            if (cannedMessageModule)
+                cannedMessageModule->LaunchFreetextWithDestination(NODENUM_BROADCAST);
             break;
         case 0x82: // Home
             e.inputEvent = INPUT_BROKER_ANYKEY;
@@ -585,22 +592,26 @@ int32_t KbI2cBase::runOnce()
             if (screen)
                 screen->setFrames(graphics::Screen::FOCUS_FAULT);
             break;
-        case 0x83: // Time
+        case 0x83: // Message
             e.inputEvent = INPUT_BROKER_ANYKEY;
             graphics::NotificationRenderer::resetBanner();
             // TODO(M9): also reset CannedMessage/PresetMessage state once those modules are ported
             if (screen)
-                screen->setFrames(graphics::Screen::FOCUS_CLOCK);
+                screen->setFrames(graphics::Screen::FOCUS_TEXTMESSAGE);
             break;
-        case 0x84:
-            e.inputEvent = INPUT_BROKER_GPS_TOGGLE;
-            Stc8HKeyBoard.switch_flashlight();
+        case 0x84: // GPS
+            e.inputEvent = INPUT_BROKER_ANYKEY;
+            graphics::NotificationRenderer::resetBanner();
+            if (screen)
+                screen->setFrames(graphics::Screen::FOCUS_GPS);
             break;
-        case 0x85: // FM
-            e.inputEvent = INPUT_BROKER_SEND_PING;
-            e.kbchar = 0;
+        case 0x85: // Map
+            e.inputEvent = INPUT_BROKER_ANYKEY;
+            graphics::NotificationRenderer::resetBanner();
+            if (screen)
+                screen->setFrames(graphics::Screen::FOCUS_MAP);
             break;
-        case 0x86: // FM (long press)
+        case 0x86: // Map (long press)
             e.inputEvent = INPUT_BROKER_CANCEL;
             e.kbchar = 0;
             break;

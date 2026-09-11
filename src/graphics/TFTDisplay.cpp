@@ -15,6 +15,21 @@
 #define TFT_BACKLIGHT_ON HIGH
 #endif
 
+// Whether the LGFX PWM backlight is active-low. Only reaches the panels driven through the
+// Light_PWM instance below; boards that say nothing keep the non-inverted drive they had.
+#ifndef TFT_INVERT_LIGHT
+#define TFT_INVERT_LIGHT false
+#endif
+
+// This class drives TFT_BL as a plain on/off GPIO for screen power. Where LovyanGFX owns the same
+// pin as a PWM backlight, that digitalWrite hands the pin from the LEDC peripheral back to the GPIO
+// matrix, and every setBrightness() afterwards writes to a channel no longer connected to anything
+// - silently, so brightness simply stops working after the first screen blank. A board in that
+// position gives the pin to LGFX alone and expresses "off" as brightness 0.
+#ifndef TFT_BACKLIGHT_PWM_ONLY
+#define TFT_BACKLIGHT_PWM_ONLY 0
+#endif
+
 #ifdef GPIO_EXTENDER
 #include <SparkFunSX1509.h>
 #include <Wire.h>
@@ -699,8 +714,8 @@ class LGFX : public lgfx::LGFX_Device
         {
             auto cfg = _light_instance.config(); // Gets a structure for backlight settings.
 
-            cfg.pin_bl = ST7789_BL; // Pin number to which the backlight is connected
-            cfg.invert = false;     // true to invert the brightness of the backlight
+            cfg.pin_bl = ST7789_BL;        // Pin number to which the backlight is connected
+            cfg.invert = TFT_INVERT_LIGHT; // true to invert the brightness of the backlight
             // cfg.pwm_channel = 0;
 
             _light_instance.config(cfg);
@@ -1646,7 +1661,7 @@ TFTDisplay::TFTDisplay(uint8_t address, int sda, int scl, OLEDDISPLAY_GEOMETRY g
 {
     LOG_DEBUG("TFTDisplay");
 
-#ifdef TFT_BL
+#if defined(TFT_BL) && !TFT_BACKLIGHT_PWM_ONLY
     GpioPin *p = new GpioHwPin(TFT_BL);
 
     if (!TFT_BACKLIGHT_ON) { // Need to invert the pin before hardware
@@ -2232,6 +2247,11 @@ void TFTDisplay::sendCommand(uint8_t com)
     case DISPLAYOFF: {
         LOG_DEBUG("Display off");
         backlightEnable->set(false);
+#if TFT_BACKLIGHT_PWM_ONLY
+        // backlightEnable is a no-op pin on these boards (see the constructor); the backlight goes
+        // out by driving the PWM to zero. Screen::handleSetOn() restores the level on the way back.
+        tft->setBrightness(0);
+#endif
 #if ARCH_PORTDUINO
         tft->clear();
         if (portduino_config.displayBacklight.pin > 0)

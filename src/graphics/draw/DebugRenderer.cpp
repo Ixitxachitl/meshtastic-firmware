@@ -15,6 +15,7 @@
 #include "graphics/TimeFormatters.h"
 #include "graphics/images.h"
 #include "main.h"
+#include "mesh/Throttle.h"
 
 #if HAS_WIFI && !defined(ARCH_PORTDUINO)
 #include "mesh/wifi/WiFiAPClient.h"
@@ -310,6 +311,10 @@ void drawLoRaFocused(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x,
 // ****************************
 // *      System Screen       *
 // ****************************
+// How often the flash usage bar re-reads the filesystem. Nothing here changes faster than the user
+// can act, so a slow sample costs nothing visible.
+#define SYSTEM_FLASH_USAGE_INTERVAL_MS (10 * 1000)
+
 void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     clearForFrame(display, state);
@@ -405,8 +410,18 @@ void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x
     uint32_t psramUsed = memGet.getPsramSize() - memGet.getFreePsram();
     uint32_t psramTotal = memGet.getPsramSize();
 #endif
-    flashUsed = FSCom.usedBytes();
-    flashTotal = FSCom.totalBytes();
+    // Both of these call esp_littlefs_info(), which traverses every block in the filesystem to
+    // total it up. Run per draw that was slow enough to visibly drag this frame's redraw - and the
+    // transition into it - so sample on an interval and reuse the last answer in between.
+    static uint32_t flashSampledAtMs = 0;
+    static uint32_t flashUsedCached = 0, flashTotalCached = 0;
+    if (flashTotalCached == 0 || Throttle::hasElapsed(flashSampledAtMs, SYSTEM_FLASH_USAGE_INTERVAL_MS)) {
+        flashUsedCached = FSCom.usedBytes();
+        flashTotalCached = FSCom.totalBytes();
+        flashSampledAtMs = millis();
+    }
+    flashUsed = flashUsedCached;
+    flashTotal = flashTotalCached;
 #endif
 
     uint32_t sdUsed = 0, sdTotal = 0;

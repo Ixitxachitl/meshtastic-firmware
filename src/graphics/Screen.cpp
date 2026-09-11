@@ -2026,6 +2026,18 @@ void Screen::setFrames(FrameFocus focus)
     case FOCUS_SYSTEM:
         ui->switchToFrame(fsi.positions.system);
         break;
+    case FOCUS_MAP:
+        // The map frame is opt-in per variant (BASEUI_HAS_MAP) and absent from the frameset when
+        // off, so fall back rather than switching to an index that was never built.
+        ui->switchToFrame(fsi.positions.map != 255 ? fsi.positions.map : fsi.positions.deviceFocused);
+        break;
+    case FOCUS_TEXTMESSAGE:
+        ui->switchToFrame(fsi.positions.textMessage);
+        break;
+    case FOCUS_GPS:
+        // Absent on boards without GPS, and whenever the user has hidden the frame.
+        ui->switchToFrame(fsi.positions.gps != 255 ? fsi.positions.gps : fsi.positions.deviceFocused);
+        break;
 
     case FOCUS_PRESERVE:
         if (previousFramesetInfo.positions.waypoint == 255 && fsi.positions.waypoint != 255) {
