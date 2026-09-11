@@ -574,6 +574,10 @@ int32_t KbI2cBase::runOnce()
         e.inputEvent = INPUT_BROKER_NONE;
         e.source = this->_originName;
         uint8_t c = Stc8HKeyBoard.bsp_get_key_value(); // unsigned so the 0x8x/0xbx codes match
+        // These keys call into the screen directly, ahead of InputBroker's splash guard. The code was read
+        // above, so dropping it here leaves no stale key behind.
+        if (screen && screen->isShowingBootScreen())
+            break;
         switch (c) {
         case 0x81: // Chat
             // The composer opens itself (LaunchFreetextWithDestination regenerates the frameset);

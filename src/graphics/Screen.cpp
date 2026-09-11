@@ -1430,6 +1430,13 @@ static bool screenDragOwnsFramerate()
 }
 #endif // BASEUI_HAS_TOUCH_DRAG
 
+bool Screen::isShowingBootScreen() const
+{
+    // This gates all input, so it must never stick: no display means no splash, and the splash's own duration
+    // caps it even if runOnce() never runs far enough to clear the flag.
+    return useDisplay && showingBootScreen && !Throttle::hasElapsed(serialSinceMsec, logo_timeout);
+}
+
 int32_t Screen::runOnce()
 {
 #ifdef UI_PERF_DEBUG
@@ -1480,7 +1487,6 @@ int32_t Screen::runOnce()
 
     // Show boot screen for first logo_timeout seconds, then switch to normal operation.
     // serialSinceMsec adjusts for additional serial wait time during nRF52 bootup
-    static bool showingBootScreen = true;
     if (showingBootScreen && Throttle::hasElapsed(serialSinceMsec, logo_timeout)) {
         LOG_INFO("Done with boot screen");
         stopBootScreen();

@@ -305,6 +305,8 @@ class Screen : public concurrency::OSThread
     bool isMapFrameShown();
 
     bool isScreenOn() { return screenOn; }
+    // True for the whole boot splash (logo, then the OEM image), until normal frames or an alert take over.
+    bool isShowingBootScreen() const;
 
     bool isOnGamesFrame()
     {
@@ -850,6 +852,7 @@ class Screen : public concurrency::OSThread
     // Whether we are showing the regular screen (as opposed to booth screen or
     // Bluetooth PIN screen)
     bool showingNormalScreen = false;
+    bool showingBootScreen = true;
     std::atomic<bool> textMessageFrameShown{false};
     /// Track USB power state to only wake screen on actual power state changes
     bool lastPowerUSBState = false;

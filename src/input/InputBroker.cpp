@@ -149,6 +149,13 @@ int InputBroker::handleInputEvent(const InputEvent *event)
     }
 #endif
 
+#if HAS_SCREEN
+    // Nothing on the boot splash responds to navigation, and acting on it (a frame change, the composer
+    // opening) would cut the splash short. The press still woke the device via PowerFSM above.
+    if (screen && screen->isShowingBootScreen())
+        return 0;
+#endif
+
     this->notifyObservers(event);
     return 0;
 }
