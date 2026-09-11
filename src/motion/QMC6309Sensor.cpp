@@ -31,6 +31,11 @@ bool QMC6309Sensor::init()
 
     sensor.reset();
 
+    // Force a SET pulse before every measurement. Left at the default, polarity came up differently on
+    // successive boots (offset flipped by ~6G), silently invalidating the saved calibration each time.
+    if (!sensor.setSetResetMode(SensorQMC6309::MagSetResetMode::SET_ONLY_ON))
+        LOG_WARN("QMC6309 set/reset mode not applied; calibration may not survive a reboot");
+
     // 8 Gauss full-scale easily covers Earth's ~0.5 G field; OSR_8 for low noise. Tunable.
     if (!sensor.configMagnetometer(OperationMode::CONTINUOUS_MEASUREMENT, MagFullScaleRange::FS_8G, 100.0f,
                                    MagOverSampleRatio::OSR_8)) {

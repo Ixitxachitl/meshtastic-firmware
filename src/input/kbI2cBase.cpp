@@ -653,9 +653,10 @@ int32_t KbI2cBase::runOnce()
             e.inputEvent = INPUT_BROKER_BACK;
             e.kbchar = 0;
             break;
-        case 0x88: // Invalid key value
+        case 0x88: // Triangle key (device-ui: keypad firmware also sends this for light/speaker)
+            // Only the message composer acts on the emote list; everywhere else it stays a plain wake keypress.
             e.inputEvent = INPUT_BROKER_ANYKEY;
-            e.kbchar = 0;
+            e.kbchar = INPUT_BROKER_MSG_EMOTE_LIST;
             break;
         default: // all other keys (printable ASCII)
             if ((c >= 0x20) && (c <= 0x7F)) {

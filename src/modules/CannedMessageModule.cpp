@@ -677,7 +677,12 @@ bool CannedMessageModule::handleTabSwitch(const InputEvent *event)
 {
     if (event->kbchar != 0x09)
         return false;
+    toggleDestinationPicker();
+    return true;
+}
 
+void CannedMessageModule::toggleDestinationPicker()
+{
     const cannedMessageModuleRunState targetState = (runState == CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION)
                                                         ? CANNED_MESSAGE_RUN_STATE_FREETEXT
                                                         : CANNED_MESSAGE_RUN_STATE_DESTINATION_SELECTION;
@@ -693,7 +698,6 @@ bool CannedMessageModule::handleTabSwitch(const InputEvent *event)
     e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
     notifyObservers(&e);
     screen->forceDisplay();
-    return true;
 }
 
 int CannedMessageModule::handleDestinationSelectionInput(const InputEvent *event, bool isUp, bool isDown, bool isSelect)
@@ -1224,6 +1228,15 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
     if (event->kbchar == INPUT_BROKER_MSG_TAB) {
         return handleTabSwitch(event); // Reuse tab logic
     }
+
+#if defined(CANNED_MESSAGE_UP_OPENS_DESTINATION) && !defined(USE_VIRTUAL_KEYBOARD)
+    // For keypads with no Tab key. Up is otherwise unused while composing; picking a destination
+    // returns to the draft. Virtual-keyboard builds keep Up for moving around the on-screen keys.
+    if (event->inputEvent == INPUT_BROKER_UP) {
+        toggleDestinationPicker();
+        return true;
+    }
+#endif
 
     // Printable ASCII (add char to draft)
     if (event->kbchar >= 32 && event->kbchar <= 126) {

@@ -18,6 +18,11 @@
 #define KB_INT 12             // STC8H key-press interrupt (idle low, rising edge on press)
 #define KB_INT_WAKE_ON_HIGH 1 // KB_INT rests low; wake light sleep on its HIGH (active) level
 #define KB_LED 46             // STC8H keypad backlight LED
+// The STC8H keypad is a real 5-way pad, but not a type configuration.h recognises. Declaring it
+// gets modal map Pan/Zoom (held until Back) instead of the one-step-per-pick menus.
+#define HAS_DIRECTIONAL_INPUT 1
+// No Tab key, so Up in the message composer opens the channel/DM picker instead.
+#define CANNED_MESSAGE_UP_OPENS_DESTINATION
 // I2C peripheral
 #define I2C_SCL1 6
 #define I2C_SDA1 7
@@ -111,6 +116,11 @@
 
 /*RTC*/
 #define PCF8563_RTC 0x51
+
+/*IMU (QMI8658)*/
+// Wake on motion from the accel samples in firmware: the chip's own engine wants >=500Hz, well above ours.
+#define QMI8658_SOFTWARE_MOTION_WAKE
+#define SHOW_STEP_COUNTER
 
 /*BATTERY*/
 #define BATTERY_PIN 13

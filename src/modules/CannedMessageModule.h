@@ -220,6 +220,7 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
     bool isDownEvent(const InputEvent *event);
     bool isSelectEvent(const InputEvent *event);
     bool handleTabSwitch(const InputEvent *event);
+    void toggleDestinationPicker(); // freetext <-> destination selection, shared by Tab and Up
     int handleDestinationSelectionInput(const InputEvent *event, bool isUp, bool isDown, bool isSelect);
     bool handleMessageSelectorInput(const InputEvent *event, bool isUp, bool isDown, bool isSelect);
     bool handleFreeTextInput(const InputEvent *event);
