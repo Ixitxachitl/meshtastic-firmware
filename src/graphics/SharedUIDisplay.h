@@ -181,25 +181,30 @@ static inline void clearForFrame(OLEDDisplay *display, const OLEDDisplayUiState 
 // state->currentFrame names the *outgoing* frame for the entire duration of a transition, so any
 // frame that identifies itself from it - to pick which module, which favourite node, which page -
 // picks the wrong one while it is sliding in, and typically bails out and draws nothing until the
-// transition completes. transitionFrameTarget is only maintained by nextFrame(), never by
-// previousFrame(), so going backwards the incoming index has to be derived from the direction.
-// frameCount resolves the backwards wrap off frame 0, whose incoming frame is the *last* one.
-// Callers that identify themselves by index must pass it. The 0 default keeps the old, wrong answer
-// rather than a plausible-looking one, so a missing argument shows up as the same blank frame
-// instead of silently drawing the wrong content.
+// transition completes. The incoming frame is therefore derived the same way OLEDDisplayUi picks
+// the frame it draws: one step from currentFrame in the transition's direction.
+//
+// transitionFrameTarget is deliberately not used. previousFrame() never writes it, and nextFrame()
+// computes it from frameTransitionDirection *before* setting that field to +1 - so a forward
+// transition opened while the direction still reads -1 (any next-after-previous where the library
+// has not yet had a FIXED tick to revert manualControl) stores the frame on the wrong side. The
+// transition itself lands correctly, because drawFrame() re-derives the target after the direction
+// is updated; only readers of the stale field were one out for the length of the slide.
+//
+// frameCount resolves the wrap at either end. Callers that identify themselves by index must pass
+// it. The 0 default keeps the old, wrong answer rather than a plausible-looking one, so a missing
+// argument shows up as the same blank frame instead of silently drawing the wrong content.
 static inline uint8_t frameIndexFor(const OLEDDisplayUiState *state, size_t frameCount = 0)
 {
     if (!state)
         return 0;
     if (state->frameState == IN_TRANSITION && state->transitionFrameRelationship == TransitionRelationship_INCOMING) {
-        if (state->frameTransitionDirection < 0) {
-            if (state->currentFrame > 0)
-                return state->currentFrame - 1;
-            // Wrapping backwards from the first frame lands on the last. Forward wrap needs no
-            // special case: nextFrame() stores the wrapped index in transitionFrameTarget, which is
-            // why last-to-first always worked and first-to-last did not.
-            return frameCount > 0 ? (uint8_t)(frameCount - 1) : state->currentFrame;
-        }
+        const bool backwards = state->frameTransitionDirection < 0;
+        if (frameCount > 0)
+            return (uint8_t)((state->currentFrame + (backwards ? frameCount - 1 : 1)) % frameCount);
+        // No count to wrap against: the best either direction can do from the state alone.
+        if (backwards)
+            return state->currentFrame > 0 ? state->currentFrame - 1 : state->currentFrame;
         return state->transitionFrameTarget;
     }
     return state->currentFrame;

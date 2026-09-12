@@ -2144,17 +2144,9 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
         return;
 #endif
 
-    // transitionFrameTarget is only maintained by nextFrame() - previousFrame() never sets it and
-    // tick() zeroes it when a transition completes - so reading it directly highlighted a stale
-    // icon (usually the first) for the whole of a backwards transition, then snapped to the right
-    // one at the end. frameIndexFor() derives the incoming frame properly in both directions.
-    // Wrap on the icon count, not the frame count. frameIndexFor() only consults the count it is
-    // given when a backwards transition wraps off frame 0, so if the two ever disagree the
-    // wrap landed past the end of indicatorIcons - and the guard below then fell back to
-    // currentFrame, which mid-transition is the frame being left rather than the one arriving.
-    // That showed as the footer sitting one icon behind for the length of a rightward swipe
-    // before snapping to the right one, and only ever rightward, since forward transitions read
-    // transitionFrameTarget and never wrap through here.
+    // frameIndexFor() derives the incoming frame from currentFrame and the transition direction;
+    // see its note for why the state's own transitionFrameTarget cannot be trusted. Wrap on the
+    // icon count, not the frame count, so the result always indexes indicatorIcons.
     const size_t iconCount = screen->indicatorIcons.size();
     uint8_t frameToHighlight = frameIndexFor(state, iconCount);
     if (iconCount && frameToHighlight >= iconCount)
