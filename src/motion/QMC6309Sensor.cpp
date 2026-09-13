@@ -105,9 +105,11 @@ int32_t QMC6309Sensor::runOnce()
     float accelY = 0.0f;
     float accelZ = 0.0f;
     uint32_t accelAgeMs = 0;
+    static bool warnedStale = false;
 
     // Fuse with the latest accelerometer sample (published by the QMI8658 driver) for tilt compensation.
-    if (getLatestCompassAccelSample(accelX, accelY, accelZ, accelAgeMs) && accelAgeMs <= QMC6309_ACCEL_STALE_MS) {
+    const bool haveAccel = getLatestCompassAccelSample(accelX, accelY, accelZ, accelAgeMs);
+    if (haveAccel && accelAgeMs <= QMC6309_ACCEL_STALE_MS) {
         FusionVector ga = {.axis = {accelX, accelY, accelZ}};
         FusionVector ma = {.axis = {magX, magY, magZ}};
         // if (config.display.compass_orientation > meshtastic_Config_DisplayConfig_CompassOrientation_DEGREES_270) {
@@ -119,8 +121,18 @@ int32_t QMC6309Sensor::runOnce()
         heading = FusionCompass(ga, ma, FusionConventionNed);
         if (ga.axis.z > 0.0f)
             heading = 360.0f - heading;
+        warnedStale = false;
 
     } else {
+        // No usable accel sample: this is a flat heading, wrong at any angle but level. Silent
+        // before, which made a stopped accelerometer thread look like a compass that lost calibration.
+        if (!warnedStale) {
+            warnedStale = true;
+            if (haveAccel)
+                LOG_WARN("QMC6309 accel sample %ums old - compass running without tilt compensation", accelAgeMs);
+            else
+                LOG_WARN("QMC6309 has no accel sample - compass running without tilt compensation");
+        }
         heading = atan2f(-magY, magX) * RAD_TO_DEG;
     }
 

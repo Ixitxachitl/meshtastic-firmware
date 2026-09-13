@@ -142,7 +142,8 @@ void MotionSensor::beginCalibrationDisplay(bool &showingScreen)
         powerFSM.trigger(EVENT_PRESS); // keep screen alive during calibration
         showingScreen = true;
         if (screen)
-            screen->startAlert((FrameCallback)drawFrameCalibration);
+            // Back to the compass when the window closes, not the home frame the default rebuild picks.
+            screen->startAlert((FrameCallback)drawFrameCalibration, graphics::Screen::FOCUS_GPS);
     }
 #else
     (void)showingScreen;

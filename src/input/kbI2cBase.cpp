@@ -615,14 +615,14 @@ int32_t KbI2cBase::runOnce()
             if (screen)
                 screen->setFrames(graphics::Screen::FOCUS_MAP);
             break;
-        case 0x86: // Map (long press)
+        case 0x86: // Back/cancel. Commented as "Map (long press)" before, which it is not.
             e.inputEvent = INPUT_BROKER_CANCEL;
             e.kbchar = 0;
             break;
-        case 0x87: // Preset
+        case 0x87: // Waypoint key, long press - observed on hardware. Sends our position, the same
+                   // SystemCommandsModule action as the Home menu's "Send Position" entry.
             graphics::NotificationRenderer::resetBanner();
-            // TODO(M9): also reset CannedMessage state once that module is ported
-            e.inputEvent = INPUT_BROKER_SELECT_LONG;
+            e.inputEvent = INPUT_BROKER_SEND_PING;
             e.kbchar = 0;
             break;
         case 0xb5: // Up
@@ -649,6 +649,10 @@ int32_t KbI2cBase::runOnce()
             e.inputEvent = INPUT_BROKER_SELECT;
             e.kbchar = 0;
             break;
+        case 0xa3: // Select/Enter, long press - observed on hardware (0x87 is the waypoint's).
+            e.inputEvent = INPUT_BROKER_SELECT_LONG;
+            e.kbchar = 0;
+            break;
         case 0x08: // Del
             e.inputEvent = INPUT_BROKER_BACK;
             e.kbchar = 0;
@@ -672,8 +676,13 @@ int32_t KbI2cBase::runOnce()
             }
             break;
         }
+        // One line per press, from the read that already happened - no extra bus traffic. If input
+        // ever stops responding, this says whether the keypad is still reporting (so something
+        // downstream is swallowing events) or has gone quiet (so the MCU or the bus is wedged).
+        if (c != 0 && c != 0xFF)
+            LOG_DEBUG("STC8H keypad: key 0x%02x -> event %u", c, (unsigned)e.inputEvent);
+
         if (e.inputEvent != INPUT_BROKER_NONE) {
-            // LOG_DEBUG("STC8H companion-MCU keypad key event: 0x%02x", c);
             this->notifyObservers(&e);
         }
 

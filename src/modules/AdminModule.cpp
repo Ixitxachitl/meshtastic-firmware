@@ -851,11 +851,19 @@ static void reconcileAccelerometerThread(bool wasOn, bool nowOn, bool otherFeatu
     if (!accelerometerThread) // null unless a sensor was detected at boot
         return;
 
+        // providesHeading() only covers a sensor that computes the heading itself. Where a separate
+        // magnetometer does it, this thread still feeds its tilt compensation - stopping it would drop
+        // the compass to an uncompensated flat heading, which is wrong at every angle but level.
+#if !MESHTASTIC_EXCLUDE_MAGNETOMETER
+    const bool feedsCompass = accelerometerThread->providesHeading() || magnetometerThread != nullptr;
+#else
+    const bool feedsCompass = accelerometerThread->providesHeading();
+#endif
+
     if (!wasOn && nowOn && accelerometerThread->enabled == false) {
         accelerometerThread->enabled = true;
         accelerometerThread->start();
-    } else if (wasOn && !nowOn && !otherFeatureOn && accelerometerThread->enabled == true &&
-               !accelerometerThread->providesHeading()) {
+    } else if (wasOn && !nowOn && !otherFeatureOn && accelerometerThread->enabled == true && !feedsCompass) {
         accelerometerThread->disable();
     }
 }

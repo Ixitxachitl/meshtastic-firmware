@@ -344,10 +344,12 @@ class Screen : public concurrency::OSThread
     // SCREEN_ANIMATE_FRAME_NAV. Ignored everywhere else.
     void showFrame(FrameDirection direction, bool animate = false);
 
-    // generic alert start
-    void startAlert(FrameCallback _alertFrame)
+    // generic alert start. returnFocus is the frame to land on when the alert ends - the default
+    // rebuild goes to the home frame, which is wrong for an alert launched from somewhere else.
+    void startAlert(FrameCallback _alertFrame, FrameFocus returnFocus = FOCUS_DEFAULT)
     {
         alertFrame = _alertFrame;
+        alertReturnFocus = returnFocus;
         ScreenCmd cmd;
         cmd.cmd = Cmd::START_ALERT_FRAME;
         enqueueCmd(cmd);
@@ -842,6 +844,7 @@ class Screen : public concurrency::OSThread
 
     /// callback for current alert frame
     FrameCallback alertFrame;
+    FrameFocus alertReturnFocus = FOCUS_DEFAULT; // where STOP_ALERT_FRAME returns to
 
     /// Queue of commands to execute in doTask.
     TypedQueue<ScreenCmd> cmdQueue;

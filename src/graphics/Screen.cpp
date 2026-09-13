@@ -1584,8 +1584,9 @@ int32_t Screen::runOnce()
                 break; // only the owning module may take the screen back off its own frame
             // Return from one-off alert mode back to regular frames.
             if (!showingNormalScreen && NotificationRenderer::current_notification_type != notificationTypeEnum::text_input) {
-                setFrames();
+                setFrames(alertReturnFocus);
             }
+            alertReturnFocus = FOCUS_DEFAULT;
             break;
         case Cmd::STOP_BOOT_SCREEN:
             EINK_ADD_FRAMEFLAG(dispdev, COSMETIC); // E-Ink: Explicitly use full-refresh for next frame
@@ -3019,7 +3020,9 @@ int Screen::handleInputEvent(const InputEvent *event)
                     menuHandler::waypointBaseMenu();
                 }
             } else if (event->inputEvent == INPUT_BROKER_BACK) {
+#if BASEUI_BACK_PAGES_FRAMES
                 showFrame(FrameDirection::PREVIOUS);
+#endif
             } else if (event->inputEvent == INPUT_BROKER_CANCEL) {
                 setOn(false);
             }

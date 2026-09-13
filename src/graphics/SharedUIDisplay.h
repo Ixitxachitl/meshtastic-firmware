@@ -77,6 +77,12 @@ namespace graphics
 #ifndef BASEUI_NAV_INFINITE_SCROLL
 #define BASEUI_NAV_INFINITE_SCROLL 0
 #endif
+// Whether INPUT_BROKER_BACK pages to the previous frame. Keypads with their own back/cancel key
+// raise BACK from delete, where paging frames is wrong; those variants set this to 0 and keep
+// delete as the backspace the text modules read it as.
+#ifndef BASEUI_BACK_PAGES_FRAMES
+#define BASEUI_BACK_PAGES_FRAMES 1
+#endif
 // Trims (negative) or grows (positive) how many entry rows the node list screens fit.
 #ifndef BASEUI_NODE_LIST_ROW_ADJUST
 #define BASEUI_NODE_LIST_ROW_ADJUST 0
