@@ -2577,6 +2577,39 @@ int TFTDisplay::heldXZone()
 }
 
 // Send a command to the display (low level function)
+#if TFT_HAS_PANEL_VCOM
+#ifndef ST7789_VCOMS
+#define ST7789_VCOMS 0x28 // LovyanGFX's init value, taken from a different panel's datasheet
+#endif
+static uint8_t sPanelVcom = ST7789_VCOMS;
+
+// LovyanGFX's init sends its own VCOMS, so this goes out after init, and again after wake for good measure.
+static void applyPanelVcom()
+{
+    if (!tft)
+        return;
+    tft->startWrite();
+    tft->writeCommand(0xBB); // VCOMS
+    tft->writeData(sPanelVcom);
+    tft->endWrite();
+}
+
+void TFTDisplay::setPanelVcom(uint8_t vcoms)
+{
+    sPanelVcom = vcoms;
+    {
+        concurrency::LockGuard g(spiLock);
+        applyPanelVcom();
+    }
+    LOG_INFO("ST7789 VCOMS 0x%02X (%u mV)", (unsigned)vcoms, 100 + 25 * (unsigned)vcoms);
+}
+
+uint8_t TFTDisplay::panelVcom()
+{
+    return sPanelVcom;
+}
+#endif
+
 void TFTDisplay::sendCommand(uint8_t com)
 {
     // handle display on/off directly
@@ -2606,6 +2639,9 @@ void TFTDisplay::sendCommand(uint8_t com)
     !defined(HELTEC_MESH_NODE_T1)
         tft->wakeup();
         tft->powerSaveOff();
+#if TFT_HAS_PANEL_VCOM
+        applyPanelVcom();
+#endif
 #endif
 
 #if defined(TFT_NV3001B)
@@ -2965,6 +3001,9 @@ bool TFTDisplay::connect()
         LOG_ERROR("TFT Fail");
 #else
     tft->init();
+#endif
+#if TFT_HAS_PANEL_VCOM
+    applyPanelVcom();
 #endif
 
 #if defined(M5STACK)

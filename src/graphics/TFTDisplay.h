@@ -67,6 +67,16 @@ class TFTDisplay : public OLEDDisplay
     // Functions for changing display brightness
     void setDisplayBrightness(uint8_t);
 
+#if defined(ST7789_CS) && !defined(USE_ARDUINO_GFX) && (defined(ST7789_VCOMS) || BASEUI_PANEL_VCOM_TUNING)
+#define TFT_HAS_PANEL_VCOM 1
+    // ST7789 VCOM (VCOMS, 0xBB): 0.1V plus 0.025V a step. One that doesn't suit the panel leaves a DC bias on the
+    // liquid crystal, seen as a faint image of whatever sat on screen. Applied at init and wake; not persisted.
+    static void setPanelVcom(uint8_t vcoms);
+    static uint8_t panelVcom();
+#else
+#define TFT_HAS_PANEL_VCOM 0
+#endif
+
     /**
      * shim to make the abstraction happy
      *

@@ -64,6 +64,7 @@ class menuHandler
         DisplayUnits,
         MessageBubblesMenu,
         ThemeMenu,
+        PanelVcomMenu,
 #if BASEUI_HAS_TOUCH_CALIBRATION
         TouchCalibrationMenu,
         RunTouchCalibration,
@@ -144,6 +145,7 @@ class menuHandler
     static void displayUnitsMenu();
     static void messageBubblesMenu();
     static void themeMenu();
+    static void panelVcomMenu();
 #if BASEUI_HAS_TOUCH_CALIBRATION
     static void touchCalibrationMenu();
     static void runTouchCalibration();

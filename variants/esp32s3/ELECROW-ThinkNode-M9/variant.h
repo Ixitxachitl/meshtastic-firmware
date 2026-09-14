@@ -84,6 +84,9 @@
 #define SCREEN_TRANSITION_FRAMERATE 60
 #define SCREEN_NAV_TRANSITION_MS 200 // same length as the pocket-watch firmware's page slide
 #define BRIGHTNESS_DEFAULT 128
+// LovyanGFX's ST7789 VCOM (0x28, from another panel's datasheet) left a faint image of a static screen behind.
+// 0x18 (700 mV), tuned on hardware; higher ghosts more and washes the panel out.
+#define ST7789_VCOMS 0x18
 
 // Custom boot splash, shown for the second half of the boot screen: full-panel 320x240 artwork, drawn in
 // colour on colour-framebuffer builds. 1:1 scale - BASEUI_ICON_SCALE would double it off the panel.

@@ -2751,7 +2751,7 @@ void menuHandler::screenOptionsMenu()
     bool hasSupportBrightness = false;
 #endif
 
-    enum optionsNumbers { Back, Brightness, FrameToggles, DisplayUnits, MessageBubbles, Theme, CalibrateTouch };
+    enum optionsNumbers { Back, Brightness, FrameToggles, DisplayUnits, MessageBubbles, Theme, CalibrateTouch, PanelVcom };
     static const char *optionsArray[8] = {"Back"};
     static int optionsEnumArray[8] = {Back};
     int options = 1;
@@ -2784,6 +2784,10 @@ void menuHandler::screenOptionsMenu()
         optionsEnumArray[options++] = CalibrateTouch;
     }
 #endif
+#if TFT_HAS_PANEL_VCOM && BASEUI_PANEL_VCOM_TUNING
+    optionsArray[options] = "Panel VCOM";
+    optionsEnumArray[options++] = PanelVcom;
+#endif
 
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = "Display Options";
@@ -2811,6 +2815,9 @@ void menuHandler::screenOptionsMenu()
             menuHandler::menuQueue = menuHandler::TouchCalibrationMenu;
             screen->runNow();
 #endif
+        } else if (selected == PanelVcom) {
+            menuHandler::menuQueue = menuHandler::PanelVcomMenu;
+            screen->runNow();
         } else {
             menuQueue = SystemBaseMenu;
             screen->runNow();
@@ -3239,6 +3246,41 @@ void menuHandler::themeMenu()
     screen->showOverlayBanner(bannerOptions);
 }
 
+void menuHandler::panelVcomMenu()
+{
+#if TFT_HAS_PANEL_VCOM
+    // Candidates either side of LovyanGFX's 0x28. Applied live and logged, not saved: the winner goes in as ST7789_VCOMS.
+    static constexpr uint8_t kValues[] = {0x14, 0x18, 0x1A, 0x1C, 0x1E, 0x20, 0x22, 0x24,
+                                          0x26, 0x28, 0x2A, 0x2C, 0x30, 0x34, 0x38};
+    constexpr size_t kCount = sizeof(kValues) / sizeof(kValues[0]);
+    static char labels[kCount][16];
+    static const char *optionsArray[kCount + 1];
+    optionsArray[0] = "Back";
+    int initial = 0;
+    for (size_t i = 0; i < kCount; i++) {
+        snprintf(labels[i], sizeof(labels[i]), "0x%02X %umV", (unsigned)kValues[i], 100 + 25 * (unsigned)kValues[i]);
+        optionsArray[i + 1] = labels[i];
+        if (kValues[i] == TFTDisplay::panelVcom())
+            initial = (int)i + 1;
+    }
+
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = "Panel VCOM";
+    bannerOptions.optionsArrayPtr = optionsArray;
+    bannerOptions.optionsCount = kCount + 1;
+    bannerOptions.InitialSelected = initial;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        if (selected <= 0) {
+            menuHandler::menuQueue = menuHandler::ScreenOptionsMenu;
+            screen->runNow();
+            return;
+        }
+        TFTDisplay::setPanelVcom(kValues[selected - 1]);
+    };
+    screen->showOverlayBanner(bannerOptions);
+#endif
+}
+
 void menuHandler::handleMenuSwitch(OLEDDisplay *display)
 {
     if (menuQueue != MenuNone)
@@ -3412,6 +3454,9 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
         break;
     case ThemeMenu:
         themeMenu();
+        break;
+    case PanelVcomMenu:
+        panelVcomMenu();
         break;
 #if BASEUI_HAS_TOUCH_CALIBRATION
     case TouchCalibrationMenu:

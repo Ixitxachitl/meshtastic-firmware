@@ -539,6 +539,11 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #ifndef BASEUI_TAP_ADVANCES_FRAME
 #define BASEUI_TAP_ADVANCES_FRAME 1
 #endif
+// Display > Panel VCOM: steps an ST7789's VCOM live, to find the value that stops image retention before baking it
+// in as ST7789_VCOMS. A tuning aid, opt-in per variant.
+#ifndef BASEUI_PANEL_VCOM_TUNING
+#define BASEUI_PANEL_VCOM_TUNING 0
+#endif
 #ifndef HAS_WIRE
 #define HAS_WIRE 0
 #endif
