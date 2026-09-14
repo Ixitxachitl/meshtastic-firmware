@@ -122,6 +122,9 @@ class TFTDisplay : public OLEDDisplay
         markNativeRowsDirty(0, displayHeight);
         return explicitBits;
     }
+    // Copy `count` pixels of a captured row from column srcX to dstX. Pixels that were the background image where
+    // they were captured take it at their new place, so a sliding frame moves over a background that holds still.
+    void copySlideRow(int32_t row, const uint16_t *src, int32_t srcX, int32_t dstX, int32_t count);
 
     void setPixel(int16_t x, int16_t y) override;
     void setPixelColor(int16_t x, int16_t y, OLEDDISPLAY_COLOR c) override;

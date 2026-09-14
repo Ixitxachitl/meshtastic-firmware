@@ -8,6 +8,9 @@
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/TFTColorRegions.h"
+#if BASEUI_NATIVE_RGB565
+#include "graphics/TFTDisplay.h"
+#endif
 #include "graphics/TFTPalette.h"
 #include "graphics/images.h"
 #include "input/RotaryEncoderInterruptImpl1.h"
@@ -1002,6 +1005,23 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
 #if GRAPHICS_TFT_COLORING_ENABLED
     registerTFTActionMenuRegions(boxLeft, boxTop, boxWidth, boxHeight);
 #endif
+#if BASEUI_NATIVE_RGB565 && GRAPHICS_TFT_COLORING_ENABLED
+    // A solid panel instead of the canvas showing through: the menu's own background tinted toward the header, a
+    // little lighter at the top. Explicit colour, so the regions above still colour the text drawn over it.
+    uint16_t menuGradientTop = 0, menuGradientBottom = 0;
+    getThemeHeaderGradient(menuGradientTop, menuGradientBottom);
+    if (boxWidth > 2 && boxHeight > 2) {
+        const uint16_t menuBodyBg = getActiveTheme().roles[static_cast<size_t>(TFTColorRole::ActionMenuBody)].offColor;
+        const uint16_t panelTop = TFTPalette::mix565(menuBodyBg, menuGradientBottom, 72);
+        const uint16_t panelBottom = TFTPalette::mix565(menuBodyBg, menuGradientBottom, 24);
+        const int rows = boxHeight - 2;
+        for (int row = 0; row < rows; ++row) {
+            const uint8_t t = static_cast<uint8_t>(rows > 1 ? row * 255 / (rows - 1) : 0);
+            static_cast<TFTDisplay *>(display)->fillRect565(boxLeft + 1, boxTop + 1 + row, boxWidth - 2, 1,
+                                                            TFTPalette::mix565(panelTop, panelBottom, t));
+        }
+    }
+#endif
 
     // Draw Content
     int16_t lineY = boxTop + vPadding;
@@ -1040,6 +1060,15 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
                 if (boxWidth > 2 && titleBarHeight > 0) {
                     setAndRegisterTFTColorRole(TFTColorRole::ActionMenuTitle, getThemeHeaderBg(), titleTextColor, boxLeft + 1,
                                                titleBarY, boxWidth - 2, titleBarHeight);
+#if BASEUI_NATIVE_RGB565
+                    // The header's gradient behind the title; the title role then only colours the glyphs.
+                    for (int row = 0; row < titleBarHeight; ++row) {
+                        const uint8_t t = static_cast<uint8_t>(titleBarHeight > 1 ? row * 255 / (titleBarHeight - 1) : 0);
+                        static_cast<TFTDisplay *>(display)->fillRect565(
+                            boxLeft + 1, titleBarY + row, boxWidth - 2, 1,
+                            TFTPalette::mix565(menuGradientTop, menuGradientBottom, t));
+                    }
+#endif
                 }
             }
 #endif

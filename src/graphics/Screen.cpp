@@ -1290,7 +1290,7 @@ static FrameCallback navSlideCompositor(NavSlideSnapshot &snap)
                 memcpy(panel->explicitMask() + p * width + dstX, snap.explicitBits + p * width + srcX, keep);
             const int32_t height = display->height();
             for (int32_t row = 0; row < height; row++)
-                memcpy(panel->nativePixels() + row * width + dstX, snap.rgb + row * width + srcX, keep * sizeof(uint16_t));
+                panel->copySlideRow(row, snap.rgb + row * width, srcX, dstX, keep);
 #endif
         }
 #if NAV_SLIDE_REPLAYS_REGIONS

@@ -87,8 +87,10 @@
 #define SCREEN_NAV_TRANSITION_MS 200 // same length as the pocket-watch firmware's page slide
 #define BRIGHTNESS_DEFAULT 128
 // LovyanGFX's ST7789 VCOM (0x28, from another panel's datasheet) left a faint image of a static screen behind.
-// 0x18 (700 mV), tuned on hardware; higher ghosts more and washes the panel out.
-#define ST7789_VCOMS 0x18
+// 0x10 (500 mV), tuned on hardware; higher ghosts more and washes the panel out.
+#define ST7789_VCOMS 0x10
+// Display > Panel VCOM, to try values live before changing ST7789_VCOMS.
+#define BASEUI_PANEL_VCOM_TUNING 1
 // Default Dark's navy canvas drawn as the topographic artwork in graphics/img/background.h.
 #define BASEUI_BACKGROUND_IMAGE 1
 // Read-only /flash/ page on the web server, for inspecting /prefs and the rest of the device filesystem.

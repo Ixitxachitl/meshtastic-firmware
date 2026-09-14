@@ -1794,6 +1794,24 @@ uint16_t TFTDisplay::onCanvas(bool lit, uint16_t be, int32_t x, int32_t y) const
     return canvasImage ? nativeSwap565(canvasImage[(size_t)y * displayWidth + x]) : canvasBe;
 }
 
+void TFTDisplay::copySlideRow(int32_t row, const uint16_t *src, int32_t srcX, int32_t dstX, int32_t count)
+{
+    if (!rgbPixels || row < 0 || row >= displayHeight || count <= 0)
+        return;
+    nativeClean = false;
+    markNativeRowDirty(row);
+    uint16_t *const dst = rgbPixels + (size_t)row * displayWidth + dstX;
+    if (!canvasImage) {
+        memcpy(dst, src + srcX, (size_t)count * sizeof(uint16_t));
+        return;
+    }
+    const uint16_t *const image = canvasImage + (size_t)row * displayWidth;
+    for (int32_t i = 0; i < count; i++) {
+        const uint16_t be = src[srcX + i];
+        dst[i] = (be == nativeSwap565(image[srcX + i])) ? nativeSwap565(image[dstX + i]) : be;
+    }
+}
+
 // Frame buffers live in PSRAM on ESP32; the push copies spans into the DMA-capable chunk buffers.
 static uint16_t *allocNativeFrame(size_t pixels)
 {
