@@ -114,6 +114,7 @@ void registerHandlers(HTTPServer *insecureServer, HTTPSServer *secureServer)
     ResourceNode *nodeJsonFsBrowseSD = new ResourceNode("/json/fs/browse/sd", "GET", &handleFsBrowseSD);
     ResourceNode *nodeJsonDeleteSD = new ResourceNode("/json/fs/delete/sd", "DELETE", &handleFsDeleteSD);
     ResourceNode *nodeJsonMkdirSD = new ResourceNode("/json/fs/mkdir/sd", "POST", &handleFsMkdirSD);
+    ResourceNode *nodeJsonMoveSD = new ResourceNode("/json/fs/move/sd", "POST", &handleFsMoveSD);
     ResourceNode *nodeFormUploadSD = new ResourceNode("/upload/sd", "POST", &handleFormUploadSD);
     ResourceNode *nodeSDStatic = new ResourceNode("/sd/*", "GET", &handleSDStatic);
 #endif
@@ -137,6 +138,7 @@ void registerHandlers(HTTPServer *insecureServer, HTTPSServer *secureServer)
     secureServer->registerNode(nodeJsonFsBrowseSD);
     secureServer->registerNode(nodeJsonDeleteSD);
     secureServer->registerNode(nodeJsonMkdirSD);
+    secureServer->registerNode(nodeJsonMoveSD);
     secureServer->registerNode(nodeFormUploadSD);
     secureServer->registerNode(nodeSDStatic);
 #endif
@@ -158,6 +160,7 @@ void registerHandlers(HTTPServer *insecureServer, HTTPSServer *secureServer)
     insecureServer->registerNode(nodeJsonFsBrowseSD);
     insecureServer->registerNode(nodeJsonDeleteSD);
     insecureServer->registerNode(nodeJsonMkdirSD);
+    insecureServer->registerNode(nodeJsonMoveSD);
     insecureServer->registerNode(nodeFormUploadSD);
     insecureServer->registerNode(nodeSDStatic);
 #endif
@@ -799,6 +802,8 @@ li.folder .nm a{color:var(--accent)}
 .del{flex:none;border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:7px;
  padding:5px 9px;font:inherit;font-size:12px;cursor:pointer}
 .del:hover{border-color:var(--warn);color:var(--warn)}
+li[draggable=true]{cursor:grab}
+li.target,.crumb button.target{outline:2px dashed var(--accent);outline-offset:-2px}
 .empty,.err{padding:26px 14px;text-align:center;color:var(--muted)}
 .err{color:var(--warn)}
 .foot{color:var(--muted);font-size:12px;margin-top:12px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
@@ -834,6 +839,7 @@ dialog pre{margin:0;padding:14px;overflow:auto;max-height:62vh;font:12px/1.5 ui-
 
 <ul id=list><li class=empty>Loading...</li></ul>
 <div class=foot><span id=count></span><span><button onclick=mkdir()>New folder</button> &middot; <button onclick=load()>Refresh</button></span></div>
+<div class=foot><span>Move a file or folder with its Move button, or drag it onto a folder, <b>..</b> or the path above.</span></div>
 <div class=foot><span>Map tiles: <b>MAP.BIN</b> in the card root, or on colour builds a style folder of PNG tiles (z/x/y.png) inside <b>/maps</b>.</span></div>
 </div>
 <dialog id=dlg><header><h2 id=dlgname></h2><button class=view onclick="dlg.close()">Close</button></header>
@@ -848,12 +854,12 @@ function go(d){cwd=d||'/';load()}
 function crumbs(){
  var c=document.getElementById('crumb');c.innerHTML='';
  var parts=cwd.split('/').filter(Boolean),path='/';
- var b=document.createElement('button');b.textContent='SD card';b.onclick=function(){go('/')};c.appendChild(b);
+ var b=document.createElement('button');b.textContent='SD card';b.onclick=function(){go('/')};dropTarget(b,'/');c.appendChild(b);
  parts.forEach(function(seg,i){
   var sp=document.createElement('span');sp.textContent='/';c.appendChild(sp);
   path=join(path,seg);
   if(i===parts.length-1){var cur=document.createElement('b');cur.textContent=seg;c.appendChild(cur)}
-  else{var t=path,x=document.createElement('button');x.textContent=seg;x.onclick=function(){go(t)};c.appendChild(x)}})}
+  else{var t=path,x=document.createElement('button');x.textContent=seg;x.onclick=function(){go(t)};dropTarget(x,t);c.appendChild(x)}})}
 function del(f){
  var full=join(cwd,f.name);
  var q=f.dir?'Delete the folder '+full+' and everything inside it?':'Delete '+full+' from the card?';
@@ -884,6 +890,33 @@ function mkdir(){
   .then(function(r){return r.json()}).then(function(j){
    if(j.status!=='ok')say('Could not create '+n+(j.error?': '+j.error:''));load()})
   .catch(function(){say('Could not create '+n+' - the request failed');load()})}
+// A card rename: instant for a file or a whole folder. A destination that is a folder receives it under its own name.
+var MOVE_TYPE='text/x-sd-path';
+function move(from,to){
+ if(busy){say('Wait for the current upload or delete to finish.');return}
+ say('');
+ fetch('/json/fs/move/sd?from='+encodeURIComponent(from)+'&to='+encodeURIComponent(to),{method:'POST'})
+  .then(function(r){return r.json()}).then(function(j){
+   if(j.status!=='ok')say('Could not move '+from+(j.error?': '+j.error:''));load()})
+  .catch(function(){say('Could not move '+from+' - the request failed');load()})}
+function moveAsk(f){
+ var full=join(cwd,f.name);
+ var to=prompt('Move or rename '+full+'\nNew path, or a folder to move it into:',full);
+ if(to===null)return;
+ to=to.trim();
+ if(!to||to===full)return;
+ if(to[0]!=='/')to=join(cwd,to);
+ move(full,to)}
+function dropTarget(el,dir){
+ function ours(e){return Array.prototype.indexOf.call(e.dataTransfer.types,MOVE_TYPE)>=0}
+ el.addEventListener('dragover',function(e){if(ours(e)){e.preventDefault();e.dataTransfer.dropEffect='move';el.classList.add('target')}});
+ el.addEventListener('dragleave',function(){el.classList.remove('target')});
+ el.addEventListener('drop',function(e){
+  el.classList.remove('target');
+  if(!ours(e))return;
+  e.preventDefault();e.stopPropagation();
+  var from=e.dataTransfer.getData(MOVE_TYPE);
+  if(from&&from!==dir)move(from,dir)})}
 // Read with fetch, never as a navigation: the bytes stay in the page, so nothing reaches the
 // downloads folder and the browser never has to decide whether the file type is dangerous.
 function view(f){
@@ -907,6 +940,7 @@ function upRow(){
  var a=document.createElement('a');a.href='#';a.textContent='..';
  var parent=cwd.slice(0,cwd.lastIndexOf('/'))||'/';
  a.onclick=function(ev){ev.preventDefault();go(parent)};
+ dropTarget(li,parent);
  d.appendChild(a);li.append(e,d);return li}
 function row(f){
  var li=document.createElement('li');
@@ -920,8 +954,13 @@ function row(f){
  var s=document.createElement('div');s.className='sz';s.textContent=f.dir?'':sz(f.size);
  li.append(e,d,s);
  if(!f.dir){var v=document.createElement('button');v.className='view';v.textContent='View';v.onclick=function(){view(f)};li.append(v)}
+ var m=document.createElement('button');m.className='view';m.textContent='Move';m.onclick=function(){moveAsk(f)};li.append(m);
  var b=document.createElement('button');b.className='del';b.textContent='Delete';b.onclick=function(){del(f)};
  li.append(b);
+ // Drag a row onto a folder row, the up row or a path segment to move it there.
+ li.draggable=true;
+ li.addEventListener('dragstart',function(ev){ev.dataTransfer.setData(MOVE_TYPE,full);ev.dataTransfer.effectAllowed='move'});
+ if(f.dir)dropTarget(li,full);
  return li}
 function load(){
  crumbs();
@@ -1554,6 +1593,72 @@ void handleFsMkdirSD(HTTPRequest *req, HTTPResponse *res)
     if (!detail.empty()) {
         out += ",\"error\":";
         out += jsonEscape(detail.c_str());
+    }
+    out += "}";
+    res->print(out.c_str());
+}
+
+// Moves or renames a file or folder from ?from= to ?to=. A ?to= naming an existing folder receives it under its own
+// name. One directory-entry rename on the card, so a whole tile tree moves instantly.
+void handleFsMoveSD(HTTPRequest *req, HTTPResponse *res)
+{
+    res->setHeader("Content-Type", "application/json");
+    res->setHeader("Access-Control-Allow-Origin", "*");
+    res->setHeader("Access-Control-Allow-Methods", "POST");
+
+    ResourceParameters *params = req->getParams();
+    std::string fromParam, toParam;
+    if (!params->getQueryParameter("from", fromParam) || !params->getQueryParameter("to", toParam) || !sdPathIsSafe(fromParam) ||
+        !sdPathIsSafe(toParam) || fromParam.find("//") != std::string::npos || toParam.find("//") != std::string::npos) {
+        res->print("{\"status\":\"Error\",\"error\":\"bad path\"}");
+        return;
+    }
+    const std::string from = sdNormalizeDir(fromParam);
+    std::string to = sdNormalizeDir(toParam);
+
+    std::string detail;
+    {
+        concurrency::LockGuard g(spiLock);
+        bool intoFolder = false;
+        if (SD.exists(to.c_str())) {
+            File target = SD.open(to.c_str());
+            intoFolder = target && target.isDirectory();
+            if (target)
+                target.close();
+        }
+        if (intoFolder)
+            to = (to == "/" ? std::string() : to) + "/" + from.substr(from.find_last_of('/') + 1);
+        const size_t slash = to.find_last_of('/');
+        const std::string parent = slash == 0 ? "/" : to.substr(0, slash);
+
+        if (from == "/")
+            detail = "refusing to move the card root";
+        else if (to == from)
+            detail = "it is already there";
+        else if (to.compare(0, from.size() + 1, from + "/") == 0)
+            detail = "a folder can't move into itself";
+        else if (!SD.exists(from.c_str()))
+            detail = "no such file or folder";
+        else if (SD.exists(to.c_str()))
+            detail = "something there already has that name";
+        else if (parent != "/" && !SD.exists(parent.c_str()))
+            detail = "the destination folder doesn't exist";
+        else {
+            errno = 0;
+            if (!SD.rename(from.c_str(), to.c_str()))
+                detail = errno ? strerror(errno) : "the card refused";
+            sdLastParentMade.clear(); // the folder it remembers may have just moved
+        }
+    }
+    LOG_INFO("SD move %s -> %s: %s", from.c_str(), to.c_str(), detail.empty() ? "ok" : detail.c_str());
+
+    std::string out = "{\"status\":";
+    out += jsonEscape(detail.empty() ? "ok" : "Error");
+    out += ",\"to\":";
+    out += jsonEscape(to);
+    if (!detail.empty()) {
+        out += ",\"error\":";
+        out += jsonEscape(detail);
     }
     out += "}";
     res->print(out.c_str());
