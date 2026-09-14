@@ -1832,26 +1832,6 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
     const int *textPos = getTextPositions(display);
     const bool compactPanel = graphics::isCompactPanel(display);
 
-#ifdef COMPASS_SENSOR_DEBUG
-    // Optional raw IMU accel + magnetometer x/y/z readout for on-device axis/sign tuning.
-    {
-        char dbg[40];
-        float sx = 0, sy = 0, sz = 0;
-        uint32_t age = 0;
-        if (MotionSensor::getLatestCompassAccelSample(sx, sy, sz, age))
-            snprintf(dbg, sizeof(dbg), "A %.2f %.2f %.2f", sx, sy, sz);
-        else
-            snprintf(dbg, sizeof(dbg), "A ---");
-        display->drawString(x, textPos[line++], dbg);
-
-        if (MotionSensor::getLatestCompassMagSample(sx, sy, sz, age))
-            snprintf(dbg, sizeof(dbg), "M %.2f %.2f %.2f", sx, sy, sz);
-        else
-            snprintf(dbg, sizeof(dbg), "M ---");
-        display->drawString(x, textPos[line++], dbg);
-    }
-#endif
-
     // === First Row: My Location ===
 #if HAS_GPS
     bool origBold = config.display.heading_bold;
@@ -1991,6 +1971,30 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
         }
         display->drawString(x + BASEUI_BODY_LR_MARGIN, textPos[line++] + y, altitudeLine);
     }
+#ifdef COMPASS_SENSOR_DEBUG
+    // Optional raw IMU accel + magnetometer x/y/z readout for on-device axis/sign tuning. Pinned above the nav row in the
+    // small font: taking text rows pushed the altitude row past the end of textPos, onto the header.
+    {
+        char dbg[40];
+        float sx = 0, sy = 0, sz = 0;
+        uint32_t age = 0;
+        display->setFont(FONT_SMALL_LOCAL);
+        const int16_t dbgLineHeight = _fontHeight(FONT_SMALL_LOCAL);
+        const int16_t dbgTop = SCREEN_HEIGHT - (FONT_HEIGHT_SMALL - 1) - 2 * dbgLineHeight - y;
+        if (MotionSensor::getLatestCompassAccelSample(sx, sy, sz, age))
+            snprintf(dbg, sizeof(dbg), "A %.2f %.2f %.2f", sx, sy, sz);
+        else
+            snprintf(dbg, sizeof(dbg), "A ---");
+        display->drawString(x + BASEUI_BODY_LR_MARGIN, dbgTop, dbg);
+
+        if (MotionSensor::getLatestCompassMagSample(sx, sy, sz, age))
+            snprintf(dbg, sizeof(dbg), "M %.2f %.2f %.2f", sx, sy, sz);
+        else
+            snprintf(dbg, sizeof(dbg), "M ---");
+        display->drawString(x + BASEUI_BODY_LR_MARGIN, dbgTop + dbgLineHeight, dbg);
+        display->setFont(FONT_SMALL);
+    }
+#endif
 #if !defined(OLED_TINY)
     // === Draw Compass ===
     if (validHeading || statusLine1) {

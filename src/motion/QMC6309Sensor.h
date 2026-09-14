@@ -14,6 +14,14 @@
 #endif
 #include <SensorQMC6309.hpp>
 
+// Opt-in per variant: refit the hard-iron centre while the device moves, for chips whose offset shifts between boots.
+#ifndef QMC6309_HARD_IRON_TRACKING
+#define QMC6309_HARD_IRON_TRACKING 0
+#endif
+#if QMC6309_HARD_IRON_TRACKING
+#include "MagHardIronTracker.h"
+#endif
+
 class QMC6309Sensor : public MotionSensor
 {
   private:
@@ -27,6 +35,17 @@ class QMC6309Sensor : public MotionSensor
 #endif
 
     bool readMagnetometer(float &xGauss, float &yGauss, float &zGauss);
+#if QMC6309_HARD_IRON_TRACKING
+    MagHardIronTracker hardIron;
+    float reportedCentre[3] = {0.0f, 0.0f, 0.0f};
+    uint32_t lastHardIronSaveMs = 0;
+    uint32_t reportedSignChanges = 0;
+    bool hardIronSaved = false;
+    bool hardIronSavePending = false;
+    bool wasCalibrating = false;
+    void resetHardIron();
+    void trackHardIron(float magX, float magY, float magZ);
+#endif
 
   public:
     explicit QMC6309Sensor(ScanI2C::FoundDevice foundDevice);

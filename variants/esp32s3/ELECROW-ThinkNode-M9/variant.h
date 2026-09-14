@@ -124,6 +124,8 @@
 /*IMU (QMI8658)*/
 // Wake on motion from the accel samples in firmware: the chip's own engine wants >=500Hz, well above ours.
 #define QMI8658_SOFTWARE_MOTION_WAKE
+// The QMC6309's offset shifts by gauss between boots here, so keep refitting it instead of asking for recalibration.
+#define QMC6309_HARD_IRON_TRACKING 1
 #define SHOW_STEP_COUNTER
 
 /*BATTERY*/
