@@ -14,11 +14,14 @@ class WebServerThread : private concurrency::OSThread
 {
   private:
     uint32_t lastActivityTime = 0;
+    uint32_t lastTransferTime = 0;
 
   public:
     WebServerThread();
     uint32_t requestRestart = 0;
     void markActivity();
+    // An SD upload or delete is under way: poll almost continuously so each request is answered as it lands.
+    void markTransfer();
 
   protected:
     virtual int32_t runOnce() override;
@@ -38,6 +41,7 @@ class WebServerThread
     WebServerThread() {}
     uint32_t requestRestart = 0;
     void markActivity() {}
+    void markTransfer() {}
 };
 
 inline WebServerThread *webServerThread = nullptr;

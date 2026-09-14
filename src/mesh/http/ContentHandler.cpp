@@ -113,6 +113,7 @@ void registerHandlers(HTTPServer *insecureServer, HTTPSServer *secureServer)
 #if HAS_WEB_SDCARD
     ResourceNode *nodeJsonFsBrowseSD = new ResourceNode("/json/fs/browse/sd", "GET", &handleFsBrowseSD);
     ResourceNode *nodeJsonDeleteSD = new ResourceNode("/json/fs/delete/sd", "DELETE", &handleFsDeleteSD);
+    ResourceNode *nodeJsonMkdirSD = new ResourceNode("/json/fs/mkdir/sd", "POST", &handleFsMkdirSD);
     ResourceNode *nodeFormUploadSD = new ResourceNode("/upload/sd", "POST", &handleFormUploadSD);
     ResourceNode *nodeSDStatic = new ResourceNode("/sd/*", "GET", &handleSDStatic);
 #endif
@@ -135,6 +136,7 @@ void registerHandlers(HTTPServer *insecureServer, HTTPSServer *secureServer)
 #if HAS_WEB_SDCARD
     secureServer->registerNode(nodeJsonFsBrowseSD);
     secureServer->registerNode(nodeJsonDeleteSD);
+    secureServer->registerNode(nodeJsonMkdirSD);
     secureServer->registerNode(nodeFormUploadSD);
     secureServer->registerNode(nodeSDStatic);
 #endif
@@ -155,6 +157,7 @@ void registerHandlers(HTTPServer *insecureServer, HTTPSServer *secureServer)
 #if HAS_WEB_SDCARD
     insecureServer->registerNode(nodeJsonFsBrowseSD);
     insecureServer->registerNode(nodeJsonDeleteSD);
+    insecureServer->registerNode(nodeJsonMkdirSD);
     insecureServer->registerNode(nodeFormUploadSD);
     insecureServer->registerNode(nodeSDStatic);
 #endif
@@ -770,6 +773,9 @@ h1{font-size:20px;font-weight:650;margin:0 0 2px;letter-spacing:-.01em}
  color:var(--muted);background:var(--card);cursor:pointer;transition:border-color .15s,background .15s;margin:0 0 18px}
 .drop:hover,.drop.over{border-color:var(--accent);color:var(--fg)}
 .drop b{color:var(--fg);font-weight:600}
+.pick{margin-top:10px;border:1px solid var(--line);background:transparent;color:var(--accent);border-radius:7px;
+ padding:5px 10px;font:inherit;font-size:12px;cursor:pointer}
+.pick:hover{border-color:var(--accent)}
 .up{display:none;margin:0 0 18px}.up.on{display:block}
 .up .bar i{background:var(--accent)}
 ul{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--card)}
@@ -818,15 +824,17 @@ dialog pre{margin:0;padding:14px;overflow:auto;max-height:62vh;font:12px/1.5 ui-
 <div class=msg id=msg></div>
 
 <label class=drop id=drop>
- <input type=file id=f hidden>
- <b>Choose a file</b> or drag it here
+ <input type=file id=f multiple hidden>
+ <b>Choose files</b> or drag files and folders here
+ <div><button type=button class=pick id=pickdir>Upload a folder</button></div>
 </label>
+<input type=file id=fd webkitdirectory hidden>
 
 <div class=up id=up><div id=upname></div><div class=bar><i id=upbar></i></div></div>
 
 <ul id=list><li class=empty>Loading...</li></ul>
-<div class=foot><span id=count></span><button onclick=load()>Refresh</button></div>
-<div class=foot><span>Map tiles belong in the card root as <b>MAP.BIN</b>.</span></div>
+<div class=foot><span id=count></span><span><button onclick=mkdir()>New folder</button> &middot; <button onclick=load()>Refresh</button></span></div>
+<div class=foot><span>Map tiles: <b>MAP.BIN</b> in the card root, or on colour builds a style folder of PNG tiles (z/x/y.png) inside <b>/maps</b>.</span></div>
 </div>
 <dialog id=dlg><header><h2 id=dlgname></h2><button class=view onclick="dlg.close()">Close</button></header>
 <pre id=dlgbody></pre><div class=note id=dlgnote></div></dialog>
@@ -849,12 +857,33 @@ function crumbs(){
 function del(f){
  var full=join(cwd,f.name);
  var q=f.dir?'Delete the folder '+full+' and everything inside it?':'Delete '+full+' from the card?';
+ if(busy){say('Wait for the current upload or delete to finish.');return}
  if(!confirm(q))return;
+ say('');busy=true;
+ var up=document.getElementById('up'),nm=document.getElementById('upname'),removed=0,idle=0;
+ document.getElementById('upbar').style.width='0';
+ function end(msg){busy=false;up.className='up';say(msg);load()}
+ // The device deletes for a moment per request and answers "partial" until the folder is gone.
+ (function again(){
+  fetch('/json/fs/delete/sd?delete='+encodeURIComponent(full),{method:'DELETE'})
+   .then(function(r){return r.json()}).then(function(j){
+    removed+=+j.removed||0;
+    idle=+j.removed?0:idle+1;
+    if(j.status==='partial'&&idle>=10){end('Delete of '+f.name+' is making no progress; stopped after '+removed+' items.');return}
+    if(j.status==='partial'){up.className='up on';nm.textContent='Deleting '+full+' - '+removed+' items removed';again();return}
+    end(j.status==='ok'?'':'Could not delete '+f.name+(j.error?': '+j.error:''))})
+   .catch(function(){end('Could not delete '+f.name+' - the request failed')})})()}
+function mkdir(){
+ if(busy){say('Wait for the current upload or delete to finish.');return}
+ var n=prompt('New folder in '+cwd);
+ if(n===null)return;
+ n=n.trim();
+ if(!n||/[\/\\]/.test(n)||/^\.+$/.test(n)){say('A folder name cannot be empty, dots only, or contain slashes.');return}
  say('');
- fetch('/json/fs/delete/sd?delete='+encodeURIComponent(full),{method:'DELETE'})
+ fetch('/json/fs/mkdir/sd?path='+encodeURIComponent(join(cwd,n)),{method:'POST'})
   .then(function(r){return r.json()}).then(function(j){
-   if(j.status!=='ok')say('Could not delete '+f.name+(j.error?': '+j.error:''));load()})
-  .catch(function(){say('Could not delete '+f.name+' - the request failed');load()})}
+   if(j.status!=='ok')say('Could not create '+n+(j.error?': '+j.error:''));load()})
+  .catch(function(){say('Could not create '+n+' - the request failed');load()})}
 // Read with fetch, never as a navigation: the bytes stay in the page, so nothing reaches the
 // downloads folder and the browser never has to decide whether the file type is dangerous.
 function view(f){
@@ -912,57 +941,153 @@ function load(){
   document.getElementById('count').textContent=nf+(nf===1?' file':' files')+(nd?', '+nd+(nd===1?' folder':' folders'):'');
  }).catch(function(e){L.innerHTML='<li class=err>Could not read the card.</li>';
   document.getElementById('cap').textContent='No card, or it failed to mount.'})}
-var drop=document.getElementById('drop'),inp=document.getElementById('f');
+var drop=document.getElementById('drop'),inp=document.getElementById('f'),dirInp=document.getElementById('fd');
 ;['dragenter','dragover'].forEach(function(t){drop.addEventListener(t,function(e){e.preventDefault();drop.classList.add('over')})});
 ;['dragleave','drop'].forEach(function(t){drop.addEventListener(t,function(e){e.preventDefault();drop.classList.remove('over')})});
-drop.addEventListener('drop',function(e){if(e.dataTransfer.files[0])send(e.dataTransfer.files[0])});
-inp.addEventListener('change',function(){if(inp.files[0])send(inp.files[0])});
+function flat(lists){return [].concat.apply([],lists)}
+function named(files,rel){return Array.prototype.map.call(files,function(f){return{file:f,path:rel&&f.webkitRelativePath||f.name}})}
+// A dropped folder is walked through its entries; readEntries hands them back in batches, ending with an empty one.
+function walk(en){
+ if(en.isFile)return new Promise(function(res,rej){en.file(function(f){res([{file:f,path:en.fullPath.replace(/^\/+/,'')}])},rej)});
+ return new Promise(function(res,rej){
+  var rd=en.createReader(),kids=[];
+  (function more(){rd.readEntries(function(batch){
+   if(!batch.length){Promise.all(kids.map(walk)).then(function(l){res(flat(l))},rej);return}
+   kids.push.apply(kids,batch);more()},rej)})()})}
+drop.addEventListener('drop',function(e){
+ // Entries are only readable during the event itself, so take them all before going async.
+ var items=e.dataTransfer.items,entries=[];
+ for(var i=0;items&&i<items.length;i++){var en=items[i].webkitGetAsEntry&&items[i].webkitGetAsEntry();if(en)entries.push(en)}
+ if(!entries.length){queue(named(e.dataTransfer.files),false);return}
+ var folder=entries.some(function(en){return en.isDirectory});
+ say('Reading what was dropped...');
+ Promise.all(entries.map(walk)).then(function(l){say('');queue(flat(l),folder)})
+  .catch(function(){say('Could not read what was dropped.')})});
+inp.addEventListener('change',function(){queue(named(inp.files),false);inp.value=''});
+dirInp.addEventListener('change',function(){queue(named(dirInp.files,true),true);dirInp.value=''});
+document.getElementById('pickdir').addEventListener('click',function(e){e.preventDefault();e.stopPropagation();dirInp.click()});
 // One HTTP request per slice. A slice that fails is retried on its own, and the device reports
 // how much it actually has, so a retry resumes from there instead of restarting a 474MB transfer.
-var CHUNK=1048576,TRIES=4;
-function put(file,off){
+var CHUNK=1048576,TRIES=4,busy=false;
+var JUNK=/(^|\/)(\.DS_Store|Thumbs\.db|desktop\.ini)$/i;
+function post(url,body){
  return new Promise(function(res,rej){
-  var end=Math.min(off+CHUNK,file.size);
   var x=new XMLHttpRequest();
-  x.open('POST','/upload/sd?path='+encodeURIComponent(cwd)+'&name='+encodeURIComponent(file.name)+'&offset='+off);
+  x.open('POST',url);
   x.setRequestHeader('Content-Type','application/octet-stream');
   x.onload=function(){
    var j={};try{j=JSON.parse(x.responseText||'{}')}catch(e){}
-   if(x.status<400&&j.status==='ok')res(j.size);
+   if(x.status<400&&j.status==='ok')res({have:j.size,skipped:!!j.skipped,j:j});
    // 409 carries the device's actual length: resume from there rather than failing outright.
-   else if(x.status===409&&typeof j.have==='number')res(j.have);
+   else if(x.status===409&&typeof j.have==='number')res({have:j.have,j:j});
    else rej(new Error(j.error||('HTTP '+x.status)));
   };
   x.onerror=function(){rej(new Error('connection lost'))};
-  x.send(file.slice(off,end));
+  x.send(body);
  })}
-function send(file){
+function put(it,base,off,skip){
+ var end=Math.min(off+CHUNK,it.file.size);
+ return post('/upload/sd?path='+encodeURIComponent(base)+'&name='+encodeURIComponent(it.path)+'&offset='+off+
+  (skip?'&skipsame='+it.file.size:''),it.file.slice(off,end))}
+// Several files go as one tar stream the device unpacks as it arrives: one request per slice, not per file.
+// The Blob only references the files, so nothing is read into memory up front.
+var enc=new TextEncoder();
+function tarHeader(name,size,type){
+ var h=new Uint8Array(512);
+ function field(s,at,len){h.set(enc.encode(s).subarray(0,len),at)}
+ function oct(n,len){return n.toString(8).padStart(len-1,'0')}
+ field(name,0,100);field('0000644',100,8);field('0000000',108,8);field('0000000',116,8);
+ field(oct(size,12),124,12);field(oct(Math.floor(Date.now()/1000),12),136,12);
+ h.fill(32,148,156);h[156]=type.charCodeAt(0);field('ustar',257,6);field('00',263,2);
+ var sum=0;for(var k=0;k<512;k++)sum+=h[k];
+ field(oct(sum,7),148,6);h[154]=0;h[155]=32;
+ return h}
+function tarParts(items){
+ var parts=[],starts=[],pos=0;
+ function add(p){parts.push(p);pos+=p.size!==undefined?p.size:p.length}
+ items.forEach(function(it){
+  starts.push(pos);
+  var name=enc.encode(it.path);
+  // Past ustar's 100 bytes, a GNU long-name entry carries the path.
+  if(name.length>100){var ln=new Uint8Array(Math.ceil((name.length+1)/512)*512);ln.set(name);
+   add(tarHeader('././@LongLink',name.length+1,'L'));add(ln)}
+  add(tarHeader(it.path,it.file.size,'0'));add(it.file);
+  var pad=(512-it.file.size%512)%512;if(pad)add(new Uint8Array(pad))});
+ add(new Uint8Array(1024));
+ return {blob:new Blob(parts),starts:starts,size:pos}}
+// Resolves once the whole file is on the card. An empty file still takes one request, to create it.
+function sendOne(it,base,skip,show){
+ return new Promise(function(res,rej){
+  var off=0,sent=false;
+  function step(){
+   if(sent&&off>=it.file.size){res(false);return}
+   var attempt=0;
+   (function tryOnce(){
+    show(it,off,attempt);
+    put(it,base,off,skip&&off===0).then(function(r){
+     if(r.skipped){res(true);return}
+     sent=true;off=r.have;step()})
+     .catch(function(e){
+      if(++attempt>=TRIES){rej(e);return}
+      setTimeout(tryOnce,1000*attempt); // back off a little, the card may just be busy
+     })})()}
+  step()})}
+function queue(items,folder){
+ items=items.filter(function(it){return it.file&&!JUNK.test(it.path)});
+ if(!items.length)return;
+ if(busy){say('Wait for the current upload to finish.');return}
+ busy=true;
+ items.sort(function(a,b){return a.path<b.path?-1:a.path>b.path?1:0});
  var up=document.getElementById('up'),bar=document.getElementById('upbar'),nm=document.getElementById('upname');
  up.className='up on';bar.style.width='0';say('');
- var off=0,started=Date.now();
- function step(){
-  if(off>=file.size){
-   nm.textContent='Uploaded '+file.name;bar.style.width='100%';
-   setTimeout(function(){up.className='up';load()},900);return}
-  var attempt=0;
-  function tryOnce(){
-   var pct=(off/file.size*100);
-   var secs=(Date.now()-started)/1000,rate=off/Math.max(secs,1);
-   var left=rate>0?Math.round((file.size-off)/rate):0;
-   nm.textContent='Uploading '+file.name+' - '+sz(off)+' of '+sz(file.size)+
-    (rate>0?'  ('+sz(rate)+'/s, '+Math.floor(left/60)+'m '+(left%60)+'s left)':'')+
-    (attempt?'  retry '+attempt+'/'+TRIES:'');
-   bar.style.width=pct+'%';
-   put(file,off).then(function(have){off=have;step()})
-    .catch(function(e){
-     if(++attempt>=TRIES){nm.textContent='Upload failed';
-      say('Stopped at '+sz(off)+' of '+sz(file.size)+': '+e.message+'. Pick the same file again to resume.');
-      setTimeout(function(){up.className='up';load()},1500);return}
-     setTimeout(tryOnce,1000*attempt); // back off a little, the card may just be busy
-    })}
-  tryOnce()}
- step();
- inp.value=''}
+ var base=cwd,many=items.length>1,i=0,done=0,skipped=0,started=Date.now();
+ var total=items.reduce(function(s,it){return s+it.file.size},0);
+ function show(it,off,attempt){
+  var sent=done+off,secs=(Date.now()-started)/1000,rate=sent/Math.max(secs,1);
+  var left=rate>0?Math.round((total-sent)/rate):0;
+  nm.textContent='Uploading '+(many?(i+1)+' of '+items.length+': ':'')+it.path+' - '+sz(sent)+' of '+sz(total)+
+   (rate>0?'  ('+sz(rate)+'/s, '+Math.floor(left/60)+'m '+(left%60)+'s left)':'')+
+   (skipped?'  • '+skipped+' already on the card, skipped':'')+
+   (attempt?'  retry '+attempt+'/'+TRIES:'');
+  bar.style.width=(total?sent/total*100:i/items.length*100)+'%'}
+ function finish(){
+  busy=false;bar.style.width='100%';
+  nm.textContent='Uploaded '+(many?items.length+' files'+(skipped?' ('+skipped+' already on the card)':''):items[0].path);
+  setTimeout(function(){up.className='up';load()},900)}
+ function fail(e){
+  busy=false;nm.textContent='Upload failed';
+  say('Stopped at '+items[i].path+(many?' ('+i+' of '+items.length+' done)':'')+': '+e.message+
+   (folder?'. Upload the same folder again to resume; files already on the card are skipped.':'. Pick the same file again to retry.'));
+  setTimeout(function(){up.className='up';load()},1500)}
+ function next(){
+  if(i>=items.length){finish();return}
+  var it=items[i];
+  sendOne(it,base,folder,show).then(function(wasSkipped){done+=it.file.size;if(wasSkipped)skipped++;i++;next()}).catch(fail)}
+ function sendTar(){
+  var t,id,off,from,skippedBefore=0;
+  // An archive of items[k..]. A device restart forgets the archive, so the page starts a fresh one at the
+  // file it was on: every file before that one had been fully written and closed.
+  function begin(k){
+   from=i=k;skippedBefore=skipped;t=tarParts(items.slice(k));off=0;total=t.size;
+   id=Date.now().toString(36)+Math.random().toString(36).slice(2,8)}
+  begin(0);
+  function step(){
+   if(off>=t.size){finish();return}
+   while(i+1-from<t.starts.length&&t.starts[i+1-from]<=off)i++;
+   var attempt=0;
+   (function tryOnce(){
+    show(items[i],off,attempt);
+    post('/upload/sd?path='+encodeURIComponent(base)+'&tar='+id+'&offset='+off+(folder?'&skipsame=1':''),
+     t.blob.slice(off,Math.min(off+CHUNK,t.size)))
+     .then(function(r){
+      if(r.j.status==='ok')skipped=skippedBefore+(+r.j.skipped||0);
+      if(r.j.status!=='ok'&&r.have===0&&off>0){begin(i);step();return}
+      off=r.have;step()})
+     .catch(function(e){
+      if(++attempt>=TRIES){fail(e);return}
+      setTimeout(tryOnce,1000*attempt)})})()}
+  step()}
+ if(many)sendTar();else next()}
 load();
 </script>)HTML");
 }
@@ -1052,6 +1177,8 @@ bool multipartBoundary(HTTPRequest *req, std::string &boundary)
 
 class UploadBody
 {
+    static constexpr size_t kReadBytes = 4096;
+
   public:
     explicit UploadBody(HTTPRequest *req) : req_(req), lastDataMs_(millis()) {}
 
@@ -1064,11 +1191,17 @@ class UploadBody
     // able to deliver the bytes we are waiting for.
     bool fill(size_t want)
     {
+        // Quiet means time spent waiting here. Card writes between calls are ours, and counting them made a
+        // slow run of file creates look like a dead connection.
+        lastDataMs_ = millis();
         while (buf_.size() < want) {
-            char chunk[512];
-            const size_t got = req_->readBytes((byte *)chunk, sizeof(chunk));
+            // Read straight into the buffer: a large read is fewer trips through the connection, and
+            // loopTask's stack has no room for a buffer that size.
+            const size_t old = buf_.size();
+            buf_.resize(old + kReadBytes);
+            const size_t got = req_->readBytes((byte *)&buf_[old], kReadBytes);
+            buf_.resize(old + got);
             if (got > 0) {
-                buf_.append(chunk, got);
                 lastDataMs_ = millis();
                 continue;
             }
@@ -1096,6 +1229,9 @@ class UploadBody
     // already complete by the time it runs, so its loop exits immediately.
     void drain()
     {
+        // A client that is still sending gets the full timeout to finish; an early return here leaves the
+        // rest to discardRequestBody(), which never gives up on a client that has gone.
+        lastDataMs_ = millis();
         for (;;) {
             char chunk[512];
             const size_t got = req_->readBytes((byte *)chunk, sizeof(chunk));
@@ -1193,52 +1329,101 @@ static bool sdRemoveFile(const std::string &path, std::string &detail)
     return false;
 }
 
-// Depth-first: a directory can only be removed once it is empty. Bounded because a FAT tree deep
-// enough to overflow the stack would need thousands of nested directories, but the limit keeps a
-// malformed card from taking the web task down with it.
-static bool sdRemoveTree(const std::string &path, std::string &detail, int depth = 0)
+// The last folder sdCreateFile() made sure of. A folder upload writes run after run of files into one
+// folder, and checking every level of the path for each of them was a large share of the per-file cost.
+static std::string sdLastParentMade;
+
+// Opens a new file for writing, creating missing parent folders. Caller holds spiLock.
+static File sdCreateFile(const std::string &path)
+{
+    const size_t slash = path.find_last_of('/');
+    const std::string parent = (slash == std::string::npos || slash == 0) ? "/" : path.substr(0, slash);
+    if (parent == "/" || parent == sdLastParentMade) {
+        File file = SD.open(path.c_str(), FILE_O_WRITE);
+        if (file)
+            return file;
+    }
+    File file = SD.open(path.c_str(), FILE_O_WRITE, true); // true: create missing parent folders
+    if (file)
+        sdLastParentMade = parent;
+    return file;
+}
+
+// A tile tree is thousands of files. Removing them all in one request starves the task watchdog and the
+// mesh, so each request deletes for this long and the page asks again until the tree is gone.
+#define SD_DELETE_BUDGET_MS 1500
+#define SD_DELETE_CHILDREN_PER_PASS 256
+
+enum class SdRemoveResult { Done, Failed, OutOfTime };
+
+// Depth-first: a directory can only be removed once it is empty. Takes the bus per card operation, so
+// the radio and display get a turn. Bounded depth keeps a malformed card from overflowing the stack.
+static SdRemoveResult sdRemoveTree(const std::string &path, std::string &detail, uint32_t deadlineMs, uint32_t &removed,
+                                   int depth = 0)
 {
     if (depth > 16) {
         detail = "directory nested too deeply";
-        return false;
+        return SdRemoveResult::Failed;
+    }
+    if (Throttle::deadlinePassed(deadlineMs))
+        return SdRemoveResult::OutOfTime;
+    esp_task_wdt_reset();
+
+    File dir;
+    {
+        concurrency::LockGuard g(spiLock);
+        dir = SD.open(path.c_str());
+        if (!dir || !dir.isDirectory()) {
+            if (dir)
+                dir.close();
+            const bool ok = sdRemoveFile(path, detail);
+            removed += ok ? 1 : 0;
+            return ok ? SdRemoveResult::Done : SdRemoveResult::Failed;
+        }
     }
 
-    File entry = SD.open(path.c_str());
-    const bool isDir = entry && entry.isDirectory();
-    if (entry)
-        entry.close();
-    if (!isDir)
-        return sdRemoveFile(path, detail);
-
-    File dir = SD.open(path.c_str());
+    // Names are collected before anything is removed: deleting during the walk invalidates the
+    // directory handle's position on FAT. Capped per pass; the rest go on a later request.
     std::vector<std::string> children;
-    if (dir) {
-        // Names are collected before anything is removed: deleting during the walk invalidates the
-        // directory handle's position on FAT.
+    bool more = false;
+    for (;;) {
+        concurrency::LockGuard g(spiLock);
         File child = dir.openNextFile();
-        while (child) {
-            children.push_back(path == "/" ? "/" + std::string(child.name()) : path + "/" + child.name());
-            child.close();
-            child = dir.openNextFile();
+        if (!child)
+            break;
+        children.push_back(path == "/" ? "/" + std::string(child.name()) : path + "/" + child.name());
+        child.close();
+        if (children.size() >= SD_DELETE_CHILDREN_PER_PASS) {
+            more = true;
+            break;
         }
+    }
+    {
+        concurrency::LockGuard g(spiLock);
         dir.close();
     }
 
     for (const auto &child : children) {
-        if (!sdRemoveTree(child, detail, depth + 1))
-            return false;
+        const SdRemoveResult result = sdRemoveTree(child, detail, deadlineMs, removed, depth + 1);
+        if (result != SdRemoveResult::Done)
+            return result;
     }
+    if (more)
+        return SdRemoveResult::OutOfTime;
 
+    concurrency::LockGuard g(spiLock);
     errno = 0;
-    if (SD.rmdir(path.c_str()))
-        return true;
-    const int firstErrno = errno;
-    sdClearAttributes(path.c_str());
-    errno = 0;
-    if (SD.rmdir(path.c_str()))
-        return true;
-    detail = strerror(firstErrno ? firstErrno : errno);
-    return false;
+    if (!SD.rmdir(path.c_str())) {
+        const int firstErrno = errno;
+        sdClearAttributes(path.c_str());
+        errno = 0;
+        if (!SD.rmdir(path.c_str())) {
+            detail = strerror(firstErrno ? firstErrno : errno);
+            return SdRemoveResult::Failed;
+        }
+    }
+    removed++;
+    return SdRemoveResult::Done;
 }
 
 // The SD card is browsed from its root, not /static: it carries user data (map tiles and the like)
@@ -1305,22 +1490,73 @@ void handleFsDeleteSD(HTTPRequest *req, HTTPResponse *res)
             res->print("{\"status\":\"Error\",\"error\":\"refusing to delete the card root\"}");
             return;
         }
-        concurrency::LockGuard g(spiLock);
+        if (webServerThread)
+            webServerThread->markTransfer();
+        sdLastParentMade.clear(); // the folder it names may be about to go
 
-        // Handles both: a plain file, or a directory and everything under it.
+        // Handles both: a plain file, or a directory and everything under it. "partial" means the time
+        // budget ran out with more to go, and the client should send the same request again.
         std::string detail;
-        const bool ok = sdRemoveTree(pathDelete, detail);
+        uint32_t removed = 0;
+        const SdRemoveResult result = sdRemoveTree(pathDelete, detail, millis() + SD_DELETE_BUDGET_MS, removed);
+        const char *status = result == SdRemoveResult::Done ? "ok" : result == SdRemoveResult::OutOfTime ? "partial" : "Error";
 
-        LOG_INFO("SD delete %s: %s%s", pathDelete.c_str(), ok ? "ok" : "FAILED - ", ok ? "" : detail.c_str());
+        if (result == SdRemoveResult::OutOfTime)
+            LOG_DEBUG("SD delete %s: %u removed, more to go", pathDelete.c_str(), (unsigned)removed);
+        else
+            LOG_INFO("SD delete %s: %s%s", pathDelete.c_str(), result == SdRemoveResult::Done ? "ok" : "FAILED - ",
+                     result == SdRemoveResult::Done ? "" : detail.c_str());
         std::string out = "{\"status\":";
-        out += jsonEscape(ok ? "ok" : "Error");
-        if (!ok) {
+        out += jsonEscape(status);
+        out += ",\"removed\":";
+        out += std::to_string(removed);
+        if (result == SdRemoveResult::Failed) {
             out += ",\"error\":";
             out += jsonEscape(detail.c_str());
         }
         out += "}";
         res->print(out.c_str());
     }
+}
+
+// Creates one folder at ?path=; its parent must already exist.
+void handleFsMkdirSD(HTTPRequest *req, HTTPResponse *res)
+{
+    res->setHeader("Content-Type", "application/json");
+    res->setHeader("Access-Control-Allow-Origin", "*");
+    res->setHeader("Access-Control-Allow-Methods", "POST");
+
+    std::string requested;
+    if (!req->getParams()->getQueryParameter("path", requested) || !sdPathIsSafe(requested) ||
+        requested.find("//") != std::string::npos) {
+        res->print("{\"status\":\"Error\",\"error\":\"bad path\"}");
+        return;
+    }
+    const std::string path = sdNormalizeDir(requested);
+    if (path == "/") {
+        res->print("{\"status\":\"Error\",\"error\":\"the card root already exists\"}");
+        return;
+    }
+
+    std::string detail;
+    {
+        concurrency::LockGuard g(spiLock);
+        errno = 0;
+        if (SD.exists(path.c_str()))
+            detail = "already exists";
+        else if (!SD.mkdir(path.c_str()))
+            detail = errno ? strerror(errno) : "the card refused";
+    }
+    LOG_INFO("SD mkdir %s: %s", path.c_str(), detail.empty() ? "ok" : detail.c_str());
+
+    std::string out = "{\"status\":";
+    out += jsonEscape(detail.empty() ? "ok" : "Error");
+    if (!detail.empty()) {
+        out += ",\"error\":";
+        out += jsonEscape(detail.c_str());
+    }
+    out += "}";
+    res->print(out.c_str());
 }
 
 // Sequential chunk upload: one HTTP request per slice, raw body, no multipart framing at all.
@@ -1333,16 +1569,21 @@ void handleFsDeleteSD(HTTPRequest *req, HTTPResponse *res)
 static void handleChunkUploadSD(HTTPRequest *req, HTTPResponse *res, const std::string &dir)
 {
     res->setHeader("Content-Type", "application/json");
+    if (webServerThread)
+        webServerThread->markTransfer();
 
     std::string name, offsetParam;
     req->getParams()->getQueryParameter("name", name);
     LOG_INFO("Upload slice: name='%s' offset='%s' len=%u", name.c_str(),
              req->getParams()->getQueryParameter("offset", offsetParam) ? offsetParam.c_str() : "(none)",
              (unsigned)req->getContentLength());
-    const size_t slash = name.find_last_of("/\\");
-    if (slash != std::string::npos)
-        name = name.substr(slash + 1);
-    if (name.empty() || !sdPathIsSafe(name)) {
+    // A folder upload names each file by its path below the folder being browsed, so slashes are kept.
+    for (char &c : name) {
+        if (c == '\\')
+            c = '/';
+    }
+    name.erase(0, name.find_first_not_of('/'));
+    if (name.empty() || name.back() == '/' || name.find("//") != std::string::npos || !sdPathIsSafe(name)) {
         res->setStatusCode(400);
         res->print("{\"status\":\"Error\",\"error\":\"bad name\"}");
         return;
@@ -1355,6 +1596,11 @@ static void handleChunkUploadSD(HTTPRequest *req, HTTPResponse *res, const std::
     const std::string pathname = dir + name;
     const size_t expected = req->getContentLength();
 
+    // ?skipsame=<bytes>: a resumed folder upload leaves a file alone if the card already has it at that size.
+    std::string skipParam;
+    const bool trySkip = offset == 0 && req->getParams()->getQueryParameter("skipsame", skipParam);
+    bool skipped = false;
+
     File file;
     uint64_t existing = 0;
     bool positioned = true;
@@ -1362,14 +1608,24 @@ static void handleChunkUploadSD(HTTPRequest *req, HTTPResponse *res, const std::
     {
         concurrency::LockGuard g(spiLock);
         esp_task_wdt_reset();
-        if (offset == 0) {
+        if (trySkip && SD.exists(pathname.c_str())) {
+            File have = SD.open(pathname.c_str(), FILE_READ);
+            skipped = have && !have.isDirectory() && have.size() == strtoull(skipParam.c_str(), nullptr, 10);
+            existing = skipped ? have.size() : 0;
+            have.close();
+        }
+        if (skipped) {
+            // Nothing to open.
+        } else if (offset == 0) {
             // Unlink before creating rather than relying on "w" to truncate: truncation has to
             // rewrite the existing cluster chain, which fails on an entry left damaged by an
-            // interrupted write. Removing it first sidesteps the old chain entirely.
-            if (SD.exists(pathname.c_str()) && !SD.remove(pathname.c_str()))
+            // interrupted write. Removing it first sidesteps the old chain entirely. Unlinking a
+            // missing file is one lookup, where exists() first would be a whole extra open.
+            errno = 0;
+            if (!SD.remove(pathname.c_str()) && errno != ENOENT)
                 LOG_WARN("Upload: could not remove existing %s: %s", pathname.c_str(), strerror(errno));
             errno = 0;
-            file = SD.open(pathname.c_str(), FILE_O_WRITE);
+            file = sdCreateFile(pathname);
             openErrno = errno;
         } else {
             // "r+" and an explicit seek rather than append mode: where the next byte lands is then
@@ -1385,6 +1641,14 @@ static void handleChunkUploadSD(HTTPRequest *req, HTTPResponse *res, const std::
             }
         }
         esp_task_wdt_reset();
+    }
+    if (skipped) {
+        UploadBody body(req);
+        body.drain();
+        char out[96];
+        snprintf(out, sizeof(out), "{\"status\":\"ok\",\"written\":0,\"size\":%u,\"skipped\":true}", (unsigned)existing);
+        res->print(out);
+        return;
     }
     LOG_INFO("Upload slice: '%s' offset=%u have=%u open=%d seek=%d err=%s", pathname.c_str(), (unsigned)offset,
              (unsigned)existing, (int)(bool)file, (int)positioned, openErrno ? strerror(openErrno) : "-");
@@ -1446,6 +1710,8 @@ static void handleChunkUploadSD(HTTPRequest *req, HTTPResponse *res, const std::
         file.close();
     }
     body.drain();
+    if (webServerThread)
+        webServerThread->markTransfer();
 
     char out[160];
     if (problem.empty()) {
@@ -1458,6 +1724,296 @@ static void handleChunkUploadSD(HTTPRequest *req, HTTPResponse *res, const std::
         res->setStatusCode(500);
         res->print(out);
     }
+}
+
+// Folder upload as one uncompressed tar stream, unpacked onto the card as it arrives: a tile tree then
+// costs one request per 1MB slice instead of one per file. ?offset= is the byte position in the archive;
+// slices must arrive in order, and a mismatch is answered 409 with where the device is. One archive at a time.
+struct TarUpload {
+    enum class Entry { None, FileData, LongName, Discard };
+
+    std::string id, base, failure;
+    uint64_t offset = 0;
+    bool skipSame = false, finished = false;
+    uint8_t header[512] = {};
+    size_t headerFill = 0;
+    Entry entry = Entry::None;
+    File file;
+    std::string longName; // GNU 'L' entry: the path of the entry after it
+    uint64_t dataLeft = 0;
+    uint32_t padLeft = 0;
+    uint32_t files = 0, skipped = 0;
+};
+static TarUpload tarUpload;
+
+static void tarCloseFile()
+{
+    if (tarUpload.file) {
+        concurrency::LockGuard g(spiLock);
+        tarUpload.file.close();
+    }
+}
+
+// Octal, space/NUL terminated; or base-256 when the top bit is set, as tar writes sizes past 8GB.
+static uint64_t tarNumber(const uint8_t *field, size_t len)
+{
+    uint64_t value = 0;
+    if (field[0] & 0x80) {
+        value = field[0] & 0x7F;
+        for (size_t i = 1; i < len; i++)
+            value = (value << 8) | field[i];
+        return value;
+    }
+    size_t i = 0;
+    while (i < len && field[i] == ' ')
+        i++;
+    for (; i < len && field[i] >= '0' && field[i] <= '7'; i++)
+        value = value * 8 + (field[i] - '0');
+    return value;
+}
+
+static std::string tarField(const uint8_t *field, size_t len)
+{
+    size_t n = 0;
+    while (n < len && field[n])
+        n++;
+    return std::string((const char *)field, n);
+}
+
+// Acts on a complete 512-byte header. False, with detail, when the archive can't go on.
+static bool tarBeginEntry(std::string &detail)
+{
+    TarUpload &t = tarUpload;
+    const uint8_t *h = t.header;
+
+    bool zero = true;
+    for (size_t i = 0; i < sizeof(t.header) && zero; i++)
+        zero = h[i] == 0;
+    if (zero) {
+        t.finished = true; // end-of-archive marker
+        return true;
+    }
+
+    uint32_t sum = 0;
+    for (size_t i = 0; i < sizeof(t.header); i++)
+        sum += (i >= 148 && i < 156) ? ' ' : h[i];
+    if (sum != tarNumber(h + 148, 8)) {
+        detail = "archive out of step (bad header checksum)";
+        return false;
+    }
+
+    const uint64_t size = tarNumber(h + 124, 12);
+    const char type = (char)h[156];
+    t.dataLeft = size;
+    t.padLeft = (uint32_t)((512 - size % 512) % 512);
+    t.entry = TarUpload::Entry::Discard;
+
+    if (type == 'L') {
+        if (size > 1024) {
+            detail = "path in archive too long";
+            return false;
+        }
+        t.longName.clear();
+        t.entry = TarUpload::Entry::LongName;
+        return true;
+    }
+
+    std::string name;
+    if (!t.longName.empty()) {
+        name.swap(t.longName);
+    } else {
+        name = tarField(h, 100);
+        if (memcmp(h + 257, "ustar", 5) == 0 && h[345]) {
+            name = tarField(h + 345, 155) + "/" + name;
+        }
+    }
+    if (type != '0' && type != '\0' && type != '7' && type != '5')
+        return true; // links, pax headers and the like are skipped
+
+    for (char &c : name) {
+        if (c == '\\')
+            c = '/';
+    }
+    while (name.compare(0, 2, "./") == 0)
+        name.erase(0, 2);
+    name.erase(0, name.find_first_not_of('/'));
+    const bool isDir = type == '5' || (!name.empty() && name.back() == '/');
+    while (!name.empty() && name.back() == '/')
+        name.pop_back();
+    if (name.empty())
+        return true;
+    if (name.find("//") != std::string::npos || !sdPathIsSafe(name)) {
+        detail = "unsafe path in archive: " + name;
+        return false;
+    }
+    const std::string path = t.base + name;
+
+    concurrency::LockGuard g(spiLock);
+    esp_task_wdt_reset();
+    if (isDir) {
+        if (!SD.mkdir(path.c_str()))
+            LOG_WARN("Upload: could not create folder %s", path.c_str());
+        return true;
+    }
+    if (t.skipSame && SD.exists(path.c_str())) {
+        File have = SD.open(path.c_str(), FILE_READ);
+        const bool same = have && !have.isDirectory() && have.size() == size;
+        if (have)
+            have.close();
+        if (same) {
+            t.files++;
+            t.skipped++;
+            return true;
+        }
+    }
+    // Unlinked first for the same reason as a single-file upload (see handleChunkUploadSD).
+    errno = 0;
+    if (!SD.remove(path.c_str()) && errno != ENOENT)
+        LOG_WARN("Upload: could not remove existing %s: %s", path.c_str(), strerror(errno));
+    t.file = sdCreateFile(path);
+    if (!t.file) {
+        detail = "could not create " + name;
+        return false;
+    }
+    t.files++;
+    t.entry = TarUpload::Entry::FileData;
+    if (t.dataLeft == 0)
+        t.file.close();
+    return true;
+}
+
+// Handles up to len bytes of the archive and returns how many it fully dealt with; short means detail says why.
+static size_t tarFeed(const uint8_t *data, size_t len, std::string &detail)
+{
+    TarUpload &t = tarUpload;
+    size_t pos = 0;
+    while (pos < len) {
+        if (t.finished)
+            return len; // padding after the end marker
+
+        if (t.dataLeft > 0) {
+            const size_t n = (size_t)std::min<uint64_t>(t.dataLeft, len - pos);
+            if (t.entry == TarUpload::Entry::FileData && t.file) {
+                int writeErrno = 0;
+                const size_t got = sdWriteWithRetry(t.file, data + pos, n, writeErrno);
+                pos += got;
+                t.dataLeft -= got;
+                if (got != n) {
+                    detail = writeErrno ? strerror(writeErrno) : "the card stopped accepting data";
+                    return pos;
+                }
+            } else {
+                if (t.entry == TarUpload::Entry::LongName)
+                    t.longName.append((const char *)data + pos, n);
+                pos += n;
+                t.dataLeft -= n;
+            }
+            if (t.dataLeft == 0) {
+                if (t.entry == TarUpload::Entry::LongName)
+                    t.longName.resize(strnlen(t.longName.c_str(), t.longName.size()));
+                else
+                    tarCloseFile();
+            }
+            continue;
+        }
+
+        if (t.padLeft > 0) {
+            const size_t n = std::min<size_t>(t.padLeft, len - pos);
+            pos += n;
+            t.padLeft -= n;
+            continue;
+        }
+
+        const size_t n = std::min(sizeof(t.header) - t.headerFill, len - pos);
+        memcpy(t.header + t.headerFill, data + pos, n);
+        t.headerFill += n;
+        pos += n;
+        if (t.headerFill < sizeof(t.header))
+            continue;
+        t.headerFill = 0;
+        if (!tarBeginEntry(detail)) {
+            t.failure = detail;
+            return pos;
+        }
+    }
+    return pos;
+}
+
+static void handleTarUploadSD(HTTPRequest *req, HTTPResponse *res, const std::string &dir)
+{
+    res->setHeader("Content-Type", "application/json");
+    if (webServerThread)
+        webServerThread->markTransfer();
+
+    ResourceParameters *params = req->getParams();
+    std::string id, offsetParam, skipParam;
+    params->getQueryParameter("tar", id);
+    const uint64_t offset = params->getQueryParameter("offset", offsetParam) ? strtoull(offsetParam.c_str(), nullptr, 10) : 0;
+    UploadBody body(req);
+
+    if (offset == 0) {
+        tarCloseFile();
+        tarUpload = TarUpload();
+        tarUpload.id = id;
+        tarUpload.base = dir;
+        tarUpload.skipSame = params->getQueryParameter("skipsame", skipParam);
+    } else if (id != tarUpload.id || offset != tarUpload.offset || !tarUpload.failure.empty()) {
+        body.drain();
+        std::string out;
+        if (id == tarUpload.id && !tarUpload.failure.empty()) {
+            res->setStatusCode(500);
+            out = "{\"status\":\"Error\",\"error\":" + jsonEscape(tarUpload.failure.c_str()) + "}";
+        } else {
+            // A retried slice, or the device restarted: say where it actually is so the client resumes there.
+            res->setStatusCode(409);
+            out = "{\"status\":\"Error\",\"error\":\"offset mismatch\",\"have\":" +
+                  jsonNum((double)(id == tarUpload.id ? tarUpload.offset : 0)) + "}";
+        }
+        res->print(out.c_str());
+        return;
+    }
+
+    const size_t expected = req->getContentLength();
+    size_t consumed = 0;
+    std::string problem;
+    while (consumed < expected) {
+        esp_task_wdt_reset();
+        const size_t want = std::min((size_t)SD_WRITE_BLOCK_BYTES, expected - consumed);
+        body.fill(want);
+        std::string &buf = body.buffer();
+        const size_t take = std::min(want, buf.size());
+        if (take == 0) {
+            problem = body.stalled() ? "the connection went quiet" : "the slice ended early";
+            break;
+        }
+        const size_t used = tarFeed((const uint8_t *)buf.data(), take, problem);
+        buf.erase(0, used);
+        consumed += used;
+        tarUpload.offset += used;
+        if (!problem.empty())
+            break;
+    }
+    body.drain();
+    if (webServerThread)
+        webServerThread->markTransfer();
+
+    std::string out;
+    if (problem.empty()) {
+        // One line per slice, so the log shows whether a resumed upload is skipping or rewriting.
+        LOG_INFO("SD archive into %s: %u MB in, %u files, %u already there (skipped)%s", tarUpload.base.c_str(),
+                 (unsigned)(tarUpload.offset >> 20), (unsigned)tarUpload.files, (unsigned)tarUpload.skipped,
+                 tarUpload.finished ? ", done" : "");
+        out = "{\"status\":\"ok\",\"size\":" + jsonNum((double)tarUpload.offset) +
+              ",\"files\":" + std::to_string(tarUpload.files) + ",\"skipped\":" + std::to_string(tarUpload.skipped) +
+              ",\"done\":" + (tarUpload.finished ? "true" : "false") + "}";
+    } else {
+        LOG_ERROR("SD archive upload into %s failed at byte %u: %s", tarUpload.base.c_str(), (unsigned)tarUpload.offset,
+                  problem.c_str());
+        res->setStatusCode(500);
+        out = "{\"status\":\"Error\",\"error\":" + jsonEscape(problem.c_str()) +
+              ",\"size\":" + jsonNum((double)tarUpload.offset) + "}";
+    }
+    res->print(out.c_str());
 }
 
 void handleFormUploadSD(HTTPRequest *req, HTTPResponse *res)
@@ -1474,8 +2030,13 @@ void handleFormUploadSD(HTTPRequest *req, HTTPResponse *res)
     if (dir.back() != '/')
         dir += "/";
 
-    // ?name= means a raw sequential slice; without it, the old whole-file multipart form.
+    // ?tar= is a slice of a packed folder upload, ?name= a raw slice of one file; neither, the old
+    // whole-file multipart form.
     std::string probe;
+    if (req->getParams()->getQueryParameter("tar", probe)) {
+        handleTarUploadSD(req, res, dir);
+        return;
+    }
     if (req->getParams()->getQueryParameter("name", probe)) {
         handleChunkUploadSD(req, res, dir);
         return;

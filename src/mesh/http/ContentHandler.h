@@ -12,6 +12,7 @@ void handleFsBrowseStatic(HTTPRequest *req, HTTPResponse *res);
 void handleFsDeleteStatic(HTTPRequest *req, HTTPResponse *res);
 void handleFsBrowseSD(HTTPRequest *req, HTTPResponse *res);
 void handleFsDeleteSD(HTTPRequest *req, HTTPResponse *res);
+void handleFsMkdirSD(HTTPRequest *req, HTTPResponse *res);
 void handleFormUploadSD(HTTPRequest *req, HTTPResponse *res);
 void handleSDStatic(HTTPRequest *req, HTTPResponse *res);
 void handleReport(HTTPRequest *req, HTTPResponse *res);

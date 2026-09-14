@@ -55,6 +55,9 @@ static const uint32_t MEDIUM_THRESHOLD_MS = 30000;
 static const int32_t ACTIVE_INTERVAL_MS = 50;
 static const int32_t MEDIUM_INTERVAL_MS = 200;
 static const int32_t IDLE_INTERVAL_MS = 1000;
+// A file transfer is a stream of requests; waiting ACTIVE_INTERVAL_MS before each one dominated tile uploads.
+static const uint32_t TRANSFER_THRESHOLD_MS = 2000;
+static const int32_t TRANSFER_INTERVAL_MS = 1;
 
 // Maximum concurrent HTTPS connections (reduced from default 4 to save memory)
 static const uint8_t MAX_HTTPS_CONNECTIONS = 2;
@@ -227,9 +230,17 @@ void WebServerThread::markActivity()
     lastActivityTime = Time::getMillis();
 }
 
+void WebServerThread::markTransfer()
+{
+    lastTransferTime = Time::getMillis();
+    lastActivityTime = lastTransferTime;
+}
+
 int32_t WebServerThread::getAdaptiveInterval()
 {
-    if (Throttle::isWithinTimespanMs(lastActivityTime, ACTIVE_THRESHOLD_MS)) {
+    if (lastTransferTime != 0 && Throttle::isWithinTimespanMs(lastTransferTime, TRANSFER_THRESHOLD_MS)) {
+        return TRANSFER_INTERVAL_MS;
+    } else if (Throttle::isWithinTimespanMs(lastActivityTime, ACTIVE_THRESHOLD_MS)) {
         return ACTIVE_INTERVAL_MS;
     } else if (Throttle::isWithinTimespanMs(lastActivityTime, MEDIUM_THRESHOLD_MS)) {
         return MEDIUM_INTERVAL_MS;
