@@ -67,11 +67,66 @@ int drawRow(PNGDRAW *draw)
     if (draw->y < 0 || draw->y >= kTileSize || draw->iWidth != kTileSize)
         return 0;
     auto *out = static_cast<uint16_t *>(draw->pUser);
-    decoder->getLineAsRGB565(draw, out + draw->y * kTileSize, PNG_RGB565_LITTLE_ENDIAN, 0);
+    uint16_t *const row = out + draw->y * kTileSize;
+    decoder->getLineAsRGB565(draw, row, PNG_RGB565_LITTLE_ENDIAN, 0);
+
+    // Transparent pixels come out as the black they were blended onto, and some tile downloaders leave a whole edge
+    // column transparent - a dark line down the map. Take each from its nearest opaque neighbour in the row instead.
+    if (draw->iHasAlpha || draw->iPixelType == PNG_PIXEL_TRUECOLOR_ALPHA || draw->iPixelType == PNG_PIXEL_GRAY_ALPHA) {
+        uint8_t mask[kTileSize / 8];
+        if (!decoder->getAlphaMask(draw, mask, 128))
+            return 1;                                                                 // nothing opaque in the row to borrow from
+        auto opaque = [&](int x) { return (mask[x >> 3] & (0x80 >> (x & 7))) != 0; }; // MSB first
+        int16_t nearestLeft[kTileSize];
+        for (int x = 0, last = -1; x < kTileSize; x++) {
+            if (opaque(x))
+                last = x;
+            nearestLeft[x] = (int16_t)last;
+        }
+        for (int x = kTileSize - 1, right = -1; x >= 0; x--) {
+            if (opaque(x)) {
+                right = x;
+                continue;
+            }
+            const int left = nearestLeft[x];
+            const int from = (left >= 0 && (right < 0 || x - left <= right - x)) ? left : right;
+            if (from >= 0)
+                row[x] = row[from];
+        }
+    }
     return 1;
 }
 
-bool loadTile(const TileKey &key, uint16_t *out)
+// Missing is remembered so it isn't looked up every frame; Failed (a bad read or decode) is tried again later.
+enum class TileLoad { Loaded, Missing, Failed };
+
+// Reads the whole file into fileBuf.
+TileLoad readTileFile(const char *path, size_t &size)
+{
+    concurrency::LockGuard g(spiLock);
+    SdFs *sd = mapSdCard();
+    if (!sd)
+        return TileLoad::Failed;
+    FsFile file = sd->open(path, O_RDONLY);
+    if (!file)
+        return TileLoad::Missing;
+    const uint64_t fileSize = file.fileSize();
+    if (fileSize == 0 || fileSize > kMaxFileBytes) {
+        file.close();
+        return TileLoad::Missing;
+    }
+    size = (size_t)fileSize;
+    if (size > fileBufSize) {
+        free(fileBuf);
+        fileBuf = static_cast<uint8_t *>(allocLarge(size));
+        fileBufSize = fileBuf ? size : 0;
+    }
+    const bool ok = fileBuf && file.read(fileBuf, size) == (int)size;
+    file.close();
+    return ok ? TileLoad::Loaded : TileLoad::Failed;
+}
+
+TileLoad loadTile(const TileKey &key, uint16_t *out)
 {
     char path[64];
     if (styles[active][0])
@@ -79,55 +134,44 @@ bool loadTile(const TileKey &key, uint16_t *out)
     else
         snprintf(path, sizeof(path), "/map/%d/%d/%d.png", (int)key.z, (int)key.x, (int)key.y);
 
-    size_t size = 0;
-    {
-        concurrency::LockGuard g(spiLock);
-        SdFs *sd = mapSdCard();
-        if (!sd)
-            return false;
-        FsFile file = sd->open(path, O_RDONLY);
-        if (!file)
-            return false;
-        const uint64_t fileSize = file.fileSize();
-        if (fileSize == 0 || fileSize > kMaxFileBytes) {
-            file.close();
-            return false;
-        }
-        size = (size_t)fileSize;
-        if (size > fileBufSize) {
-            free(fileBuf);
-            fileBuf = static_cast<uint8_t *>(allocLarge(size));
-            fileBufSize = fileBuf ? size : 0;
-        }
-        const bool ok = fileBuf && file.read(fileBuf, size) == (int)size;
-        file.close();
-        if (!ok)
-            return false;
-    }
-
     if (!decoder) {
         void *mem = allocLarge(sizeof(PNG));
         if (!mem)
-            return false;
+            return TileLoad::Failed;
         decoder = new (mem) PNG();
     }
-    if (decoder->openRAM(fileBuf, (int)size, drawRow) != PNG_SUCCESS) {
-        LOG_WARN("Map: can't open %s (%d)", path, decoder->getLastError());
-        return false;
-    }
-    if (decoder->getWidth() != kTileSize || decoder->getHeight() != kTileSize) {
-        LOG_WARN("Map: %s is %dx%d, tiles must be %d px", path, decoder->getWidth(), decoder->getHeight(), kTileSize);
+
+    // Unchecked, a byte corrupted in the read decodes into a streak down the tile (each PNG row builds on the one above).
+    // With the checksum on it fails instead, and the card gets a second read.
+    for (int attempt = 0; attempt < 2; attempt++) {
+        size_t size = 0;
+        const TileLoad read = readTileFile(path, size);
+        if (read == TileLoad::Missing)
+            return TileLoad::Missing;
+        if (read == TileLoad::Failed) {
+            LOG_WARN("Map: short read of %s%s", path, attempt == 0 ? ", reading it again" : "");
+            continue;
+        }
+        if (decoder->openRAM(fileBuf, (int)size, drawRow) != PNG_SUCCESS) {
+            LOG_WARN("Map: can't open %s (%d)%s", path, decoder->getLastError(), attempt == 0 ? ", reading it again" : "");
+            continue;
+        }
+        if (decoder->getWidth() != kTileSize || decoder->getHeight() != kTileSize) {
+            LOG_WARN("Map: %s is %dx%d, tiles must be %d px", path, decoder->getWidth(), decoder->getHeight(), kTileSize);
+            decoder->close();
+            return TileLoad::Missing;
+        }
+        const int rc = decoder->decode(out, PNG_CHECK_CRC);
         decoder->close();
-        return false;
+        if (rc == PNG_SUCCESS)
+            return TileLoad::Loaded;
+        LOG_WARN("Map: %s failed to decode (%d)%s", path, rc, attempt == 0 ? ", reading it again" : "");
     }
-    const int rc = decoder->decode(out, 0);
-    decoder->close();
-    if (rc != PNG_SUCCESS)
-        LOG_WARN("Map: can't decode %s (%d)", path, rc);
-    return rc == PNG_SUCCESS;
+    return TileLoad::Failed;
 }
 
-// Decoded tile, loading it on a cache miss; nullptr when it isn't on the card. Valid until the next call.
+// Decoded tile, loading it on a cache miss; nullptr when it isn't on the card or couldn't be read. Valid until the
+// next call.
 const uint16_t *fetchTile(int z, int32_t x, int32_t y)
 {
     const TileKey key{gen, z, x, y};
@@ -157,9 +201,12 @@ const uint16_t *fetchTile(int z, int32_t x, int32_t y)
         return nullptr;
 
     slot->valid = false; // a failed decode may have half-overwritten it
-    if (!loadTile(key, slot->pixels)) {
-        misses[nextMiss] = key;
-        nextMiss = (nextMiss + 1) % kMissSlots;
+    const TileLoad result = loadTile(key, slot->pixels);
+    if (result != TileLoad::Loaded) {
+        if (result == TileLoad::Missing) {
+            misses[nextMiss] = key;
+            nextMiss = (nextMiss + 1) % kMissSlots;
+        }
         return nullptr;
     }
     slot->key = key;
