@@ -15,6 +15,9 @@
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/TFTColorRegions.h"
+#if BASEUI_NATIVE_RGB565
+#include "graphics/TFTDisplay.h"
+#endif
 #include "graphics/TFTPalette.h"
 #include "graphics/TimeFormatters.h"
 #include "graphics/draw/NotificationRenderer.h"
@@ -458,6 +461,34 @@ static void registerRoundedBubbleFillRegion(int x, int y, int w, int h, int radi
         registerTFTColorRegion(TFTColorRole::ActionMenuBody, x, middleY, w, middleH);
     }
 }
+
+#if BASEUI_NATIVE_RGB565
+// Top-to-bottom gradient in exactly the rounded shape registerRoundedBubbleFillRegion() claims. It is explicit
+// colour, so the bubble's region still colours the text drawn over it but leaves the fill alone.
+static void paintBubbleGradient(OLEDDisplay *display, int x, int y, int w, int h, int radius, bool mine)
+{
+    if (w <= 0 || h <= 0)
+        return;
+    uint16_t top, bottom;
+    getThemeBubbleGradient(mine, top, bottom);
+    int capRows = 0;
+    if (radius > 0 && w >= 3 && h >= 3) {
+        if (radius >= 4 && h >= 5)
+            capRows = 2;
+        else if (radius >= 2)
+            capRows = 1;
+    }
+    TFTDisplay *const panel = static_cast<TFTDisplay *>(display);
+    for (int row = 0; row < h; ++row) {
+        const int edgeRow = std::min(row, h - 1 - row);
+        int inset = 0;
+        if (edgeRow < capRows)
+            inset = (radius >= 4) ? (edgeRow == 0 ? 2 : 1) : 1;
+        const uint8_t t = static_cast<uint8_t>(h > 1 ? row * 255 / (h - 1) : 0);
+        panel->fillRect565(x + inset, y + row, w - inset * 2, 1, TFTPalette::mix565(top, bottom, t));
+    }
+}
+#endif
 #endif
 
 static int getDrawnLinePixelBottom(int lineTopY, const std::string &line, bool isHeaderLine)
@@ -1187,6 +1218,9 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 if (useDarkModeBubbleFill) {
                     setDarkModeBubbleRoleColors(themeId, b.mine);
                     registerRoundedBubbleFillRegion(bx, by, bw, bh, r);
+#if BASEUI_NATIVE_RGB565
+                    paintBubbleGradient(display, bx, by, bw, bh, r, b.mine);
+#endif
                 }
 #endif
 
@@ -1214,6 +1248,9 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
                 if (useDarkModeBubbleFill) {
                     setDarkModeBubbleRoleColors(themeId, b.mine);
                     registerTFTColorRegion(TFTColorRole::ActionMenuBody, bubbleX, topY, bubbleW, bubbleH);
+#if BASEUI_NATIVE_RGB565
+                    paintBubbleGradient(display, bubbleX, topY, bubbleW, bubbleH, 0, b.mine);
+#endif
                 }
 #endif
                 if (drawBubbleOutline) {

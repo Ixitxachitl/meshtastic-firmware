@@ -8,6 +8,9 @@
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/TFTColorRegions.h"
+#if BASEUI_NATIVE_RGB565
+#include "graphics/TFTDisplay.h"
+#endif
 #include "graphics/TFTPalette.h"
 #include "graphics/draw/UIRenderer.h"
 #include "main.h"
@@ -253,6 +256,20 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
         } else {
             display->setColor(BLACK);
             display->fillRect(frameLeft, 0, screenW, headerHeight);
+#if BASEUI_NATIVE_RGB565
+            if (!transparent_background) {
+                // Gradient down to the separator row. Explicit colour, so the title and status regions
+                // registered below still colour their glyphs without flattening it.
+                uint16_t top, bottom;
+                getThemeHeaderGradient(top, bottom);
+                const int rows = headerHeight - 1;
+                for (int row = 0; row < rows; ++row) {
+                    const uint8_t t = static_cast<uint8_t>(rows > 1 ? row * 255 / (rows - 1) : 0);
+                    static_cast<TFTDisplay *>(display)->fillRect565(frameLeft, row, screenW, 1,
+                                                                    TFTPalette::mix565(top, bottom, t));
+                }
+            }
+#endif
 // Keep the legacy white separator for monochrome displays only when header background is visible.
 #if !GRAPHICS_TFT_COLORING_ENABLED
             if (!transparent_background) {
@@ -612,6 +629,11 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
         registerTFTColorRegionDirect(batteryFillRegionX, batteryFillRegionY, batteryFillRegionW, batteryFillRegionH,
                                      batteryFillColor, headerColorForRoles);
     }
+#endif
+#if BASEUI_NATIVE_RGB565
+    // Border along the header's bottom row, drawn last so nothing else in the header paints over it.
+    if (!transparent_background)
+        static_cast<TFTDisplay *>(display)->fillRect565(frameLeft, headerHeight - 1, screenW, 1, getThemeHeaderSeparator());
 #endif
     display->setColor(WHITE); // Reset for other UI
 }

@@ -80,6 +80,8 @@ void registerTFTColorRegionBe(int16_t x, int16_t y, int16_t width, int16_t heigh
 void registerTFTActionMenuRegions(int16_t boxLeft, int16_t boxTop, int16_t boxWidth, int16_t boxHeight);
 uint32_t getTFTColorFrameSignature();
 uint8_t getTFTColorRegionCount();
+// Changes whenever the registered regions do, so draw-time lookups can cache per row safely.
+uint32_t getTFTColorRegionGeneration();
 void clearTFTColorRegions();
 // Called as each region is registered, with its clipped rect and big-endian colours. Set by a display
 // that resolves colour at draw time, so it can repaint pixels drawn before the region existed.
@@ -173,6 +175,16 @@ struct TFTThemeDef {
     bool fullFrameInvert; // Apply full-frame FrameMono inversion (ST7789 light themes)
     bool visible;         // Show in the theme picker menu.  Hidden themes still apply
                           // correctly if their uniqueIdentifier is persisted (dev/legacy themes).
+    // Colour-framebuffer builds (BASEUI_NATIVE_RGB565) only; two-tone builds ignore these.
+    uint16_t canvasBg;        // replaces the body background wherever it showed; equal to it changes nothing
+    uint16_t headerSeparator; // border along the bottom row of the header
+    // Message bubble gradients, top to bottom. Used by themes that fill bubbles (Default Dark, Blue).
+    uint16_t bubbleMineTop;
+    uint16_t bubbleMineBottom;
+    uint16_t bubbleTheirsTop;
+    uint16_t bubbleTheirsBottom;
+    uint16_t headerGradientTop; // header background, top to bottom down to the separator row
+    uint16_t headerGradientBottom;
 };
 
 // Count of themes whose .visible flag is true.  Use this when building menus.
@@ -197,6 +209,10 @@ uint16_t getThemeBodyBg();
 uint16_t getThemeBodyFg();
 bool isThemeFullFrameInvert();
 uint16_t getThemeBatteryFillColor(int batteryPercent);
+uint16_t getThemeCanvasBg();
+uint16_t getThemeHeaderSeparator();
+void getThemeBubbleGradient(bool mine, uint16_t &top, uint16_t &bottom);
+void getThemeHeaderGradient(uint16_t &top, uint16_t &bottom);
 
 // Reinitialise default roleColors from the active theme.  Call after a
 // theme change so that any role registered without a prior setTFTColorRole()

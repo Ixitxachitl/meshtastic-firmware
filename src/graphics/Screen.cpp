@@ -186,8 +186,9 @@ static void drawLockdownLockScreen(OLEDDisplay *display)
 }
 #endif
 
-// Timed arrow-key slide, applied just before each redraw; defined with the nav transition settings.
+// Timed arrow-key slide, applied around each redraw; defined with the nav transition settings.
 static void navSlideBeforeUpdate(OLEDDisplayUi *ui);
+static void navSlideAfterUpdate(OLEDDisplayUi *ui);
 
 static inline void updateUiFrame(OLEDDisplayUi *ui)
 {
@@ -224,6 +225,7 @@ static inline void updateUiFrame(OLEDDisplayUi *ui)
 #endif
     navSlideBeforeUpdate(ui);
     ui->update();
+    navSlideAfterUpdate(ui);
 }
 // Global variables for alert banner - explicitly define with extern "C" linkage to prevent optimization
 
@@ -1177,6 +1179,17 @@ static struct NavSlideState {
     NavSlideSnapshot in;
 } sNavSlide;
 
+#ifdef UI_PERF_DEBUG
+// Where a heavy frame can still cost a slide: the start-of-slide captures, the redraws the slide got, and the
+// first real redraw once it has landed.
+static struct {
+    uint32_t updateStartMs = 0;
+    uint16_t ticksAtUpdate = 0;
+    uint16_t redraws = 0;
+    bool timeNextRedraw = false;
+} sNavSlidePerf;
+#endif
+
 // ticksPerTransition exactly as OLEDDisplayUi derives it, so the progress written below lines up.
 static uint16_t navSlideTicks()
 {
@@ -1193,6 +1206,10 @@ static void navSlideRestore()
         sNavSlide.in.original = nullptr;
         sNavSlide.swapped = false;
     }
+#if BASEUI_NATIVE_RGB565
+    if (screen)
+        static_cast<TFTDisplay *>(screen->getDisplayDevice())->setClearCovered(false);
+#endif
     sNavSlide.armed = false;
 }
 
@@ -1247,6 +1264,9 @@ static FrameCallback navSlideCompositor(NavSlideSnapshot &snap)
 {
     return [&snap](OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y) {
         if (y != 0) { // vertical slides are not cached
+#if BASEUI_NATIVE_RGB565
+            static_cast<TFTDisplay *>(display)->setClearCovered(false); // the real frame paints its own background
+#endif
             if (snap.original)
                 snap.original(display, state, x, y);
             return;
@@ -1298,9 +1318,16 @@ static void navSlideArm(OLEDDisplayUi *ui, OLEDDisplay *display, size_t frameCou
         state.transitionFrameRelationship = TransitionRelationship_NONE;
         const uint8_t cur = state.currentFrame;
         const uint8_t next = static_cast<uint8_t>(forward ? (cur + 1) % frameCount : (cur + frameCount - 1) % frameCount);
+#ifdef UI_PERF_DEBUG
+        const uint32_t captureStartMs = millis();
+#endif
         // Incoming first, so the buffer is left holding the frame already on screen.
         navSlideCapture(display, state, next, sNavSlide.in);
         navSlideCapture(display, state, cur, sNavSlide.out);
+#ifdef UI_PERF_DEBUG
+        LOG_INFO("Nav slide: captured frames %u -> %u in %u ms", (unsigned)cur, (unsigned)next,
+                 (unsigned)(millis() - captureStartMs));
+#endif
 #if GRAPHICS_TFT_COLORING_ENABLED
         clearTFTColorRegions();
 #endif
@@ -1315,28 +1342,68 @@ static void navSlideArm(OLEDDisplayUi *ui, OLEDDisplay *display, size_t frameCou
     // Stamped after the capture, which can itself take a redraw or two, so the slide starts at zero.
     sNavSlide.startMs = millis();
     sNavSlide.armed = true;
+#ifdef UI_PERF_DEBUG
+    sNavSlidePerf.redraws = 0;
+#endif
 }
 
 static void navSlideBeforeUpdate(OLEDDisplayUi *ui)
 {
+#ifdef UI_PERF_DEBUG
+    sNavSlidePerf.updateStartMs = millis();
+    sNavSlidePerf.ticksAtUpdate = ui->getUiState()->ticks;
+#endif
     if (!sNavSlide.armed)
         return;
     OLEDDisplayUiState *state = ui->getUiState();
     if (state->frameState != IN_TRANSITION) {
-        navSlideRestore(); // finished, or cut short by a snap: the real frames go back
+#ifdef UI_PERF_DEBUG
+        LOG_INFO("Nav slide: %u redraws over %u ms", (unsigned)sNavSlidePerf.redraws, (unsigned)(millis() - sNavSlide.startMs));
+        sNavSlidePerf.timeNextRedraw = sNavSlide.swapped;
+#endif
+        navSlideRestore(); // landed on the snapshot last redraw, or cut short by a snap: the real frames go back
         return;
     }
+    // tick() adds one before drawing and completes the slide when that reaches ticks. Even that last redraw
+    // comes from the snapshot: the real frame can be slow (map tiles, message layout), and drawing it there
+    // held the slide's final step. It goes back in on the next redraw, once nothing is moving.
     const uint64_t raw = (uint64_t)(millis() - sNavSlide.startMs) * sNavSlide.ticks / SCREEN_NAV_TRANSITION_MS;
-    if (raw >= sNavSlide.ticks) {
-        // tick() adds one and completes the slide; restore first so it lands on the real frame.
-        navSlideRestore();
+    if (raw >= sNavSlide.ticks)
         state->ticksSinceLastStateSwitch = sNavSlide.ticks - 1;
-    } else {
+    else
         state->ticksSinceLastStateSwitch = raw > 0 ? static_cast<uint16_t>(raw - 1) : 0; // tick() adds the one back
+#if BASEUI_NATIVE_RGB565
+    if (sNavSlide.swapped) // the snapshots cover every pixel, so this redraw's clears need not paint
+        static_cast<TFTDisplay *>(screen->getDisplayDevice())->setClearCovered(true);
+#endif
+}
+
+static void navSlideAfterUpdate(OLEDDisplayUi *ui)
+{
+#if BASEUI_NATIVE_RGB565
+    if (screen)
+        static_cast<TFTDisplay *>(screen->getDisplayDevice())->setClearCovered(false);
+#endif
+#ifdef UI_PERF_DEBUG
+    if (ui->getUiState()->ticks != sNavSlidePerf.ticksAtUpdate) {
+        if (sNavSlide.armed)
+            sNavSlidePerf.redraws++;
+        if (sNavSlidePerf.timeNextRedraw) {
+            sNavSlidePerf.timeNextRedraw = false;
+            LOG_INFO("Nav slide: first real redraw after landing took %u ms", (unsigned)(millis() - sNavSlidePerf.updateStartMs));
+        }
     }
+#else
+    (void)ui;
+#endif
 }
 #else
 static void navSlideBeforeUpdate(OLEDDisplayUi *ui)
+{
+    (void)ui;
+}
+
+static void navSlideAfterUpdate(OLEDDisplayUi *ui)
 {
     (void)ui;
 }

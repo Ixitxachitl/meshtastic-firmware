@@ -90,11 +90,28 @@ class TFTDisplay : public OLEDDisplay
     // regions. clear() drops the pen, so it can't leak into the next frame.
     void setPenColors(uint16_t onColor, uint16_t offColor);
     void clearPen();
-    // Blit a full-colour image (native-endian RGB565, w*h pixels). Later regions don't recolour it.
-    void drawRGB565(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *pixels);
+    // Blit a full-colour image (native-endian RGB565, w*h pixels). Later regions don't recolour it. With
+    // zeroIsTransparent, 0x0000 pixels are skipped and whatever is underneath shows through.
+    void drawRGB565(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *pixels, bool zeroIsTransparent = false);
+    // Fill a rect with one native-endian RGB565 colour as background: unlit, and not recoloured by regions.
+    void fillRect565(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color);
+    // While set, clear() only resets the lit mask: the caller is about to cover every pixel itself (a slide
+    // blitting its snapshots), so painting the background first would be thrown away.
+    void setClearCovered(bool covered) { clearCovered = covered; }
 
-    uint16_t *nativePixels() { return rgbPixels; }
-    uint8_t *explicitMask() { return explicitBits; }
+    // Writable access, so both count as drawing: the next clear() can no longer be skipped.
+    uint16_t *nativePixels()
+    {
+        nativeClean = false;
+        markNativeRowsDirty(0, displayHeight);
+        return rgbPixels;
+    }
+    uint8_t *explicitMask()
+    {
+        nativeClean = false;
+        markNativeRowsDirty(0, displayHeight);
+        return explicitBits;
+    }
 
     void setPixel(int16_t x, int16_t y) override;
     void setPixelColor(int16_t x, int16_t y, OLEDDISPLAY_COLOR c) override;
@@ -150,9 +167,37 @@ class TFTDisplay : public OLEDDisplay
     uint8_t *explicitBits = nullptr; // buffer's page layout; set where a pen or image chose the colour
     uint16_t defaultOnBe = 0;
     uint16_t defaultOffBe = 0;
+    uint16_t legacyBgBe = 0; // the theme's two-tone body background, which canvasBe replaces
+    uint16_t canvasBe = 0;
+    void refreshNativeThemeColors();
+    // An unlit pixel in the old body background takes the canvas colour instead.
+    uint16_t onCanvas(bool lit, uint16_t be) const { return (!lit && be == legacyBgBe) ? canvasBe : be; }
     uint16_t penOnBe = 0;
     uint16_t penOffBe = 0;
     bool penActive = false;
-    bool forceNativePush = true; // push every row on the next display()
+    bool forceNativePush = true;        // push every row on the next display()
+    bool clearCovered = false;          // see setClearCovered()
+    bool nativeClean = false;           // nothing drawn since the last clear(), so another can be skipped
+    uint32_t cleanRegionGeneration = 0; // the region set that clean clear() resolved against
+    int32_t cachedRowY = -1;            // row the shared region row cache currently holds
+    uint32_t cachedRowGeneration = 0;
+    void nativeBeginRow(int16_t y);
+
+    // One bit per push band drawn into since the last display(), so untouched bands skip the change scan. Rows past
+    // the last band always scan.
+    static constexpr uint8_t kNativeBandRows = 8;
+    static constexpr uint32_t kNativeMaxBands = 256;
+    uint32_t nativeDirtyBands[kNativeMaxBands / 32] = {};
+    void markNativeRowDirty(int32_t y)
+    {
+        const uint32_t band = (uint32_t)y / kNativeBandRows;
+        if (band < kNativeMaxBands)
+            nativeDirtyBands[band >> 5] |= 1u << (band & 31);
+    }
+    void markNativeRowsDirty(int32_t y0, int32_t y1)
+    {
+        for (int32_t y = y0 - (y0 % kNativeBandRows); y < y1; y += kNativeBandRows)
+            markNativeRowDirty(y);
+    }
 #endif
 };

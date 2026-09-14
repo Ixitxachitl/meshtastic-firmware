@@ -18,6 +18,9 @@
 #include "graphics/EmoteRenderer.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/TFTColorRegions.h"
+#if BASEUI_NATIVE_RGB565
+#include "graphics/TFTDisplay.h"
+#endif
 #include "graphics/TFTPalette.h"
 #include "graphics/TimeFormatters.h"
 #include "graphics/images.h"
@@ -2504,6 +2507,17 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
     display->drawRect(rectX, rectY, 1, 1);
     display->drawRect(rectX + rectWidth - 1, rectY, 1, 1);
     display->setColor(WHITE);
+#endif
+#if BASEUI_NATIVE_RGB565
+    if (navBarVisible) {
+        // Box around the bar in the header's border colour; the knocked-off top corners stay open.
+        TFTDisplay *const panel = static_cast<TFTDisplay *>(display);
+        const uint16_t border = getThemeHeaderSeparator();
+        panel->fillRect565(rectX + 1, rectY, rectWidth - 2, 1, border);
+        panel->fillRect565(rectX, rectY + 1, 1, rectHeight - 1, border);
+        panel->fillRect565(rectX + rectWidth - 1, rectY + 1, 1, rectHeight - 1, border);
+        panel->fillRect565(rectX, rectY + rectHeight - 1, rectWidth, 1, border);
+    }
 #endif
 }
 

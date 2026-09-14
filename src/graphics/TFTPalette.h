@@ -11,6 +11,13 @@ constexpr uint16_t rgb565(uint8_t red, uint8_t green, uint8_t blue)
 {
     return static_cast<uint16_t>(((red & 0xF8) << 8) | ((green & 0xFC) << 3) | ((blue & 0xF8) >> 3));
 }
+// Blend two RGB565 colours per channel: t = 0 is all a, 255 is all b.
+constexpr uint16_t mix565(uint16_t a, uint16_t b, uint8_t t)
+{
+    return static_cast<uint16_t>(((((a >> 11) * (255 - t) + (b >> 11) * t) / 255) << 11) |
+                                 (((((a >> 5) & 0x3F) * (255 - t) + ((b >> 5) & 0x3F) * t) / 255) << 5) |
+                                 (((a & 0x1F) * (255 - t) + (b & 0x1F) * t) / 255));
+}
 
 constexpr uint16_t Black = 0x0000;
 constexpr uint16_t White = 0xFFFF;
@@ -54,6 +61,15 @@ constexpr uint16_t Cream = rgb565(255, 248, 235);
 // Classic monochrome theme accent colors (single-color-on-black themes)
 constexpr uint16_t MeshtasticGreen = rgb565(0x67, 0xEA, 0x94);
 constexpr uint16_t ClassicRed = rgb565(255, 64, 64);
+// Colour-framebuffer restyle: the Default Dark canvas, header borders and message bubble gradients.
+constexpr uint16_t MidnightNavy = rgb565(12, 20, 44);
+constexpr uint16_t SlateBlue = rgb565(70, 90, 130);
+constexpr uint16_t IceBlue = rgb565(160, 215, 255);
+constexpr uint16_t OceanBlue = rgb565(55, 135, 225);
+constexpr uint16_t StormGray = rgb565(78, 88, 108);
+constexpr uint16_t CharcoalBlue = rgb565(40, 46, 60);
+constexpr uint16_t SteelBlue = rgb565(45, 80, 150);
+constexpr uint16_t InkBlue = rgb565(22, 40, 90);
 // Monochrome White reuses TFTPalette::White above.
 
 // Fast contrast picker for monochrome glyph overlays on arbitrary RGB565 backgrounds.

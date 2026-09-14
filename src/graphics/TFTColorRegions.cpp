@@ -18,6 +18,7 @@ struct TFTRoleColorsBe {
 };
 
 static uint8_t colorRegionCount = 0;
+static uint32_t colorRegionGeneration = 0; // see getTFTColorRegionGeneration()
 static constexpr uint32_t kFnv1aOffsetBasis = 2166136261u;
 static constexpr uint32_t kFnv1aPrime = 16777619u;
 
@@ -128,11 +129,19 @@ static const TFTThemeDef kThemes[] = {
             {kStatusColor, kHeaderBackground},         // NavigationBar  (icon fg, bar bg)
             {kTitleColor, TFTPalette::Black},          // NavigationArrow (arrow fg, body bg)
         },
-        TFTPalette::Good,   // batteryFillGood
-        TFTPalette::Medium, // batteryFillMedium
-        TFTPalette::Bad,    // batteryFillBad
-        false,              // fullFrameInvert
-        true,               // visible
+        TFTPalette::Good,         // batteryFillGood
+        TFTPalette::Medium,       // batteryFillMedium
+        TFTPalette::Bad,          // batteryFillBad
+        false,                    // fullFrameInvert
+        true,                     // visible
+        TFTPalette::MidnightNavy, // canvasBg
+        TFTPalette::SlateBlue,    // headerSeparator
+        TFTPalette::IceBlue,      // bubbleMineTop
+        TFTPalette::OceanBlue,    // bubbleMineBottom
+        TFTPalette::StormGray,    // bubbleTheirsTop
+        TFTPalette::CharcoalBlue, // bubbleTheirsBottom
+        TFTPalette::StormGray,    // headerGradientTop
+        TFTPalette::CharcoalBlue, // headerGradientBottom
     },
 
     // Default Light (ThemeID::DefaultLight = 1)
@@ -157,11 +166,19 @@ static const TFTThemeDef kThemes[] = {
             {TFTPalette::Black, TFTPalette::LightGray}, // NavigationBar  (icon fg, bar bg)
             {TFTPalette::Black, TFTPalette::White},     // NavigationArrow (arrow fg, body bg)
         },
-        TFTPalette::Good,   // batteryFillGood
-        TFTPalette::Medium, // batteryFillMedium
-        TFTPalette::Bad,    // batteryFillBad
-        true,               // fullFrameInvert
-        true,               // visible
+        TFTPalette::Good,                                                  // batteryFillGood
+        TFTPalette::Medium,                                                // batteryFillMedium
+        TFTPalette::Bad,                                                   // batteryFillBad
+        true,                                                              // fullFrameInvert
+        true,                                                              // visible
+        TFTPalette::Black,                                                 // canvasBg
+        TFTPalette::DarkGray,                                              // headerSeparator
+        TFTPalette::IceBlue,                                               // bubbleMineTop
+        TFTPalette::SkyBlue,                                               // bubbleMineBottom
+        TFTPalette::LightGray,                                             // bubbleTheirsTop
+        TFTPalette::Gray,                                                  // bubbleTheirsBottom
+        TFTPalette::mix565(TFTPalette::LightGray, TFTPalette::White, 128), // headerGradientTop
+        TFTPalette::LightGray,                                             // headerGradientBottom
     },
 
     // Christmas (ThemeID::Christmas = 2)
@@ -186,11 +203,19 @@ static const TFTThemeDef kThemes[] = {
             {TFTPalette::Gold, TFTPalette::ChristmasRed},   // NavigationBar  (icon fg, bar bg)
             {TFTPalette::Gold, TFTPalette::Pine},           // NavigationArrow (arrow fg, body bg)
         },
-        TFTPalette::ChristmasGreen, // batteryFillGood
-        TFTPalette::Gold,           // batteryFillMedium
-        TFTPalette::ChristmasRed,   // batteryFillBad
-        true,                       // fullFrameInvert
-        false,                      // visible
+        TFTPalette::ChristmasGreen,                                          // batteryFillGood
+        TFTPalette::Gold,                                                    // batteryFillMedium
+        TFTPalette::ChristmasRed,                                            // batteryFillBad
+        true,                                                                // fullFrameInvert
+        false,                                                               // visible
+        TFTPalette::Pine,                                                    // canvasBg
+        TFTPalette::Gold,                                                    // headerSeparator
+        TFTPalette::ChristmasGreen,                                          // bubbleMineTop
+        TFTPalette::Pine,                                                    // bubbleMineBottom
+        TFTPalette::ChristmasRed,                                            // bubbleTheirsTop
+        TFTPalette::Pine,                                                    // bubbleTheirsBottom
+        TFTPalette::mix565(TFTPalette::ChristmasRed, TFTPalette::White, 64), // headerGradientTop
+        TFTPalette::ChristmasRed,                                            // headerGradientBottom
     },
 
     // Pink (ThemeID::Pink = 3) light variant
@@ -215,11 +240,19 @@ static const TFTThemeDef kThemes[] = {
             {TFTPalette::White, TFTPalette::HotPink},     // NavigationBar  (icon fg, bar bg)
             {TFTPalette::HotPink, TFTPalette::PalePink},  // NavigationArrow (arrow fg, body bg)
         },
-        TFTPalette::DeepPink, // batteryFillGood
-        TFTPalette::HotPink,  // batteryFillMedium
-        TFTPalette::Bad,      // batteryFillBad
-        true,                 // fullFrameInvert
-        true,                 // visible
+        TFTPalette::DeepPink,                                           // batteryFillGood
+        TFTPalette::HotPink,                                            // batteryFillMedium
+        TFTPalette::Bad,                                                // batteryFillBad
+        true,                                                           // fullFrameInvert
+        true,                                                           // visible
+        TFTPalette::Black,                                              // canvasBg
+        TFTPalette::DeepPink,                                           // headerSeparator
+        TFTPalette::PalePink,                                           // bubbleMineTop
+        TFTPalette::HotPink,                                            // bubbleMineBottom
+        TFTPalette::White,                                              // bubbleTheirsTop
+        TFTPalette::PalePink,                                           // bubbleTheirsBottom
+        TFTPalette::mix565(TFTPalette::HotPink, TFTPalette::White, 64), // headerGradientTop
+        TFTPalette::HotPink,                                            // headerGradientBottom
     },
 
     // Blue (ThemeID::Blue = 4) dark variant
@@ -244,11 +277,19 @@ static const TFTThemeDef kThemes[] = {
             {TFTPalette::SkyBlue, TFTPalette::DeepBlue}, // NavigationBar  (icon fg, bar bg)
             {TFTPalette::SkyBlue, TFTPalette::Black},    // NavigationArrow (arrow fg, body bg)
         },
-        TFTPalette::SkyBlue, // batteryFillGood
-        TFTPalette::Medium,  // batteryFillMedium
-        TFTPalette::Bad,     // batteryFillBad
-        true,                // fullFrameInvert
-        true,                // visible
+        TFTPalette::SkyBlue,                                             // batteryFillGood
+        TFTPalette::Medium,                                              // batteryFillMedium
+        TFTPalette::Bad,                                                 // batteryFillBad
+        true,                                                            // fullFrameInvert
+        true,                                                            // visible
+        TFTPalette::Navy,                                                // canvasBg
+        TFTPalette::SkyBlue,                                             // headerSeparator
+        TFTPalette::IceBlue,                                             // bubbleMineTop
+        TFTPalette::SkyBlue,                                             // bubbleMineBottom
+        TFTPalette::SteelBlue,                                           // bubbleTheirsTop
+        TFTPalette::InkBlue,                                             // bubbleTheirsBottom
+        TFTPalette::mix565(TFTPalette::DeepBlue, TFTPalette::White, 48), // headerGradientTop
+        TFTPalette::DeepBlue,                                            // headerGradientBottom
     },
 
     // Creamsicle (ThemeID::Creamsicle = 5)light variant
@@ -273,11 +314,19 @@ static const TFTThemeDef kThemes[] = {
             {TFTPalette::White, TFTPalette::CreamOrange}, // NavigationBar  (icon fg, bar bg)
             {TFTPalette::CreamOrange, TFTPalette::White}, // NavigationArrow (arrow fg, body bg)
         },
-        TFTPalette::DeepOrange, // batteryFillGood
-        TFTPalette::Gold,       // batteryFillMedium
-        TFTPalette::Bad,        // batteryFillBad
-        true,                   // fullFrameInvert
-        true,                   // visible
+        TFTPalette::DeepOrange,                                             // batteryFillGood
+        TFTPalette::Gold,                                                   // batteryFillMedium
+        TFTPalette::Bad,                                                    // batteryFillBad
+        true,                                                               // fullFrameInvert
+        true,                                                               // visible
+        TFTPalette::Black,                                                  // canvasBg
+        TFTPalette::DeepOrange,                                             // headerSeparator
+        TFTPalette::CreamOrange,                                            // bubbleMineTop
+        TFTPalette::DeepOrange,                                             // bubbleMineBottom
+        TFTPalette::Cream,                                                  // bubbleTheirsTop
+        TFTPalette::CreamOrange,                                            // bubbleTheirsBottom
+        TFTPalette::mix565(TFTPalette::CreamOrange, TFTPalette::White, 64), // headerGradientTop
+        TFTPalette::CreamOrange,                                            // headerGradientBottom
     },
 
     // Meshtastic Green (ThemeID::MeshtasticGreen = 6) classic monochrome
@@ -304,11 +353,19 @@ static const TFTThemeDef kThemes[] = {
             {TFTPalette::MeshtasticGreen, TFTPalette::Black}, // NavigationBar
             {TFTPalette::MeshtasticGreen, TFTPalette::Black}, // NavigationArrow
         },
-        TFTPalette::Black, // batteryFillGood
-        TFTPalette::Black, // batteryFillMedium
-        TFTPalette::Black, // batteryFillBad
-        true,              // fullFrameInvert
-        true,              // visible
+        TFTPalette::Black,                                                      // batteryFillGood
+        TFTPalette::Black,                                                      // batteryFillMedium
+        TFTPalette::Black,                                                      // batteryFillBad
+        true,                                                                   // fullFrameInvert
+        true,                                                                   // visible
+        TFTPalette::Black,                                                      // canvasBg
+        TFTPalette::MeshtasticGreen,                                            // headerSeparator
+        TFTPalette::DarkGray,                                                   // bubbleMineTop
+        TFTPalette::Black,                                                      // bubbleMineBottom
+        TFTPalette::DarkGray,                                                   // bubbleTheirsTop
+        TFTPalette::Black,                                                      // bubbleTheirsBottom
+        TFTPalette::mix565(TFTPalette::MeshtasticGreen, TFTPalette::White, 64), // headerGradientTop
+        TFTPalette::MeshtasticGreen,                                            // headerGradientBottom
     },
 
     // Classic Red (ThemeID::ClassicRed = 7) classic monochrome
@@ -333,11 +390,19 @@ static const TFTThemeDef kThemes[] = {
             {TFTPalette::ClassicRed, TFTPalette::Black}, // NavigationBar
             {TFTPalette::ClassicRed, TFTPalette::Black}, // NavigationArrow
         },
-        TFTPalette::Black, // batteryFillGood
-        TFTPalette::Black, // batteryFillMedium
-        TFTPalette::Black, // batteryFillBad
-        true,              // fullFrameInvert
-        true,              // visible
+        TFTPalette::Black,                                                 // batteryFillGood
+        TFTPalette::Black,                                                 // batteryFillMedium
+        TFTPalette::Black,                                                 // batteryFillBad
+        true,                                                              // fullFrameInvert
+        true,                                                              // visible
+        TFTPalette::Black,                                                 // canvasBg
+        TFTPalette::ClassicRed,                                            // headerSeparator
+        TFTPalette::DarkGray,                                              // bubbleMineTop
+        TFTPalette::Black,                                                 // bubbleMineBottom
+        TFTPalette::DarkGray,                                              // bubbleTheirsTop
+        TFTPalette::Black,                                                 // bubbleTheirsBottom
+        TFTPalette::mix565(TFTPalette::ClassicRed, TFTPalette::White, 64), // headerGradientTop
+        TFTPalette::ClassicRed,                                            // headerGradientBottom
     },
 
     // Monochrome White (ThemeID::MonochromeWhite = 8) classic monochrome
@@ -362,11 +427,19 @@ static const TFTThemeDef kThemes[] = {
             {TFTPalette::White, TFTPalette::Black}, // NavigationBar
             {TFTPalette::White, TFTPalette::Black}, // NavigationArrow
         },
-        TFTPalette::Black, // batteryFillGood
-        TFTPalette::Black, // batteryFillMedium
-        TFTPalette::Black, // batteryFillBad
-        true,              // fullFrameInvert
-        true,              // visible
+        TFTPalette::Black,     // batteryFillGood
+        TFTPalette::Black,     // batteryFillMedium
+        TFTPalette::Black,     // batteryFillBad
+        true,                  // fullFrameInvert
+        true,                  // visible
+        TFTPalette::Black,     // canvasBg
+        TFTPalette::White,     // headerSeparator
+        TFTPalette::DarkGray,  // bubbleMineTop
+        TFTPalette::Black,     // bubbleMineBottom
+        TFTPalette::DarkGray,  // bubbleTheirsTop
+        TFTPalette::Black,     // bubbleTheirsBottom
+        TFTPalette::White,     // headerGradientTop
+        TFTPalette::LightGray, // headerGradientBottom
     },
 };
 
@@ -429,6 +502,7 @@ static inline void appendColorRegion(int16_t x, int16_t y, int16_t width, int16_
         colorRegions[colorRegionCount].enabled = false;
     }
     colorRegions[MAX_TFT_COLOR_REGIONS - 1].enabled = false;
+    colorRegionGeneration++;
 
     if (tftColorRegionAddedHook)
         tftColorRegionAddedHook(x, y, width, height, onColorBe, offColorBe);
@@ -559,6 +633,52 @@ uint16_t getThemeBodyFg()
     return kThemes[resolveThemeIndex()].roles[static_cast<size_t>(TFTColorRole::FrameMono)].offColor;
 #else
     return TFTPalette::White;
+#endif
+}
+
+uint16_t getThemeCanvasBg()
+{
+#if GRAPHICS_TFT_COLORING_ENABLED
+    return kThemes[resolveThemeIndex()].canvasBg;
+#else
+    return TFTPalette::Black;
+#endif
+}
+
+uint16_t getThemeHeaderSeparator()
+{
+#if GRAPHICS_TFT_COLORING_ENABLED
+    return kThemes[resolveThemeIndex()].headerSeparator;
+#else
+    return TFTPalette::White;
+#endif
+}
+
+void getThemeBubbleGradient(bool mine, uint16_t &top, uint16_t &bottom)
+{
+#if GRAPHICS_TFT_COLORING_ENABLED
+    const TFTThemeDef &theme = kThemes[resolveThemeIndex()];
+    top = mine ? theme.bubbleMineTop : theme.bubbleTheirsTop;
+    bottom = mine ? theme.bubbleMineBottom : theme.bubbleTheirsBottom;
+#else
+    top = bottom = mine ? TFTPalette::SkyBlue : TFTPalette::DarkGray;
+#endif
+}
+
+void getThemeHeaderGradient(uint16_t &top, uint16_t &bottom)
+{
+#if GRAPHICS_TFT_COLORING_ENABLED
+#ifdef TFT_HEADER_BG_COLOR_OVERRIDE
+    // A variant's fixed header colour wins, as it does for getThemeHeaderBg().
+    top = TFTPalette::mix565(TFT_HEADER_BG_COLOR_OVERRIDE, TFTPalette::White, 64);
+    bottom = TFT_HEADER_BG_COLOR_OVERRIDE;
+#else
+    const TFTThemeDef &theme = kThemes[resolveThemeIndex()];
+    top = theme.headerGradientTop;
+    bottom = theme.headerGradientBottom;
+#endif
+#else
+    top = bottom = TFTPalette::DarkGray;
 #endif
 }
 
@@ -797,6 +917,11 @@ uint8_t getTFTColorRegionCount()
 #endif
 }
 
+uint32_t getTFTColorRegionGeneration()
+{
+    return colorRegionGeneration;
+}
+
 void clearTFTColorRegions()
 {
     for (uint8_t i = 0; i < colorRegionCount; i++) {
@@ -806,6 +931,7 @@ void clearTFTColorRegions()
         colorRegions[colorRegionCount].enabled = false;
     }
     colorRegionCount = 0;
+    colorRegionGeneration++;
 }
 
 // Per-row culling fast path (see TFTColorRegions.h / resolveTFTColorPixelRow()).

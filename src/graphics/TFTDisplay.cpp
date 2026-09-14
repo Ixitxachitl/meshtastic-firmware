@@ -1809,8 +1809,15 @@ static inline void nativeWriteMaskBit(uint8_t *mask, uint16_t width, int32_t x, 
 void TFTDisplay::writeNativePixel(int16_t x, int16_t y)
 {
     const bool lit = nativeMaskBit(buffer, displayWidth, x, y);
-    const uint16_t be =
-        penActive ? (lit ? penOnBe : penOffBe) : graphics::resolveTFTColorPixel(x, y, lit, defaultOnBe, defaultOffBe);
+    uint16_t be;
+    if (penActive) {
+        be = lit ? penOnBe : penOffBe;
+    } else {
+        nativeBeginRow(y);
+        be = onCanvas(lit, graphics::resolveTFTColorPixelRow(x, lit, defaultOnBe, defaultOffBe));
+    }
+    nativeClean = false;
+    markNativeRowDirty(y);
     nativeWriteMaskBit(explicitBits, displayWidth, x, y, penActive);
     rgbPixels[(size_t)y * displayWidth + x] = be;
 }
@@ -1858,13 +1865,17 @@ void TFTDisplay::drawHorizontalLine(int16_t x, int16_t y, int16_t length)
     const int32_t x1 = ((int32_t)x + length) > displayWidth ? displayWidth : ((int32_t)x + length);
     if (x0 >= x1)
         return;
+    nativeClean = false;
+    markNativeRowDirty(y);
     uint16_t *const row = rgbPixels + (size_t)y * displayWidth;
     if (!penActive)
-        graphics::beginTFTColorRow(y);
+        nativeBeginRow(y);
     for (int32_t xx = x0; xx < x1; xx++) {
         const bool lit = nativeMaskBit(buffer, displayWidth, xx, y);
-        row[xx] = penActive ? (lit ? penOnBe : penOffBe)
-                            : graphics::resolveTFTColorPixelRow(static_cast<int16_t>(xx), lit, defaultOnBe, defaultOffBe);
+        row[xx] =
+            penActive
+                ? (lit ? penOnBe : penOffBe)
+                : onCanvas(lit, graphics::resolveTFTColorPixelRow(static_cast<int16_t>(xx), lit, defaultOnBe, defaultOffBe));
         nativeWriteMaskBit(explicitBits, displayWidth, xx, y, penActive);
     }
 }
@@ -1886,21 +1897,44 @@ void TFTDisplay::clear(void)
     penActive = false;
     if (!rgbPixels)
         return;
+    if (clearCovered)
+        return; // every pixel is about to be covered anyway (see setClearCovered)
     // Refreshed here, at the start of every frame, so a theme change applies to the next one.
-    defaultOnBe = nativeSwap565(getThemeDefaultOnColor());
-    defaultOffBe = nativeSwap565(getThemeDefaultOffColor());
+    const uint16_t prevOffBe = defaultOffBe;
+    refreshNativeThemeColors();
+    // A frame clears twice - OLEDDisplayUi::tick(), then the frame's own clearForFrame() - with nothing drawn
+    // in between. Skip the repeat when nothing it resolves against has changed.
+    const uint32_t gen = graphics::getTFTColorRegionGeneration();
+    if (nativeClean && gen == cleanRegionGeneration && defaultOffBe == prevOffBe)
+        return;
     memset(explicitBits, 0, displayBufferSize);
+    markNativeRowsDirty(0, displayHeight);
     for (uint16_t y = 0; y < displayHeight; y++) {
         uint16_t *const row = rgbPixels + (size_t)y * displayWidth;
-        graphics::beginTFTColorRow(static_cast<int16_t>(y));
+        nativeBeginRow(static_cast<int16_t>(y));
         if (graphics::tftColorRowCount == 0) {
             for (uint16_t x = 0; x < displayWidth; x++)
                 row[x] = defaultOffBe;
         } else {
             for (uint16_t x = 0; x < displayWidth; x++)
-                row[x] = graphics::resolveTFTColorPixelRow(static_cast<int16_t>(x), false, defaultOnBe, defaultOffBe);
+                row[x] =
+                    onCanvas(false, graphics::resolveTFTColorPixelRow(static_cast<int16_t>(x), false, defaultOnBe, defaultOffBe));
         }
     }
+    nativeClean = true;
+    cleanRegionGeneration = gen;
+}
+
+// beginTFTColorRow() walks every region. Per-pixel drawing hits the same row again and again, so only redo it
+// when the row or the registered regions have changed.
+void TFTDisplay::nativeBeginRow(int16_t y)
+{
+    const uint32_t gen = graphics::getTFTColorRegionGeneration();
+    if (y == cachedRowY && gen == cachedRowGeneration)
+        return;
+    graphics::beginTFTColorRow(y);
+    cachedRowY = y;
+    cachedRowGeneration = gen;
 }
 
 // Text and fast images. Same walk as the library - columns of rasterHeight bytes, byte k covering
@@ -1941,10 +1975,12 @@ void TFTDisplay::drawInternal(int16_t xMove, int16_t yMove, int16_t width, int16
     }
 }
 
-void TFTDisplay::drawRGB565(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *pixels)
+void TFTDisplay::drawRGB565(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *pixels, bool zeroIsTransparent)
 {
     if (!rgbPixels || !pixels)
         return;
+    nativeClean = false;
+    markNativeRowsDirty(y < 0 ? 0 : y, ((int32_t)y + h) > displayHeight ? displayHeight : ((int32_t)y + h));
     for (int32_t r = 0; r < h; r++) {
         const int32_t py = (int32_t)y + r;
         if (py < 0 || py >= displayHeight)
@@ -1953,27 +1989,66 @@ void TFTDisplay::drawRGB565(int16_t x, int16_t y, int16_t w, int16_t h, const ui
             const int32_t px = (int32_t)x + c;
             if (px < 0 || px >= displayWidth)
                 continue;
-            rgbPixels[(size_t)py * displayWidth + px] = nativeSwap565(pixels[(size_t)r * w + c]);
+            const uint16_t color = pixels[(size_t)r * w + c];
+            if (zeroIsTransparent && color == 0)
+                continue;
+            rgbPixels[(size_t)py * displayWidth + px] = nativeSwap565(color);
             nativeWriteMaskBit(buffer, displayWidth, px, py, true);
             nativeWriteMaskBit(explicitBits, displayWidth, px, py, true);
         }
     }
 }
 
-void TFTDisplay::repaintRegion(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t onColorBe, uint16_t offColorBe)
+void TFTDisplay::fillRect565(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color)
 {
     if (!rgbPixels)
         return;
+    nativeClean = false;
+    const uint16_t be = nativeSwap565(color);
     const int32_t x0 = x < 0 ? 0 : x;
     const int32_t y0 = y < 0 ? 0 : y;
     const int32_t x1 = ((int32_t)x + w) > displayWidth ? displayWidth : ((int32_t)x + w);
     const int32_t y1 = ((int32_t)y + h) > displayHeight ? displayHeight : ((int32_t)y + h);
+    markNativeRowsDirty(y0, y1);
+    for (int32_t py = y0; py < y1; py++) {
+        uint16_t *const row = rgbPixels + (size_t)py * displayWidth;
+        for (int32_t px = x0; px < x1; px++) {
+            row[px] = be;
+            nativeWriteMaskBit(buffer, displayWidth, px, py, false);
+            nativeWriteMaskBit(explicitBits, displayWidth, px, py, true);
+        }
+    }
+}
+
+// Default on/off colours plus the canvas swap, from the active theme.
+void TFTDisplay::refreshNativeThemeColors()
+{
+    defaultOnBe = nativeSwap565(getThemeDefaultOnColor());
+    legacyBgBe = nativeSwap565(getThemeDefaultOffColor());
+#if GRAPHICS_TFT_COLORING_ENABLED
+    canvasBe = nativeSwap565(graphics::getThemeCanvasBg());
+#else
+    canvasBe = legacyBgBe;
+#endif
+    defaultOffBe = canvasBe;
+}
+
+void TFTDisplay::repaintRegion(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t onColorBe, uint16_t offColorBe)
+{
+    if (!rgbPixels)
+        return;
+    nativeClean = false;
+    const int32_t x0 = x < 0 ? 0 : x;
+    const int32_t y0 = y < 0 ? 0 : y;
+    const int32_t x1 = ((int32_t)x + w) > displayWidth ? displayWidth : ((int32_t)x + w);
+    const int32_t y1 = ((int32_t)y + h) > displayHeight ? displayHeight : ((int32_t)y + h);
+    markNativeRowsDirty(y0, y1);
     for (int32_t py = y0; py < y1; py++) {
         uint16_t *const row = rgbPixels + (size_t)py * displayWidth;
         for (int32_t px = x0; px < x1; px++) {
             if (nativeMaskBit(explicitBits, displayWidth, px, py))
                 continue;
-            row[px] = nativeMaskBit(buffer, displayWidth, px, py) ? onColorBe : offColorBe;
+            row[px] = nativeMaskBit(buffer, displayWidth, px, py) ? onColorBe : onCanvas(false, offColorBe);
         }
     }
 }
@@ -1995,12 +2070,17 @@ void TFTDisplay::display(bool fromBlank)
 
     if (!rgbPixels || !repaintChunkBuffer)
         return;
+    static_assert(kFullRepaintChunkRows == kNativeBandRows, "dirty bands must line up with push bands");
     const bool pushAll = fromBlank || forceNativePush;
     forceNativePush = false;
 
     beginPixelBatch();
     uint8_t chunkSlot = 0;
     for (uint32_t yStart = 0; yStart < displayHeight; yStart += kFullRepaintChunkRows) {
+        const uint32_t band = yStart / kFullRepaintChunkRows;
+        // Nothing drawn into this band since the last push, so it can't differ: skip the scan.
+        if (!pushAll && band < kNativeMaxBands && !(nativeDirtyBands[band >> 5] & (1u << (band & 31))))
+            continue;
         const uint32_t rows = min<uint32_t>(kFullRepaintChunkRows, displayHeight - yStart);
         int32_t first = pushAll ? 0 : (int32_t)displayWidth;
         int32_t last = pushAll ? (int32_t)displayWidth - 1 : -1;
@@ -2038,6 +2118,8 @@ void TFTDisplay::display(bool fromBlank)
         pushPixelBlock(first, yStart, spanW, rows, chunk);
     }
     endPixelBatch();
+    for (auto &word : nativeDirtyBands)
+        word = 0;
     graphics::clearTFTColorRegions();
 }
 #endif // BASEUI_NATIVE_RGB565
@@ -2978,8 +3060,7 @@ bool TFTDisplay::connect()
             LOG_ERROR("Not enough memory for the native RGB565 frame buffers");
             return false;
         }
-        defaultOnBe = nativeSwap565(getThemeDefaultOnColor());
-        defaultOffBe = nativeSwap565(getThemeDefaultOffColor());
+        refreshNativeThemeColors();
         nativeInstance = this;
         graphics::tftColorRegionAddedHook = onColorRegionAdded;
         forceNativePush = true;
