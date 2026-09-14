@@ -2419,7 +2419,7 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
                     } else {
                         display->setColor(WHITE);
                     }
-                    display->drawXbm(iconX, iconY, key_symbol_width, key_symbol_height, key_symbol);
+                    graphics::drawScaledXbm(display, iconX, iconY, key_symbol_width, key_symbol_height, key_symbol, 1);
                 }
             }
         }

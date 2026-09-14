@@ -141,7 +141,39 @@ void fillRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int1
 // ***********************
 // * Scaled bitmap blit  *
 // ***********************
-void drawScaledXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm, int scale)
+#if GRAPHICS_HAS_RGB565_IMAGES
+// Draws the colour version of `xbm` into destW x destH, if images.h has one. White pixels take the current draw colour, so
+// theme regions and the nav bar's inverted chip still colour them; any other colour is drawn exactly as painted.
+static bool drawRGB565Version(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm, int16_t destW,
+                              int16_t destH, int16_t clipLeft = INT16_MIN, int16_t clipRight = INT16_MAX)
+{
+    const RGB565Image *img = findRGB565Image(xbm, w, h);
+    if (!img || destW <= 0 || destH <= 0)
+        return false;
+    TFTDisplay *const panel = static_cast<TFTDisplay *>(display);
+    const int16_t maskRowBytes = (img->width + 7) / 8;
+    for (int16_t dy = 0; dy < destH; ++dy) {
+        const int16_t sy = dy * img->height / destH;
+        for (int16_t dx = 0; dx < destW; ++dx) {
+            const int16_t px = x + dx;
+            if (px < clipLeft || px >= clipRight)
+                continue;
+            const int16_t sx = dx * img->width / destW;
+            if (!(pgm_read_byte(img->mask + sy * maskRowBytes + (sx >> 3)) & (1U << (sx & 7)))) // XBM order, LSB first
+                continue;
+            const uint16_t color = img->pixels[sy * img->width + sx];
+            if (color == 0xFFFF)
+                display->setPixel(px, y + dy);
+            else
+                panel->drawRGB565(px, y + dy, 1, 1, &color);
+        }
+    }
+    return true;
+}
+#endif
+
+// 1-bit only, for icons whose colour version would have to shrink to fit.
+static void drawScaledXbmMono(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm, int scale)
 {
     if (scale <= 1) {
         display->drawXbm(x, y, w, h, xbm);
@@ -160,11 +192,25 @@ void drawScaledXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_
     }
 }
 
+void drawScaledXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm, int scale)
+{
+#if GRAPHICS_HAS_RGB565_IMAGES
+    const int s = scale < 1 ? 1 : scale;
+    if (drawRGB565Version(display, x, y, w, h, xbm, w * s, h * s))
+        return;
+#endif
+    drawScaledXbmMono(display, x, y, w, h, xbm, scale);
+}
+
 void drawStretchedXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm, int16_t destW,
                       int16_t destH)
 {
     if (w <= 0 || h <= 0 || destW <= 0 || destH <= 0)
         return;
+#if GRAPHICS_HAS_RGB565_IMAGES
+    if (drawRGB565Version(display, x, y, w, h, xbm, destW, destH))
+        return;
+#endif
 
     const int16_t bytesPerRow = (w + 7) / 8;
     for (int16_t dy = 0; dy < destH; ++dy) {
@@ -183,6 +229,10 @@ void drawStretchedXbmClipped(OLEDDisplay *display, int16_t x, int16_t y, int16_t
 {
     if (w <= 0 || h <= 0 || destW <= 0 || destH <= 0)
         return;
+#if GRAPHICS_HAS_RGB565_IMAGES
+    if (drawRGB565Version(display, x, y, w, h, xbm, destW, destH, clipLeft, clipRight))
+        return;
+#endif
 
     const int16_t bytesPerRow = (w + 7) / 8;
     for (int16_t dy = 0; dy < destH; ++dy) {
@@ -385,7 +435,17 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
     if (usbPowered && !isCharging) { // This is a basic check to determine USB Powered is flagged but not charging
         batteryX += 1;
         batteryY += 2;
-        if (currentResolution == ScreenResolution::High) {
+#if GRAPHICS_HAS_RGB565_IMAGES
+        // imgUSB's colour version drawn at its own 20x16; imgUSB_HighResolution's would have to shrink to fit the header.
+        const bool colourUsb = currentResolution == ScreenResolution::High && findRGB565Image(imgUSB, 10, 8);
+#else
+        constexpr bool colourUsb = false;
+#endif
+        if (colourUsb) {
+            batteryY -= 2; // 16 px tall, so start higher to stay clear of the separator row
+            drawScaledXbm(display, batteryX, batteryY, 10, 8, imgUSB, 2 * iconScale);
+            batteryX += 20 * iconScale + 1; // Icon + 1 pixel
+        } else if (currentResolution == ScreenResolution::High) {
             drawScaledXbm(display, batteryX, batteryY, 19, 12, imgUSB_HighResolution, iconScale);
             batteryX += 19 * iconScale + 1; // Icon + 1 pixel
         } else {
@@ -396,10 +456,10 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
         if (useHorizontalBattery) {
             batteryX += 1;
             batteryY += 2;
-            drawScaledXbm(display, batteryX, batteryY, 9, 13, batteryBitmap_h_bottom, iconScale);
-            drawScaledXbm(display, batteryX + 9 * iconScale, batteryY, 9, 13, batteryBitmap_h_top, iconScale);
+            drawScaledXbmMono(display, batteryX, batteryY, 9, 13, batteryBitmap_h_bottom, iconScale);
+            drawScaledXbmMono(display, batteryX + 9 * iconScale, batteryY, 9, 13, batteryBitmap_h_top, iconScale);
             if (isCharging && isBoltVisibleShared)
-                drawScaledXbm(display, batteryX + 4 * iconScale, batteryY, 9, 13, lightning_bolt_h, iconScale);
+                drawScaledXbmMono(display, batteryX + 4 * iconScale, batteryY, 9, 13, lightning_bolt_h, iconScale);
             else {
                 // Caps on the open ends of the two half-bitmaps; one bitmap pixel thick.
                 display->fillRect(batteryX + 5 * iconScale, batteryY, 6 * iconScale, iconScale);

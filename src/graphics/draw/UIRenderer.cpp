@@ -554,7 +554,7 @@ void UIRenderer::drawGps(OLEDDisplay *display, int16_t x, int16_t y, const mesht
         const int iconY = y + (iconSlack > 0 ? iconSlack / 2 : 0);
         NodeListRenderer::drawScaledXBitmap16x16(x, iconY, imgGPS_width, imgGPS_height, imgGPS, display);
     } else {
-        display->drawXbm(x + 1, y + 3, imgGPS_width, imgGPS_height, imgGPS);
+        drawScaledXbm(display, x + 1, y + 3, imgGPS_width, imgGPS_height, imgGPS, 1); // scale 1: colour version when there is one
     }
 
     display->drawString(x + textOffset, y, textString);
@@ -977,7 +977,7 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
                                                                    xeddsa_shield_height, xeddsa_shield, display);
                 username_buffer = (xeddsa_shield_width * 2 * BASEUI_ICON_SCALE) + 4;
             } else {
-                display->drawXbm(bodyX, row(line) + 3, xeddsa_shield_width, xeddsa_shield_height, xeddsa_shield);
+                drawScaledXbm(display, bodyX, row(line) + 3, xeddsa_shield_width, xeddsa_shield_height, xeddsa_shield, 1);
                 username_buffer = xeddsa_shield_width + 2;
             }
         }

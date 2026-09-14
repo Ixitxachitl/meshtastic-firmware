@@ -1,5 +1,14 @@
 #pragma once
 
+// Colour builds use images_high.h when it's there: the RGB565 Image Editor's export of these same 1-bit images plus
+// colour versions of many of them (see findRGB565Image()). Other builds, and images without a colour version, stay 1-bit.
+#include "configuration.h"
+#if BASEUI_NATIVE_RGB565 && __has_include("images_high.h")
+#include "images_high.h"
+#define GRAPHICS_HAS_RGB565_IMAGES 1
+#else
+#define GRAPHICS_HAS_RGB565_IMAGES 0
+
 #define SATELLITE_IMAGE_WIDTH 16
 #define SATELLITE_IMAGE_HEIGHT 15
 const uint8_t SATELLITE_IMAGE[] PROGMEM = {0x00, 0x08, 0x00, 0x1C, 0x00, 0x0E, 0x20, 0x07, 0x70, 0x02,
@@ -380,3 +389,4 @@ static const uint8_t chirpy_run[] PROGMEM = {0x40, 0x00, 0x20, 0x00, 0x40, 0x00,
 #include "img/icon.xbm"
 #endif
 static_assert(sizeof(icon_bits) >= 0, "Silence unused variable warning");
+#endif // BASEUI_NATIVE_RGB565 && images_high.h
