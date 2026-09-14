@@ -20,8 +20,10 @@
 #if defined(SENSECAP_INDICATOR)
 #include "graphics/niche/Map/MapTileSourceIndicator.h"
 #endif
-#if BASEUI_MAP_PNG_TILES
+#if BASEUI_NATIVE_RGB565
 #include "graphics/TFTDisplay.h"
+#endif
+#if BASEUI_MAP_PNG_TILES
 #include "graphics/niche/Map/MapPngTiles.h"
 #include <esp_heap_caps.h>
 #endif
@@ -522,13 +524,101 @@ constexpr int8_t kHaloOffsets[8][2] = {{-1, -1}, {0, -1}, {1, -1}, {-1, 0}, {1, 
 // part of the basemap (dense tile art, blank background, etc.) without depending on XOR/INVERSE
 // against whatever's underneath. Replaces the old drawn-INVERSE approach, which read fine against
 // any single background but caused overlapping elements to XOR-cancel back to background.
-void drawHaloXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm)
+// Drawn at destW x destH, with the halo scaled to match (one halo pixel per source pixel of stretch).
+#if !BASEUI_NATIVE_RGB565
+void drawHaloXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm, int16_t destW,
+                 int16_t destH)
 {
+    const int16_t halo = std::max<int16_t>(1, destW / w);
     display->setColor(WHITE);
     for (auto &o : kHaloOffsets)
-        graphics::drawScaledXbm(display, x + o[0] * BASEUI_ICON_SCALE, y + o[1] * BASEUI_ICON_SCALE, w, h, xbm);
+        graphics::drawStretchedXbm(display, x + o[0] * halo, y + o[1] * halo, w, h, xbm, destW, destH);
     display->setColor(BLACK);
-    graphics::drawScaledXbm(display, x, y, w, h, xbm);
+    graphics::drawStretchedXbm(display, x, y, w, h, xbm, destW, destH);
+}
+#endif
+
+#if BASEUI_NATIVE_RGB565
+// Map pins, drawn exactly as painted: a black-edged white pin with a red (node) or green (waypoint) ring. Both share
+// one mask, which also covers the black edge and fill.
+constexpr int16_t kMapPinWidth = 16;
+constexpr int16_t kMapPinHeight = 16;
+const uint16_t nodeMarker_rgb565[] PROGMEM = {
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0xF800, 0xF800, 0x0000, 0x0000, 0xFFFF,
+    0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0x0000, 0x0000, 0xF800, 0xF800, 0xF800, 0xF800, 0x0000,
+    0x0000, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0x0000, 0xF800, 0xF800, 0x0000, 0x0000, 0xF800,
+    0xF800, 0x0000, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0x0000, 0xF800, 0xF800, 0x0000, 0x0000,
+    0xF800, 0xF800, 0x0000, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0x0000, 0x0000, 0xF800, 0xF800,
+    0xF800, 0xF800, 0x0000, 0x0000, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0x0000, 0x0000,
+    0xF800, 0xF800, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF,
+    0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0xFFFF, 0xFFFF, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000,
+};
+const uint16_t waypointMarker_rgb565[] PROGMEM = {
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x07E0, 0x07E0, 0x0000, 0x0000, 0xFFFF,
+    0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0x0000, 0x0000, 0x07E0, 0x07E0, 0x07E0, 0x07E0, 0x0000,
+    0x0000, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0x0000, 0x07E0, 0x07E0, 0x0000, 0x0000, 0x07E0,
+    0x07E0, 0x0000, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0x0000, 0x07E0, 0x07E0, 0x0000, 0x0000,
+    0x07E0, 0x07E0, 0x0000, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0x0000, 0x0000, 0x07E0, 0x07E0,
+    0x07E0, 0x07E0, 0x0000, 0x0000, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0x0000, 0x0000,
+    0x07E0, 0x07E0, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF,
+    0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0xFFFF, 0xFFFF, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000,
+};
+const uint8_t kMapPinMask[] PROGMEM = {
+    0xE0, 0x07, 0xF0, 0x0F, 0xF8, 0x1F, 0xFC, 0x3F, 0xFC, 0x3F, 0xFC, 0x3F, 0xFC, 0x3F, 0xFC, 0x3F,
+    0xFC, 0x3F, 0xF8, 0x1F, 0xF0, 0x0F, 0xE0, 0x07, 0xE0, 0x07, 0xC0, 0x03, 0xC0, 0x03, 0x80, 0x01,
+};
+
+// The pin's tip (bottom centre) sits on the position; each row goes out as runs of masked pixels.
+void drawMapPin(OLEDDisplay *display, int16_t tipX, int16_t tipY, const uint16_t *pixels)
+{
+    TFTDisplay *const panel = static_cast<TFTDisplay *>(display);
+    const int16_t left = tipX - kMapPinWidth / 2;
+    const int16_t top = tipY - (kMapPinHeight - 1);
+    const int16_t maskRowBytes = (kMapPinWidth + 7) / 8;
+    for (int16_t row = 0; row < kMapPinHeight; ++row) {
+        const uint8_t *maskRow = kMapPinMask + row * maskRowBytes;
+        int16_t col = 0;
+        while (col < kMapPinWidth) {
+            while (col < kMapPinWidth && !(pgm_read_byte(maskRow + (col >> 3)) & (1U << (col & 7))))
+                ++col;
+            const int16_t runStart = col;
+            while (col < kMapPinWidth && (pgm_read_byte(maskRow + (col >> 3)) & (1U << (col & 7))))
+                ++col;
+            if (col > runStart)
+                panel->drawRGB565(left + runStart, top + row, col - runStart, 1, pixels + row * kMapPinWidth + runStart);
+        }
+    }
+}
+#endif
+
+// On-screen size of a node/waypoint marker: the pin on colour builds, else the 1-bit ring at the icon scale.
+int16_t mapMarkerSize()
+{
+#if BASEUI_NATIVE_RGB565
+    return kMapPinWidth;
+#else
+    return 8 * BASEUI_ICON_SCALE;
+#endif
 }
 
 void drawHaloString(OLEDDisplay *display, int16_t x, int16_t y, const char *text)
@@ -540,16 +630,15 @@ void drawHaloString(OLEDDisplay *display, int16_t x, int16_t y, const char *text
     display->drawString(x, y, text);
 }
 
-#if GRAPHICS_TFT_COLORING_ENABLED
+#if GRAPHICS_TFT_COLORING_ENABLED && !BASEUI_NATIVE_RGB565
 // Colour screens tint only the 2x2 dot at the centre of each node marker red. Everything else -
 // the marker ring, its halo, and the name labels - is left exactly as the monochrome drawing above
 // produces it (black glyph, white halo).
 //
-// icon_map_node is a ring with a 2x2 centre dot at columns/rows 3-4 of its 8x8 box, so drawing the
-// icon at (mx - 4, my - 4) puts that dot at (mx - 1, my - 1)..(mx, my). drawHaloXbm renders the
-// glyph itself with BLACK, i.e. as *cleared* pixels, so the region maps unset -> red to catch the
-// dot. set -> white matches what TFTDisplay already paints set pixels with, so the surrounding halo
-// is unaffected. The box is only 2x2, so there is no room for basemap content to be tinted with it.
+// icon_map_node is a ring whose centre dot is the middle quarter of its box (2x2 of 8x8, 4x4 of the 16x16 colour
+// version), so a marker of size s centred on (mx, my) has its dot at (mx - s/8, my - s/8), s/4 across. drawHaloXbm
+// renders the glyph itself with BLACK, i.e. as *cleared* pixels, so the region maps unset -> red to catch the dot.
+// set -> white matches what TFTDisplay already paints set pixels with, so the surrounding halo is unaffected.
 //
 // colorRegions[] is a fixed global pool shared with the header, and it silently evicts the oldest
 // entry once full, so marker tints get everything the pool has left after a reserve for this
@@ -563,12 +652,12 @@ constexpr int kChromeColorRegionReserve = 32;
 constexpr int kMaxNodeColorRegions =
     (MAX_TFT_COLOR_REGIONS > kChromeColorRegionReserve + 24) ? (int)MAX_TFT_COLOR_REGIONS - kChromeColorRegionReserve : 24;
 
-void tintMarkerCenter(int16_t centerX, int16_t centerY, int &budget, uint16_t centerColor = TFTPalette::Red)
+void tintMarkerCenter(int16_t centerX, int16_t centerY, int16_t markerSize, int &budget, uint16_t centerColor = TFTPalette::Red)
 {
     if (budget <= 0)
         return;
-    registerTFTColorRegionDirect(centerX - BASEUI_ICON_SCALE, centerY - BASEUI_ICON_SCALE, 2 * BASEUI_ICON_SCALE,
-                                 2 * BASEUI_ICON_SCALE, TFTPalette::White, centerColor);
+    const int16_t dot = markerSize / 4;
+    registerTFTColorRegionDirect(centerX - markerSize / 8, centerY - markerSize / 8, dot, dot, TFTPalette::White, centerColor);
     budget--;
 }
 #endif
@@ -925,7 +1014,13 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     // nearby already-drawn marker positions below - not needed for correctness anymore (halo draws
     // don't cancel out like XOR did), but it still avoids wasted draws and visual clutter when many
     // nodes collapse onto nearly the same screen position at low zoom.
-    constexpr int16_t kMarkerDedupeRadius = 4;
+    const int16_t markerSize = mapMarkerSize();
+    const int16_t markerDedupeRadius = markerSize / 2;
+#if BASEUI_NATIVE_RGB565
+    const int16_t markerHeadDy = -(markerSize / 2 + 1); // pins stand above their position; labels sit by the head
+#else
+    constexpr int16_t markerHeadDy = 0;
+#endif
     constexpr int kMaxDedupeTracked = 64;
     int16_t drawnMx[kMaxDedupeTracked];
     int16_t drawnMy[kMaxDedupeTracked];
@@ -941,7 +1036,7 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     int16_t labelH[kMaxLabelsTracked];
     int labelCount = 0;
 
-#if GRAPHICS_TFT_COLORING_ENABLED
+#if GRAPHICS_TFT_COLORING_ENABLED && !BASEUI_NATIVE_RGB565
     // Waypoints draw after the nodes, so a busy mesh would spend the whole budget first and leave them black-centred,
     // indistinguishable from nodes. Reserve them a slice up front.
 #if MESHTASTIC_EXCLUDE_WAYPOINT
@@ -1004,7 +1099,7 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
 
         bool tooClose = false;
         for (int d = 0; d < drawnCount; d++) {
-            if (abs(drawnMx[d] - mx) <= kMarkerDedupeRadius && abs(drawnMy[d] - my) <= kMarkerDedupeRadius) {
+            if (abs(drawnMx[d] - mx) <= markerDedupeRadius && abs(drawnMy[d] - my) <= markerDedupeRadius) {
                 tooClose = true;
                 break;
             }
@@ -1017,16 +1112,20 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
             drawnCount++;
         }
 
-        drawHaloXbm(display, mx - 4 * BASEUI_ICON_SCALE, my - 4 * BASEUI_ICON_SCALE, 8, 8, icon_map_node);
+#if BASEUI_NATIVE_RGB565
+        drawMapPin(display, mx, my, nodeMarker_rgb565);
+#else
+        drawHaloXbm(display, mx - markerSize / 2, my - markerSize / 2, 8, 8, icon_map_node, markerSize, markerSize);
 #if GRAPHICS_TFT_COLORING_ENABLED
-        tintMarkerCenter(mx, my, nodeColorRegions);
+        tintMarkerCenter(mx, my, markerSize, nodeColorRegions);
+#endif
 #endif
 
         if (node->short_name[0] != '\0')
-            placeLabel(mx + 5 * BASEUI_ICON_SCALE, my - labelHeight / 2, node->short_name);
+            placeLabel(mx + markerSize / 2 + 1, my + markerHeadDy - labelHeight / 2, node->short_name);
     }
 
-    // Stored waypoints: the node ring with a green centre, after the nodes and before the self crosshair. The same
+    // Stored waypoints: the node marker in green, after the nodes and before the self crosshair. The same
     // non-expired filter as the waypoint screen, and not deduped against nodes - a waypoint on a node still shows.
 #if !MESHTASTIC_EXCLUDE_WAYPOINT
     for (const StoredWaypoint &entry : waypointStore.getWaypoints()) {
@@ -1045,12 +1144,16 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         if (wx < x - 2 || wx > x + viewWidth + 1 || wy < y - 2 || wy > y + viewHeight + 1)
             continue;
 
-        drawHaloXbm(display, wx - 4 * BASEUI_ICON_SCALE, wy - 4 * BASEUI_ICON_SCALE, 8, 8, icon_map_node);
+#if BASEUI_NATIVE_RGB565
+        drawMapPin(display, wx, wy, waypointMarker_rgb565);
+#else
+        drawHaloXbm(display, wx - markerSize / 2, wy - markerSize / 2, 8, 8, icon_map_node, markerSize, markerSize);
 #if GRAPHICS_TFT_COLORING_ENABLED
-        tintMarkerCenter(wx, wy, waypointColorRegions, TFTPalette::MeshtasticGreen);
+        tintMarkerCenter(wx, wy, markerSize, waypointColorRegions, TFTPalette::MeshtasticGreen);
+#endif
 #endif
         if (wp.name[0] != '\0')
-            placeLabel(wx + 5 * BASEUI_ICON_SCALE, wy - labelHeight / 2, wp.name);
+            placeLabel(wx + markerSize / 2 + 1, wy + markerHeadDy - labelHeight / 2, wp.name);
     }
 #endif
 
