@@ -549,6 +549,15 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #ifndef BASEUI_PANEL_VCOM_TUNING
 #define BASEUI_PANEL_VCOM_TUNING 0
 #endif
+// Default Dark's navy canvas drawn as the full-screen RGB565 image in graphics/img/background.h, where its size
+// matches the panel. Opt-in per variant; needs BASEUI_NATIVE_RGB565.
+#ifndef BASEUI_BACKGROUND_IMAGE
+#define BASEUI_BACKGROUND_IMAGE 0
+#endif
+#if BASEUI_BACKGROUND_IMAGE && !BASEUI_NATIVE_RGB565
+#undef BASEUI_BACKGROUND_IMAGE
+#define BASEUI_BACKGROUND_IMAGE 0
+#endif
 #ifndef HAS_WIRE
 #define HAS_WIRE 0
 #endif

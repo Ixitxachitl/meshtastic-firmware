@@ -1781,6 +1781,19 @@ static inline uint16_t nativeSwap565(uint16_t c)
     return static_cast<uint16_t>((c >> 8) | (c << 8));
 }
 
+#if BASEUI_BACKGROUND_IMAGE && __has_include("img/background.h")
+#include "img/background.h"
+// Stays in flash; each pixel is swapped for the panel as it is read.
+static const uint16_t kCanvasImage[] PROGMEM = BACKGROUND_RGB565_DATA;
+#endif
+
+uint16_t TFTDisplay::onCanvas(bool lit, uint16_t be, int32_t x, int32_t y) const
+{
+    if (lit || (be != legacyBgBe && be != canvasBe))
+        return be;
+    return canvasImage ? nativeSwap565(canvasImage[(size_t)y * displayWidth + x]) : canvasBe;
+}
+
 // Frame buffers live in PSRAM on ESP32; the push copies spans into the DMA-capable chunk buffers.
 static uint16_t *allocNativeFrame(size_t pixels)
 {
@@ -1814,7 +1827,7 @@ void TFTDisplay::writeNativePixel(int16_t x, int16_t y)
         be = lit ? penOnBe : penOffBe;
     } else {
         nativeBeginRow(y);
-        be = onCanvas(lit, graphics::resolveTFTColorPixelRow(x, lit, defaultOnBe, defaultOffBe));
+        be = onCanvas(lit, graphics::resolveTFTColorPixelRow(x, lit, defaultOnBe, defaultOffBe), x, y);
     }
     nativeClean = false;
     markNativeRowDirty(y);
@@ -1872,10 +1885,10 @@ void TFTDisplay::drawHorizontalLine(int16_t x, int16_t y, int16_t length)
         nativeBeginRow(y);
     for (int32_t xx = x0; xx < x1; xx++) {
         const bool lit = nativeMaskBit(buffer, displayWidth, xx, y);
-        row[xx] =
-            penActive
-                ? (lit ? penOnBe : penOffBe)
-                : onCanvas(lit, graphics::resolveTFTColorPixelRow(static_cast<int16_t>(xx), lit, defaultOnBe, defaultOffBe));
+        row[xx] = penActive
+                      ? (lit ? penOnBe : penOffBe)
+                      : onCanvas(lit, graphics::resolveTFTColorPixelRow(static_cast<int16_t>(xx), lit, defaultOnBe, defaultOffBe),
+                                 xx, y);
         nativeWriteMaskBit(explicitBits, displayWidth, xx, y, penActive);
     }
 }
@@ -1901,11 +1914,12 @@ void TFTDisplay::clear(void)
         return; // every pixel is about to be covered anyway (see setClearCovered)
     // Refreshed here, at the start of every frame, so a theme change applies to the next one.
     const uint16_t prevOffBe = defaultOffBe;
+    const uint16_t *const prevCanvasImage = canvasImage;
     refreshNativeThemeColors();
     // A frame clears twice - OLEDDisplayUi::tick(), then the frame's own clearForFrame() - with nothing drawn
     // in between. Skip the repeat when nothing it resolves against has changed.
     const uint32_t gen = graphics::getTFTColorRegionGeneration();
-    if (nativeClean && gen == cleanRegionGeneration && defaultOffBe == prevOffBe)
+    if (nativeClean && gen == cleanRegionGeneration && defaultOffBe == prevOffBe && canvasImage == prevCanvasImage)
         return;
     memset(explicitBits, 0, displayBufferSize);
     markNativeRowsDirty(0, displayHeight);
@@ -1914,11 +1928,11 @@ void TFTDisplay::clear(void)
         nativeBeginRow(static_cast<int16_t>(y));
         if (graphics::tftColorRowCount == 0) {
             for (uint16_t x = 0; x < displayWidth; x++)
-                row[x] = defaultOffBe;
+                row[x] = onCanvas(false, defaultOffBe, x, y);
         } else {
             for (uint16_t x = 0; x < displayWidth; x++)
-                row[x] =
-                    onCanvas(false, graphics::resolveTFTColorPixelRow(static_cast<int16_t>(x), false, defaultOnBe, defaultOffBe));
+                row[x] = onCanvas(
+                    false, graphics::resolveTFTColorPixelRow(static_cast<int16_t>(x), false, defaultOnBe, defaultOffBe), x, y);
         }
     }
     nativeClean = true;
@@ -2031,6 +2045,11 @@ void TFTDisplay::refreshNativeThemeColors()
     canvasBe = legacyBgBe;
 #endif
     defaultOffBe = canvasBe;
+#if BASEUI_BACKGROUND_IMAGE && __has_include("img/background.h")
+    // Default Dark's navy only; the other themes keep their own canvas colour.
+    const bool imageFits = displayWidth == BACKGROUND_WIDTH && displayHeight == BACKGROUND_HEIGHT;
+    canvasImage = (imageFits && graphics::getThemeCanvasBg() == graphics::TFTPalette::MidnightNavy) ? kCanvasImage : nullptr;
+#endif
 }
 
 void TFTDisplay::repaintRegion(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t onColorBe, uint16_t offColorBe)
@@ -2048,7 +2067,7 @@ void TFTDisplay::repaintRegion(int16_t x, int16_t y, int16_t w, int16_t h, uint1
         for (int32_t px = x0; px < x1; px++) {
             if (nativeMaskBit(explicitBits, displayWidth, px, py))
                 continue;
-            row[px] = nativeMaskBit(buffer, displayWidth, px, py) ? onColorBe : onCanvas(false, offColorBe);
+            row[px] = nativeMaskBit(buffer, displayWidth, px, py) ? onColorBe : onCanvas(false, offColorBe, px, py);
         }
     }
 }

@@ -179,9 +179,10 @@ class TFTDisplay : public OLEDDisplay
     uint16_t defaultOffBe = 0;
     uint16_t legacyBgBe = 0; // the theme's two-tone body background, which canvasBe replaces
     uint16_t canvasBe = 0;
+    const uint16_t *canvasImage = nullptr; // panel-sized, native-endian; null for a solid canvas
     void refreshNativeThemeColors();
-    // An unlit pixel in the old body background takes the canvas colour instead.
-    uint16_t onCanvas(bool lit, uint16_t be) const { return (!lit && be == legacyBgBe) ? canvasBe : be; }
+    // An unlit pixel in the body background takes the canvas instead: its image pixel where there is one.
+    uint16_t onCanvas(bool lit, uint16_t be, int32_t x, int32_t y) const;
     uint16_t penOnBe = 0;
     uint16_t penOffBe = 0;
     bool penActive = false;
