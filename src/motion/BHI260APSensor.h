@@ -7,6 +7,7 @@
 #if !defined(ARCH_STM32WL) && !MESHTASTIC_EXCLUDE_I2C && defined(HAS_BHI260AP) && __has_include(<SensorBHI260AP.hpp>)
 
 // Sensor lib
+#include "../detect/ReClockI2C.h"
 #include <SensorBHI260AP.hpp>
 #include <Wire.h>
 #include <bosch/BoschSensorDataHelper.hpp>
@@ -18,6 +19,9 @@ class BHI260APSensor : public MotionSensor
     SensorStepCounter *stepCounter;
     SensorStepDetector *stepDetector;
     uint32_t steps = 0;
+#ifdef BHI260AP_I2C_CLOCK_SPEED
+    ReClockI2C reClockI2C; // reclocks the bus for the boot-time firmware upload
+#endif
 #ifdef BHI260AP_INT
     uint32_t lastPollMs = 0;
 #endif

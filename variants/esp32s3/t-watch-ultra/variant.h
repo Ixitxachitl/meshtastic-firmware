@@ -75,6 +75,8 @@
 #define BASEUI_KEYBOARD_BOTTOM_MARGIN_PCT 10
 
 #define HAS_TOUCHSCREEN 1
+// Zoom, pan and Follow Me as buttons on the Map frame: a finger shouldn't travel to a menu for one zoom step.
+#define BASEUI_MAP_ONSCREEN_CONTROLS 1
 #define HAS_SPI_TFT 1
 #define ENABLE_TOUCH_INT 1
 #define VARIANT_TOUCHSCREEN 1
@@ -127,6 +129,8 @@
 // Measured from the gravity vector: the part's own axes already line up with the watch (X at 3
 // o'clock, Y at 12, Z out of the screen), so no remapping. Required for the wrist-tilt gesture.
 #define BHI260AP_REMAP_AXES TOP_LAYER_LEFT_CORNER
+// The RAM firmware image is re-uploaded over I2C every boot; reclock the bus for that, then hand back 100kHz.
+#define BHI260AP_I2C_CLOCK_SPEED 400000
 #undef MESHTASTIC_EXCLUDE_ACCELEROMETER
 #define SHOW_STEP_COUNTER
 

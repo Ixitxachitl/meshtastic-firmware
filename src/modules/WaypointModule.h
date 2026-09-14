@@ -18,6 +18,8 @@ class WaypointModule : public SinglePortModule, public Observable<const UIFrameE
     /// Scroll the list a text row at a time. Driven from UP/DOWN on the waypoint frame.
     static void scrollUp();
     static void scrollDown();
+    /// Touch scroll by the finger's movement since the last drag report, in pixels. The list follows the finger.
+    static void scrollByFingerDelta(float dyPx);
 #endif
 #if !MESHTASTIC_EXCLUDE_WAYPOINT
     /// Broadcast an expired copy of the waypoint so the mesh (and we) discard it.

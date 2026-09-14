@@ -525,6 +525,20 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #undef BASEUI_MAP_PNG_TILES
 #define BASEUI_MAP_PNG_TILES 0
 #endif
+// Map zoom, pan and Follow Me as buttons on the Map frame instead of Map menu entries, for touch panels; a long
+// press there then opens only the tile style picker, where there is one. Opt-in per variant; needs BASEUI_HAS_MAP.
+#ifndef BASEUI_MAP_ONSCREEN_CONTROLS
+#define BASEUI_MAP_ONSCREEN_CONTROLS 0
+#endif
+#if BASEUI_MAP_ONSCREEN_CONTROLS && !BASEUI_HAS_MAP
+#undef BASEUI_MAP_ONSCREEN_CONTROLS
+#define BASEUI_MAP_ONSCREEN_CONTROLS 0
+#endif
+// Whether a touchscreen tap with nothing under it pages to the next frame, and beeps for it. Physical buttons
+// reporting the same event keep both. Variants where frames are swiped between set this to 0.
+#ifndef BASEUI_TAP_ADVANCES_FRAME
+#define BASEUI_TAP_ADVANCES_FRAME 1
+#endif
 #ifndef HAS_WIRE
 #define HAS_WIRE 0
 #endif

@@ -75,6 +75,12 @@ void zoomOut();
 constexpr int kMinZoom = 0;
 constexpr int kMaxZoom = 18;
 
+#if BASEUI_MAP_ONSCREEN_CONTROLS
+// Zoom in, zoom out, and Pan and Follow Me toggles as buttons down the right edge. Coordinates are the panel's,
+// as the touch layer reports them. True if the tap landed on a button and was acted on.
+bool handleControlTap(int16_t tapX, int16_t tapY);
+#endif
+
 #if BASEUI_MAP_PNG_TILES
 // PNG tile styles: folders under /maps on the SD card, or one bare /map tree. Rescans the card, returns the count.
 constexpr int kMaxMapStyles = 16;

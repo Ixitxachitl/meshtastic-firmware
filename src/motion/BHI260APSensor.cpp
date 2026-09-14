@@ -53,7 +53,20 @@ bool BHI260APSensor::init()
     LOG_WARN("Initializing BHI260AP sensor %u", deviceAddress());
     sensor.setFirmware(bosch_firmware_image, bosch_firmware_size, bosch_firmware_type);
     sensor.setBootFromFlash(bosch_firmware_type);
-    if (sensor.begin(Wire, deviceAddress())) {
+
+    // begin() uploads the ~124KB RAM firmware image on every boot, which is almost all I2C bit time: ~11s at 100kHz.
+    const uint32_t bootStart = millis();
+    bool started;
+    {
+#ifdef BHI260AP_I2C_CLOCK_SPEED
+        reClockI2C.setup(&Wire, devicePort());
+        ReClockI2CGuard clockGuard(reClockI2C, BHI260AP_I2C_CLOCK_SPEED);
+#endif
+        started = sensor.begin(Wire, deviceAddress());
+    }
+    LOG_INFO("BHI260AP boot (%u byte firmware upload) took %ums", (unsigned)bosch_firmware_size,
+             (unsigned)(millis() - bootStart));
+    if (started) {
         sensor.setRemapAxes(SensorRemap::BHI260AP_REMAP_AXES);
         BoschSensorInfo info = sensor.getSensorInfo();
 

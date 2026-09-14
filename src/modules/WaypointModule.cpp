@@ -499,4 +499,15 @@ void WaypointModule::scrollDown()
     waypointScrollY = std::min<int16_t>(waypointMaxScroll, waypointScrollY + (WAYPOINT_LIST_FONT_HEIGHT + 1));
 #endif
 }
+
+void WaypointModule::scrollByFingerDelta(float dyPx)
+{
+#if HAS_SCREEN && !MESHTASTIC_EXCLUDE_WAYPOINT
+    // Dragging down walks back towards the top, the opposite sense to scrollDown(). Clamped to the last layout.
+    const int32_t next = (int32_t)waypointScrollY - (int32_t)(dyPx < 0 ? dyPx - 0.5f : dyPx + 0.5f);
+    waypointScrollY = (int16_t)std::max<int32_t>(0, std::min<int32_t>(waypointMaxScroll, next));
+#else
+    (void)dyPx;
+#endif
+}
 #endif

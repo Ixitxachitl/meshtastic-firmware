@@ -3427,7 +3427,7 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
     case LicensedToNormalConfirm:
         licensedToNormalConfirmMenu();
         break;
-#if BASEUI_HAS_MAP
+#if BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
     case MapBaseMenu:
         mapBaseMenu();
         break;
@@ -3455,7 +3455,7 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
     menuQueue = MenuNone;
 }
 
-#if BASEUI_HAS_MAP
+#if BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
 void menuHandler::mapBaseMenu()
 {
     enum class MapAction {
@@ -3525,6 +3525,8 @@ void menuHandler::mapBaseMenu()
 
     screen->showOverlayBanner(bannerOptions);
 }
+#endif // BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
+
 #if BASEUI_MAP_PNG_TILES
 void menuHandler::mapStyleMenu()
 {
@@ -3557,6 +3559,7 @@ void menuHandler::mapStyleMenu()
 }
 #endif
 
+#if BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
 void menuHandler::mapFollowMeMenu()
 {
     static const MapToggleOption options[] = {
@@ -3686,7 +3689,7 @@ void menuHandler::mapPanMenu()
 
     screen->showOverlayBanner(bannerOptions);
 }
-#endif // BASEUI_HAS_MAP
+#endif // BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
 
 // Flips the mute bit on a node and persists. Returns without writing if the node is unknown, so a
 // stale pickedNodeNum can't cause a pointless flash write.

@@ -23,6 +23,7 @@
 #include "graphics/emotes.h"
 #include "graphics/images.h"
 #include "input/SerialKeyboard.h"
+#include "input/TouchHaptics.h"
 #include "input/TouchScreenImpl1.h" // for BASEUI_HAS_TOUCH_DRAG
 #include "main.h"                   // for cardkb_found
 #include "mesh/generated/meshtastic/cannedmessages.pb.h"
@@ -389,49 +390,7 @@ static size_t firstWrappedTokenLen(const char *text)
     return graphics::EmoteRenderer::utf8CharLen(static_cast<uint8_t>(text[0]));
 }
 
-#if defined(USE_VIRTUAL_KEYBOARD) || CANNED_MESSAGE_HAS_EMOTE_BUTTON
-// Rounded key caps. drawRect() reads as a grid of boxes at the sizes a full QWERTY layout forces;
-// rounding the corners is what lets a key still look like a key once it is only ~25px wide. The
-// emote button borrows the same outline so a lone button still reads as one of these key caps.
-static void drawRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r)
-{
-    r = std::min<int16_t>(r, std::min(w, h) / 2);
-    if (r < 1) {
-        display->drawRect(x, y, w, h);
-        return;
-    }
-
-    display->drawHorizontalLine(x + r, y, w - r * 2);
-    display->drawHorizontalLine(x + r, y + h - 1, w - r * 2);
-    display->drawVerticalLine(x, y + r, h - r * 2);
-    display->drawVerticalLine(x + w - 1, y + r, h - r * 2);
-    // Quadrant bitmask: 1 = top-right, 2 = top-left, 4 = bottom-left, 8 = bottom-right
-    display->drawCircleQuads(x + r, y + r, r, 2);
-    display->drawCircleQuads(x + w - 1 - r, y + r, r, 1);
-    display->drawCircleQuads(x + r, y + h - 1 - r, r, 4);
-    display->drawCircleQuads(x + w - 1 - r, y + h - 1 - r, r, 8);
-}
-#endif // USE_VIRTUAL_KEYBOARD || CANNED_MESSAGE_HAS_EMOTE_BUTTON
-
 #if defined(USE_VIRTUAL_KEYBOARD)
-// Filled counterpart, for the cap under the finger. Only the keyboard highlights a key this way.
-static void fillRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r)
-{
-    r = std::min<int16_t>(r, std::min(w, h) / 2);
-    if (r < 1) {
-        display->fillRect(x, y, w, h);
-        return;
-    }
-
-    display->fillRect(x + r, y, w - r * 2, h);
-    display->fillRect(x, y + r, r, h - r * 2);
-    display->fillRect(x + w - r, y + r, r, h - r * 2);
-    display->fillCircle(x + r, y + r, r);
-    display->fillCircle(x + w - 1 - r, y + r, r);
-    display->fillCircle(x + r, y + h - 1 - r, r);
-    display->fillCircle(x + w - 1 - r, y + h - 1 - r, r);
-}
-
 // Second glyph a key produces while shift is held. Returns 0 for keys that only case-shift.
 static char shiftedSymbol(char c)
 {
@@ -1054,6 +1013,9 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
         if (isKeyboardPanFingerSteering())
             return true;
         String keyTapped = keyForCoordinates(event->touchX, event->touchY);
+        // A key under the finger earns the buzz; the gaps between keys, where a tap does nothing, get none.
+        if (keyTapped != "")
+            touchHapticPulse(TouchHaptic::Activate);
         bool valid = false;
 
 #ifndef EXCLUDE_EMOJI
@@ -1144,6 +1106,7 @@ bool CannedMessageModule::handleFreeTextInput(const InputEvent *event)
     if (event->touchX != 0 || event->touchY != 0) {
         if (graphics::numEmotes > 0 && event->touchX >= displayWidth - EMOTE_BUTTON_SIZE - EMOTE_BUTTON_MARGIN &&
             event->touchY >= displayHeight - EMOTE_BUTTON_SIZE - EMOTE_BUTTON_MARGIN) {
+            touchHapticPulse(TouchHaptic::Activate);
             updateState(CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER, true);
             screen->forceDisplay(true);
             return true;
@@ -1536,6 +1499,7 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
         if (!isSelect) {
             if (touchedIdx != emotePickerIndex) {
                 emotePickerIndex = touchedIdx;
+                touchHapticPulse(TouchHaptic::Activate);
                 requestFocus();
                 screen->forceDisplay(true);
             }
@@ -2212,7 +2176,7 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
             const bool inverted =
                 isShiftKey ? this->shift : (this->highlight.length() > 0 && this->highlight == letter.character);
             if (inverted) {
-                fillRoundedRect(display, capX, capY, capW, capH, buttonRadius);
+                graphics::fillRoundedRect(display, capX, capY, capW, capH, buttonRadius);
                 display->setColor(OLEDDISPLAY_COLOR::BLACK);
                 // Only for the transient tap flash, which clears itself at the end of this
                 // function. Shift's inversion latches, so asking for an immediate redraw here
@@ -2222,7 +2186,7 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
                 if (!isShiftKey)
                     setIntervalFromNow(0);
             } else {
-                drawRoundedRect(display, capX, capY, capW, capH, buttonRadius);
+                graphics::drawRoundedRect(display, capX, capY, capW, capH, buttonRadius);
             }
 
             if (letter.character == "⇧") {
@@ -2778,7 +2742,7 @@ void CannedMessageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *st
             const graphics::Emote *smiley = graphics::EmoteRenderer::findEmoteByLabel("\U0001F60A");
 
             display->setColor(WHITE);
-            drawRoundedRect(display, buttonX, buttonY, EMOTE_BUTTON_SIZE, EMOTE_BUTTON_SIZE, EMOTE_BUTTON_RADIUS);
+            graphics::drawRoundedRect(display, buttonX, buttonY, EMOTE_BUTTON_SIZE, EMOTE_BUTTON_SIZE, EMOTE_BUTTON_RADIUS);
             if (smiley) {
                 graphics::drawScaledXbm(display, buttonX + (EMOTE_BUTTON_SIZE - smiley->width * BASEUI_ICON_SCALE) / 2,
                                         buttonY + (EMOTE_BUTTON_SIZE - smiley->height * BASEUI_ICON_SCALE) / 2, smiley->width,

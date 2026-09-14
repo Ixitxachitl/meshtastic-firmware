@@ -73,7 +73,7 @@ class menuHandler
 #if HAS_LORA_FEM
         LoraFemLnaToggleMenu,
 #endif
-#if BASEUI_HAS_MAP
+#if BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
         MapBaseMenu,
         MapFollowMeMenu,
         MapZoomLevelMenu,
@@ -152,7 +152,8 @@ class menuHandler
     static void messageOrderMenu();
     static void hamModeConfirmMenu();
     static void licensedToNormalConfirmMenu();
-#if BASEUI_HAS_MAP
+    // The Map frame's own menu; absent where the same controls are buttons on the frame instead.
+#if BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
     static void mapBaseMenu();
     static void mapFollowMeMenu();
     static void mapZoomLevelMenu();
@@ -208,8 +209,10 @@ using NodeNameOption = MenuOption<bool>;
 using PositionMenuOption = MenuOption<int>;
 using ManageNodeOption = MenuOption<int>;
 using ClockFaceOption = MenuOption<bool>;
+#if BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
 using MapMenuOption = MenuOption<int>;
 using MapToggleOption = MenuOption<bool>;
+#endif
 #if HAS_LORA_FEM
 using LoRaFEMLNAToggleOption = MenuOption<meshtastic_Config_LoRaConfig_FEM_LNA_Mode>;
 #endif

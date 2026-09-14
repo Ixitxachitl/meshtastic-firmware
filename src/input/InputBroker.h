@@ -3,6 +3,7 @@
 #include "Observer.h"
 #include "concurrency/OSThread.h"
 #include "freertosinc.h"
+#include <string.h>
 
 #ifdef InputBrokerDebug
 #define LOG_INPUT(...) LOG_DEBUG(__VA_ARGS__)
@@ -64,6 +65,13 @@ typedef struct _InputEvent {
     uint16_t touchX;
     uint16_t touchY;
 } InputEvent;
+
+// True when the event came from the touchscreen rather than a button, keyboard, encoder or trackball, which can
+// report the same input_broker_event. The name is the one TouchScreenImpl1 is constructed with.
+static inline bool inputEventIsTouch(const InputEvent *event)
+{
+    return event && event->source && strcmp(event->source, "touchscreen1") == 0;
+}
 
 class InputPollable
 {

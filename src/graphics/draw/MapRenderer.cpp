@@ -3,6 +3,7 @@
 #if BASEUI_HAS_MAP
 
 #include "NodeDB.h"
+#include "WaypointStore.h"
 #include "gps/GeoCoord.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/TFTColorRegions.h"
@@ -25,6 +26,7 @@
 #include <esp_heap_caps.h>
 #endif
 
+#include <algorithm>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -39,6 +41,11 @@ constexpr int kDefaultZoomAlone = 6; // Sensible starting zoom when only our own
 
 int16_t s_lastViewWidth = 128;
 int16_t s_lastViewHeight = 64;
+#if BASEUI_MAP_ONSCREEN_CONTROLS
+// Where the last draw put the map body, so a tap is tested against the buttons actually on screen.
+int16_t s_lastViewTop = 0;
+bool s_controlsOnScreen = false;
+#endif
 
 bool s_panMode = false;
 bool s_zoomMode = false;
@@ -546,15 +553,92 @@ constexpr int kChromeColorRegionReserve = 32;
 constexpr int kMaxNodeColorRegions =
     (MAX_TFT_COLOR_REGIONS > kChromeColorRegionReserve + 24) ? (int)MAX_TFT_COLOR_REGIONS - kChromeColorRegionReserve : 24;
 
-void tintMarkerCenter(int16_t centerX, int16_t centerY, int &budget)
+void tintMarkerCenter(int16_t centerX, int16_t centerY, int &budget, uint16_t centerColor = TFTPalette::Red)
 {
     if (budget <= 0)
         return;
     registerTFTColorRegionDirect(centerX - BASEUI_ICON_SCALE, centerY - BASEUI_ICON_SCALE, 2 * BASEUI_ICON_SCALE,
-                                 2 * BASEUI_ICON_SCALE, TFTPalette::White, TFTPalette::Red);
+                                 2 * BASEUI_ICON_SCALE, TFTPalette::White, centerColor);
     budget--;
 }
 #endif
+
+#if BASEUI_MAP_ONSCREEN_CONTROLS
+// A column down the right edge: the header owns the top, the nav bar sweeps the bottom on every frame change, and
+// on a rounded panel mid-height is the widest part of the glass.
+enum class MapControl : uint8_t { ZoomIn, ZoomOut, Pan, FollowMe, Count };
+constexpr int kMapControlCount = (int)MapControl::Count;
+constexpr int16_t kMapControlRadius = 7; // the keyboard's key caps
+
+struct MapControlRect {
+    int16_t x, y, w, h;
+};
+
+// Shared by the draw and the hit test, so a button can't be drawn anywhere other than where it is pressed.
+void layoutMapControls(int16_t x, int16_t y, int16_t viewWidth, int16_t viewHeight, MapControlRect out[kMapControlCount])
+{
+    constexpr int16_t gap = 4;
+    const int16_t w = std::max<int16_t>(34, viewWidth / 7);
+    const int16_t h = std::max<int16_t>(24, viewHeight / 10);
+    const int16_t inset = std::max<int16_t>(2, viewWidth / 40);
+    const int16_t left = x + viewWidth - inset - w;
+    const int16_t stackHeight = kMapControlCount * h + (kMapControlCount - 1) * gap;
+    const int16_t top = std::max<int16_t>(y, y + (viewHeight - stackHeight) / 2);
+
+    for (int i = 0; i < kMapControlCount; ++i)
+        out[i] = {left, (int16_t)(top + i * (h + gap)), w, h};
+}
+
+void drawMapControls(OLEDDisplay *display, int16_t x, int16_t y, int16_t viewWidth, int16_t viewHeight)
+{
+    MapControlRect rects[kMapControlCount];
+    layoutMapControls(x, y, viewWidth, viewHeight, rects);
+
+    display->setFont(FONT_SMALL);
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+
+    for (int i = 0; i < kMapControlCount; ++i) {
+        const MapControlRect &r = rects[i];
+        const MapControl control = (MapControl)i;
+        // The toggles stay filled while on, like the keyboard's shift key; the zoom steps never fill.
+        const bool latched = (control == MapControl::Pan && s_panMode) || (control == MapControl::FollowMe && s_followMe);
+
+        // Always filled, never a bare outline, or the tile art shows straight through the cap.
+        if (latched) {
+            display->setColor(WHITE);
+            fillRoundedRect(display, r.x, r.y, r.w, r.h, kMapControlRadius);
+            display->setColor(BLACK);
+        } else {
+            display->setColor(BLACK);
+            fillRoundedRect(display, r.x, r.y, r.w, r.h, kMapControlRadius);
+            display->setColor(WHITE);
+            drawRoundedRect(display, r.x, r.y, r.w, r.h, kMapControlRadius);
+        }
+
+        const int16_t cx = r.x + r.w / 2;
+        const int16_t cy = r.y + r.h / 2;
+        // Strokes rather than glyphs: '+' and '-' are small and off-centre in most faces.
+        const int16_t arm = std::min<int16_t>(r.w, r.h) / 4;
+        const int16_t stroke = std::max<int16_t>(2, r.h / 12);
+        switch (control) {
+        case MapControl::ZoomIn:
+            display->fillRect(cx - arm, cy - stroke / 2, arm * 2, stroke);
+            display->fillRect(cx - stroke / 2, cy - arm, stroke, arm * 2);
+            break;
+        case MapControl::ZoomOut:
+            display->fillRect(cx - arm, cy - stroke / 2, arm * 2, stroke);
+            break;
+        default:
+            display->drawString(cx, r.y + (r.h - FONT_HEIGHT_SMALL) / 2, control == MapControl::Pan ? "PAN" : "ME");
+            break;
+        }
+
+        display->setColor(WHITE);
+    }
+
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+}
+#endif // BASEUI_MAP_ONSCREEN_CONTROLS
 
 } // namespace
 
@@ -714,6 +798,10 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
 
     s_lastViewWidth = viewWidth;
     s_lastViewHeight = viewHeight;
+#if BASEUI_MAP_ONSCREEN_CONTROLS
+    s_lastViewTop = y;
+    s_controlsOnScreen = false; // raised once they are actually drawn, so an early return leaves nothing to tap
+#endif
 
     float centerLat, centerLng;
     bool haveCenter;
@@ -826,7 +914,16 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     int labelCount = 0;
 
 #if GRAPHICS_TFT_COLORING_ENABLED
-    int nodeColorRegions = kMaxNodeColorRegions; // budget for the red marker-centre tints
+    // Waypoints draw after the nodes, so a busy mesh would spend the whole budget first and leave them black-centred,
+    // indistinguishable from nodes. Reserve them a slice up front.
+#if MESHTASTIC_EXCLUDE_WAYPOINT
+    constexpr int kWaypointColorRegions = 0;
+#else
+    constexpr int kWaypointColorRegions =
+        (WAYPOINT_HISTORY_LIMIT < kMaxNodeColorRegions / 4) ? WAYPOINT_HISTORY_LIMIT : kMaxNodeColorRegions / 4;
+    int waypointColorRegions = kWaypointColorRegions; // green waypoint centres
+#endif
+    int nodeColorRegions = kMaxNodeColorRegions - kWaypointColorRegions; // red node centres
 #endif
 
     // FONT_SMALL_LOCAL rather than FONT_SMALL deliberately: on TFT/HAS_SPI_TFT builds FONT_SMALL is
@@ -836,6 +933,26 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     display->setFont(FONT_SMALL_LOCAL);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     const int16_t labelHeight = _fontHeight(FONT_SMALL_LOCAL);
+
+    // Draws a label unless it would land on one already placed. Shared by node and waypoint markers, so their names
+    // respect each other instead of stacking.
+    auto placeLabel = [&](int16_t lx, int16_t ly, const char *text) {
+        const int16_t lw = (int16_t)display->getStringWidth(text);
+        for (int li = 0; li < labelCount; li++) {
+            if (lx < labelX[li] + labelW[li] && lx + lw > labelX[li] && ly < labelY[li] + labelH[li] &&
+                ly + labelHeight > labelY[li])
+                return;
+        }
+
+        drawHaloString(display, lx, ly, text);
+        if (labelCount < kMaxLabelsTracked) {
+            labelX[labelCount] = lx;
+            labelY[labelCount] = ly;
+            labelW[labelCount] = lw;
+            labelH[labelCount] = labelHeight;
+            labelCount++;
+        }
+    };
 
     for (uint32_t i = 0; i < nodeDB->getNumMeshNodes(); i++) {
         meshtastic_NodeInfoLite *node = nodeDB->getMeshNodeByIndex(i);
@@ -877,32 +994,37 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         tintMarkerCenter(mx, my, nodeColorRegions);
 #endif
 
-        if (node->short_name[0] != '\0') {
-            int16_t lx = mx + 5 * BASEUI_ICON_SCALE;
-            int16_t ly = my - labelHeight / 2;
-            int16_t lw = (int16_t)display->getStringWidth(node->short_name);
-
-            bool overlaps = false;
-            for (int li = 0; li < labelCount; li++) {
-                if (lx < labelX[li] + labelW[li] && lx + lw > labelX[li] && ly < labelY[li] + labelH[li] &&
-                    ly + labelHeight > labelY[li]) {
-                    overlaps = true;
-                    break;
-                }
-            }
-
-            if (!overlaps) {
-                drawHaloString(display, lx, ly, node->short_name);
-                if (labelCount < kMaxLabelsTracked) {
-                    labelX[labelCount] = lx;
-                    labelY[labelCount] = ly;
-                    labelW[labelCount] = lw;
-                    labelH[labelCount] = labelHeight;
-                    labelCount++;
-                }
-            }
-        }
+        if (node->short_name[0] != '\0')
+            placeLabel(mx + 5 * BASEUI_ICON_SCALE, my - labelHeight / 2, node->short_name);
     }
+
+    // Stored waypoints: the node ring with a green centre, after the nodes and before the self crosshair. The same
+    // non-expired filter as the waypoint screen, and not deduped against nodes - a waypoint on a node still shows.
+#if !MESHTASTIC_EXCLUDE_WAYPOINT
+    for (const StoredWaypoint &entry : waypointStore.getWaypoints()) {
+        const meshtastic_Waypoint &wp = entry.waypoint;
+        if (WaypointStore::isExpired(entry))
+            continue;
+        if (!wp.has_latitude_i || !wp.has_longitude_i || (wp.latitude_i == 0 && wp.longitude_i == 0))
+            continue;
+
+        const float wlat = wp.latitude_i * 1e-7f;
+        const float wlng = wp.longitude_i * 1e-7f;
+        const float wdistance = GeoCoord::latLongToMeter(centerLat, centerLng, wlat, wlng);
+        const float wbearing = GeoCoord::bearing(centerLat, centerLng, wlat, wlng);
+        const int16_t wx = x + viewWidth / 2 + (int16_t)(sinf(wbearing) * wdistance * metersToPx);
+        const int16_t wy = y + viewHeight / 2 - (int16_t)(cosf(wbearing) * wdistance * metersToPx);
+        if (wx < x - 2 || wx > x + viewWidth + 1 || wy < y - 2 || wy > y + viewHeight + 1)
+            continue;
+
+        drawHaloXbm(display, wx - 4 * BASEUI_ICON_SCALE, wy - 4 * BASEUI_ICON_SCALE, 8, 8, icon_map_node);
+#if GRAPHICS_TFT_COLORING_ENABLED
+        tintMarkerCenter(wx, wy, waypointColorRegions, TFTPalette::MeshtasticGreen);
+#endif
+        if (wp.name[0] != '\0')
+            placeLabel(wx + 5 * BASEUI_ICON_SCALE, wy - labelHeight / 2, wp.name);
+    }
+#endif
 
     // Self marker: crosshair, drawn last so it's always visible when on-screen. Uses the live
     // `localPosition` global (see computeAutoCenter's comment) rather than nodeDB->copyNodePosition,
@@ -998,6 +1120,48 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         display->setFont(FONT_SMALL);
         drawHaloString(display, rulerX - 7, indicatorY - FONT_HEIGHT_SMALL / 2, zoomText);
     }
+
+#if BASEUI_MAP_ONSCREEN_CONTROLS
+    // Last, so nothing is drawn over what the finger is aiming at.
+    drawMapControls(display, x, y, viewWidth, viewHeight);
+    s_controlsOnScreen = true;
+#endif
 }
+
+#if BASEUI_MAP_ONSCREEN_CONTROLS
+bool MapRenderer::handleControlTap(int16_t tapX, int16_t tapY)
+{
+    if (!s_controlsOnScreen)
+        return false;
+
+    // x is 0, not the draw's frame origin: that is only non-zero mid-transition, and a tap lands on the frame at rest.
+    MapControlRect rects[kMapControlCount];
+    layoutMapControls(0, s_lastViewTop, s_lastViewWidth, s_lastViewHeight, rects);
+
+    for (int i = 0; i < kMapControlCount; ++i) {
+        const MapControlRect &r = rects[i];
+        if (tapX < r.x || tapX >= r.x + r.w || tapY < r.y || tapY >= r.y + r.h)
+            continue;
+
+        switch ((MapControl)i) {
+        case MapControl::ZoomIn:
+            zoomIn();
+            return true;
+        case MapControl::ZoomOut:
+            zoomOut();
+            return true;
+        case MapControl::Pan:
+            setPanModeEnabled(!s_panMode);
+            return true;
+        case MapControl::FollowMe:
+            setFollowMeEnabled(!s_followMe);
+            return true;
+        default:
+            return false;
+        }
+    }
+    return false;
+}
+#endif
 
 #endif // BASEUI_HAS_MAP

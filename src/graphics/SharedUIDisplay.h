@@ -110,15 +110,6 @@ namespace graphics
 #ifndef BASEUI_SPLASH_CORNER_INSET_PCT
 #define BASEUI_SPLASH_CORNER_INSET_PCT 0
 #endif
-// Whether a touchscreen tap pages to the next frame. On by default because it predates swipe
-// navigation and is how touch devices without a swipe gesture get around. Variants where swiping
-// is the intended way to change frames set this to 0, so a stray contact can't page the screen.
-// Only affects taps from the touchscreen - INPUT_BROKER_USER_PRESS is also how single-button
-// devices navigate, and that is untouched.
-#ifndef BASEUI_TAP_ADVANCES_FRAME
-#define BASEUI_TAP_ADVANCES_FRAME 1
-#endif
-
 // Multiplier applied to every embedded bitmap (status icons, emotes, node/GPS
 // glyphs, nav bar, logos) and to the layout offsets around them. Variants with a
 // display far larger than the artwork was drawn for bump this up.
@@ -140,6 +131,11 @@ void decomposeTime(uint32_t rtc_sec, int &hour, int &minute, int &second);
 
 // Rounded highlight (used for inverted headers)
 void drawRoundedHighlight(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r);
+
+// Rounded button caps, shared by the on-screen keyboard and the map's on-screen controls. r is clamped to half
+// the shorter side, falling back to a plain rect when there is no room.
+void drawRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r);
+void fillRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r);
 
 // Nearest-neighbour XBM blit. Falls through to the library's drawXbm() at scale 1,
 // so callers can use it unconditionally. w/h are the bitmap's own dimensions; the

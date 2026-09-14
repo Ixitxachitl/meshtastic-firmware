@@ -1,4 +1,5 @@
 #include "TouchScreenBase.h"
+#include "TouchHaptics.h"
 #include "main.h"
 
 #if defined(UI_PERF_DEBUG) && defined(ARCH_ESP32)
@@ -125,7 +126,7 @@ int32_t TouchScreenBase::runOnce()
     }
     if (touched != _touchedOld) {
         if (touched) {
-            hapticFeedback();
+            // No haptic on touch-down: this could still be a tap on nothing. Each outcome below pulses for itself.
             _state = TOUCH_EVENT_OCCURRED;
             _start = millis();
             _first_x = x;
@@ -135,6 +136,8 @@ int32_t TouchScreenBase::runOnce()
             _drag_y = y;
         } else {
             _state = TOUCH_EVENT_CLEARED;
+            // A drag already pulsed as it started, so the swipe classified from the same finger must not again.
+            const bool wasDragging = _dragging;
             time_t duration = millis() - _start;
             x = _last_x;
             y = _last_y;
@@ -173,6 +176,8 @@ int32_t TouchScreenBase::runOnce()
                         e.touchEvent = static_cast<char>(TOUCH_ACTION_RIGHT);
                         LOG_DEBUG("action SWIPE: left to right");
                     }
+                    if (!wasDragging)
+                        touchHapticPulse(TouchHaptic::Gesture);
                 }
                 // swipe vertical
                 else if (ady > adx && ady > TOUCH_THRESHOLD_Y) {
@@ -183,6 +188,8 @@ int32_t TouchScreenBase::runOnce()
                         e.touchEvent = static_cast<char>(TOUCH_ACTION_DOWN);
                         LOG_DEBUG("action SWIPE: top to bottom");
                     }
+                    if (!wasDragging)
+                        touchHapticPulse(TouchHaptic::Gesture);
                 }
                 // tap
                 else {
@@ -212,6 +219,7 @@ int32_t TouchScreenBase::runOnce()
                 _drag_y = _last_y;
                 e.touchEvent = static_cast<char>(TOUCH_ACTION_DRAG);
                 LOG_DEBUG("action DRAG START(%d/%d)", _last_x, _last_y);
+                touchHapticPulse(TouchHaptic::Gesture); // the start only: the view is about to follow the finger
             }
         } else if (abs(_last_x - _drag_x) >= TOUCH_DRAG_MIN_STEP || abs(_last_y - _drag_y) >= TOUCH_DRAG_MIN_STEP) {
             _drag_x = _last_x;
@@ -315,6 +323,7 @@ int32_t TouchScreenBase::runOnce()
         _start = millis() + 30000;
         e.touchEvent = static_cast<char>(TOUCH_ACTION_LONG_PRESS);
         LOG_DEBUG("action LONG PRESS(%d/%d)", _last_x, _last_y);
+        touchHapticPulse(TouchHaptic::LongPress); // fires before release, so it also says "let go"
     }
 
     if (e.touchEvent != TOUCH_ACTION_NONE) {
@@ -325,15 +334,6 @@ int32_t TouchScreenBase::runOnce()
     }
 
     return interval;
-}
-
-void TouchScreenBase::hapticFeedback()
-{
-#if defined(T_WATCH_S3) || defined(T_WATCH_ULTRA)
-    drv.setWaveform(0, 75);
-    drv.setWaveform(1, 0); // end waveform
-    drv.go();
-#endif
 }
 
 bool TouchScreenBase::fastTapModeEnabled() const
