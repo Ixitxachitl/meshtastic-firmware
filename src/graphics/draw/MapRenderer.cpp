@@ -19,6 +19,11 @@
 #if defined(SENSECAP_INDICATOR)
 #include "graphics/niche/Map/MapTileSourceIndicator.h"
 #endif
+#if BASEUI_MAP_PNG_TILES
+#include "graphics/TFTDisplay.h"
+#include "graphics/niche/Map/MapPngTiles.h"
+#include <esp_heap_caps.h>
+#endif
 
 #include <math.h>
 #include <stdlib.h>
@@ -427,6 +432,71 @@ void blitBasemap(OLEDDisplay *display, int16_t offX, int16_t offY, int16_t viewW
     }
 }
 
+#if BASEUI_MAP_PNG_TILES
+// Colour counterpart of the basemap cache above for PNG tiles: the rendered viewport, native-endian RGB565.
+uint16_t *s_colorBasemap = nullptr;
+size_t s_colorBasemapCapacity = 0;
+bool s_colorBasemapValid = false;
+bool s_mapStylesScanned = false;
+
+struct ColorBasemapKey {
+    int32_t worldX, worldY;
+    int16_t zoom, width, height;
+    uint16_t background;
+    uint32_t generation;
+
+    bool operator==(const ColorBasemapKey &o) const
+    {
+        return worldX == o.worldX && worldY == o.worldY && zoom == o.zoom && width == o.width && height == o.height &&
+               background == o.background && generation == o.generation;
+    }
+};
+ColorBasemapKey s_colorBasemapKey{};
+
+void ensureMapStylesScanned()
+{
+    if (s_mapStylesScanned)
+        return;
+    s_mapStylesScanned = true;
+    NicheGraphics::MapTiles::Png::refreshStyles(uiconfig.has_map_data ? uiconfig.map_data.style : nullptr);
+}
+
+// Draws the PNG basemap. False when the card has no PNG tiles, so the caller falls back to MAP.BIN.
+bool drawColorBasemap(OLEDDisplay *display, int16_t offX, int16_t offY, int16_t viewWidth, int16_t viewHeight, int32_t worldX,
+                      int32_t worldY, int zoom)
+{
+    namespace Png = NicheGraphics::MapTiles::Png;
+    ensureMapStylesScanned();
+    if (Png::activeStyle() < 0 || viewWidth <= 0 || viewHeight <= 0)
+        return false;
+
+    const size_t needed = (size_t)viewWidth * (size_t)viewHeight * sizeof(uint16_t);
+    if (s_colorBasemapCapacity < needed) {
+        free(s_colorBasemap);
+        s_colorBasemap = static_cast<uint16_t *>(heap_caps_malloc(needed, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        s_colorBasemapCapacity = s_colorBasemap ? needed : 0;
+        s_colorBasemapValid = false;
+        if (!s_colorBasemap)
+            return false;
+    }
+
+    const ColorBasemapKey key{worldX, worldY, (int16_t)zoom, viewWidth, viewHeight, getThemeCanvasBg(), Png::generation()};
+    if (!s_colorBasemapValid || !(s_colorBasemapKey == key)) {
+#ifdef UI_PERF_DEBUG
+        const uint32_t startMs = millis();
+#endif
+        Png::renderView(s_colorBasemap, viewWidth, viewHeight, worldX, worldY, zoom, key.background);
+#ifdef UI_PERF_DEBUG
+        LOG_INFO("map PNG basemap rebuild: %u ms, z%d", (unsigned)(millis() - startMs), zoom);
+#endif
+        s_colorBasemapKey = key;
+        s_colorBasemapValid = true;
+    }
+    static_cast<TFTDisplay *>(display)->drawRGB565(offX, offY, viewWidth, viewHeight, s_colorBasemap);
+    return true;
+}
+#endif
+
 // Offsets used to build a 1px halo by blitting a glyph/icon 8 times before the real draw - see
 // drawHaloXbm/drawHaloString below.
 constexpr int8_t kHaloOffsets[8][2] = {{-1, -1}, {0, -1}, {1, -1}, {-1, 0}, {1, 0}, {-1, 1}, {0, 1}, {1, 1}};
@@ -582,6 +652,38 @@ void MapRenderer::zoomOut()
     setZoom(zoom() - 1);
 }
 
+#if BASEUI_MAP_PNG_TILES
+static_assert(MapRenderer::kMaxMapStyles == NicheGraphics::MapTiles::Png::kMaxStyles, "style list sizes must match");
+
+int MapRenderer::refreshMapStyles()
+{
+    namespace Png = NicheGraphics::MapTiles::Png;
+    s_mapStylesScanned = true;
+    const int current = Png::activeStyle();
+    if (current >= 0)
+        return Png::refreshStyles(Png::styleName(current));
+    return Png::refreshStyles(uiconfig.has_map_data ? uiconfig.map_data.style : nullptr);
+}
+
+const char *MapRenderer::mapStyleName(int index)
+{
+    return NicheGraphics::MapTiles::Png::styleName(index);
+}
+
+int MapRenderer::activeMapStyle()
+{
+    return NicheGraphics::MapTiles::Png::activeStyle();
+}
+
+void MapRenderer::setMapStyle(int index)
+{
+    NicheGraphics::MapTiles::Png::setActiveStyle(index);
+    uiconfig.has_map_data = true;
+    strncpy(uiconfig.map_data.style, NicheGraphics::MapTiles::Png::styleName(index), sizeof(uiconfig.map_data.style) - 1);
+    uiconfig.map_data.style[sizeof(uiconfig.map_data.style) - 1] = '\0';
+}
+#endif
+
 void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
 #if defined(ARCH_PORTDUINO) || defined(ARCH_ESP32)
@@ -659,7 +761,14 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     const BasemapKey basemapKey{snappedWorldX, snappedWorldY, (int16_t)zoom,
                                 viewWidth,     viewHeight,    NicheGraphics::MapTiles::hasTiles()};
 
-    if (ensureBasemapBuffer(viewWidth, viewHeight)) {
+    bool colorBasemap = false;
+#if BASEUI_MAP_PNG_TILES
+    colorBasemap = drawColorBasemap(display, x, y, viewWidth, viewHeight, snappedWorldX, snappedWorldY, zoom);
+#endif
+
+    if (colorBasemap) {
+        // PNG tiles are already on screen.
+    } else if (ensureBasemapBuffer(viewWidth, viewHeight)) {
         if (!s_basemapValid || !(s_basemapKey == basemapKey)) {
             memset(s_basemapBits, 0, (size_t)s_basemapStride * (size_t)viewHeight);
             BasemapPlotCtx basemapCtx{s_basemapBits, s_basemapStride, viewWidth, viewHeight};

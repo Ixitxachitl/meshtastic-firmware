@@ -3441,6 +3441,11 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
         mapPanMenu();
         break;
 #endif
+#if BASEUI_MAP_PNG_TILES
+    case MapStyleMenu:
+        mapStyleMenu();
+        break;
+#endif
 #if HAS_LORA_FEM
     case LoraFemLnaToggleMenu:
         LoRaFEMLNAToggleMenu();
@@ -3453,7 +3458,14 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
 #if BASEUI_HAS_MAP
 void menuHandler::mapBaseMenu()
 {
-    enum class MapAction { PanMode, FollowMe, ZoomLevel };
+    enum class MapAction {
+        PanMode,
+        FollowMe,
+        ZoomLevel,
+#if BASEUI_MAP_PNG_TILES
+        Style,
+#endif
+    };
 
     static const MapMenuOption baseOptions[] = {
         {"Back", OptionsAction::Back},
@@ -3462,6 +3474,9 @@ void menuHandler::mapBaseMenu()
         {"Zoom", OptionsAction::Select, static_cast<int>(MapAction::ZoomLevel)},
 #endif
         {"Follow Me", OptionsAction::Select, static_cast<int>(MapAction::FollowMe)},
+#if BASEUI_MAP_PNG_TILES
+        {"Style", OptionsAction::Select, static_cast<int>(MapAction::Style)},
+#endif
     };
     constexpr size_t baseCount = sizeof(baseOptions) / sizeof(baseOptions[0]);
     static std::array<const char *, baseCount> baseLabels{};
@@ -3499,11 +3514,48 @@ void menuHandler::mapBaseMenu()
             screen->runNow();
 #endif
             break;
+#if BASEUI_MAP_PNG_TILES
+        case MapAction::Style:
+            menuQueue = MapStyleMenu;
+            screen->runNow();
+            break;
+#endif
         }
     });
 
     screen->showOverlayBanner(bannerOptions);
 }
+#if BASEUI_MAP_PNG_TILES
+void menuHandler::mapStyleMenu()
+{
+    // Labels point at MapRenderer's style names, which stay put until the next rescan (this menu's own).
+    static const char *labels[graphics::MapRenderer::kMaxMapStyles + 1];
+    const int count = graphics::MapRenderer::refreshMapStyles();
+    labels[0] = "Back";
+    for (int i = 0; i < count; i++) {
+        const char *name = graphics::MapRenderer::mapStyleName(i);
+        labels[i + 1] = name[0] ? name : "map";
+    }
+
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = count > 0 ? "Map Style" : "No map tiles on SD";
+    bannerOptions.optionsArrayPtr = labels;
+    bannerOptions.optionsCount = count + 1;
+    bannerOptions.InitialSelected = graphics::MapRenderer::activeMapStyle() + 1;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        if (selected <= 0) {
+#if !BASEUI_MAP_ONSCREEN_CONTROLS // otherwise there is no Map menu to go back to
+            menuQueue = MapBaseMenu;
+            screen->runNow();
+#endif
+            return;
+        }
+        graphics::MapRenderer::setMapStyle(selected - 1);
+        saveUIConfig();
+    };
+    screen->showOverlayBanner(bannerOptions);
+}
+#endif
 
 void menuHandler::mapFollowMeMenu()
 {

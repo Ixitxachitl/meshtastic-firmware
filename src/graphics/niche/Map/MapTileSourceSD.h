@@ -43,6 +43,9 @@ crashed a worldwide z0-10 bake (1.4M tiles) on the T-Deck: the old version loade
 namespace NicheGraphics::MapTiles
 {
 
+// The card, mounted on first use and shared by every map reader; nullptr if it won't mount. Caller holds spiLock.
+SdFs *mapSdCard();
+
 class SDCardTileSource : public TileSource
 {
   public:
@@ -64,13 +67,11 @@ class SDCardTileSource : public TileSource
     int indexOf(int zoom, int tx, int ty) override;
 
   private:
-    SdFs sd_;
     // Kept open for the lifetime of a successful begin() rather than reopened per decodeTile()
     // call - SD file opens walk the FAT to resolve the path and are the dominant per-tile cost
     // (far more than the read itself or the LZ4 decompression), so reopening by path on every
     // single tile of every single frame redraw was the main cause of sluggish map rendering.
     FsFile file_;
-    bool sdBegun_ = false;
     // Sized to the file's own range count rather than a fixed kTileBlobMaxZoomRanges array - see
     // MapTileSourceFile.h's ranges_ for why.
     std::unique_ptr<TileBlobZoomRange[]> ranges_;

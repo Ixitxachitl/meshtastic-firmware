@@ -49,6 +49,20 @@ bool readEntryAt(FsFile &file, uint32_t indexTableStart, uint32_t entryIndex, Ti
 }
 } // namespace
 
+SdFs *NicheGraphics::MapTiles::mapSdCard()
+{
+    static SdFs sd;
+    static bool begun = false;
+    if (!begun) {
+        // FSCommon's setupSDCard() already brought up the SPI bus pins at boot (plain Arduino SD
+        // library, FAT16/32 only) - SHARED_SPI here lets SdFs mount the same card independently
+        // (its own CMD0/init handshake) without fighting over the bus, exactly like
+        // meshtastic-device-ui's SdFsCard::init() already does successfully on this hardware.
+        begun = sd.begin(SdSpiConfig(SDCARD_CS, SHARED_SPI, SD_SPI_FREQUENCY, &MapSDHandler));
+    }
+    return begun ? &sd : nullptr;
+}
+
 bool SDCardTileSource::begin(const char *path)
 {
     // Everything below talks to the card. On the boards this actually matters for, that bus is
@@ -68,21 +82,15 @@ bool SDCardTileSource::begin(const char *path)
     if (file_)
         file_.close();
 
-    if (!sdBegun_) {
-        // FSCommon's setupSDCard() already brought up the SPI bus pins at boot (plain Arduino SD
-        // library, FAT16/32 only) - SHARED_SPI here lets SdFs mount the same card independently
-        // (its own CMD0/init handshake) without fighting over the bus, exactly like
-        // meshtastic-device-ui's SdFsCard::init() already does successfully on this hardware.
-        sdBegun_ = sd_.begin(SdSpiConfig(SDCARD_CS, SHARED_SPI, SD_SPI_FREQUENCY, &MapSDHandler));
-    }
-    if (!sdBegun_) {
+    SdFs *sd = mapSdCard();
+    if (!sd) {
         LOG_WARN("Map: no SD card detected");
         return false;
     }
 
     // Opened once and kept open for decodeTile() to reuse (see file_'s doc comment) - only closed
     // again below on a failure path, where nothing will call decodeTile() anyway.
-    file_ = sd_.open(path, O_RDONLY);
+    file_ = sd->open(path, O_RDONLY);
     if (!file_) {
         LOG_WARN("Map: '%s' not found on SD card", path);
         return false;

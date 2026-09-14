@@ -75,6 +75,16 @@ void zoomOut();
 constexpr int kMinZoom = 0;
 constexpr int kMaxZoom = 18;
 
+#if BASEUI_MAP_PNG_TILES
+// PNG tile styles: folders under /maps on the SD card, or one bare /map tree. Rescans the card, returns the count.
+constexpr int kMaxMapStyles = 16;
+int refreshMapStyles();
+const char *mapStyleName(int index); // "" for the bare /map tree
+int activeMapStyle();                // -1 when the card has none
+// Switches style and records it in uiconfig; the caller saves uiconfig.
+void setMapStyle(int index);
+#endif
+
 } // namespace MapRenderer
 
 } // namespace graphics

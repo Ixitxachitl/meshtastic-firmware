@@ -516,6 +516,15 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define BASEUI_HAS_MAP 0
 #endif
 #endif
+// Colour map tiles in device-ui's layout (/maps/<style>/z/x/y.png on the SD card), MAP.BIN when there are none.
+// Opt-in per variant; needs BASEUI_HAS_MAP, BASEUI_NATIVE_RGB565 and HAS_SDCARD.
+#ifndef BASEUI_MAP_PNG_TILES
+#define BASEUI_MAP_PNG_TILES 0
+#endif
+#if BASEUI_MAP_PNG_TILES && !(BASEUI_HAS_MAP && BASEUI_NATIVE_RGB565 && defined(HAS_SDCARD))
+#undef BASEUI_MAP_PNG_TILES
+#define BASEUI_MAP_PNG_TILES 0
+#endif
 #ifndef HAS_WIRE
 #define HAS_WIRE 0
 #endif
