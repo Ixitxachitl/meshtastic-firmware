@@ -82,6 +82,8 @@
 // The arrow-key slide is timed and drawn from snapshots, so this only sets how many frames fill it;
 // frames the panel can't keep up with are dropped rather than stretching the slide.
 #define SCREEN_TRANSITION_FRAMERATE 60
+// Compass screens redraw at the magnetometer's 20ms cadence rather than the default 20fps.
+#define COMPASS_ACTIVE_FRAMERATE 50
 #define SCREEN_NAV_TRANSITION_MS 200 // same length as the pocket-watch firmware's page slide
 #define BRIGHTNESS_DEFAULT 128
 // LovyanGFX's ST7789 VCOM (0x28, from another panel's datasheet) left a faint image of a static screen behind.

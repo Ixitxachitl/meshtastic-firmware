@@ -119,7 +119,9 @@ namespace graphics
 
 // This means the *visible* area (sh1106 can address 132, but shows 128 for example)
 #define IDLE_FRAMERATE 1 // in fps
-#define COMPASS_ACTIVE_FRAMERATE 20
+#ifndef COMPASS_ACTIVE_FRAMERATE
+#define COMPASS_ACTIVE_FRAMERATE 20 // while a compass frame is shown; variants may raise it
+#endif
 
 // DEBUG
 #if BASEUI_HAS_GAMES
