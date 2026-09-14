@@ -1,6 +1,7 @@
 #include "TouchScreenBase.h"
 #include "TouchHaptics.h"
 #include "main.h"
+#include "mesh/Throttle.h"
 
 #if defined(UI_PERF_DEBUG) && defined(ARCH_ESP32)
 #include <esp_heap_caps.h> // heap_caps_get_free_size(), for the per-gesture heap probe
@@ -13,6 +14,12 @@
 #ifndef TIME_LONG_PRESS
 #define TIME_LONG_PRESS 400
 #endif
+
+// The deferred-tap window is `TIME_LONG_PRESS - 50`, unsigned: below 50 it underflows to ~49.7 days.
+static_assert(TIME_LONG_PRESS >= 50, "TIME_LONG_PRESS must be at least 50ms: see the deferred-tap window below");
+
+// How long a held finger stays suppressed after a LONG_PRESS is reported.
+#define LONG_PRESS_REPEAT_SUPPRESS_MS 30000
 
 // Touch sampling cadence (milliseconds).
 // Can be overridden by board variants for faster touch panels.
@@ -79,7 +86,8 @@
 
 TouchScreenBase::TouchScreenBase(const char *name, uint16_t width, uint16_t height)
     : concurrency::OSThread(name), _display_width(width), _display_height(height), _first_x(0), _last_x(0), _first_y(0),
-      _last_y(0), _start(0), _lastTouchSeenMs(0), _tapped(false), _originName(name)
+      _last_y(0), _pressStartMs(0), _longPressSuppressed(false), _longPressSuppressUntilMs(0), _lastTouchSeenMs(0),
+      _tapped(false), _originName(name)
 {
 }
 
@@ -128,7 +136,8 @@ int32_t TouchScreenBase::runOnce()
         if (touched) {
             // No haptic on touch-down: this could still be a tap on nothing. Each outcome below pulses for itself.
             _state = TOUCH_EVENT_OCCURRED;
-            _start = millis();
+            _pressStartMs = nowMs;
+            _longPressSuppressed = false;
             _first_x = x;
             _first_y = y;
             _dragging = false;
@@ -138,7 +147,7 @@ int32_t TouchScreenBase::runOnce()
             _state = TOUCH_EVENT_CLEARED;
             // A drag already pulsed as it started, so the swipe classified from the same finger must not again.
             const bool wasDragging = _dragging;
-            time_t duration = millis() - _start;
+            uint32_t duration = nowMs - _pressStartMs;
             x = _last_x;
             y = _last_y;
             this->setInterval(fastTapMode ? TOUCH_POLL_INTERVAL_RELEASE_FAST : TOUCH_POLL_INTERVAL_RELEASE);
@@ -300,7 +309,7 @@ int32_t TouchScreenBase::runOnce()
             LOG_DEBUG("action TAP(%d/%d)", _last_x, _last_y);
         }
     } else {
-        if (_tapped && (time_t(millis()) - _start) > TIME_LONG_PRESS - 50) {
+        if (_tapped && Throttle::hasElapsed(_pressStartMs, TIME_LONG_PRESS - 50)) {
             _tapped = false;
             e.touchEvent = static_cast<char>(TOUCH_ACTION_TAP);
             LOG_DEBUG("action TAP(%d/%d)", _last_x, _last_y);
@@ -316,11 +325,16 @@ int32_t TouchScreenBase::runOnce()
 #endif
 
     // fire LONG_PRESS event without the need for release
-    // Never mid-drag: the finger having travelled is exactly what says this gesture isn't a press,
-    // and firing here would also clobber a TOUCH_ACTION_DRAG set for this same poll.
-    if (allowLongPress && touched && !_dragging && (time_t(millis()) - _start) > TIME_LONG_PRESS) {
-        // tricky: prevent reoccurring events and another touch event when releasing
-        _start = millis() + 30000;
+    // Armed and expired are asked separately; folding the deadline into the press stamp repeated
+    // LONG_PRESS every poll across the wrap on 64-bit time_t hosts.
+    const bool longPressSuppressed = _longPressSuppressed && !Throttle::deadlinePassed(_longPressSuppressUntilMs);
+    // Never mid-drag: the finger having travelled says this gesture isn't a press, and firing here would
+    // also clobber a TOUCH_ACTION_DRAG set for this same poll.
+    if (allowLongPress && touched && !_dragging && !longPressSuppressed &&
+        Throttle::hasElapsed(_pressStartMs, TIME_LONG_PRESS)) {
+        // A finger held past the window re-reports LONG_PRESS once per window, as before.
+        _longPressSuppressed = true;
+        _longPressSuppressUntilMs = nowMs + LONG_PRESS_REPEAT_SUPPRESS_MS;
         e.touchEvent = static_cast<char>(TOUCH_ACTION_LONG_PRESS);
         LOG_DEBUG("action LONG PRESS(%d/%d)", _last_x, _last_y);
         touchHapticPulse(TouchHaptic::LongPress); // fires before release, so it also says "let go"

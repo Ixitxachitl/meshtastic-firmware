@@ -356,21 +356,9 @@ void portduinoSetup()
     return;
 #endif
 
-    if (portduino_config.force_simradio == true) {
-        portduino_config.lora_module = use_simradio;
-#ifdef PORTDUINO_DEFAULT_TFT_GUI
-        // -s skips the config.yaml search entirely (below), so without this the "no config
-        // found" branch's TFT defaults never run and -s opens no window at all.
-        portduino_config.displayPanel = sdl;
-        if (portduino_config.displayWidth == 0)
-            portduino_config.displayWidth = 320;
-        if (portduino_config.displayHeight == 0)
-            portduino_config.displayHeight = 240;
-        portduino_config.displayOffsetRotate = 0;
-        if (!yamlOnly)
-            std::cout << "Using built-in native TFT defaults (sim radio + 320x240 window)" << std::endl;
-#endif
-    } else if (configPath != nullptr) {
+    // An explicit -c is honored even under -s: it also carries non-radio settings
+    // (EnableUDP, display, GPIO) that have to survive simulated mode.
+    if (configPath != nullptr) {
         if (loadConfig(configPath)) {
             if (!yamlOnly && !configCheck)
                 std::cout << "Using " << configPath << " as config file" << std::endl;
@@ -380,6 +368,19 @@ void portduinoSetup()
             std::cout << "Unable to use " << configPath << " as config file" << std::endl;
             exit(EXIT_FAILURE);
         }
+    } else if (portduino_config.force_simradio) {
+        // -s with no -c: the simulator brings its own defaults, so skip config discovery.
+#ifdef PORTDUINO_DEFAULT_TFT_GUI
+        // Discovery would have set the window, so without this -s on the native TFT build opens none.
+        portduino_config.displayPanel = sdl;
+        if (portduino_config.displayWidth == 0)
+            portduino_config.displayWidth = 320;
+        if (portduino_config.displayHeight == 0)
+            portduino_config.displayHeight = 240;
+        portduino_config.displayOffsetRotate = 0;
+        if (!yamlOnly)
+            std::cout << "Using built-in native TFT defaults (sim radio + 320x240 window)" << std::endl;
+#endif
     } else if (access("config.yaml", R_OK) == 0) {
         if (loadConfig("config.yaml")) {
             if (!yamlOnly && !configCheck)
@@ -443,6 +444,12 @@ void portduinoSetup()
     if (portduino_config.show_console)
         portduinoWindowsConsoleAllocIfNeeded();
 #endif
+
+    // Applied after every config source: ConfigDirectory entries can set Lora.Module
+    // too, and -s must win over all of them, including in --check / --output-yaml.
+    if (portduino_config.force_simradio) {
+        portduino_config.lora_module = use_simradio;
+    }
 
 #ifndef ARCH_PORTDUINO_WASM
     // --check wins over --output-yaml: asking for validation and getting a config dump
