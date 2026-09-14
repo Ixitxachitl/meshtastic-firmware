@@ -1766,8 +1766,8 @@ void TFTDisplay::pushPixelBlock(int32_t x, int32_t y, int32_t w, int32_t h, uint
 #endif
 
 #if BASEUI_NATIVE_RGB565
-#if defined(USE_ARDUINO_GFX) || defined(CO5300_CS)
-#error "BASEUI_NATIVE_RGB565 is only wired for the SPI panel push path"
+#if defined(USE_ARDUINO_GFX)
+#error "BASEUI_NATIVE_RGB565 is only wired for the LovyanGFX panel push path"
 #endif
 
 // ---- Native RGB565 drawing ----------------------------------------------------------------------
@@ -2107,6 +2107,19 @@ void TFTDisplay::display(bool fromBlank)
         last |= 1;
         if (last >= (int32_t)displayWidth)
             last = (int32_t)displayWidth - 1;
+#if defined(CO5300_CS)
+        // Transfers at or under the SPI FIFO threshold skip DMA, and this panel renders those as scattered wrong pixels
+        // (see the 1-bit path). Widen from the live frame, so the extra pixels are correct too.
+        const uint32_t minPixels = ((kSpiFifoThresholdBytes / (rows * sizeof(uint16_t))) + 2) & ~1U;
+        if ((uint32_t)(last - first + 1) < minPixels) {
+            const int32_t want = (int32_t)min<uint32_t>(minPixels, displayWidth);
+            last = min<int32_t>(first + want - 1, (int32_t)displayWidth - 1);
+            first = max<int32_t>(0, last + 1 - want) & ~1;
+            last |= 1;
+            if (last >= (int32_t)displayWidth)
+                last = (int32_t)displayWidth - 1;
+        }
+#endif
         const uint32_t spanW = (uint32_t)(last - first + 1);
         uint16_t *const chunk = repaintChunkBuffer + ((size_t)chunkSlot * displayWidth * kFullRepaintChunkRows);
         chunkSlot = (uint8_t)((chunkSlot + 1) % chunkBufferSlots);
