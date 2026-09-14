@@ -52,6 +52,9 @@ extern NicheGraphics::BaseUIEInkDisplay *setupNicheGraphicsBaseUI();
 #include "draw/NotificationRenderer.h"
 #include "draw/UIRenderer.h"
 #include "graphics/TFTColorRegions.h"
+#if BASEUI_NATIVE_RGB565
+#include "graphics/TFTDisplay.h"
+#endif
 #include "modules/CannedMessageModule.h"
 #if HAS_TELEMETRY && HAS_SENSOR && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
 #include "modules/Telemetry/EnvironmentTelemetry.h"
@@ -1146,10 +1149,17 @@ struct OLEDBufferSize : OLEDDisplay {
     static uint16_t of(const OLEDDisplay *display) { return display->*(&OLEDBufferSize::displayBufferSize); }
 };
 
+// A native RGB565 frame already carries its colours, so only the 1-bit path replays regions.
+#define NAV_SLIDE_REPLAYS_REGIONS (GRAPHICS_TFT_COLORING_ENABLED && !BASEUI_NATIVE_RGB565)
+
 struct NavSlideSnapshot {
-    uint8_t *pixels = nullptr;
+    uint8_t *pixels = nullptr; // the 1-bit frame; in native mode, its lit mask
+#if BASEUI_NATIVE_RGB565
+    uint16_t *rgb = nullptr;         // the frame's colours
+    uint8_t *explicitBits = nullptr; // where a pen or image chose the colour
+#endif
     FrameCallback original; // the real frame this slot held before the slide
-#if GRAPHICS_TFT_COLORING_ENABLED
+#if NAV_SLIDE_REPLAYS_REGIONS
     TFTColorRegion *regions = nullptr;
     uint8_t regionCount = 0;
 #endif
@@ -1186,15 +1196,23 @@ static void navSlideRestore()
     sNavSlide.armed = false;
 }
 
-static bool navSlideAllocate(NavSlideSnapshot &snap)
+static bool navSlideAllocate(NavSlideSnapshot &snap, OLEDDisplay *display)
 {
     if (!snap.pixels)
         snap.pixels = static_cast<uint8_t *>(malloc(sNavSlide.bufferSize));
-#if GRAPHICS_TFT_COLORING_ENABLED
+#if BASEUI_NATIVE_RGB565
+    if (!snap.rgb)
+        snap.rgb = static_cast<uint16_t *>(malloc(sizeof(uint16_t) * display->width() * display->height()));
+    if (!snap.explicitBits)
+        snap.explicitBits = static_cast<uint8_t *>(malloc(sNavSlide.bufferSize));
+    return snap.pixels && snap.rgb && snap.explicitBits && static_cast<TFTDisplay *>(display)->nativePixels();
+#elif NAV_SLIDE_REPLAYS_REGIONS
+    (void)display;
     if (!snap.regions)
         snap.regions = static_cast<TFTColorRegion *>(malloc(sizeof(TFTColorRegion) * MAX_TFT_COLOR_REGIONS));
     return snap.pixels && snap.regions;
 #else
+    (void)display;
     return snap.pixels != nullptr;
 #endif
 }
@@ -1203,13 +1221,21 @@ static bool navSlideAllocate(NavSlideSnapshot &snap)
 static void navSlideCapture(OLEDDisplay *display, OLEDDisplayUiState &state, uint8_t index, NavSlideSnapshot &snap)
 {
     state.currentFrame = index;
-    display->clear();
-#if GRAPHICS_TFT_COLORING_ENABLED
+    // Regions reset before clear(), as in a real redraw: native clear() paints against what is registered,
+    // so clearing pixels first baked the previous capture's regions (message bubbles) into this frame.
+#if BASEUI_NATIVE_RGB565 && GRAPHICS_TFT_COLORING_ENABLED
+    prepareFrameColorRegions();
+#elif GRAPHICS_TFT_COLORING_ENABLED
     clearTFTColorRegions();
 #endif
+    display->clear();
     normalFrames[index](display, &state, 0, 0);
     memcpy(snap.pixels, display->buffer, sNavSlide.bufferSize);
-#if GRAPHICS_TFT_COLORING_ENABLED
+#if BASEUI_NATIVE_RGB565
+    TFTDisplay *const panel = static_cast<TFTDisplay *>(display);
+    memcpy(snap.rgb, panel->nativePixels(), sizeof(uint16_t) * display->width() * display->height());
+    memcpy(snap.explicitBits, panel->explicitMask(), sNavSlide.bufferSize);
+#elif NAV_SLIDE_REPLAYS_REGIONS
     snap.regionCount = getTFTColorRegionCount();
     memcpy(snap.regions, colorRegions, sizeof(TFTColorRegion) * snap.regionCount);
 #endif
@@ -1235,8 +1261,16 @@ static FrameCallback navSlideCompositor(NavSlideSnapshot &snap)
             const uint16_t pages = sNavSlide.bufferSize / width;
             for (uint16_t p = 0; p < pages; p++)
                 memcpy(display->buffer + p * width + dstX, snap.pixels + p * width + srcX, keep);
+#if BASEUI_NATIVE_RGB565
+            TFTDisplay *const panel = static_cast<TFTDisplay *>(display);
+            for (uint16_t p = 0; p < pages; p++)
+                memcpy(panel->explicitMask() + p * width + dstX, snap.explicitBits + p * width + srcX, keep);
+            const int32_t height = display->height();
+            for (int32_t row = 0; row < height; row++)
+                memcpy(panel->nativePixels() + row * width + dstX, snap.rgb + row * width + srcX, keep * sizeof(uint16_t));
+#endif
         }
-#if GRAPHICS_TFT_COLORING_ENABLED
+#if NAV_SLIDE_REPLAYS_REGIONS
         for (uint8_t i = 0; i < snap.regionCount; i++) {
             const TFTColorRegion &r = snap.regions[i];
             registerTFTColorRegionBe(r.x + x, r.y, r.width, r.height, r.onColorBe, r.offColorBe);
@@ -1256,8 +1290,8 @@ static void navSlideArm(OLEDDisplayUi *ui, OLEDDisplay *display, size_t frameCou
     const uint16_t size = OLEDBufferSize::of(display);
     if (sNavSlide.bufferSize == 0)
         sNavSlide.bufferSize = size;
-    if (cacheFrames && frameCount >= 2 && size == sNavSlide.bufferSize && navSlideAllocate(sNavSlide.out) &&
-        navSlideAllocate(sNavSlide.in)) {
+    if (cacheFrames && frameCount >= 2 && size == sNavSlide.bufferSize && navSlideAllocate(sNavSlide.out, display) &&
+        navSlideAllocate(sNavSlide.in, display)) {
         // A copy: frames that read the state see the frame they are, and the live state is untouched.
         OLEDDisplayUiState state = *ui->getUiState();
         state.frameState = FIXED;

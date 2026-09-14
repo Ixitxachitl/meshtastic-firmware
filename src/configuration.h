@@ -477,6 +477,11 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #ifndef BASEUI_HAS_GAMES
 #define BASEUI_HAS_GAMES 0
 #endif
+// Draw BaseUI straight into an RGB565 frame buffer instead of a 1-bit one, so any pixel can take any
+// colour. Opt-in per variant; needs the OLED library built with OLEDDISPLAY_OVERRIDABLE_DRAW.
+#ifndef BASEUI_NATIVE_RGB565
+#define BASEUI_NATIVE_RGB565 0
+#endif
 // Opt-in: build the BaseUI map frame (basemap tiles + node markers, with pan/zoom/follow-me).
 // Off by default because it costs real flash and needs a provisioned MAP.BIN to be useful; enable
 // per build/variant with -DBASEUI_HAS_MAP=1. Independent of InkHUD's own map applet, which shares

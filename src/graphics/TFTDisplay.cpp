@@ -1704,6 +1704,15 @@ TFTDisplay::~TFTDisplay()
         free(repaintChunkBuffer);
         repaintChunkBuffer = nullptr;
     }
+#if BASEUI_NATIVE_RGB565
+    if (nativeInstance == this) {
+        graphics::tftColorRegionAddedHook = nullptr;
+        nativeInstance = nullptr;
+    }
+    free(rgbPixels);
+    free(rgbPushed);
+    free(explicitBits);
+#endif
     memaudit::set("display", 0);
 }
 
@@ -1756,6 +1765,284 @@ void TFTDisplay::pushPixelBlock(int32_t x, int32_t y, int32_t w, int32_t h, uint
 }
 #endif
 
+#if BASEUI_NATIVE_RGB565
+#if defined(USE_ARDUINO_GFX) || defined(CO5300_CS)
+#error "BASEUI_NATIVE_RGB565 is only wired for the SPI panel push path"
+#endif
+
+// ---- Native RGB565 drawing ----------------------------------------------------------------------
+// Primitives write colour as they draw, resolved against the colour regions registered so far, and a
+// region registered later repaints its rect from the lit mask. display() only moves pixels.
+
+TFTDisplay *TFTDisplay::nativeInstance = nullptr;
+
+static inline uint16_t nativeSwap565(uint16_t c)
+{
+    return static_cast<uint16_t>((c >> 8) | (c << 8));
+}
+
+// Frame buffers live in PSRAM on ESP32; the push copies spans into the DMA-capable chunk buffers.
+static uint16_t *allocNativeFrame(size_t pixels)
+{
+#if defined(ARCH_ESP32)
+    uint16_t *buf = static_cast<uint16_t *>(heap_caps_malloc(pixels * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (buf)
+        return buf;
+#endif
+    return static_cast<uint16_t *>(malloc(pixels * sizeof(uint16_t)));
+}
+
+static inline bool nativeMaskBit(const uint8_t *mask, uint16_t width, int32_t x, int32_t y)
+{
+    return (mask[x + (y >> 3) * width] & (1 << (y & 7))) != 0;
+}
+
+static inline void nativeWriteMaskBit(uint8_t *mask, uint16_t width, int32_t x, int32_t y, bool on)
+{
+    const uint8_t bit = static_cast<uint8_t>(1 << (y & 7));
+    if (on)
+        mask[x + (y >> 3) * width] |= bit;
+    else
+        mask[x + (y >> 3) * width] &= static_cast<uint8_t>(~bit);
+}
+
+void TFTDisplay::writeNativePixel(int16_t x, int16_t y)
+{
+    const bool lit = nativeMaskBit(buffer, displayWidth, x, y);
+    const uint16_t be =
+        penActive ? (lit ? penOnBe : penOffBe) : graphics::resolveTFTColorPixel(x, y, lit, defaultOnBe, defaultOffBe);
+    nativeWriteMaskBit(explicitBits, displayWidth, x, y, penActive);
+    rgbPixels[(size_t)y * displayWidth + x] = be;
+}
+
+void TFTDisplay::setPenColors(uint16_t onColor, uint16_t offColor)
+{
+    penOnBe = nativeSwap565(onColor);
+    penOffBe = nativeSwap565(offColor);
+    penActive = true;
+}
+
+void TFTDisplay::clearPen()
+{
+    penActive = false;
+}
+
+void TFTDisplay::setPixel(int16_t x, int16_t y)
+{
+    OLEDDisplay::setPixel(x, y);
+    if (rgbPixels && x >= 0 && x < displayWidth && y >= 0 && y < displayHeight)
+        writeNativePixel(x, y);
+}
+
+void TFTDisplay::setPixelColor(int16_t x, int16_t y, OLEDDISPLAY_COLOR c)
+{
+    OLEDDisplay::setPixelColor(x, y, c);
+    if (rgbPixels && x >= 0 && x < displayWidth && y >= 0 && y < displayHeight)
+        writeNativePixel(x, y);
+}
+
+void TFTDisplay::clearPixel(int16_t x, int16_t y)
+{
+    OLEDDisplay::clearPixel(x, y);
+    if (rgbPixels && x >= 0 && x < displayWidth && y >= 0 && y < displayHeight)
+        writeNativePixel(x, y);
+}
+
+void TFTDisplay::drawHorizontalLine(int16_t x, int16_t y, int16_t length)
+{
+    OLEDDisplay::drawHorizontalLine(x, y, length);
+    if (!rgbPixels || y < 0 || y >= displayHeight)
+        return;
+    // Same clip as the library, as a half-open range.
+    const int32_t x0 = x < 0 ? 0 : x;
+    const int32_t x1 = ((int32_t)x + length) > displayWidth ? displayWidth : ((int32_t)x + length);
+    if (x0 >= x1)
+        return;
+    uint16_t *const row = rgbPixels + (size_t)y * displayWidth;
+    if (!penActive)
+        graphics::beginTFTColorRow(y);
+    for (int32_t xx = x0; xx < x1; xx++) {
+        const bool lit = nativeMaskBit(buffer, displayWidth, xx, y);
+        row[xx] = penActive ? (lit ? penOnBe : penOffBe)
+                            : graphics::resolveTFTColorPixelRow(static_cast<int16_t>(xx), lit, defaultOnBe, defaultOffBe);
+        nativeWriteMaskBit(explicitBits, displayWidth, xx, y, penActive);
+    }
+}
+
+void TFTDisplay::drawVerticalLine(int16_t x, int16_t y, int16_t length)
+{
+    OLEDDisplay::drawVerticalLine(x, y, length);
+    if (!rgbPixels || x < 0 || x >= displayWidth)
+        return;
+    const int32_t y0 = y < 0 ? 0 : y;
+    const int32_t y1 = ((int32_t)y + length) > displayHeight ? displayHeight : ((int32_t)y + length);
+    for (int32_t yy = y0; yy < y1; yy++)
+        writeNativePixel(x, static_cast<int16_t>(yy));
+}
+
+void TFTDisplay::clear(void)
+{
+    OLEDDisplay::clear();
+    penActive = false;
+    if (!rgbPixels)
+        return;
+    // Refreshed here, at the start of every frame, so a theme change applies to the next one.
+    defaultOnBe = nativeSwap565(getThemeDefaultOnColor());
+    defaultOffBe = nativeSwap565(getThemeDefaultOffColor());
+    memset(explicitBits, 0, displayBufferSize);
+    for (uint16_t y = 0; y < displayHeight; y++) {
+        uint16_t *const row = rgbPixels + (size_t)y * displayWidth;
+        graphics::beginTFTColorRow(static_cast<int16_t>(y));
+        if (graphics::tftColorRowCount == 0) {
+            for (uint16_t x = 0; x < displayWidth; x++)
+                row[x] = defaultOffBe;
+        } else {
+            for (uint16_t x = 0; x < displayWidth; x++)
+                row[x] = graphics::resolveTFTColorPixelRow(static_cast<int16_t>(x), false, defaultOnBe, defaultOffBe);
+        }
+    }
+}
+
+// Text and fast images. Same walk as the library - columns of rasterHeight bytes, byte k covering
+// glyph rows k*8..k*8+7 - and only set glyph bits touch a pixel, which is all its |=, &=~ and ^= do.
+void TFTDisplay::drawInternal(int16_t xMove, int16_t yMove, int16_t width, int16_t height, const uint8_t *data, uint16_t offset,
+                              uint16_t bytesInData)
+{
+    if (!rgbPixels) {
+        OLEDDisplay::drawInternal(xMove, yMove, width, height, data, offset, bytesInData);
+        return;
+    }
+    if (width < 0 || height <= 0)
+        return;
+    if (yMove + height < 0 || yMove > (int16_t)displayHeight)
+        return;
+    if (xMove + width < 0 || xMove > (int16_t)displayWidth)
+        return;
+
+    const uint8_t rasterHeight = 1 + ((height - 1) >> 3);
+    if (bytesInData == 0)
+        bytesInData = width * rasterHeight;
+
+    for (uint16_t i = 0; i < bytesInData; i++) {
+        uint8_t bits = pgm_read_byte(data + offset + i);
+        const int32_t px = xMove + (i / rasterHeight);
+        if (bits && px >= 0 && px < displayWidth) {
+            const int32_t top = yMove + (int32_t)(i % rasterHeight) * 8;
+            for (int32_t py = top; bits; py++, bits >>= 1) {
+                if (!(bits & 1) || py < 0 || py >= displayHeight)
+                    continue;
+                OLEDDisplay::setPixel(static_cast<int16_t>(px), static_cast<int16_t>(py)); // applies `color` to the lit mask
+                writeNativePixel(static_cast<int16_t>(px), static_cast<int16_t>(py));
+            }
+        }
+#ifndef __MBED__
+        yield();
+#endif
+    }
+}
+
+void TFTDisplay::drawRGB565(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *pixels)
+{
+    if (!rgbPixels || !pixels)
+        return;
+    for (int32_t r = 0; r < h; r++) {
+        const int32_t py = (int32_t)y + r;
+        if (py < 0 || py >= displayHeight)
+            continue;
+        for (int32_t c = 0; c < w; c++) {
+            const int32_t px = (int32_t)x + c;
+            if (px < 0 || px >= displayWidth)
+                continue;
+            rgbPixels[(size_t)py * displayWidth + px] = nativeSwap565(pixels[(size_t)r * w + c]);
+            nativeWriteMaskBit(buffer, displayWidth, px, py, true);
+            nativeWriteMaskBit(explicitBits, displayWidth, px, py, true);
+        }
+    }
+}
+
+void TFTDisplay::repaintRegion(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t onColorBe, uint16_t offColorBe)
+{
+    if (!rgbPixels)
+        return;
+    const int32_t x0 = x < 0 ? 0 : x;
+    const int32_t y0 = y < 0 ? 0 : y;
+    const int32_t x1 = ((int32_t)x + w) > displayWidth ? displayWidth : ((int32_t)x + w);
+    const int32_t y1 = ((int32_t)y + h) > displayHeight ? displayHeight : ((int32_t)y + h);
+    for (int32_t py = y0; py < y1; py++) {
+        uint16_t *const row = rgbPixels + (size_t)py * displayWidth;
+        for (int32_t px = x0; px < x1; px++) {
+            if (nativeMaskBit(explicitBits, displayWidth, px, py))
+                continue;
+            row[px] = nativeMaskBit(buffer, displayWidth, px, py) ? onColorBe : offColorBe;
+        }
+    }
+}
+
+void TFTDisplay::onColorRegionAdded(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t onColorBe, uint16_t offColorBe)
+{
+    if (nativeInstance)
+        nativeInstance->repaintRegion(x, y, w, h, onColorBe, offColorBe);
+}
+
+// Push what changed since the last frame. Rows go in bands of kFullRepaintChunkRows: the changed span is
+// unioned across a band and sent as one block, alternating chunk slots so a band's copy overlaps the
+// previous band's transfer.
+void TFTDisplay::display(bool fromBlank)
+{
+    UI_PERF_TIME_FRAME();
+    concurrency::LockGuard g(spiLock);
+    UI_PERF_FRAME_LOCKED();
+
+    if (!rgbPixels || !repaintChunkBuffer)
+        return;
+    const bool pushAll = fromBlank || forceNativePush;
+    forceNativePush = false;
+
+    beginPixelBatch();
+    uint8_t chunkSlot = 0;
+    for (uint32_t yStart = 0; yStart < displayHeight; yStart += kFullRepaintChunkRows) {
+        const uint32_t rows = min<uint32_t>(kFullRepaintChunkRows, displayHeight - yStart);
+        int32_t first = pushAll ? 0 : (int32_t)displayWidth;
+        int32_t last = pushAll ? (int32_t)displayWidth - 1 : -1;
+        for (uint32_t r = 0; r < rows && !pushAll; r++) {
+            const uint16_t *now = rgbPixels + (yStart + r) * displayWidth;
+            const uint16_t *was = rgbPushed + (yStart + r) * displayWidth;
+            if (memcmp(now, was, (size_t)displayWidth * sizeof(uint16_t)) == 0)
+                continue;
+            int32_t f = 0;
+            while (now[f] == was[f])
+                f++;
+            int32_t l = (int32_t)displayWidth - 1;
+            while (now[l] == was[l])
+                l--;
+            if (f < first)
+                first = f;
+            if (l > last)
+                last = l;
+        }
+        if (last < first)
+            continue;
+        // Even start, odd end: whole 32-bit words for the GDMA transfer, as in the 1-bit path.
+        first &= ~1;
+        last |= 1;
+        if (last >= (int32_t)displayWidth)
+            last = (int32_t)displayWidth - 1;
+        const uint32_t spanW = (uint32_t)(last - first + 1);
+        uint16_t *const chunk = repaintChunkBuffer + ((size_t)chunkSlot * displayWidth * kFullRepaintChunkRows);
+        chunkSlot = (uint8_t)((chunkSlot + 1) % chunkBufferSlots);
+        for (uint32_t r = 0; r < rows; r++) {
+            const size_t rowStart = (yStart + r) * displayWidth + first;
+            memcpy(chunk + r * spanW, rgbPixels + rowStart, spanW * sizeof(uint16_t));
+            memcpy(rgbPushed + rowStart, rgbPixels + rowStart, spanW * sizeof(uint16_t));
+        }
+        pushPixelBlock(first, yStart, spanW, rows, chunk);
+    }
+    endPixelBatch();
+    graphics::clearTFTColorRegions();
+}
+#endif // BASEUI_NATIVE_RGB565
+
+#if !BASEUI_NATIVE_RGB565
 // Write the buffer to the display memory
 void TFTDisplay::display(bool fromBlank)
 {
@@ -2075,6 +2362,7 @@ void TFTDisplay::display(bool fromBlank)
     lastDefaultOffColor = defaultOffColor;
     graphics::clearTFTColorRegions();
 }
+#endif // !BASEUI_NATIVE_RGB565
 
 void TFTDisplay::sdlLoop()
 {
@@ -2667,6 +2955,36 @@ bool TFTDisplay::connect()
         allBuffersDmaCapable &= thisBufferDmaCapable;
         memaudit::add("display", sizeof(uint16_t) * chunkPixels * this->chunkBufferSlots);
     }
+#if BASEUI_NATIVE_RGB565
+    {
+        const size_t pixels = (size_t)displayWidth * displayHeight;
+        // connect() re-runs on display wake, so each buffer is allocated - and counted - only once.
+        if (!this->rgbPixels) {
+            this->rgbPixels = allocNativeFrame(pixels);
+            if (this->rgbPixels)
+                memaudit::add("display", sizeof(uint16_t) * pixels);
+        }
+        if (!this->rgbPushed) {
+            this->rgbPushed = allocNativeFrame(pixels);
+            if (this->rgbPushed)
+                memaudit::add("display", sizeof(uint16_t) * pixels);
+        }
+        if (!this->explicitBits) {
+            this->explicitBits = static_cast<uint8_t *>(calloc(displayBufferSize, 1));
+            if (this->explicitBits)
+                memaudit::add("display", displayBufferSize);
+        }
+        if (!this->rgbPixels || !this->rgbPushed || !this->explicitBits) {
+            LOG_ERROR("Not enough memory for the native RGB565 frame buffers");
+            return false;
+        }
+        defaultOnBe = nativeSwap565(getThemeDefaultOnColor());
+        defaultOffBe = nativeSwap565(getThemeDefaultOffColor());
+        nativeInstance = this;
+        graphics::tftColorRegionAddedHook = onColorRegionAdded;
+        forceNativePush = true;
+    }
+#endif
     LOG_DEBUG("TFT pixel buffers: dma=%d chunkSlots=%u", (int)allBuffersDmaCapable, (unsigned)this->chunkBufferSlots);
 
     this->pixelBuffersAreDmaCapable = allBuffersDmaCapable;

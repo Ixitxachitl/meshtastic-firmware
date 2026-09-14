@@ -7,6 +7,7 @@
 namespace graphics
 {
 TFTColorRegion colorRegions[MAX_TFT_COLOR_REGIONS];
+void (*tftColorRegionAddedHook)(int16_t, int16_t, int16_t, int16_t, uint16_t, uint16_t) = nullptr;
 
 namespace
 {
@@ -428,6 +429,9 @@ static inline void appendColorRegion(int16_t x, int16_t y, int16_t width, int16_
         colorRegions[colorRegionCount].enabled = false;
     }
     colorRegions[MAX_TFT_COLOR_REGIONS - 1].enabled = false;
+
+    if (tftColorRegionAddedHook)
+        tftColorRegionAddedHook(x, y, width, height, onColorBe, offColorBe);
 }
 
 // Current working role colors (big-endian).  Initialised to Dark defaults;

@@ -4,6 +4,10 @@
 #include <GpioLogic.h>
 #include <OLEDDisplay.h>
 
+#if BASEUI_NATIVE_RGB565 && !defined(OLEDDISPLAY_OVERRIDABLE_DRAW)
+#error "BASEUI_NATIVE_RGB565 needs the OLED library built with OLEDDISPLAY_OVERRIDABLE_DRAW"
+#endif
+
 /**
  * An adapter class that allows using the LovyanGFX library as if it was an OLEDDisplay implementation.
  *
@@ -77,6 +81,29 @@ class TFTDisplay : public OLEDDisplay
      */
     static GpioPin *backlightEnable;
 
+#if BASEUI_NATIVE_RGB565
+    // ---- Native RGB565 drawing --------------------------------------------------------------------
+    // Every OLEDDisplay primitive writes its colour straight into rgbPixels. The 1-bit buffer stays as
+    // the lit mask a colour region repaints from when it is registered after the drawing it tints.
+
+    // Draw subsequent lit/unlit pixels in fixed native-endian RGB565 colours, ignoring theme and
+    // regions. clear() drops the pen, so it can't leak into the next frame.
+    void setPenColors(uint16_t onColor, uint16_t offColor);
+    void clearPen();
+    // Blit a full-colour image (native-endian RGB565, w*h pixels). Later regions don't recolour it.
+    void drawRGB565(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *pixels);
+
+    uint16_t *nativePixels() { return rgbPixels; }
+    uint8_t *explicitMask() { return explicitBits; }
+
+    void setPixel(int16_t x, int16_t y) override;
+    void setPixelColor(int16_t x, int16_t y, OLEDDISPLAY_COLOR c) override;
+    void clearPixel(int16_t x, int16_t y) override;
+    void drawHorizontalLine(int16_t x, int16_t y, int16_t length) override;
+    void drawVerticalLine(int16_t x, int16_t y, int16_t length) override;
+    void clear(void) override;
+#endif
+
   protected:
     // the header size of the buffer used, e.g. for the SPI command header
     virtual int getBufferOffset(void) override { return 0; }
@@ -106,4 +133,26 @@ class TFTDisplay : public OLEDDisplay
     // prepares the next one. Must be paired.
     void beginPixelBatch();
     void endPixelBatch();
+
+#if BASEUI_NATIVE_RGB565
+    void drawInternal(int16_t xMove, int16_t yMove, int16_t width, int16_t height, const uint8_t *data, uint16_t offset,
+                      uint16_t bytesInData) override;
+
+    // Colour one pixel from its lit bit: the pen if one is set, else the regions, else the theme.
+    void writeNativePixel(int16_t x, int16_t y);
+    // Repaint a just-registered region's rect from the lit mask, skipping explicitly coloured pixels.
+    void repaintRegion(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t onColorBe, uint16_t offColorBe);
+    static void onColorRegionAdded(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t onColorBe, uint16_t offColorBe);
+    static TFTDisplay *nativeInstance;
+
+    uint16_t *rgbPixels = nullptr;   // what the panel should show, big-endian RGB565
+    uint16_t *rgbPushed = nullptr;   // what the panel was last sent, for the change scan
+    uint8_t *explicitBits = nullptr; // buffer's page layout; set where a pen or image chose the colour
+    uint16_t defaultOnBe = 0;
+    uint16_t defaultOffBe = 0;
+    uint16_t penOnBe = 0;
+    uint16_t penOffBe = 0;
+    bool penActive = false;
+    bool forceNativePush = true; // push every row on the next display()
+#endif
 };
