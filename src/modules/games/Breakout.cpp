@@ -29,7 +29,7 @@ void BreakoutGame::serveBall()
     paddleLeft = (BOARD_W - PADDLE_W) / 2;
     ballPxX = static_cast<int32_t>(BOARD_W / 2) * SUBPX;
     ballPxY = static_cast<int32_t>(PADDLE_Y - 2) * SUBPX;
-    ballVx = (nextRandom() & 1u) ? 28 : -28;
+    ballVx = (nextRandom() & 1u) ? 14 : -14;
     ballVy = -BALL_VY;
 }
 
@@ -47,7 +47,6 @@ void BreakoutGame::reset(uint32_t seed)
     livesLeft = START_LIVES;
     levelNum = 1;
     alive = true;
-    ballTick = false;
     buildBricks();
     serveBall();
 }
@@ -78,12 +77,8 @@ bool BreakoutGame::step()
     if (!alive)
         return false;
 
-    // The ball advances on every other step() so the caller can tick (and poll the paddle) at twice
-    // the ball's rate -- this keeps the ball speed constant while paddle control refreshes faster.
-    ballTick = !ballTick;
-    if (!ballTick)
-        return true;
-
+    // The ball moves every step at half the speed it once moved every other step: the same pace, drawn twice as
+    // often, and collisions checked at twice the resolution.
     ballPxX += ballVx;
     ballPxY += ballVy;
 
@@ -129,7 +124,7 @@ bool BreakoutGame::step()
             ballPxY = static_cast<int32_t>(PADDLE_Y - 1) * SUBPX;
             ballVy = -BALL_VY;
             // Six zones across the paddle map to increasing outward angles; no zone is vertical.
-            static const int16_t vxByZone[6] = {-48, -28, -8, 8, 28, 48};
+            static const int16_t vxByZone[6] = {-24, -14, -4, 4, 14, 24};
             int zone = ((px - paddleLeft) * 6) / PADDLE_W;
             if (zone < 0)
                 zone = 0;
@@ -211,9 +206,8 @@ Breakout::Breakout()
 
 int32_t Breakout::tickIntervalMs() const
 {
-    // Tick at twice the ball's cadence: the ball advances every other step() (BreakoutGame::step),
-    // so halving the interval keeps the ball speed the same while the paddle is polled/redrawn twice
-    // as often. Speed ramps with level: ~22 ms base, floor 10 ms.
+    // The ball and paddle both advance every step(), so this is also the redraw rate. Speed ramps with
+    // level: ~22 ms base, floor 10 ms.
     int32_t iv = 45 - static_cast<int32_t>(game.level() - 1) * 5;
     if (iv < 20)
         iv = 20;
@@ -486,7 +480,12 @@ void Breakout::drawPlaying(OLEDDisplay *display, int16_t x, int16_t y)
     // Ball: square, sized to the shorter screen-space dimension of 2 game pixels.
     const int16_t _bmn = sw(2) < sh(2) ? sw(2) : sh(2);
     const int16_t ballPx = _bmn < 2 ? static_cast<int16_t>(2) : _bmn;
-    display->fillRect(sx(game.ballX()), sy(game.ballY()), ballPx, ballPx);
+    // From the sub-pixel position, so the ball glides instead of snapping a whole scaled-up board pixel at a time.
+    const int16_t ballSx =
+        static_cast<int16_t>(x + game.ballSubX() * dW / (static_cast<int32_t>(BreakoutGame::BOARD_W) * BreakoutGame::SUBPX));
+    const int16_t ballSy = static_cast<int16_t>(
+        y + SCORE_BAR_H + game.ballSubY() * gameH / (static_cast<int32_t>(BreakoutGame::BOARD_H) * BreakoutGame::SUBPX));
+    display->fillRect(ballSx, ballSy, ballPx, ballPx);
 
 #if GRAPHICS_TFT_COLORING_ENABLED
     // Colour the wall by row, plus a blue paddle and white ball.
@@ -496,7 +495,7 @@ void Breakout::drawPlaying(OLEDDisplay *display, int16_t x, int16_t y)
                                                sh(BreakoutGame::BRICK_H - 1), brickRowColor(r), bg);
     graphics::registerTFTColorRegionDirect(sx(game.paddleX()), sy(BreakoutGame::PADDLE_Y), sw(BreakoutGame::PADDLE_W),
                                            sh(BreakoutGame::PADDLE_H), graphics::TFTPalette::Blue, bg);
-    graphics::registerTFTColorRegionDirect(sx(game.ballX()), sy(game.ballY()), ballPx, ballPx, graphics::TFTPalette::White, bg);
+    graphics::registerTFTColorRegionDirect(ballSx, ballSy, ballPx, ballPx, graphics::TFTPalette::White, bg);
 #endif
 }
 

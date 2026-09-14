@@ -37,6 +37,7 @@ class BreakoutGame
 
     static constexpr uint8_t START_LIVES = 3;
     static constexpr uint8_t POINTS_PER_BRICK = 10;
+    static constexpr int32_t SUBPX = 16; // fixed-point sub-pixels per pixel
 
     /** (Re)start a full game: rebuild bricks, reset lives/score, serve the ball. `seed` drives the
      * xorshift32 RNG used for the initial serve direction. */
@@ -66,11 +67,13 @@ class BreakoutGame
     int16_t paddleX() const { return paddleLeft; }
     int16_t ballX() const { return static_cast<int16_t>(ballPxX / SUBPX); }
     int16_t ballY() const { return static_cast<int16_t>(ballPxY / SUBPX); }
+    // Ball centre in sub-pixels, so a scaled-up renderer can place it between board pixels.
+    int32_t ballSubX() const { return ballPxX; }
+    int32_t ballSubY() const { return ballPxY; }
     bool brickAt(uint8_t row, uint8_t col) const { return row < BRICK_ROWS && col < BRICK_COLS && bricks[row][col]; }
 
   private:
-    static constexpr int32_t SUBPX = 16;    // fixed-point sub-pixels per pixel
-    static constexpr int32_t BALL_VY = 40;  // vertical ball speed (sub-pixels/step)
+    static constexpr int32_t BALL_VY = 20;  // vertical ball speed (sub-pixels/step)
     static constexpr int16_t BALL_SIZE = 2; // ball is drawn BALL_SIZE x BALL_SIZE
 
     void buildBricks();
@@ -93,7 +96,6 @@ class BreakoutGame
     int16_t topWallY = 0;          // top bounce boundary in game pixels; negative lets the ball enter the score bar
     int16_t brickTopY = BRICK_TOP; // first brick row in game pixels; set per-display for consistent visual gap
     bool alive = false;
-    bool ballTick = false; // ball advances on every other step() (see step())
 };
 
 #include "configuration.h"
