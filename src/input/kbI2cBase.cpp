@@ -676,12 +676,6 @@ int32_t KbI2cBase::runOnce()
             }
             break;
         }
-        // One line per press, from the read that already happened - no extra bus traffic. If input
-        // ever stops responding, this says whether the keypad is still reporting (so something
-        // downstream is swallowing events) or has gone quiet (so the MCU or the bus is wedged).
-        if (c != 0 && c != 0xFF)
-            LOG_DEBUG("STC8H keypad: key 0x%02x -> event %u", c, (unsigned)e.inputEvent);
-
         if (e.inputEvent != INPUT_BROKER_NONE) {
             this->notifyObservers(&e);
         }
