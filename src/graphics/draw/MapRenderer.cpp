@@ -445,6 +445,14 @@ uint16_t *s_colorBasemap = nullptr;
 size_t s_colorBasemapCapacity = 0;
 bool s_colorBasemapValid = false;
 bool s_mapStylesScanned = false;
+bool s_useBinaryMap = false; // MAP.BIN picked over the PNG tiles
+// Saved in uiconfig for MAP.BIN. ':' can't appear in a FAT name, so no style folder can collide with it.
+constexpr const char *kBinaryMapStyle = ":MAP.BIN";
+
+bool savedStyleIsBinary()
+{
+    return uiconfig.has_map_data && strcmp(uiconfig.map_data.style, kBinaryMapStyle) == 0;
+}
 
 struct ColorBasemapKey {
     int32_t worldX, worldY;
@@ -465,16 +473,18 @@ void ensureMapStylesScanned()
     if (s_mapStylesScanned)
         return;
     s_mapStylesScanned = true;
-    NicheGraphics::MapTiles::Png::refreshStyles(uiconfig.has_map_data ? uiconfig.map_data.style : nullptr);
+    s_useBinaryMap = savedStyleIsBinary();
+    NicheGraphics::MapTiles::Png::refreshStyles((uiconfig.has_map_data && !s_useBinaryMap) ? uiconfig.map_data.style : nullptr);
 }
 
-// Draws the PNG basemap. False when the card has no PNG tiles, so the caller falls back to MAP.BIN.
+// Draws the PNG basemap. False when MAP.BIN was picked (and is loaded) or the card has no PNG tiles, so the caller
+// draws MAP.BIN instead.
 bool drawColorBasemap(OLEDDisplay *display, int16_t offX, int16_t offY, int16_t viewWidth, int16_t viewHeight, int32_t worldX,
                       int32_t worldY, int zoom)
 {
     namespace Png = NicheGraphics::MapTiles::Png;
     ensureMapStylesScanned();
-    if (Png::activeStyle() < 0 || viewWidth <= 0 || viewHeight <= 0)
+    if ((s_useBinaryMap && NicheGraphics::MapTiles::hasTiles()) || Png::activeStyle() < 0 || viewWidth <= 0 || viewHeight <= 0)
         return false;
 
     const size_t needed = (size_t)viewWidth * (size_t)viewHeight * sizeof(uint16_t);
@@ -742,28 +752,46 @@ static_assert(MapRenderer::kMaxMapStyles == NicheGraphics::MapTiles::Png::kMaxSt
 int MapRenderer::refreshMapStyles()
 {
     namespace Png = NicheGraphics::MapTiles::Png;
+#if defined(ARCH_PORTDUINO) || defined(ARCH_ESP32)
+    ensureFileTileSourceInitialized(); // so MAP.BIN is known even if the Map frame hasn't drawn yet
+#endif
+    if (!s_mapStylesScanned)
+        s_useBinaryMap = savedStyleIsBinary();
     s_mapStylesScanned = true;
     const int current = Png::activeStyle();
-    if (current >= 0)
-        return Png::refreshStyles(Png::styleName(current));
-    return Png::refreshStyles(uiconfig.has_map_data ? uiconfig.map_data.style : nullptr);
+    const int pngCount = (current >= 0)
+                             ? Png::refreshStyles(Png::styleName(current))
+                             : Png::refreshStyles((uiconfig.has_map_data && !s_useBinaryMap) ? uiconfig.map_data.style : nullptr);
+    return pngCount + (NicheGraphics::MapTiles::hasTiles() ? 1 : 0);
 }
 
-const char *MapRenderer::mapStyleName(int index)
+const char *MapRenderer::mapStyleLabel(int index)
 {
-    return NicheGraphics::MapTiles::Png::styleName(index);
+    namespace Png = NicheGraphics::MapTiles::Png;
+    if (index == Png::styleCount())
+        return "MAP.BIN";
+    const char *name = Png::styleName(index);
+    return name[0] ? name : "map";
 }
 
 int MapRenderer::activeMapStyle()
 {
-    return NicheGraphics::MapTiles::Png::activeStyle();
+    namespace Png = NicheGraphics::MapTiles::Png;
+    // MAP.BIN is what draws when it was picked, or when there are no PNG tiles to prefer over it.
+    if (NicheGraphics::MapTiles::hasTiles() && (s_useBinaryMap || Png::activeStyle() < 0))
+        return Png::styleCount();
+    return Png::activeStyle();
 }
 
 void MapRenderer::setMapStyle(int index)
 {
-    NicheGraphics::MapTiles::Png::setActiveStyle(index);
+    namespace Png = NicheGraphics::MapTiles::Png;
+    s_useBinaryMap = (index == Png::styleCount());
+    if (!s_useBinaryMap)
+        Png::setActiveStyle(index);
     uiconfig.has_map_data = true;
-    strncpy(uiconfig.map_data.style, NicheGraphics::MapTiles::Png::styleName(index), sizeof(uiconfig.map_data.style) - 1);
+    strncpy(uiconfig.map_data.style, s_useBinaryMap ? kBinaryMapStyle : Png::styleName(index),
+            sizeof(uiconfig.map_data.style) - 1);
     uiconfig.map_data.style[sizeof(uiconfig.map_data.style) - 1] = '\0';
 }
 #endif

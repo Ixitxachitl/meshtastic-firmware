@@ -3576,16 +3576,15 @@ void menuHandler::mapBaseMenu()
 void menuHandler::mapStyleMenu()
 {
     // Labels point at MapRenderer's style names, which stay put until the next rescan (this menu's own).
-    static const char *labels[graphics::MapRenderer::kMaxMapStyles + 1];
+    // Back, the PNG folders, and MAP.BIN.
+    static const char *labels[graphics::MapRenderer::kMaxMapStyles + 2];
     const int count = graphics::MapRenderer::refreshMapStyles();
     labels[0] = "Back";
-    for (int i = 0; i < count; i++) {
-        const char *name = graphics::MapRenderer::mapStyleName(i);
-        labels[i + 1] = name[0] ? name : "map";
-    }
+    for (int i = 0; i < count; i++)
+        labels[i + 1] = graphics::MapRenderer::mapStyleLabel(i);
 
     BannerOverlayOptions bannerOptions;
-    bannerOptions.message = count > 0 ? "Map Style" : "No map tiles on SD";
+    bannerOptions.message = count > 0 ? "Map Style" : "No maps found";
     bannerOptions.optionsArrayPtr = labels;
     bannerOptions.optionsCount = count + 1;
     bannerOptions.InitialSelected = graphics::MapRenderer::activeMapStyle() + 1;

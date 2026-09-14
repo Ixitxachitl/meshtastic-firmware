@@ -82,11 +82,12 @@ bool handleControlTap(int16_t tapX, int16_t tapY);
 #endif
 
 #if BASEUI_MAP_PNG_TILES
-// PNG tile styles: folders under /maps on the SD card, or one bare /map tree. Rescans the card, returns the count.
-constexpr int kMaxMapStyles = 16;
+// Map styles: PNG tile folders under /maps on the SD card (or one bare /map tree), then MAP.BIN when one is loaded.
+// Rescans the card and returns how many there are.
+constexpr int kMaxMapStyles = 16; // PNG folders; MAP.BIN is one more
 int refreshMapStyles();
-const char *mapStyleName(int index); // "" for the bare /map tree
-int activeMapStyle();                // -1 when the card has none
+const char *mapStyleLabel(int index); // folder name, "map" for the bare /map tree, or "MAP.BIN"
+int activeMapStyle();                 // -1 when there are none
 // Switches style and records it in uiconfig; the caller saves uiconfig.
 void setMapStyle(int index);
 #endif
