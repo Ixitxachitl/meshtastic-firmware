@@ -3085,14 +3085,34 @@ int Screen::handleInputEvent(const InputEvent *event)
                 setFastFramerate();
                 return 0;
             } else if (event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_RIGHT) {
+#if BASEUI_MAP_UPDOWN_ZOOMS
+                // Here Zoom Mode is only the ruler up/down turned on, so it must not trap paging: leave it,
+                // and let the press page frames as usual.
+                graphics::MapRenderer::setZoomModeEnabled(false);
+#else
                 // Swallow - don't let these page frames out from under Zoom Mode.
                 setFastFramerate();
                 return 0;
+#endif
             } else {
                 // Same reasoning as Pan Mode above - e.g. SELECT opening the menu.
                 graphics::MapRenderer::setZoomModeEnabled(false);
             }
         }
+#if BASEUI_MAP_UPDOWN_ZOOMS
+        // No Zoom entry in the Map menu here: up/down zoom straight away, turning on Zoom Mode for its
+        // ruler. Pan Mode, when active, has already claimed them above.
+        if (!graphics::MapRenderer::isPanModeEnabled() &&
+            (event->inputEvent == INPUT_BROKER_UP || event->inputEvent == INPUT_BROKER_DOWN)) {
+            graphics::MapRenderer::setZoomModeEnabled(true);
+            if (event->inputEvent == INPUT_BROKER_UP)
+                graphics::MapRenderer::zoomIn();
+            else
+                graphics::MapRenderer::zoomOut();
+            setFastFramerate();
+            return 0;
+        }
+#endif
     }
 #endif // BASEUI_HAS_MAP
 #if defined(OLED_COMPACT_UI)

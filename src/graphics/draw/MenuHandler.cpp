@@ -3458,7 +3458,9 @@ void menuHandler::mapBaseMenu()
     static const MapMenuOption baseOptions[] = {
         {"Back", OptionsAction::Back},
         {"Pan", OptionsAction::Select, static_cast<int>(MapAction::PanMode)},
+#if !BASEUI_MAP_UPDOWN_ZOOMS // up/down zoom directly on the Map frame instead (see Screen::handleInputEvent)
         {"Zoom", OptionsAction::Select, static_cast<int>(MapAction::ZoomLevel)},
+#endif
         {"Follow Me", OptionsAction::Select, static_cast<int>(MapAction::FollowMe)},
     };
     constexpr size_t baseCount = sizeof(baseOptions) / sizeof(baseOptions[0]);

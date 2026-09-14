@@ -489,6 +489,11 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #ifndef BASEUI_HAS_MAP
 #define BASEUI_HAS_MAP 0
 #endif
+// Map frame on devices whose up/down keys are free there: they zoom directly, and the Map menu drops its
+// Zoom entry. Opt-in per variant; needs BASEUI_HAS_MAP.
+#ifndef BASEUI_MAP_UPDOWN_ZOOMS
+#define BASEUI_MAP_UPDOWN_ZOOMS 0
+#endif
 #if BASEUI_HAS_MAP
 // Two hard requirements on top of the opt-in. Both silently force the flag back off rather than
 // failing the build, so a blanket -DBASEUI_HAS_MAP=1 across a build matrix stays usable - the map
