@@ -47,6 +47,14 @@
 #define HAS_WEB_SDCARD 0
 #endif
 
+// Read-only browsing of the device's own flash filesystem, /prefs included. Opt-in per variant with WEB_FLASH_BROWSER,
+// and never in lockdown builds: these routes have no way to tell an authorised client.
+#if defined(WEB_FLASH_BROWSER) && WEB_FLASH_BROWSER && defined(ARCH_ESP32) && !defined(MESHTASTIC_PHONEAPI_ACCESS_CONTROL)
+#define HAS_WEB_FLASH_BROWSER 1
+#else
+#define HAS_WEB_FLASH_BROWSER 0
+#endif
+
 /*
   Including the esp32_https_server library will trigger a compile time error. I've
   tracked it down to a reoccurrance of this bug:
@@ -118,6 +126,10 @@ void registerHandlers(HTTPServer *insecureServer, HTTPSServer *secureServer)
     ResourceNode *nodeFormUploadSD = new ResourceNode("/upload/sd", "POST", &handleFormUploadSD);
     ResourceNode *nodeSDStatic = new ResourceNode("/sd/*", "GET", &handleSDStatic);
 #endif
+#if HAS_WEB_FLASH_BROWSER
+    ResourceNode *nodeJsonFsBrowseFlash = new ResourceNode("/json/fs/browse/flash", "GET", &handleFsBrowseFlash);
+    ResourceNode *nodeFlashStatic = new ResourceNode("/flash/*", "GET", &handleFlashStatic);
+#endif
 
     ResourceNode *nodeRoot = new ResourceNode("/*", "GET", &handleStatic);
 
@@ -142,6 +154,10 @@ void registerHandlers(HTTPServer *insecureServer, HTTPSServer *secureServer)
     secureServer->registerNode(nodeFormUploadSD);
     secureServer->registerNode(nodeSDStatic);
 #endif
+#if HAS_WEB_FLASH_BROWSER
+    secureServer->registerNode(nodeJsonFsBrowseFlash);
+    secureServer->registerNode(nodeFlashStatic);
+#endif
     secureServer->registerNode(nodeRoot); // This has to be last
 
     // Insecure nodes
@@ -163,6 +179,10 @@ void registerHandlers(HTTPServer *insecureServer, HTTPSServer *secureServer)
     insecureServer->registerNode(nodeJsonMoveSD);
     insecureServer->registerNode(nodeFormUploadSD);
     insecureServer->registerNode(nodeSDStatic);
+#endif
+#if HAS_WEB_FLASH_BROWSER
+    insecureServer->registerNode(nodeJsonFsBrowseFlash);
+    insecureServer->registerNode(nodeFlashStatic);
 #endif
     insecureServer->registerNode(nodeRoot); // This has to be last
 }
@@ -751,11 +771,60 @@ void handleFormUpload(HTTPRequest *req, HTTPResponse *res)
     handleFormUploadTo(req, res, FSCom, "/static/", budget, "/static", true);
 }
 
-#if HAS_WEB_SDCARD
+#if HAS_WEB_SDCARD || HAS_WEB_FLASH_BROWSER
 // How much of a file ?preview=1 will return. Enough to see what a config or script is doing,
 // small enough that previewing a map tile set costs nothing.
 #define SD_PREVIEW_MAX_BYTES 8192
 
+// A client-supplied path is only ever used below the card root. Rejecting "..' outright is blunter
+// than normalising, and blunt is what is wanted here.
+static bool sdPathIsSafe(const std::string &path)
+{
+    return path.find("..") == std::string::npos;
+}
+
+// Normalise to a leading slash and no trailing one, so "/" and "maps/" and "/maps" all agree.
+static std::string sdNormalizeDir(std::string dir)
+{
+    if (dir.empty() || dir[0] != '/')
+        dir = "/" + dir;
+    while (dir.size() > 1 && dir.back() == '/')
+        dir.pop_back();
+    return dir;
+}
+
+// One directory, not recursive, with directories flagged so the page can navigate into them.
+// htmlListDir() is shaped for the /static tree: it inlines subdirectories as nested arrays and
+// never names them, which is no use for a browser.
+static std::string sdListDir(fs::FS &fs, const char *path)
+{
+    std::string out = "[";
+    File root = fs.open(path);
+    if (!root || !root.isDirectory())
+        return out + "]";
+
+    bool first = true;
+    File file = root.openNextFile();
+    while (file) {
+        if (!first)
+            out += ",";
+        first = false;
+        out += "{\"name\":";
+        out += jsonEscape(file.name());
+        out += ",\"size\":";
+        out += jsonNum((double)file.size());
+        out += ",\"dir\":";
+        out += file.isDirectory() ? "true" : "false";
+        out += "}";
+        file.close();
+        file = root.openNextFile();
+    }
+    root.close();
+    return out + "]";
+}
+#endif
+
+#if HAS_WEB_SDCARD
 // Self-contained listing/upload page. Deliberately plain: it is served from flash on a device with
 // no room for a framework, and it only has to move files on and off the card.
 static void sendSDBrowsePage(HTTPResponse *res)
@@ -1131,53 +1200,6 @@ load();
 </script>)HTML");
 }
 
-// A client-supplied path is only ever used below the card root. Rejecting "..' outright is blunter
-// than normalising, and blunt is what is wanted here.
-static bool sdPathIsSafe(const std::string &path)
-{
-    return path.find("..") == std::string::npos;
-}
-
-// Normalise to a leading slash and no trailing one, so "/" and "maps/" and "/maps" all agree.
-static std::string sdNormalizeDir(std::string dir)
-{
-    if (dir.empty() || dir[0] != '/')
-        dir = "/" + dir;
-    while (dir.size() > 1 && dir.back() == '/')
-        dir.pop_back();
-    return dir;
-}
-
-// One directory, not recursive, with directories flagged so the page can navigate into them.
-// htmlListDir() is shaped for the /static tree: it inlines subdirectories as nested arrays and
-// never names them, which is no use for browsing a card.
-static std::string sdListDir(const char *path)
-{
-    std::string out = "[";
-    File root = SD.open(path);
-    if (!root || !root.isDirectory())
-        return out + "]";
-
-    bool first = true;
-    File file = root.openNextFile();
-    while (file) {
-        if (!first)
-            out += ",";
-        first = false;
-        out += "{\"name\":";
-        out += jsonEscape(file.name());
-        out += ",\"size\":";
-        out += jsonNum((double)file.size());
-        out += ",\"dir\":";
-        out += file.isDirectory() ? "true" : "false";
-        out += "}";
-        file.close();
-        file = root.openNextFile();
-    }
-    root.close();
-    return out + "]";
-}
-
 // ---- Minimal multipart/form-data reader -------------------------------------------------------
 //
 // HTTPMultipartBodyParser is not usable for a large upload. Its read() cannot tell a stalled
@@ -1486,7 +1508,7 @@ void handleFsBrowseSD(HTTPRequest *req, HTTPResponse *res)
     const std::string dir = sdNormalizeDir(requested);
 
     concurrency::LockGuard g(spiLock);
-    std::string fileList = sdListDir(dir.c_str());
+    std::string fileList = sdListDir(SD, dir.c_str());
 
     uint64_t total = SD.totalBytes();
     uint64_t used = SD.usedBytes();
@@ -2343,6 +2365,239 @@ void handleSDStatic(HTTPRequest *req, HTTPResponse *res)
     res->setHeader("Content-Length", httpsserver::intToString(remaining));
 
     // The bus is shared with the radio, so it is taken per read rather than held for the whole file.
+    while (remaining > 0) {
+        char buffer[512];
+        const size_t want = remaining < sizeof(buffer) ? remaining : sizeof(buffer);
+        size_t length = 0;
+        {
+            concurrency::LockGuard g(spiLock);
+            length = file.read((uint8_t *)buffer, want);
+        }
+        if (!length)
+            break;
+        res->write((uint8_t *)buffer, length);
+        remaining -= length;
+    }
+
+    concurrency::LockGuard g(spiLock);
+    file.close();
+}
+#endif
+
+#if HAS_WEB_FLASH_BROWSER
+// The flash browser page. Read-only on purpose: settings and keys live on this filesystem, and a stray
+// delete or overwrite there can leave the node unconfigured.
+static void sendFlashBrowsePage(HTTPResponse *res)
+{
+    res->setHeader("Content-Type", "text/html; charset=utf-8");
+    res->print(R"HTML(<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>Device flash</title><style>
+:root{--bg:#faf9f7;--fg:#1c1b19;--muted:#6f6b64;--line:#e3e0da;--card:#fff;--accent:#2f6f4f;--warn:#a8442f;--chip:#efece6}
+@media(prefers-color-scheme:dark){:root{--bg:#141310;--fg:#e9e7e2;--muted:#97928a;--line:#2b2925;--card:#1c1a16;--accent:#7cc4a0;--warn:#e08b74;--chip:#26241f}}
+*{box-sizing:border-box}
+body{margin:0;padding:24px 16px;font:14px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--fg)}
+.wrap{max-width:720px;margin:0 auto}
+h1{font-size:20px;font-weight:650;margin:0 0 2px;letter-spacing:-.01em}
+.sub{color:var(--muted);font-size:13px}
+.bar{height:6px;border-radius:99px;background:var(--chip);overflow:hidden;margin:10px 0 18px}
+.bar i{display:block;height:100%;background:var(--accent);width:0;transition:width .3s}
+.crumb{display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin:0 0 10px;font-size:13px}
+.crumb button{border:0;background:none;color:var(--accent);font:inherit;cursor:pointer;padding:2px 4px;border-radius:5px}
+.crumb button:hover{background:var(--chip)}
+.crumb span{color:var(--muted)}
+.crumb b{font-weight:600;padding:2px 4px}
+ul{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--card)}
+li{display:flex;align-items:center;gap:12px;padding:10px 14px}
+li+li{border-top:1px solid var(--line)}
+.ext{flex:none;width:38px;height:38px;border-radius:9px;background:var(--chip);color:var(--muted);
+ display:flex;align-items:center;justify-content:center;font:600 10px/1 ui-monospace,monospace;letter-spacing:.04em}
+.ext.dir{background:transparent;border:1.5px solid var(--line);color:var(--accent);font-size:15px}
+.nm{flex:1;min-width:0}
+.nm a{color:inherit;text-decoration:none;font-weight:550;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nm a:hover{color:var(--accent);text-decoration:underline}
+li.folder .nm a{color:var(--accent)}
+.sz{flex:none;color:var(--muted);font-variant-numeric:tabular-nums;font-size:13px}
+.view{flex:none;border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:7px;
+ padding:5px 9px;font:inherit;font-size:12px;cursor:pointer}
+.view:hover{border-color:var(--accent);color:var(--accent)}
+.empty,.err{padding:26px 14px;text-align:center;color:var(--muted)}
+.err{color:var(--warn)}
+.foot{color:var(--muted);font-size:12px;margin-top:12px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.foot button{border:0;background:none;color:var(--accent);font:inherit;cursor:pointer;padding:0}
+dialog{border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--fg);padding:0;
+ width:min(680px,92vw);max-height:80vh;overflow:hidden}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+dialog header{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
+dialog h2{font-size:14px;margin:0;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+dialog pre{margin:0;padding:14px;overflow:auto;max-height:62vh;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+ white-space:pre-wrap;word-break:break-word}
+.note{padding:8px 14px;border-top:1px solid var(--line);color:var(--muted);font-size:12px}
+</style>
+<div class=wrap>
+<h1>Device flash</h1>
+<div class=sub id=cap>Reading flash...</div>
+<div class=bar><i id=capbar></i></div>
+<div class=crumb id=crumb></div>
+<ul id=list><li class=empty>Loading...</li></ul>
+<div class=foot><span id=count></span><button onclick=load()>Refresh</button></div>
+<div class=foot><span>Read-only. Settings, channels and keys live in <b>/prefs</b>; change them from the app.</span></div>
+</div>
+<dialog id=dlg><header><h2 id=dlgname></h2><button class=view onclick="dlg.close()">Close</button></header>
+<pre id=dlgbody></pre><div class=note id=dlgnote></div></dialog>
+<script>
+var L=document.getElementById('list'),cwd='/';
+function sz(n){n=+n||0;return n>=1048576?(n/1048576).toFixed(1)+' MB':n>=1024?(n/1024).toFixed(1)+' kB':n+' B'}
+function ext(n){var i=n.lastIndexOf('.');return i>0&&i<n.length-1?n.slice(i+1).slice(0,4).toUpperCase():'•'}
+function join(d,n){return d==='/'?'/'+n:d+'/'+n}
+function go(d){cwd=d||'/';load()}
+function crumbs(){
+ var c=document.getElementById('crumb');c.innerHTML='';
+ var parts=cwd.split('/').filter(Boolean),path='/';
+ var b=document.createElement('button');b.textContent='Flash';b.onclick=function(){go('/')};c.appendChild(b);
+ parts.forEach(function(seg,i){
+  var sp=document.createElement('span');sp.textContent='/';c.appendChild(sp);
+  path=join(path,seg);
+  if(i===parts.length-1){var cur=document.createElement('b');cur.textContent=seg;c.appendChild(cur)}
+  else{var t=path,x=document.createElement('button');x.textContent=seg;x.onclick=function(){go(t)};c.appendChild(x)}})}
+function view(f){
+ var dlg=document.getElementById('dlg'),full=join(cwd,f.name);
+ document.getElementById('dlgname').textContent=full;
+ document.getElementById('dlgbody').textContent='Reading...';
+ document.getElementById('dlgnote').textContent='';
+ dlg.showModal();
+ var shown=0;
+ fetch('/flash/?preview=1&p='+encodeURIComponent(full)).then(function(r){
+  shown=+r.headers.get('Content-Length')||0;return r.text()}).then(function(t){
+  document.getElementById('dlgbody').textContent=t.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g,'·')||'(empty file)';
+  document.getElementById('dlgnote').textContent=shown<f.size?'First '+sz(shown)+' of '+sz(f.size)+' - preview only':sz(f.size)+' - whole file';
+ }).catch(function(){document.getElementById('dlgbody').textContent='Could not read the file.'})}
+function upRow(){
+ var li=document.createElement('li');li.className='folder';
+ var e=document.createElement('div');e.className='ext dir';e.textContent='↑';
+ var d=document.createElement('div');d.className='nm';
+ var a=document.createElement('a');a.href='#';a.textContent='..';
+ var parent=cwd.slice(0,cwd.lastIndexOf('/'))||'/';
+ a.onclick=function(ev){ev.preventDefault();go(parent)};
+ d.appendChild(a);li.append(e,d);return li}
+function row(f){
+ var li=document.createElement('li');
+ var e=document.createElement('div');e.className=f.dir?'ext dir':'ext';e.textContent=f.dir?'▸':ext(f.name);
+ var d=document.createElement('div');d.className='nm';
+ var a=document.createElement('a');a.textContent=f.name;
+ var full=join(cwd,f.name);
+ if(f.dir){li.className='folder';a.href='#';a.onclick=function(ev){ev.preventDefault();go(full)}}
+ else{a.href='/flash/?p='+encodeURIComponent(full);a.download=f.name}
+ d.appendChild(a);
+ var s=document.createElement('div');s.className='sz';s.textContent=f.dir?'':sz(f.size);
+ li.append(e,d,s);
+ if(!f.dir){var v=document.createElement('button');v.className='view';v.textContent='View';v.onclick=function(){view(f)};li.append(v)}
+ return li}
+function load(){
+ crumbs();
+ fetch('/json/fs/browse/flash?path='+encodeURIComponent(cwd)).then(function(r){return r.json()}).then(function(j){
+  var all=(j.data&&j.data.files||[]).filter(function(f){return f&&f.name});
+  all.sort(function(a,b){return (b.dir?1:0)-(a.dir?1:0)||a.name.localeCompare(b.name)});
+  L.innerHTML='';
+  if(cwd!=='/')L.appendChild(upRow());
+  if(!all.length)L.appendChild(Object.assign(document.createElement('li'),{className:'empty',textContent:'This folder is empty.'}));
+  all.forEach(function(f){L.appendChild(row(f))});
+  var fs=j.data&&j.data.filesystem||{},t=+fs.total||0,u=+fs.used||0;
+  document.getElementById('cap').textContent=t?sz(u)+' used of '+sz(t)+' • '+sz(t-u)+' free':'Capacity unknown';
+  document.getElementById('capbar').style.width=t?Math.min(100,u/t*100)+'%':'0';
+  var nf=all.filter(function(f){return !f.dir}).length,nd=all.length-nf;
+  document.getElementById('count').textContent=nf+(nf===1?' file':' files')+(nd?', '+nd+(nd===1?' folder':' folders'):'');
+ }).catch(function(){L.innerHTML='<li class=err>Could not read the flash.</li>';
+  document.getElementById('cap').textContent='The flash filesystem did not answer.'})}
+load();
+</script>)HTML");
+}
+
+// No Access-Control-Allow-Origin, unlike the SD routes: /prefs holds keys, so another site open in the same
+// browser must not be able to read it.
+void handleFsBrowseFlash(HTTPRequest *req, HTTPResponse *res)
+{
+    res->setHeader("Content-Type", "application/json");
+
+    ResourceParameters *params = req->getParams();
+    std::string requested;
+    if (!params->getQueryParameter("path", requested))
+        requested = "/";
+    if (!sdPathIsSafe(requested)) {
+        res->print("{\"status\":\"Error\"}");
+        return;
+    }
+    const std::string dir = sdNormalizeDir(requested);
+
+    concurrency::LockGuard g(spiLock);
+    const std::string fileList = sdListDir(FSCom, dir.c_str());
+    const uint64_t total = FSCom.totalBytes();
+    const uint64_t used = FSCom.usedBytes();
+
+    std::string out;
+    out.reserve(fileList.size() + 128);
+    out += "{\"data\":{\"path\":";
+    out += jsonEscape(dir.c_str());
+    out += ",\"files\":";
+    out += fileList;
+    out += ",\"filesystem\":{\"free\":";
+    out += jsonNum((double)(total - used));
+    out += ",\"total\":";
+    out += jsonNum((double)total);
+    out += ",\"used\":";
+    out += jsonNum((double)used);
+    out += "}},\"status\":\"ok\"}";
+
+    res->print(out.c_str());
+}
+
+// /flash/ is the page; /flash/?p=<path> downloads a file, and &preview=1 sends its head as text instead.
+void handleFlashStatic(HTTPRequest *req, HTTPResponse *res)
+{
+    if (webServerThread)
+        webServerThread->markActivity();
+
+    ResourceParameters *params = req->getParams();
+    std::string requested;
+    if (!params->getQueryParameter("p", requested) || requested.empty()) {
+        sendFlashBrowsePage(res);
+        return;
+    }
+    if (!sdPathIsSafe(requested)) {
+        res->setStatusCode(404);
+        res->println("Not found");
+        return;
+    }
+    const std::string filename = sdNormalizeDir(requested);
+
+    std::string previewParam;
+    const bool preview = params->getQueryParameter("preview", previewParam);
+
+    File file;
+    {
+        concurrency::LockGuard g(spiLock);
+        if (FSCom.exists(filename.c_str()))
+            file = FSCom.open(filename.c_str(), FILE_O_READ);
+        if (file && file.isDirectory()) {
+            file.close();
+            file = File();
+        }
+    }
+    if (!file) {
+        res->setStatusCode(404);
+        res->println("Not found");
+        return;
+    }
+
+    size_t remaining = file.size();
+    if (preview) {
+        if (remaining > SD_PREVIEW_MAX_BYTES)
+            remaining = SD_PREVIEW_MAX_BYTES;
+        res->setHeader("Content-Type", "text/plain; charset=utf-8");
+    } else {
+        res->setHeader("Content-Type", "application/octet-stream");
+    }
+    res->setHeader("Content-Length", httpsserver::intToString(remaining));
+
     while (remaining > 0) {
         char buffer[512];
         const size_t want = remaining < sizeof(buffer) ? remaining : sizeof(buffer);

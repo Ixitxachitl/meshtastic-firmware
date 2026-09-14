@@ -16,6 +16,8 @@ void handleFsMkdirSD(HTTPRequest *req, HTTPResponse *res);
 void handleFsMoveSD(HTTPRequest *req, HTTPResponse *res);
 void handleFormUploadSD(HTTPRequest *req, HTTPResponse *res);
 void handleSDStatic(HTTPRequest *req, HTTPResponse *res);
+void handleFsBrowseFlash(HTTPRequest *req, HTTPResponse *res);
+void handleFlashStatic(HTTPRequest *req, HTTPResponse *res);
 void handleReport(HTTPRequest *req, HTTPResponse *res);
 void handleNodes(HTTPRequest *req, HTTPResponse *res);
 void handleAdmin(HTTPRequest *req, HTTPResponse *res);
