@@ -85,13 +85,12 @@
 #define SCREEN_NAV_TRANSITION_MS 200 // same length as the pocket-watch firmware's page slide
 #define BRIGHTNESS_DEFAULT 128
 
-// Custom boot splash, shown for the second half of the boot screen. Same 320x240 landscape panel
-// as the t-deck, so the same artwork and 1:1 scale apply - BASEUI_ICON_SCALE would blow 240x200
-// up to 480x400 and clip it.
+// Custom boot splash, shown for the second half of the boot screen: full-panel 320x240 artwork, drawn in
+// colour on colour-framebuffer builds. 1:1 scale - BASEUI_ICON_SCALE would double it off the panel.
 #define USERPREFS_OEM_TEXT "Ixitxachitl Build"
 #define USERPREFS_OEM_FONT_SIZE 1
 #define USERPREFS_OEM_IMAGE_SCALE 1
-#include "graphics/img/oem_splash_landscape.h"
+#include "graphics/img/oem_splash.h"
 
 /*Lora radio*/
 #define HW_SPI1_DEVICE

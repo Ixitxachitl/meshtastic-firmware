@@ -2051,6 +2051,10 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
 #ifndef USERPREFS_OEM_IMAGE_SCALE
 #define USERPREFS_OEM_IMAGE_SCALE BASEUI_ICON_SCALE
 #endif
+// Text over full-colour splash artwork: dark by default, so it reads against a bright image.
+#ifndef USERPREFS_OEM_TEXT_COLOR
+#define USERPREFS_OEM_TEXT_COLOR TFTPalette::Black
+#endif
 
 void UIRenderer::drawOEMIconScreen(const char *upperMsg, OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
@@ -2058,16 +2062,34 @@ void UIRenderer::drawOEMIconScreen(const char *upperMsg, OLEDDisplay *display, O
     const int oemW = USERPREFS_OEM_IMAGE_WIDTH * USERPREFS_OEM_IMAGE_SCALE;
     const int oemH = USERPREFS_OEM_IMAGE_HEIGHT * USERPREFS_OEM_IMAGE_SCALE;
     const int oemX = x + (SCREEN_WIDTH - oemW) / 2;
-    const int oemY = (currentResolution == ScreenResolution::High) ? y + (SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM - oemH) / 2 + 2
-                                                                   : y + (SCREEN_HEIGHT - oemH) / 2 + 2;
-    drawScaledXbm(display, oemX, oemY, USERPREFS_OEM_IMAGE_WIDTH, USERPREFS_OEM_IMAGE_HEIGHT, xbm, USERPREFS_OEM_IMAGE_SCALE);
+    // Full-panel artwork sits on the panel; leaving room for the title would push its top rows off-screen.
+    const int oemY = (oemH >= SCREEN_HEIGHT)                         ? y
+                     : (currentResolution == ScreenResolution::High) ? y + (SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM - oemH) / 2 + 2
+                                                                     : y + (SCREEN_HEIGHT - oemH) / 2 + 2;
 
-#if GRAPHICS_TFT_COLORING_ENABLED
-    // Paint the artwork in Meshtastic green instead of the theme's default foreground. Only the
-    // set pixels are remapped - the OFF colour stays the theme's own body background, so the image
-    // does not stamp a differently coloured block onto the splash under the lighter themes.
-    registerTFTColorRegionDirect(oemX, oemY, oemW, oemH, TFTPalette::MeshtasticGreen, getThemeBodyBg());
+#if BASEUI_NATIVE_RGB565 && defined(USERPREFS_OEM_IMAGE_RGB565_DATA)
+    const bool drawColourArtwork = USERPREFS_OEM_IMAGE_SCALE == 1; // drawRGB565() only blits 1:1
+#else
+    const bool drawColourArtwork = false;
 #endif
+    if (drawColourArtwork) {
+#if BASEUI_NATIVE_RGB565 && defined(USERPREFS_OEM_IMAGE_RGB565_DATA)
+        // The artwork's own colours; 0x0000 is transparent, so the canvas shows through.
+        static const uint16_t rgb565[] = USERPREFS_OEM_IMAGE_RGB565_DATA;
+        static_cast<TFTDisplay *>(display)->drawRGB565(oemX, oemY, USERPREFS_OEM_IMAGE_WIDTH, USERPREFS_OEM_IMAGE_HEIGHT, rgb565,
+                                                       true);
+        // All the splash text below goes over the artwork, so draw it dark; the pen comes off before the push.
+        static_cast<TFTDisplay *>(display)->setPenColors(USERPREFS_OEM_TEXT_COLOR, USERPREFS_OEM_TEXT_COLOR);
+#endif
+    } else {
+        drawScaledXbm(display, oemX, oemY, USERPREFS_OEM_IMAGE_WIDTH, USERPREFS_OEM_IMAGE_HEIGHT, xbm, USERPREFS_OEM_IMAGE_SCALE);
+#if GRAPHICS_TFT_COLORING_ENABLED
+        // Paint the artwork in Meshtastic green instead of the theme's default foreground. Only the
+        // set pixels are remapped - the OFF colour stays the theme's own body background, so the image
+        // does not stamp a differently coloured block onto the splash under the lighter themes.
+        registerTFTColorRegionDirect(oemX, oemY, oemW, oemH, TFTPalette::MeshtasticGreen, getThemeBodyBg());
+#endif
+    }
 
     switch (USERPREFS_OEM_FONT_SIZE) {
     case 0:
@@ -2112,6 +2134,10 @@ void UIRenderer::drawOEMIconScreen(const char *upperMsg, OLEDDisplay *display, O
         UIRenderer::drawStringWithEmotes(display, shortNameX, cornerTop + FONT_HEIGHT_SMALL, shortName, FONT_HEIGHT_SMALL, 1,
                                          false);
     }
+#if BASEUI_NATIVE_RGB565 && defined(USERPREFS_OEM_IMAGE_RGB565_DATA)
+    if (drawColourArtwork)
+        static_cast<TFTDisplay *>(display)->clearPen();
+#endif
     screen->forceDisplay();
 
     display->setTextAlignment(TEXT_ALIGN_LEFT); // Restore left align, just to be kind to any other unsuspecting code
