@@ -2366,6 +2366,20 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
                                rectHeight);
     setTFTColorRole(TFTColorRole::NavigationArrow, navArrowRole.onColor, navArrowRole.offColor);
     display->fillRect(rectX, rectY, rectWidth, rectHeight);
+#if BASEUI_NATIVE_RGB565
+    {
+        // The header's gradient mirrored, so both bars shade toward the body. Inside the box drawn at the end, which
+        // leaves the knocked-off top corners to the arrow role; the chip and glyphs still colour from the region.
+        uint16_t headerTop, headerBottom;
+        getThemeHeaderGradient(headerTop, headerBottom);
+        const int rows = rectHeight - 2;
+        for (int row = 0; row < rows; ++row) {
+            const uint8_t t = static_cast<uint8_t>(rows > 1 ? row * 255 / (rows - 1) : 0);
+            static_cast<TFTDisplay *>(display)->fillRect565(rectX + 1, rectY + 1 + row, rectWidth - 2, 1,
+                                                            TFTPalette::mix565(headerBottom, headerTop, t));
+        }
+    }
+#endif
 #else
     // Keep legacy OLED behavior untouched.
     display->fillRect(rectX + 1, rectY, rectWidth - 2, rectHeight - 2);
