@@ -477,6 +477,11 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #ifndef BASEUI_HAS_GAMES
 #define BASEUI_HAS_GAMES 0
 #endif
+// Breakout's paddle on keypads that report presses but no hold: a direction starts the paddle moving, the same
+// direction again stops it, the other reverses it. Opt-in per variant.
+#ifndef BREAKOUT_TOGGLE_PADDLE
+#define BREAKOUT_TOGGLE_PADDLE 0
+#endif
 // Draw BaseUI straight into an RGB565 frame buffer instead of a 1-bit one, so any pixel can take any
 // colour. Opt-in per variant; needs the OLED library built with OLEDDISPLAY_OVERRIDABLE_DRAW.
 #ifndef BASEUI_NATIVE_RGB565

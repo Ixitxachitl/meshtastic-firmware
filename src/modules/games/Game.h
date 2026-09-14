@@ -44,6 +44,8 @@ class Game
 
     // --- Input while PLAYING (the host handles the BACK-to-pause and menu keys) ---
     virtual void handleInput(input_broker_event ev) = 0;
+    // Called when BACK pauses the game, so input state latched by handleInput() doesn't resume with it.
+    virtual void onPause() {}
 
     // --- Rendering (the host draws the shared PAUSED / GAME OVER / HIGH SCORES chrome) ---
     virtual void drawAttract(OLEDDisplay *display, int16_t x, int16_t y) = 0; // title/art + hi + hint

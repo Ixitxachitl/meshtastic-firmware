@@ -223,6 +223,8 @@ int GamesModule::handleInputEvent(const InputEvent *event)
     case GAMES_PLAYING:
         if (isBack) {
             uiState = GAMES_PAUSED; // BACK to pause; from there choose resume or quit
+            if (active)
+                active->onPause();
             disable();
             requestRedraw();
         } else if (active) {

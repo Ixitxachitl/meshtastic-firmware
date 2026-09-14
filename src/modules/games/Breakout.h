@@ -117,13 +117,18 @@ class Breakout : public Game
 
     const char *name() const override { return "Breakout"; }
 
-    void start(uint32_t seed) override { game.reset(seed); }
+    void start(uint32_t seed) override
+    {
+        game.reset(seed);
+        paddleVel = 0; // a latched direction must not carry into the next game
+    }
     bool tick() override; // polls a held joystick for the paddle, then advances the ball
     bool isPlaying() const override { return game.isPlaying(); }
     uint32_t score() const override { return game.score(); }
     int32_t tickIntervalMs() const override;
 
     void handleInput(input_broker_event ev) override;
+    void onPause() override { paddleVel = 0; } // a latched paddle mustn't set off again on resume
 
     void drawAttract(OLEDDisplay *display, int16_t x, int16_t y) override;
     void drawPlaying(OLEDDisplay *display, int16_t x, int16_t y) override;
@@ -160,6 +165,7 @@ class Breakout : public Game
     static constexpr int16_t PADDLE_TB_VEL_MAX = 3;         // max |velocity| for trackball
     static constexpr uint32_t PADDLE_ACCEL_WINDOW_MS = 200; // events within this window accelerate
     static constexpr uint32_t PADDLE_COAST_MS = 200;        // trackball: coast at full speed this long after last event
+    static constexpr int16_t PADDLE_TOGGLE_VEL = 2;         // BREAKOUT_TOGGLE_PADDLE: pixels/tick while latched
 
 #if GAMES_ANNOUNCE_HIGH_SCORE
     void announceHighScore(GamesModule &host, uint32_t score, const char *name);

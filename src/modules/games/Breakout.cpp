@@ -222,7 +222,15 @@ int32_t Breakout::tickIntervalMs() const
 
 bool Breakout::tick()
 {
-#if ARCH_PORTDUINO && defined(__linux__)
+#if BREAKOUT_TOGGLE_PADDLE
+    // Presses only, no hold: handleInput() latches paddleVel, which runs until toggled off or a wall stops it.
+    if (paddleVel != 0) {
+        game.movePaddle(paddleVel);
+        if ((paddleVel > 0 && game.paddleX() >= BreakoutGame::BOARD_W - BreakoutGame::PADDLE_W) ||
+            (paddleVel < 0 && game.paddleX() <= 0))
+            paddleVel = 0;
+    }
+#elif ARCH_PORTDUINO && defined(__linux__)
     if (aLinuxJoystick) {
         const int held = aLinuxJoystick->heldXZone();
         if (held < 0)
@@ -313,6 +321,13 @@ bool Breakout::tick()
 
 void Breakout::handleInput(input_broker_event ev)
 {
+#if BREAKOUT_TOGGLE_PADDLE
+    // The same direction again stops the paddle; the other direction reverses it straight away.
+    if (ev == INPUT_BROKER_LEFT)
+        paddleVel = (paddleVel < 0) ? 0 : static_cast<int16_t>(-PADDLE_TOGGLE_VEL);
+    else if (ev == INPUT_BROKER_RIGHT)
+        paddleVel = (paddleVel > 0) ? 0 : PADDLE_TOGGLE_VEL;
+#else
 #if ARCH_PORTDUINO && defined(__linux__)
     if (aLinuxJoystick)
         return;
@@ -373,6 +388,7 @@ void Breakout::handleInput(input_broker_event ev)
     default:
         break;
     }
+#endif // BREAKOUT_TOGGLE_PADDLE
 }
 
 void Breakout::drawAttract(OLEDDisplay *display, int16_t x, int16_t y)
