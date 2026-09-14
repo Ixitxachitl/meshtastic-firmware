@@ -79,10 +79,10 @@
 // TFT_BACKLIGHT_PWM_ONLY in TFTDisplay.cpp. Screen off is brightness 0.
 #define TFT_BACKLIGHT_PWM_ONLY 1
 #define SCREEN_ROTATE
-// Frame transitions advance one tick per redraw and never skip ticks (BaseUI disables the
-// library's auto-transition), so this is what sets how long a page turn takes as well as how
-// smooth it is. 30 to match the t-deck and tlora-pager, which drive the same 320x240 ST7789.
-#define SCREEN_TRANSITION_FRAMERATE 30
+// The arrow-key slide is timed and drawn from snapshots, so this only sets how many frames fill it;
+// frames the panel can't keep up with are dropped rather than stretching the slide.
+#define SCREEN_TRANSITION_FRAMERATE 60
+#define SCREEN_NAV_TRANSITION_MS 200 // same length as the pocket-watch firmware's page slide
 #define BRIGHTNESS_DEFAULT 128
 
 // Custom boot splash, shown for the second half of the boot screen. Same 320x240 landscape panel

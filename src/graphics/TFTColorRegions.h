@@ -74,6 +74,9 @@ void setAndRegisterTFTColorRole(TFTColorRole role, uint16_t onColor, uint16_t of
 // Register a region using explicit colors (no role lookup). Use when the
 // color comes from a theme field rather than a role (e.g. battery fill).
 void registerTFTColorRegionDirect(int16_t x, int16_t y, int16_t width, int16_t height, uint16_t onColor, uint16_t offColor);
+// Register a region whose colors are already big-endian, as stored in colorRegions[] - for replaying
+// a captured region at a new position.
+void registerTFTColorRegionBe(int16_t x, int16_t y, int16_t width, int16_t height, uint16_t onColorBe, uint16_t offColorBe);
 void registerTFTActionMenuRegions(int16_t boxLeft, int16_t boxTop, int16_t boxWidth, int16_t boxHeight);
 uint32_t getTFTColorFrameSignature();
 uint8_t getTFTColorRegionCount();

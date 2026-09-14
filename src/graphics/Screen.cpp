@@ -183,6 +183,9 @@ static void drawLockdownLockScreen(OLEDDisplay *display)
 }
 #endif
 
+// Timed arrow-key slide, applied just before each redraw; defined with the nav transition settings.
+static void navSlideBeforeUpdate(OLEDDisplayUi *ui);
+
 static inline void updateUiFrame(OLEDDisplayUi *ui)
 {
 #ifdef MESHTASTIC_LOCKDOWN
@@ -216,6 +219,7 @@ static inline void updateUiFrame(OLEDDisplayUi *ui)
 #if GRAPHICS_TFT_COLORING_ENABLED
     prepareFrameColorRegions();
 #endif
+    navSlideBeforeUpdate(ui);
     ui->update();
 }
 // Global variables for alert banner - explicitly define with extern "C" linkage to prevent optimization
@@ -1105,13 +1109,11 @@ static uint32_t lastScreenTransition;
 #define SCREEN_TRANSITION_UPDATE_INTERVAL (1000 / SCREEN_TRANSITION_FRAMERATE)
 
 #if SCREEN_ANIMATE_FRAME_NAV
-// The arrow-key slide, measured in redraws rather than milliseconds: a transition is only as smooth
-// as the number of frames drawn during it, and SCREEN_TRANSITION_FRAMERATE varies by an order of
-// magnitude between variants. Fixing the frame count keeps the slide readable on all of them.
-#ifndef SCREEN_NAV_TRANSITION_FRAMES
-#define SCREEN_NAV_TRANSITION_FRAMES 5
+// Arrow-key slide length. Progress is taken from elapsed time, so this holds however slow a redraw
+// is; the framerate only sets how many frames fill it. The default keeps the old five-redraw feel.
+#ifndef SCREEN_NAV_TRANSITION_MS
+#define SCREEN_NAV_TRANSITION_MS (5 * SCREEN_TRANSITION_UPDATE_INTERVAL)
 #endif
-#define SCREEN_NAV_TRANSITION_TIME (SCREEN_NAV_TRANSITION_FRAMES * SCREEN_TRANSITION_UPDATE_INTERVAL)
 #endif
 
 #if BASEUI_HAS_TOUCH_DRAG || SCREEN_ANIMATE_FRAME_NAV
@@ -1131,6 +1133,178 @@ uint16_t frameTransitionTicks()
 uint16_t frameTransitionTicks()
 {
     return 0;
+}
+#endif
+
+#if SCREEN_ANIMATE_FRAME_NAV
+// ---- Arrow-key slide ----------------------------------------------------------------------------
+// Both frames are drawn once when the slide starts and then moved, like pre-built tiles, instead of
+// being re-run twice per redraw. Progress comes from elapsed time, so slow redraws drop frames.
+
+// displayBufferSize is protected in OLEDDisplay; a member pointer formed in a derived class reads it.
+struct OLEDBufferSize : OLEDDisplay {
+    static uint16_t of(const OLEDDisplay *display) { return display->*(&OLEDBufferSize::displayBufferSize); }
+};
+
+struct NavSlideSnapshot {
+    uint8_t *pixels = nullptr;
+    FrameCallback original; // the real frame this slot held before the slide
+#if GRAPHICS_TFT_COLORING_ENABLED
+    TFTColorRegion *regions = nullptr;
+    uint8_t regionCount = 0;
+#endif
+};
+
+static struct NavSlideState {
+    bool armed = false;   // a timed slide is running
+    bool swapped = false; // normalFrames holds the snapshot stand-ins
+    uint32_t startMs = 0;
+    uint16_t ticks = 0; // the library's ticksPerTransition for this slide
+    uint16_t bufferSize = 0;
+    uint8_t outIndex = 0;
+    uint8_t inIndex = 0;
+    NavSlideSnapshot out;
+    NavSlideSnapshot in;
+} sNavSlide;
+
+// ticksPerTransition exactly as OLEDDisplayUi derives it, so the progress written below lines up.
+static uint16_t navSlideTicks()
+{
+    const uint16_t updateInterval = static_cast<uint16_t>(((float)1.0 / (float)SCREEN_TRANSITION_FRAMERATE) * 1000);
+    return updateInterval ? static_cast<uint16_t>(SCREEN_NAV_TRANSITION_MS) / updateInterval : 0;
+}
+
+static void navSlideRestore()
+{
+    if (sNavSlide.swapped) {
+        normalFrames[sNavSlide.outIndex] = sNavSlide.out.original;
+        normalFrames[sNavSlide.inIndex] = sNavSlide.in.original;
+        sNavSlide.out.original = nullptr;
+        sNavSlide.in.original = nullptr;
+        sNavSlide.swapped = false;
+    }
+    sNavSlide.armed = false;
+}
+
+static bool navSlideAllocate(NavSlideSnapshot &snap)
+{
+    if (!snap.pixels)
+        snap.pixels = static_cast<uint8_t *>(malloc(sNavSlide.bufferSize));
+#if GRAPHICS_TFT_COLORING_ENABLED
+    if (!snap.regions)
+        snap.regions = static_cast<TFTColorRegion *>(malloc(sizeof(TFTColorRegion) * MAX_TFT_COLOR_REGIONS));
+    return snap.pixels && snap.regions;
+#else
+    return snap.pixels != nullptr;
+#endif
+}
+
+// Draws one frame at the origin and keeps its pixels and color regions.
+static void navSlideCapture(OLEDDisplay *display, OLEDDisplayUiState &state, uint8_t index, NavSlideSnapshot &snap)
+{
+    state.currentFrame = index;
+    display->clear();
+#if GRAPHICS_TFT_COLORING_ENABLED
+    clearTFTColorRegions();
+#endif
+    normalFrames[index](display, &state, 0, 0);
+    memcpy(snap.pixels, display->buffer, sNavSlide.bufferSize);
+#if GRAPHICS_TFT_COLORING_ENABLED
+    snap.regionCount = getTFTColorRegionCount();
+    memcpy(snap.regions, colorRegions, sizeof(TFTColorRegion) * snap.regionCount);
+#endif
+}
+
+// Stands in for a frame during the slide: blits its snapshot at the offset the library passes and
+// replays its color regions shifted to match. The buffer is page-major, so a column shift is a copy.
+static FrameCallback navSlideCompositor(NavSlideSnapshot &snap)
+{
+    return [&snap](OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y) {
+        if (y != 0) { // vertical slides are not cached
+            if (snap.original)
+                snap.original(display, state, x, y);
+            return;
+        }
+        clearForFrame(display, state);
+        const int32_t width = display->width();
+        if (x > -width && x < width) {
+            // Columns still on screen, where they come from in the snapshot and where they land.
+            const int32_t keep = width - (x >= 0 ? x : -x);
+            const int32_t srcX = x >= 0 ? 0 : -x;
+            const int32_t dstX = x >= 0 ? x : 0;
+            const uint16_t pages = sNavSlide.bufferSize / width;
+            for (uint16_t p = 0; p < pages; p++)
+                memcpy(display->buffer + p * width + dstX, snap.pixels + p * width + srcX, keep);
+        }
+#if GRAPHICS_TFT_COLORING_ENABLED
+        for (uint8_t i = 0; i < snap.regionCount; i++) {
+            const TFTColorRegion &r = snap.regions[i];
+            registerTFTColorRegionBe(r.x + x, r.y, r.width, r.height, r.onColorBe, r.offColorBe);
+        }
+#endif
+    };
+}
+
+// Called from showFrame() while the UI is still FIXED on the frame being left.
+static void navSlideArm(OLEDDisplayUi *ui, OLEDDisplay *display, size_t frameCount, bool forward, bool cacheFrames)
+{
+    navSlideRestore();
+    sNavSlide.ticks = navSlideTicks();
+    if (sNavSlide.ticks == 0)
+        return; // shorter than one redraw: the library snaps, so there is nothing to time
+
+    const uint16_t size = OLEDBufferSize::of(display);
+    if (sNavSlide.bufferSize == 0)
+        sNavSlide.bufferSize = size;
+    if (cacheFrames && frameCount >= 2 && size == sNavSlide.bufferSize && navSlideAllocate(sNavSlide.out) &&
+        navSlideAllocate(sNavSlide.in)) {
+        // A copy: frames that read the state see the frame they are, and the live state is untouched.
+        OLEDDisplayUiState state = *ui->getUiState();
+        state.frameState = FIXED;
+        state.transitionFrameRelationship = TransitionRelationship_NONE;
+        const uint8_t cur = state.currentFrame;
+        const uint8_t next = static_cast<uint8_t>(forward ? (cur + 1) % frameCount : (cur + frameCount - 1) % frameCount);
+        // Incoming first, so the buffer is left holding the frame already on screen.
+        navSlideCapture(display, state, next, sNavSlide.in);
+        navSlideCapture(display, state, cur, sNavSlide.out);
+#if GRAPHICS_TFT_COLORING_ENABLED
+        clearTFTColorRegions();
+#endif
+        sNavSlide.outIndex = cur;
+        sNavSlide.inIndex = next;
+        sNavSlide.out.original = normalFrames[cur];
+        sNavSlide.in.original = normalFrames[next];
+        normalFrames[cur] = navSlideCompositor(sNavSlide.out);
+        normalFrames[next] = navSlideCompositor(sNavSlide.in);
+        sNavSlide.swapped = true;
+    }
+    // Stamped after the capture, which can itself take a redraw or two, so the slide starts at zero.
+    sNavSlide.startMs = millis();
+    sNavSlide.armed = true;
+}
+
+static void navSlideBeforeUpdate(OLEDDisplayUi *ui)
+{
+    if (!sNavSlide.armed)
+        return;
+    OLEDDisplayUiState *state = ui->getUiState();
+    if (state->frameState != IN_TRANSITION) {
+        navSlideRestore(); // finished, or cut short by a snap: the real frames go back
+        return;
+    }
+    const uint64_t raw = (uint64_t)(millis() - sNavSlide.startMs) * sNavSlide.ticks / SCREEN_NAV_TRANSITION_MS;
+    if (raw >= sNavSlide.ticks) {
+        // tick() adds one and completes the slide; restore first so it lands on the real frame.
+        navSlideRestore();
+        state->ticksSinceLastStateSwitch = sNavSlide.ticks - 1;
+    } else {
+        state->ticksSinceLastStateSwitch = raw > 0 ? static_cast<uint16_t>(raw - 1) : 0; // tick() adds the one back
+    }
+}
+#else
+static void navSlideBeforeUpdate(OLEDDisplayUi *ui)
+{
+    (void)ui;
 }
 #endif
 
@@ -1677,6 +1851,14 @@ int32_t Screen::runOnce()
     // soon, otherwise just 1 fps (to save CPU) We also ask to be called twice
     // as fast as we really need so that any rounding errors still result with
     // the correct framerate
+#if SCREEN_ANIMATE_FRAME_NAV
+    // Mid-transition, wake when the next frame is due - not a full interval after this one finished.
+    if (ui->getUiState()->frameState == IN_TRANSITION) {
+        const uint32_t sinceFrame = millis() - static_cast<uint32_t>(ui->getUiState()->lastUpdate);
+        const uint32_t interval = 1000 / targetFramerate;
+        return sinceFrame >= interval ? 0 : static_cast<int32_t>(interval - sinceFrame);
+    }
+#endif
     return (1000 / targetFramerate);
 }
 
@@ -1771,6 +1953,9 @@ void Screen::setFrames(FrameFocus focus)
     if (NotificationRenderer::current_notification_type == notificationTypeEnum::text_input) {
         return;
     }
+#if SCREEN_ANIMATE_FRAME_NAV
+    navSlideRestore(); // the rebuild below rewrites normalFrames, so a slide's stand-ins go back first
+#endif
 
     const FramesetInfo previousFramesetInfo = framesetInfo;
     uint8_t originalPosition = ui->getUiState()->currentFrame;
@@ -2481,8 +2666,9 @@ void Screen::showFrame(FrameDirection direction, bool animate)
         // holds if both are set in that order (same reasoning as the drag driver above).
         if (animate) {
             ui->setTargetFPS(SCREEN_TRANSITION_FRAMERATE);
-            ui->setTimePerTransition(SCREEN_NAV_TRANSITION_TIME);
-            sTransitionTicks = SCREEN_NAV_TRANSITION_FRAMES;
+            ui->setTimePerTransition(SCREEN_NAV_TRANSITION_MS);
+            sTransitionTicks = navSlideTicks();
+            navSlideArm(ui, dispdev, frameCount, direction == FrameDirection::NEXT, showingNormalScreen);
         }
 #else
         (void)animate;

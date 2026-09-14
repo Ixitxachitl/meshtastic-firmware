@@ -719,6 +719,18 @@ void registerTFTColorRegionDirect(int16_t x, int16_t y, int16_t width, int16_t h
     appendColorRegion(x, y, width, height, toBe565(onColor), toBe565(offColor));
 }
 
+void registerTFTColorRegionBe(int16_t x, int16_t y, int16_t width, int16_t height, uint16_t onColorBe, uint16_t offColorBe)
+{
+#if !GRAPHICS_TFT_COLORING_ENABLED
+    return;
+#endif
+
+    if (!normalizeRegion(x, y, width, height))
+        return;
+
+    appendColorRegion(x, y, width, height, onColorBe, offColorBe);
+}
+
 void registerTFTActionMenuRegions(int16_t boxLeft, int16_t boxTop, int16_t boxWidth, int16_t boxHeight)
 {
 #if !GRAPHICS_TFT_COLORING_ENABLED
