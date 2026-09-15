@@ -1,4 +1,5 @@
 #include "configuration.h"
+#include "graphics/draw/MapRenderer.h"
 
 #if !MESHTASTIC_EXCLUDE_GPS
 #include "GPS.h"
@@ -254,6 +255,9 @@ void doDeepSleep(uint32_t msecToWake, bool skipPreflight = false, bool skipSaveN
 
     if (!skipSaveNodeDb) {
         nodeDB->saveToDisk();
+#if BASEUI_HAS_MAP
+        graphics::MapRenderer::saveView(); // Power::shutdown() saves its own, then skips this
+#endif
     }
 
     // Persist broadcast transmit times so throttle survives reboot

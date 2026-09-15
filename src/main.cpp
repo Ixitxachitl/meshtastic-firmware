@@ -31,6 +31,7 @@
 #include "detect/ScanI2C.h"
 #include "error.h"
 #include "gps/RTC.h"
+#include "graphics/draw/MapRenderer.h"
 
 #ifdef SENSECAP_INDICATOR // on the indicator run the additional serial port for the RP2040
 #include "IndicatorSerial.h"
@@ -1601,6 +1602,9 @@ void loop()
 #endif
 #if !MESHTASTIC_EXCLUDE_WAYPOINT && ENABLE_WAYPOINT_PERSISTENCE
     waypointStoreAutosaveTick();
+#endif
+#if BASEUI_HAS_MAP
+    graphics::MapRenderer::autosaveTick();
 #endif
     long delayMsec = mainController.runOrDelay();
 

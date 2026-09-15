@@ -35,6 +35,11 @@ namespace MapRenderer
 
 void drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
 
+// Writes zoom and our last known location to uiconfig.map_data.home if either changed, so the map reopens where
+// it was. Called on clean shutdown, reboot and deep sleep; autosaveTick() covers the rest every couple of hours.
+void saveView();
+void autosaveTick(); // from the main loop
+
 // Pan Mode: entered directly from the menu, held until Back is pressed (see the guard in
 // Screen::handleInputEvent) - not an enabled/disabled toggle. While active, the joystick's
 // up/down/left/right pans the view instead of paging between frames. Off by default, so simply

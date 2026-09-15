@@ -2176,8 +2176,8 @@ void Screen::setFrames(FrameFocus focus)
         PUSH_FRAME_TITLE("GPS");
     }
 #endif
-    // Map doesn't need local GPS - it can show other nodes' positions regardless, and falls back to
-    // their centroid when we have no fix of our own. Opt-in via -DBASEUI_HAS_MAP=1, which also
+    // Map doesn't need local GPS - without a fix it centres on our saved location, then other nodes, then
+    // the whole LoRa region. Opt-in via -DBASEUI_HAS_MAP=1, which also
     // enforces a color-TFT-or-E-Ink display and somewhere to store a basemap (see configuration.h).
 #if BASEUI_HAS_MAP
     if (!hiddenFrames.map) {

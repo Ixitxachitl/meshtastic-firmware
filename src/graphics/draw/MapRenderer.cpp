@@ -3,13 +3,21 @@
 #if BASEUI_HAS_MAP
 
 #include "NodeDB.h"
+#include "UptimeClock.h"
 #include "WaypointStore.h"
 #include "gps/GeoCoord.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/TFTColorRegions.h"
 #include "graphics/TFTPalette.h"
+#include "graphics/draw/MapRegionBounds.h"
+#include "graphics/draw/MapViewPersistence.h"
 #include "graphics/images.h"
 #include "graphics/niche/Map/MapTileRenderer.h"
+#include "mesh/Throttle.h"
+#include "meshUtils.h"
+#ifdef MESHTASTIC_ENCRYPTED_STORAGE
+#include "security/EncryptedStorage.h"
+#endif
 
 #if defined(ARCH_PORTDUINO) || defined(ARCH_ESP32)
 #include "graphics/niche/Map/MapTileSourceFile.h"
@@ -56,7 +64,16 @@ float s_centerLat = 0;
 float s_centerLng = 0;
 bool s_centerInitialized = false;
 
-int s_zoom = -1; // -1 = not yet initialized; set to an auto-fit value on first use.
+int s_zoom = -1; // -1 = not yet initialized; set from the saved home, else auto-fit, on first use.
+
+// Saving the view to uiconfig.map_data.home: MapViewPersistence.h decides what, saveView()'s callers when.
+bool s_zoomSavePending = false;
+uint32_t s_lastAutosaveMs = 0;
+
+// Whole-region fallback, for when nothing at all is positioned. The zoom is dropped once something is.
+bool s_lastCenterFromRegion = false;
+bool s_zoomIsRegionFit = false;
+int s_regionFitCode = -1;
 
 float metersToPxForZoom(int zoom, float latDeg)
 {
@@ -166,7 +183,20 @@ bool computeNodeCentroid(float *lat, float *lng)
     return true;
 }
 
-// Own node position if known, else the centroid of all known node positions.
+MapRegionBounds::View regionView(const MapRegionBounds::Bounds &bounds)
+{
+    return MapRegionBounds::fit(bounds, s_lastViewWidth, s_lastViewHeight, MapRenderer::kMinZoom, MapRenderer::kMaxZoom);
+}
+
+// A home either UI saved. 0,0 counts as none - it is what a zeroed field reads as.
+bool haveSavedHome()
+{
+    return uiconfig.has_map_data && uiconfig.map_data.has_home &&
+           (uiconfig.map_data.home.latitude != 0 || uiconfig.map_data.home.longitude != 0);
+}
+
+// Own node position if known, else our last known location from uiconfig, else the centroid of all
+// known node positions, else the whole LoRa region the radio is set for.
 //
 // Deliberately reads the live `localPosition` global instead of going through
 // nodeDB->copyNodePosition(ourNodeNum, ...): that call looks up our own entry in the
@@ -176,12 +206,29 @@ bool computeNodeCentroid(float *lat, float *lng)
 // other than the actual current position.
 bool computeAutoCenter(float *lat, float *lng)
 {
+    s_lastCenterFromRegion = false;
     if (localPosition.latitude_i != 0 || localPosition.longitude_i != 0) {
         *lat = localPosition.latitude_i * 1e-7f;
         *lng = localPosition.longitude_i * 1e-7f;
         return true;
     }
-    return computeNodeCentroid(lat, lng);
+    // No fix yet this boot: centre where we last were. The self crosshair still waits for a real fix.
+    if (haveSavedHome()) {
+        *lat = uiconfig.map_data.home.latitude * 1e-7f;
+        *lng = uiconfig.map_data.home.longitude * 1e-7f;
+        return true;
+    }
+    if (computeNodeCentroid(lat, lng))
+        return true;
+    // Nothing positioned at all: frame the region rather than leave the frame empty.
+    MapRegionBounds::Bounds bounds;
+    if (!MapRegionBounds::regionBounds(config.lora.region, bounds))
+        return false;
+    const MapRegionBounds::View view = regionView(bounds);
+    *lat = view.centerLat;
+    *lng = view.centerLng;
+    s_lastCenterFromRegion = true;
+    return true;
 }
 
 // Highest zoom whose native scale still keeps the furthest known node within the viewport.
@@ -228,8 +275,23 @@ int computeAutoFitZoom(float centerLat, float centerLng, int16_t viewWidth, int1
 
 void ensureZoomInitialized(float centerLat, float centerLng)
 {
-    if (s_zoom < 0)
+    // The region zoom only stood in for having nothing to show: re-fit once there is, or the region changes.
+    if (s_zoomIsRegionFit && (!s_lastCenterFromRegion || s_regionFitCode != (int)config.lora.region)) {
+        s_zoom = -1;
+        s_zoomIsRegionFit = false;
+    }
+    if (s_zoom >= 0)
+        return;
+    MapRegionBounds::Bounds bounds;
+    if (haveSavedHome()) { // the zoom last used, by this UI or device-ui
+        s_zoom = clamp<int>(uiconfig.map_data.home.zoom, MapRenderer::kMinZoom, MapRenderer::kMaxZoom);
+    } else if (s_lastCenterFromRegion && MapRegionBounds::regionBounds(config.lora.region, bounds)) {
+        s_zoom = regionView(bounds).zoom;
+        s_zoomIsRegionFit = true;
+        s_regionFitCode = (int)config.lora.region;
+    } else {
         s_zoom = computeAutoFitZoom(centerLat, centerLng, s_lastViewWidth, s_lastViewHeight);
+    }
 }
 
 void ensureCenterInitialized()
@@ -822,7 +884,11 @@ void MapRenderer::setZoom(int zoom)
         zoom = kMinZoom;
     if (zoom > kMaxZoom)
         zoom = kMaxZoom;
+    if (zoom == s_zoom)
+        return;
     s_zoom = zoom;
+    s_zoomIsRegionFit = false; // a zoom the user picked stands, even over the region view
+    s_zoomSavePending = true;  // only a user's choice is saved, never auto-fit
 }
 
 void MapRenderer::zoomIn()
@@ -833,6 +899,57 @@ void MapRenderer::zoomIn()
 void MapRenderer::zoomOut()
 {
     setZoom(zoom() - 1);
+}
+
+#ifndef MAP_VIEW_AUTOSAVE_INTERVAL_SEC
+#define MAP_VIEW_AUTOSAVE_INTERVAL_SEC (2 * 60 * 60) // the message and waypoint stores' cadence
+#endif
+
+void MapRenderer::saveView()
+{
+    namespace Persist = MapViewPersistence;
+    const bool haveLive = localPosition.latitude_i != 0 || localPosition.longitude_i != 0;
+    const bool haveSaved = haveSavedHome();
+
+    Persist::Inputs in{};
+    in.zoomPending = s_zoomSavePending;
+    in.haveLivePosition = haveLive;
+    in.haveSavedLocation = haveSaved;
+    if (haveLive && haveSaved)
+        in.metersFromSaved =
+            GeoCoord::latLongToMeter(localPosition.latitude_i * 1e-7, localPosition.longitude_i * 1e-7,
+                                     uiconfig.map_data.home.latitude * 1e-7, uiconfig.map_data.home.longitude * 1e-7);
+#ifdef MESHTASTIC_ENCRYPTED_STORAGE
+    in.locationAllowed = !EncryptedStorage::isLockdownActive();
+#else
+    in.locationAllowed = true;
+#endif
+
+    const Persist::Decision decision = Persist::decide(in);
+    if (!decision.write)
+        return;
+
+    uiconfig.has_map_data = true;
+    uiconfig.map_data.has_home = true;
+    if (decision.writeLocation) {
+        uiconfig.map_data.home.latitude = localPosition.latitude_i;
+        uiconfig.map_data.home.longitude = localPosition.longitude_i;
+    }
+    if (decision.writeZoom)
+        uiconfig.map_data.home.zoom = (int8_t)zoom();
+    if (!nodeDB->saveProto(uiconfigFileName, meshtastic_DeviceUIConfig_size, &meshtastic_DeviceUIConfig_msg, &uiconfig))
+        return; // the zoom stays pending for the next save
+    if (decision.writeZoom)
+        s_zoomSavePending = false;
+}
+
+void MapRenderer::autosaveTick()
+{
+    if (s_lastAutosaveMs == 0) { // start the interval at boot, as WaypointStore does, rather than save on the first tick
+        s_lastAutosaveMs = Time::getMillis();
+        return;
+    }
+    Throttle::execute(&s_lastAutosaveMs, (uint32_t)MAP_VIEW_AUTOSAVE_INTERVAL_SEC * 1000UL, MapRenderer::saveView);
 }
 
 #if BASEUI_MAP_PNG_TILES
