@@ -95,6 +95,8 @@
 #define BASEUI_BACKGROUND_IMAGE 1
 // Read-only /flash/ page on the web server, for inspecting /prefs and the rest of the device filesystem.
 #define WEB_FLASH_BROWSER 1
+// FTP access to the SD card, for uploading map tiles in bulk from an ordinary FTP client.
+#define FTP_SERVER 1
 
 // Custom boot splash, shown for the second half of the boot screen: full-panel 320x240 artwork, drawn in
 // colour on colour-framebuffer builds. 1:1 scale - BASEUI_ICON_SCALE would double it off the panel.

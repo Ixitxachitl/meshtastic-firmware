@@ -32,6 +32,7 @@
 #include "error.h"
 #include "gps/RTC.h"
 #include "graphics/draw/MapRenderer.h"
+#include "mesh/ftp/FtpServerThread.h"
 
 #ifdef SENSECAP_INDICATOR // on the indicator run the additional serial port for the RP2040
 #include "IndicatorSerial.h"
@@ -1234,6 +1235,10 @@ void setup()
     // Start web server thread.
     webServerThread = new WebServerThread();
 #endif
+
+    // No-op unless the variant opts in, and the thread waits for WiFi itself. Kept out of the web server's guard
+    // above: a variant can exclude that and still want FTP.
+    ftp::initFtpServer();
 
 #ifdef ARCH_PORTDUINO
 #if __has_include(<ulfius.h>)
