@@ -1,4 +1,5 @@
 #pragma once
+#include "configuration.h" // BASEUI_NATIVE_RGB565, before the block at the end of this file
 #include <Arduino.h>
 
 namespace graphics
@@ -432,3 +433,28 @@ extern const unsigned char pushpin[] PROGMEM;
 #endif // EXCLUDE_EMOJI
 
 } // namespace graphics
+
+// Colour emote support. Declared here rather than in the generated emotes_color.h so that file - which is a full
+// copy of this one - never has to be included beside it, and so the generated emotes_color.cpp compiles as exported.
+#if BASEUI_NATIVE_RGB565
+#ifndef RGB565_IMAGE_DEFINED
+#define RGB565_IMAGE_DEFINED
+// A colour version of a 1-bit image: the original it stands in for, and the pixels and opacity mask to draw.
+struct RGB565Image {
+    const uint8_t *original;
+    int16_t originalWidth;
+    int16_t originalHeight;
+    const uint16_t *pixels;
+    const uint8_t *mask;
+    int16_t width;
+    int16_t height;
+};
+#endif
+
+namespace graphics
+{
+// The colour version of an emote bitmap, or nullptr to keep drawing the 1-bit original. Defined only in the colour
+// data (emotes_color.cpp), which the build selects in place of emotes.cpp - see BASEUI_COLOR_EMOTES.
+const RGB565Image *findEmoteRGB565(const unsigned char *bitmap);
+} // namespace graphics
+#endif
