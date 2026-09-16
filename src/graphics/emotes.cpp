@@ -1,5 +1,6 @@
 #include "configuration.h"
-#if HAS_SCREEN
+// The colour set in emotes_color.cpp defines the same emotes[]/numEmotes, so exactly one of the two builds.
+#if HAS_SCREEN && !BASEUI_COLOR_EMOTES
 #include "emotes.h"
 
 namespace graphics

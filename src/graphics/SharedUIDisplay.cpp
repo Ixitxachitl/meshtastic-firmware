@@ -20,6 +20,9 @@
 #include <algorithm>
 #include <cctype>
 #include <graphics/images.h>
+#if BASEUI_COLOR_EMOTES
+#include "graphics/emotes_color.h" // findEmoteRGB565()
+#endif
 
 namespace graphics
 {
@@ -142,12 +145,17 @@ void fillRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int1
 // * Scaled bitmap blit  *
 // ***********************
 #if GRAPHICS_HAS_RGB565_IMAGES
-// Draws the colour version of `xbm` into destW x destH, if images.h has one. White pixels take the current draw colour, so
+// Draws the colour version of `xbm` into destW x destH, if images.h or the emote table has one. White pixels take the
+// current draw colour, so
 // theme regions and the nav bar's inverted chip still colour them; any other colour is drawn exactly as painted.
 static bool drawRGB565Version(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm, int16_t destW,
                               int16_t destH, int16_t clipLeft = INT16_MIN, int16_t clipRight = INT16_MAX)
 {
     const RGB565Image *img = findRGB565Image(xbm, w, h);
+#if BASEUI_COLOR_EMOTES
+    if (!img) // emote bitmaps carry their own table rather than living in images_high.h
+        img = findEmoteRGB565(xbm);
+#endif
     if (!img || destW <= 0 || destH <= 0)
         return false;
     TFTDisplay *const panel = static_cast<TFTDisplay *>(display);

@@ -558,6 +558,15 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #undef BASEUI_BACKGROUND_IMAGE
 #define BASEUI_BACKGROUND_IMAGE 0
 #endif
+// Full-colour emote bitmaps (graphics/emotes_color.cpp) in place of the 1-bit set in emotes.cpp. Emotes with
+// no colour version stay 1-bit. Opt-in per variant; needs BASEUI_NATIVE_RGB565.
+#ifndef BASEUI_COLOR_EMOTES
+#define BASEUI_COLOR_EMOTES 0
+#endif
+#if BASEUI_COLOR_EMOTES && !BASEUI_NATIVE_RGB565
+#undef BASEUI_COLOR_EMOTES
+#define BASEUI_COLOR_EMOTES 0
+#endif
 #ifndef HAS_WIRE
 #define HAS_WIRE 0
 #endif
