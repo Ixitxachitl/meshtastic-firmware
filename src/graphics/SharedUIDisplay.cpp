@@ -21,7 +21,12 @@
 #include <cctype>
 #include <graphics/images.h>
 #if BASEUI_COLOR_EMOTES
-#include "graphics/emotes_color.h" // findEmoteRGB565()
+// Declared rather than including emotes_color.h: that header is a generated copy of emotes.h, which
+// EmoteRenderer.h already pulls in here, so including both redefines struct Emote.
+namespace graphics
+{
+const RGB565Image *findEmoteRGB565(const unsigned char *bitmap);
+}
 #endif
 
 namespace graphics
