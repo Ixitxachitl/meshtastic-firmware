@@ -2455,26 +2455,6 @@ void CannedMessageModule::drawDestinationSelectionScreen(OLEDDisplay *display, O
 #define EMOTE_MAX_TOUCH_SCALE 4
 #endif
 
-// graphics::drawScaledXbm() with a vertical clip. Rows scroll under the picker's header, so a
-// partially visible emote has to stop at the grid's edge instead of painting over the title.
-static void drawClippedScaledXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm, int scale,
-                                 int16_t clipTop, int16_t clipBottom)
-{
-    const int16_t bytesPerRow = (w + 7) / 8;
-    for (int16_t row = 0; row < h; ++row) {
-        const int16_t rowY = y + row * scale;
-        const int16_t top = std::max<int16_t>(rowY, clipTop);
-        const int16_t bottom = std::min<int16_t>(rowY + scale, clipBottom);
-        if (bottom <= top)
-            continue;
-        const uint8_t *rowPtr = xbm + row * bytesPerRow;
-        for (int16_t col = 0; col < w; ++col) {
-            if (pgm_read_byte(rowPtr + (col >> 3)) & (1U << (col & 7))) // XBM is LSB-first
-                display->fillRect(x + col * scale, top, scale, bottom - top);
-        }
-    }
-}
-
 void CannedMessageModule::drawEmotePickerScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     const std::vector<uint16_t> &unique = uniqueEmoteIndices();
@@ -2551,9 +2531,9 @@ void CannedMessageModule::drawEmotePickerScreen(OLEDDisplay *display, OLEDDispla
                 display->setColor(BLACK);
             }
 
-            drawClippedScaledXbm(display, cellX + (cellSize - emote.width * drawScale) / 2,
-                                 cellY + (cellSize - emote.height * drawScale) / 2, emote.width, emote.height, emote.bitmap,
-                                 drawScale, gridTop, gridBottom);
+            graphics::drawScaledXbmClippedV(display, cellX + (cellSize - emote.width * drawScale) / 2,
+                                            cellY + (cellSize - emote.height * drawScale) / 2, emote.width, emote.height,
+                                            emote.bitmap, drawScale, gridTop, gridBottom);
 
             if (idx == emotePickerIndex)
                 display->setColor(WHITE);

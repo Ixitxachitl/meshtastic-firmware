@@ -143,6 +143,10 @@ void fillRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int1
 void drawScaledXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm,
                    int scale = BASEUI_ICON_SCALE);
 
+// As drawScaledXbm(), but drops rows outside [clipTop, clipBottom). For grids that scroll under a header.
+void drawScaledXbmClippedV(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm, int scale,
+                           int16_t clipTop, int16_t clipBottom);
+
 // Nearest-neighbour XBM blit into an arbitrary destination box, for target sizes that
 // aren't an integer multiple of the source. Identical output to drawScaledXbm() when
 // destW/destH happen to be exact multiples of w/h.

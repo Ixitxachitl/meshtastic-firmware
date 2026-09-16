@@ -149,7 +149,8 @@ void fillRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int1
 // current draw colour, so
 // theme regions and the nav bar's inverted chip still colour them; any other colour is drawn exactly as painted.
 static bool drawRGB565Version(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm, int16_t destW,
-                              int16_t destH, int16_t clipLeft = INT16_MIN, int16_t clipRight = INT16_MAX)
+                              int16_t destH, int16_t clipLeft = INT16_MIN, int16_t clipRight = INT16_MAX,
+                              int16_t clipTop = INT16_MIN, int16_t clipBottom = INT16_MAX)
 {
     const RGB565Image *img = findRGB565Image(xbm, w, h);
 #if BASEUI_COLOR_EMOTES
@@ -161,6 +162,9 @@ static bool drawRGB565Version(OLEDDisplay *display, int16_t x, int16_t y, int16_
     TFTDisplay *const panel = static_cast<TFTDisplay *>(display);
     const int16_t maskRowBytes = (img->width + 7) / 8;
     for (int16_t dy = 0; dy < destH; ++dy) {
+        const int16_t py = y + dy;
+        if (py < clipTop || py >= clipBottom) // rows scrolling under a header, as the emote picker does
+            continue;
         const int16_t sy = dy * img->height / destH;
         for (int16_t dx = 0; dx < destW; ++dx) {
             const int16_t px = x + dx;
@@ -171,9 +175,9 @@ static bool drawRGB565Version(OLEDDisplay *display, int16_t x, int16_t y, int16_
                 continue;
             const uint16_t color = img->pixels[sy * img->width + sx];
             if (color == 0xFFFF)
-                display->setPixel(px, y + dy);
+                display->setPixel(px, py);
             else
-                panel->drawRGB565(px, y + dy, 1, 1, &color);
+                panel->drawRGB565(px, py, 1, 1, &color);
         }
     }
     return true;
@@ -208,6 +212,32 @@ void drawScaledXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_
         return;
 #endif
     drawScaledXbmMono(display, x, y, w, h, xbm, scale);
+}
+
+// drawScaledXbm() with a vertical clip, so a partially scrolled row stops at its container's edge instead of
+// painting over what is above or below it. Colour version first, as everywhere else.
+void drawScaledXbmClippedV(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm, int scale,
+                           int16_t clipTop, int16_t clipBottom)
+{
+    const int s = scale < 1 ? 1 : scale;
+#if GRAPHICS_HAS_RGB565_IMAGES
+    if (drawRGB565Version(display, x, y, w, h, xbm, w * s, h * s, INT16_MIN, INT16_MAX, clipTop, clipBottom))
+        return;
+#endif
+    const int16_t bytesPerRow = (w + 7) / 8;
+    for (int16_t row = 0; row < h; ++row) {
+        const int16_t rowY = y + row * s;
+        const int16_t top = rowY > clipTop ? rowY : clipTop;
+        const int16_t end = (int16_t)(rowY + s);
+        const int16_t bottom = end < clipBottom ? end : clipBottom;
+        if (bottom <= top)
+            continue;
+        const uint8_t *rowPtr = xbm + row * bytesPerRow;
+        for (int16_t col = 0; col < w; ++col) {
+            if (pgm_read_byte(rowPtr + (col >> 3)) & (1U << (col & 7))) // XBM is LSB-first
+                display->fillRect(x + col * s, top, s, bottom - top);
+        }
+    }
 }
 
 void drawStretchedXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, const uint8_t *xbm, int16_t destW,
