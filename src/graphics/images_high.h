@@ -1569,7 +1569,7 @@ static const RGB565Image rgb565Images[] = {
      imgPositionEmpty_rgb565_height},
     {imgPositionSolid, 8, 6, imgPositionSolid_rgb565, imgPositionSolid_rgb565_mask, imgPositionSolid_rgb565_width,
      imgPositionSolid_rgb565_height},
-    {bluetoothConnectedIcon, 8, 36, bluetoothConnectedIcon_rgb565, bluetoothConnectedIcon_rgb565_mask,
+    {bluetoothConnectedIcon, 14, 18, bluetoothConnectedIcon_rgb565, bluetoothConnectedIcon_rgb565_mask,
      bluetoothConnectedIcon_rgb565_width, bluetoothConnectedIcon_rgb565_height},
     {batteryBitmap_h_bottom, 9, 13, batteryBitmap_h_bottom_rgb565, batteryBitmap_h_bottom_rgb565_mask,
      batteryBitmap_h_bottom_rgb565_width, batteryBitmap_h_bottom_rgb565_height},
