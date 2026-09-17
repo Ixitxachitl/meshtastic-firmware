@@ -1444,7 +1444,7 @@ static File sdCreateFile(const std::string &path)
 // A tile tree is thousands of files. Removing them all in one request starves the task watchdog and the
 // mesh, so each request deletes for this long and the page asks again until the tree is gone.
 #define SD_DELETE_BUDGET_MS 1500
-#define SD_DELETE_CHILDREN_PER_PASS 256
+#define SD_DELETE_CHILDREN_PER_BATCH 32
 
 enum class SdRemoveResult { Done, Failed, OutOfTime };
 
@@ -1474,34 +1474,50 @@ static SdRemoveResult sdRemoveTree(const std::string &path, std::string &detail,
         }
     }
 
-    // Names are collected before anything is removed: deleting during the walk invalidates the
-    // directory handle's position on FAT. Capped per pass; the rest go on a later request.
-    std::vector<std::string> children;
-    bool more = false;
-    for (;;) {
-        concurrency::LockGuard g(spiLock);
-        File child = dir.openNextFile();
-        if (!child)
-            break;
-        children.push_back(path == "/" ? "/" + std::string(child.name()) : path + "/" + child.name());
-        child.close();
-        if (children.size() >= SD_DELETE_CHILDREN_PER_PASS) {
-            more = true;
-            break;
-        }
-    }
     {
         concurrency::LockGuard g(spiLock);
-        dir.close();
+        dir.close(); // reopened per batch below; a handle held across removals loses its place on FAT
     }
 
-    for (const auto &child : children) {
-        const SdRemoveResult result = sdRemoveTree(child, detail, deadlineMs, removed, depth + 1);
-        if (result != SdRemoveResult::Done)
-            return result;
+    // A small batch of names is collected, the handle closed, then those are removed - deleting through an
+    // open handle invalidates its position on FAT. Reopening restarts the listing, but what the last batch
+    // removed is gone from it, so every batch advances. Batches are small so the first file is deleted early
+    // in the time budget: collecting a whole large directory first spent the budget enumerating and removed
+    // nothing, and because the walk restarts at the top of the tree on the next request, it never converged.
+    for (;;) {
+        std::vector<std::string> children;
+        {
+            concurrency::LockGuard g(spiLock);
+            dir = SD.open(path.c_str());
+        }
+        if (!dir)
+            break;
+        for (;;) {
+            concurrency::LockGuard g(spiLock);
+            File child = dir.openNextFile();
+            if (!child)
+                break;
+            children.push_back(path == "/" ? "/" + std::string(child.name()) : path + "/" + child.name());
+            child.close();
+            if (children.size() >= SD_DELETE_CHILDREN_PER_BATCH)
+                break;
+        }
+        {
+            concurrency::LockGuard g(spiLock);
+            dir.close();
+        }
+        if (children.empty())
+            break;
+
+        for (const auto &child : children) {
+            const SdRemoveResult result = sdRemoveTree(child, detail, deadlineMs, removed, depth + 1);
+            if (result != SdRemoveResult::Done)
+                return result; // what has gone stays gone; Failed reports, OutOfTime has the page ask again
+        }
+        esp_task_wdt_reset();
+        if (Throttle::deadlinePassed(deadlineMs))
+            return SdRemoveResult::OutOfTime;
     }
-    if (more)
-        return SdRemoveResult::OutOfTime;
 
     concurrency::LockGuard g(spiLock);
     errno = 0;
