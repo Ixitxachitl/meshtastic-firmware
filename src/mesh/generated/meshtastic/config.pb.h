@@ -5,6 +5,7 @@
 #define PB_MESHTASTIC_MESHTASTIC_CONFIG_PB_H_INCLUDED
 #include <pb.h>
 #include "meshtastic/device_ui.pb.h"
+#include "meshtastic/field_metadata.pb.h"
 
 #if PB_PROTO_HEADER_VERSION != 40
 #error Regenerate this file with the current version of nanopb generator.
@@ -1171,7 +1172,7 @@ extern const pb_msgdesc_t meshtastic_Config_SessionkeyConfig_msg;
 #define meshtastic_Config_PowerConfig_size       52
 #define meshtastic_Config_SecurityConfig_size    180
 #define meshtastic_Config_SessionkeyConfig_size  0
-#define meshtastic_Config_size                   207
+#define meshtastic_Config_size                   209
 
 #ifdef __cplusplus
 } /* extern "C" */
