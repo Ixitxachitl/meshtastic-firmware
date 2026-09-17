@@ -9,6 +9,7 @@
 #include "MeshService.h"
 #include "MessageStore.h"
 #include "NodeDB.h"
+#include "UptimeClock.h"
 #include "buzz.h"
 #include "graphics/Backlight.h"
 #include "graphics/Screen.h"
@@ -227,8 +228,33 @@ void menuHandler::OnboardMessage()
     screen->showOverlayBanner(bannerOptions);
 }
 
+// Out-of-box US setup starts on LongTurbo rather than the region table's LongFast. Menu-only: the
+// US entry in `regions[]` keeps LongFast, so no other route onto US changes. Anything that already
+// states a preset - a pinned userpref, or a preset moved off the install default - outranks it.
+meshtastic_Config_LoRaConfig_ModemPreset menuHandler::presetForRegionSelection(const meshtastic_Config_LoRaConfig &lora,
+                                                                               meshtastic_Config_LoRaConfig_RegionCode selected)
+{
+#ifdef USERPREFS_LORACONFIG_MODEM_PRESET
+    (void)selected; // the pinned preset wins outright; nothing to decide
+#else
+    if (lora.region == meshtastic_Config_LoRaConfig_RegionCode_UNSET && selected == meshtastic_Config_LoRaConfig_RegionCode_US &&
+        lora.use_preset && lora.modem_preset == meshtastic_Config_LoRaConfig_ModemPreset_LONG_FAST) {
+        return meshtastic_Config_LoRaConfig_ModemPreset_LONG_TURBO;
+    }
+#endif
+    return lora.modem_preset;
+}
+
 static void applyLoraRegion(meshtastic_Config_LoRaConfig_RegionCode region, bool isHam)
 {
+    // Decided first: it keys off the *outgoing* region being UNSET.
+    const meshtastic_Config_LoRaConfig_ModemPreset selectionPreset = menuHandler::presetForRegionSelection(config.lora, region);
+    if (selectionPreset != config.lora.modem_preset) {
+        LOG_INFO("First region is %s, default preset to %s", getRegion(region)->name,
+                 DisplayFormatters::getModemPresetDisplayName(selectionPreset, false, true));
+        config.lora.modem_preset = selectionPreset;
+    }
+
     config.lora.region = region;
     config.lora.channel_num = 0; // Reset to default channel
 
@@ -272,6 +298,10 @@ static void applyLoraRegion(meshtastic_Config_LoRaConfig_RegionCode region, bool
     if (gps != nullptr && !gps->isEnabled() && config.position.gps_mode == meshtastic_Config_PositionConfig_GpsMode_ENABLED)
         gps->enable();
 #endif
+    if (config.lora.region != meshtastic_Config_LoRaConfig_RegionCode_UNSET && !config.lora.tx_enabled && !owner.is_licensed) {
+        LOG_WARN("Setting config.lora.tx_enabled to true");
+        config.lora.tx_enabled = true;
+    }
     service->reloadConfig(changes);
 }
 
@@ -449,7 +479,7 @@ void menuHandler::deviceRolePicker()
             config.device.role = meshtastic_Config_DeviceConfig_Role_TRACKER;
         }
         service->reloadConfig(SEGMENT_CONFIG);
-        rebootAtMsec = (millis() + DEFAULT_REBOOT_SECONDS * 1000);
+        rebootAtMsec = Time::timerEndsAtMillis(DEFAULT_REBOOT_SECONDS * 1000);
     };
     screen->showOverlayBanner(bannerOptions);
 }
@@ -1843,12 +1873,12 @@ void menuHandler::resetNodeDBMenu()
             LOG_INFO("Initiate node-db reset");
             nodeDB->resetNodes();
             disableBluetooth();
-            rebootAtMsec = (millis() + DEFAULT_REBOOT_SECONDS * 1000);
+            rebootAtMsec = Time::timerEndsAtMillis(DEFAULT_REBOOT_SECONDS * 1000);
         } else if (selected == 2) {
             LOG_INFO("Initiate node-db reset, keep favorites");
             nodeDB->resetNodes(1);
             disableBluetooth();
-            rebootAtMsec = (millis() + DEFAULT_REBOOT_SECONDS * 1000);
+            rebootAtMsec = Time::timerEndsAtMillis(DEFAULT_REBOOT_SECONDS * 1000);
         } else if (selected == 0) {
             menuQueue = NodeBaseMenu;
             screen->runNow();
@@ -2043,12 +2073,12 @@ void menuHandler::GPSSmartPositionMenu()
             config.position.position_broadcast_smart_enabled = true;
             saveUIConfig();
             service->reloadConfig(SEGMENT_CONFIG);
-            rebootAtMsec = (millis() + DEFAULT_REBOOT_SECONDS * 1000);
+            rebootAtMsec = Time::timerEndsAtMillis(DEFAULT_REBOOT_SECONDS * 1000);
         } else if (selected == 2) {
             config.position.position_broadcast_smart_enabled = false;
             saveUIConfig();
             service->reloadConfig(SEGMENT_CONFIG);
-            rebootAtMsec = (millis() + DEFAULT_REBOOT_SECONDS * 1000);
+            rebootAtMsec = Time::timerEndsAtMillis(DEFAULT_REBOOT_SECONDS * 1000);
         }
     };
     bannerOptions.InitialSelected = config.position.position_broadcast_smart_enabled ? 1 : 2;
@@ -2103,7 +2133,7 @@ void menuHandler::GPSUpdateIntervalMenu()
         if (selected != 0) {
             saveUIConfig();
             service->reloadConfig(SEGMENT_CONFIG);
-            rebootAtMsec = (millis() + DEFAULT_REBOOT_SECONDS * 1000);
+            rebootAtMsec = Time::timerEndsAtMillis(DEFAULT_REBOOT_SECONDS * 1000);
         }
     };
 
@@ -2193,7 +2223,7 @@ void menuHandler::GPSPositionBroadcastMenu()
         if (selected != 0) {
             saveUIConfig();
             service->reloadConfig(SEGMENT_CONFIG);
-            rebootAtMsec = (millis() + DEFAULT_REBOOT_SECONDS * 1000);
+            rebootAtMsec = Time::timerEndsAtMillis(DEFAULT_REBOOT_SECONDS * 1000);
         }
     };
 
@@ -2336,7 +2366,7 @@ void menuHandler::switchToMUIMenu()
             config.display.displaymode = meshtastic_Config_DisplayConfig_DisplayMode_COLOR;
             config.bluetooth.enabled = false;
             service->reloadConfig(SEGMENT_CONFIG);
-            rebootAtMsec = (millis() + DEFAULT_REBOOT_SECONDS * 1000);
+            rebootAtMsec = Time::timerEndsAtMillis(DEFAULT_REBOOT_SECONDS * 1000);
         }
     };
     screen->showOverlayBanner(bannerOptions);
@@ -2357,7 +2387,7 @@ void menuHandler::rebootMenu()
             IF_SCREEN(screen->showSimpleBanner("Rebooting...", 0));
             nodeDB->saveToDisk();
             messageStore.saveToFlash();
-            rebootAtMsec = millis() + DEFAULT_REBOOT_SECONDS * 1000;
+            rebootAtMsec = Time::timerEndsAtMillis(DEFAULT_REBOOT_SECONDS * 1000);
         } else {
             menuQueue = PowerMenu;
             screen->runNow();
@@ -2660,12 +2690,12 @@ void menuHandler::wifiToggleMenu()
             config.network.wifi_enabled = false;
             config.bluetooth.enabled = true;
             service->reloadConfig(SEGMENT_CONFIG);
-            rebootAtMsec = (millis() + DEFAULT_REBOOT_SECONDS * 1000);
+            rebootAtMsec = Time::timerEndsAtMillis(DEFAULT_REBOOT_SECONDS * 1000);
         } else if (selected == Wifi_enable) {
             config.network.wifi_enabled = true;
             config.bluetooth.enabled = false;
             service->reloadConfig(SEGMENT_CONFIG);
-            rebootAtMsec = (millis() + DEFAULT_REBOOT_SECONDS * 1000);
+            rebootAtMsec = Time::timerEndsAtMillis(DEFAULT_REBOOT_SECONDS * 1000);
         }
     };
     screen->showOverlayBanner(bannerOptions);
@@ -3270,9 +3300,11 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
     case MessageBubblesMenu:
         messageBubblesMenu();
         break;
+#if GRAPHICS_TFT_COLORING_ENABLED // the Theme option only exists with TFT coloring
     case ThemeMenu:
         themeMenu();
         break;
+#endif
     case HamModeConfirm:
         hamModeConfirmMenu();
         break;
