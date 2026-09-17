@@ -25,6 +25,10 @@ void setActiveStyle(int index);
 // Changes whenever the same view would render differently.
 uint32_t generation();
 
+// A tile the reader reported missing has since been downloaded: forget the miss and invalidate the cached
+// view, so the next draw picks it up instead of the fallback it scaled from a lower zoom.
+void noteTileArrived(int z, int32_t x, int32_t y);
+
 // Fills dst (w*h native-endian RGB565) with the view whose centre column/row is world pixel (centerX, centerY)
 // at `zoom`. A missing tile is scaled up from a lower zoom when one exists, else filled with bg.
 void renderView(uint16_t *dst, int16_t w, int16_t h, int32_t centerX, int32_t centerY, int zoom, uint16_t bg);

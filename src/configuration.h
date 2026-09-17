@@ -530,6 +530,16 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #undef BASEUI_MAP_PNG_TILES
 #define BASEUI_MAP_PNG_TILES 0
 #endif
+// Fetch a missing map tile over WiFi, from the URL template in /maps/<style>/.url, and cache it to the card beside
+// the tiles already there. On demand only - never a bulk download, and never brings WiFi up by itself.
+// Opt-in per variant; needs BASEUI_MAP_PNG_TILES and ESP32.
+#ifndef BASEUI_MAP_ONLINE_TILES
+#define BASEUI_MAP_ONLINE_TILES 0
+#endif
+#if BASEUI_MAP_ONLINE_TILES && !(BASEUI_MAP_PNG_TILES && defined(ARCH_ESP32))
+#undef BASEUI_MAP_ONLINE_TILES
+#define BASEUI_MAP_ONLINE_TILES 0
+#endif
 // Map zoom, pan and Follow Me as buttons on the Map frame instead of Map menu entries, for touch panels; a long
 // press there then opens only the tile style picker, where there is one. Opt-in per variant; needs BASEUI_HAS_MAP.
 #ifndef BASEUI_MAP_ONSCREEN_CONTROLS

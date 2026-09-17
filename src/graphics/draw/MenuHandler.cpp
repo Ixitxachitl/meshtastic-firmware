@@ -3492,6 +3492,11 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
         mapStyleMenu();
         break;
 #endif
+#if BASEUI_MAP_ONLINE_TILES
+    case MapSourceMenu:
+        mapSourceMenu();
+        break;
+#endif
 #if HAS_LORA_FEM
     case LoraFemLnaToggleMenu:
         LoRaFEMLNAToggleMenu();
@@ -3511,6 +3516,9 @@ void menuHandler::mapBaseMenu()
 #if BASEUI_MAP_PNG_TILES
         Style,
 #endif
+#if BASEUI_MAP_ONLINE_TILES
+        Source,
+#endif
     };
 
     static const MapMenuOption baseOptions[] = {
@@ -3522,6 +3530,9 @@ void menuHandler::mapBaseMenu()
         {"Follow Me", OptionsAction::Select, static_cast<int>(MapAction::FollowMe)},
 #if BASEUI_MAP_PNG_TILES
         {"Style", OptionsAction::Select, static_cast<int>(MapAction::Style)},
+#endif
+#if BASEUI_MAP_ONLINE_TILES
+        {"Source", OptionsAction::Select, static_cast<int>(MapAction::Source)},
 #endif
     };
     constexpr size_t baseCount = sizeof(baseOptions) / sizeof(baseOptions[0]);
@@ -3563,6 +3574,12 @@ void menuHandler::mapBaseMenu()
 #if BASEUI_MAP_PNG_TILES
         case MapAction::Style:
             menuQueue = MapStyleMenu;
+            screen->runNow();
+            break;
+#endif
+#if BASEUI_MAP_ONLINE_TILES
+        case MapAction::Source:
+            menuQueue = MapSourceMenu;
             screen->runNow();
             break;
 #endif
@@ -3635,6 +3652,44 @@ void menuHandler::mapFollowMeMenu()
 
     screen->showOverlayBanner(bannerOptions);
 }
+
+#if BASEUI_MAP_ONLINE_TILES
+// Whether a tile the card doesn't have is fetched over WiFi. Offline is the shipped default: online costs
+// radio time and talks to whatever provider the style's .url names.
+void menuHandler::mapSourceMenu()
+{
+    static const MapToggleOption options[] = {
+        {"Back", OptionsAction::Back},
+        {"Online", OptionsAction::Select, true},
+        {"Offline", OptionsAction::Select, false},
+    };
+    constexpr size_t count = sizeof(options) / sizeof(options[0]);
+    static std::array<const char *, count> labels{};
+
+    auto bannerOptions = createStaticBannerOptions("Map Source", options, labels, [](const MapToggleOption &option, int) -> void {
+        if (option.action == OptionsAction::Back) {
+            menuQueue = MapBaseMenu;
+            screen->runNow();
+            return;
+        }
+        if (!option.hasValue)
+            return;
+        uiconfig.has_map_data = true;
+        uiconfig.map_data.online_tiles = option.value;
+        saveUIConfig();
+    });
+
+    const bool online = uiconfig.has_map_data && uiconfig.map_data.online_tiles;
+    for (size_t i = 0; i < count; ++i) {
+        if (options[i].hasValue && options[i].value == online) {
+            bannerOptions.InitialSelected = i;
+            break;
+        }
+    }
+
+    screen->showOverlayBanner(bannerOptions);
+}
+#endif
 
 void menuHandler::mapZoomLevelMenu()
 {

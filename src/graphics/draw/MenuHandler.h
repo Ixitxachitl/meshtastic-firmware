@@ -83,6 +83,9 @@ class menuHandler
 #if BASEUI_MAP_PNG_TILES
         MapStyleMenu,
 #endif
+#if BASEUI_MAP_ONLINE_TILES
+        MapSourceMenu,
+#endif
     };
     static screenMenus menuQueue;
     static uint32_t pickedNodeNum; // node selected by NodePicker for ManageNodeMenu
@@ -163,6 +166,9 @@ class menuHandler
 #endif
 #if BASEUI_MAP_PNG_TILES
     static void mapStyleMenu();
+#endif
+#if BASEUI_MAP_ONLINE_TILES
+    static void mapSourceMenu();
 #endif
 #if HAS_LORA_FEM
     static void LoRaFEMLNAToggleMenu();

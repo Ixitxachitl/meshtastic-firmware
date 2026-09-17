@@ -2,6 +2,7 @@
 
 #if BASEUI_MAP_PNG_TILES
 
+#include "./MapTileFetch.h"
 #include "./MapTileSourceSD.h"
 #include "DebugConfiguration.h"
 #include "SPILock.h"
@@ -206,6 +207,10 @@ const uint16_t *fetchTile(int z, int32_t x, int32_t y)
         if (result == TileLoad::Missing) {
             misses[nextMiss] = key;
             nextMiss = (nextMiss + 1) % kMissSlots;
+#if BASEUI_MAP_ONLINE_TILES
+            // The miss slot is what keeps this to one request per tile rather than one per frame.
+            Fetch::requestTile(z, x, y);
+#endif
         }
         return nullptr;
     }
@@ -308,6 +313,17 @@ int refreshStyles(const char *preferred)
     return numStyles;
 }
 
+void noteTileArrived(int z, int32_t x, int32_t y)
+{
+    for (auto &m : misses) {
+        if (m.gen == gen && m.z == z && m.x == x && m.y == y)
+            m = TileKey{};
+    }
+    // The renderer keys its cached basemap on generation(), so without this the new tile is on the card but
+    // off the screen until something else moves the view.
+    gen++;
+}
+
 int styleCount()
 {
     return numStyles;
@@ -338,6 +354,9 @@ uint32_t generation()
 
 void renderView(uint16_t *dst, int16_t w, int16_t h, int32_t centerX, int32_t centerY, int zoom, uint16_t bg)
 {
+#if BASEUI_MAP_ONLINE_TILES
+    Fetch::noteMapDrawn(); // fetching runs only while the map is the frame on screen
+#endif
     const int32_t left = centerX - w / 2;
     const int32_t top = centerY - h / 2;
     const int32_t side = (int32_t)1 << zoom;
