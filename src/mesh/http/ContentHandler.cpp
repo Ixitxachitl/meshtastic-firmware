@@ -421,11 +421,14 @@ void handleFsBrowseStatic(HTTPRequest *req, HTTPResponse *res)
     res->setHeader("Access-Control-Allow-Origin", "*");
     res->setHeader("Access-Control-Allow-Methods", "GET");
 
-    concurrency::LockGuard g(spiLock);
-    std::string fileList = htmlListDir(FSCom, "/static", 10);
-
-    uint64_t total = FSCom.totalBytes();
-    uint64_t used = FSCom.usedBytes();
+    std::string fileList;
+    uint64_t total, used;
+    {
+        concurrency::LockGuard g(spiLock);
+        fileList = htmlListDir(FSCom, "/static", 10);
+        total = FSCom.totalBytes();
+        used = FSCom.usedBytes();
+    }
 
     // Key order matches the previous std::map-based emission (alphabetical).
     std::string out;
@@ -454,11 +457,14 @@ void handleFsDeleteStatic(HTTPRequest *req, HTTPResponse *res)
 
     if (params->getQueryParameter("delete", paramValDelete)) {
         std::string pathDelete = "/" + paramValDelete;
-        concurrency::LockGuard g(spiLock);
-        const char *status = FSCom.remove(pathDelete.c_str()) ? "ok" : "Error";
+        bool removed;
+        {
+            concurrency::LockGuard g(spiLock);
+            removed = FSCom.remove(pathDelete.c_str());
+        }
         LOG_INFO("%s", pathDelete.c_str());
         std::string out = "{\"status\":";
-        out += jsonEscape(status);
+        out += jsonEscape(removed ? "ok" : "Error");
         out += "}";
         writeAll(res, out);
         return;
@@ -490,38 +496,43 @@ void handleStatic(HTTPRequest *req, HTTPResponse *res)
             filenameGzip = "/static/index.html.gz";
         }
 
-        concurrency::LockGuard g(spiLock);
+        // spiLock covers filesystem calls only: a socket write or a syslog line can need the lock itself on a
+        // shared-bus Ethernet board, and the lock is not recursive.
+        bool exists;
+        bool gzipExists = false;
+        bool available;
+        size_t size;
+        {
+            concurrency::LockGuard g(spiLock);
+            exists = FSCom.exists(filename.c_str());
+            if (!exists) {
+                gzipExists = FSCom.exists(filenameGzip.c_str());
+                if (!gzipExists)
+                    filenameGzip = "/static/index.html.gz";
+            }
+            file = FSCom.open(exists ? filename.c_str() : filenameGzip.c_str());
+            available = file.available();
+            size = file.size();
+            if (!available && !exists && !gzipExists)
+                file.close();
+        }
 
-        if (FSCom.exists(filename.c_str())) {
-            file = FSCom.open(filename.c_str());
-            if (!file.available()) {
-                LOG_WARN("File not available - %s", filename.c_str());
-            }
-        } else if (FSCom.exists(filenameGzip.c_str())) {
-            file = FSCom.open(filenameGzip.c_str());
-            res->setHeader("Content-Encoding", "gzip");
-            if (!file.available()) {
-                LOG_WARN("File not available - %s", filenameGzip.c_str());
-            }
-        } else {
+        if (!available)
+            LOG_WARN("File not available - %s", exists ? filename.c_str() : filenameGzip.c_str());
+        if (!exists && !gzipExists) {
             has_set_content_type = true;
-            filenameGzip = "/static/index.html.gz";
-            file = FSCom.open(filenameGzip.c_str());
             res->setHeader("Content-Type", "text/html");
-            if (!file.available()) {
-
-                LOG_WARN("File not available - %s", filenameGzip.c_str());
+            if (!available) {
                 res->println("Web server is running.<br><br>The content you are looking for can't be found. Please see: <a "
                              "href=https://meshtastic.org/docs/software/web-client/>FAQ</a>.<br><br><a "
                              "href=/admin>admin</a>");
-
                 return;
-            } else {
-                res->setHeader("Content-Encoding", "gzip");
             }
         }
+        if (!exists)
+            res->setHeader("Content-Encoding", "gzip");
 
-        res->setHeader("Content-Length", httpsserver::intToString(file.size()));
+        res->setHeader("Content-Length", httpsserver::intToString(size));
 
         // Content-Type is guessed using the definition of the contentTypes-table defined above
         int cTypeIdx = 0;
@@ -542,13 +553,18 @@ void handleStatic(HTTPRequest *req, HTTPResponse *res)
         // Read the file and write it to the HTTP response body
         size_t length = 0;
         do {
-            char buffer[256];
-            length = file.read((uint8_t *)buffer, 256);
-            std::string bufferString(buffer, length);
-            res->write((uint8_t *)bufferString.c_str(), bufferString.size());
+            uint8_t buffer[256];
+            {
+                concurrency::LockGuard g(spiLock);
+                length = file.read(buffer, sizeof(buffer));
+            }
+            res->write(buffer, length);
         } while (length > 0);
 
-        file.close();
+        {
+            concurrency::LockGuard g(spiLock);
+            file.close();
+        }
 
         return;
     } else {
