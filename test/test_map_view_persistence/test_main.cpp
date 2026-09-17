@@ -13,6 +13,8 @@
 //   - A first-ever home written without a zoom, which device-ui opens at world view (zoom 0).
 //   - A location refresh overwriting the user's saved zoom with whatever the map currently shows.
 //   - A lockdown build copying the device's location into uiconfig, the one file it leaves unencrypted.
+//   - Follow Me (map_data.follow_gps) being unable to persist on a device with no position, or conversely
+//     loosening the zoom rule above so a pending zoom rides out on a follow-me write with no home behind it.
 //
 // No feature guard: the header has no BASEUI_HAS_MAP gate and no dependencies, so this runs on every native build.
 
@@ -120,6 +122,42 @@ static void test_lockdown_never_writes_location()
     TEST_ASSERT_FALSE(d.writeLocation);
 }
 
+static void test_follow_me_writes_with_no_location_at_all()
+{
+    Inputs in = baseline();
+    in.followMePending = true;
+
+    const Decision d = decide(in);
+    TEST_ASSERT_TRUE(d.write);
+    TEST_ASSERT_TRUE(d.writeFollowMe);
+    // follow_gps is a field of Map, not of home, so it must not fabricate a home at 0,0 to save itself
+    TEST_ASSERT_FALSE(d.writeLocation);
+    TEST_ASSERT_FALSE(d.writeZoom);
+}
+
+static void test_follow_me_does_not_release_a_stuck_zoom()
+{
+    Inputs in = baseline();
+    in.followMePending = true;
+    in.zoomPending = true; // no live fix and no saved home, so the zoom still has nowhere to live
+
+    const Decision d = decide(in);
+    TEST_ASSERT_TRUE(d.writeFollowMe);
+    TEST_ASSERT_FALSE(d.writeZoom);
+}
+
+static void test_follow_me_rides_along_with_a_location_write()
+{
+    Inputs in = baseline();
+    in.followMePending = true;
+    in.haveLivePosition = true; // first fix, nothing saved yet
+
+    const Decision d = decide(in);
+    TEST_ASSERT_TRUE(d.writeFollowMe);
+    TEST_ASSERT_TRUE(d.writeLocation);
+    TEST_ASSERT_TRUE(d.writeZoom); // a first-ever home still needs a zoom with it
+}
+
 void setUp(void) {}
 void tearDown(void) {}
 
@@ -138,6 +176,11 @@ void setup()
     RUN_TEST(test_zoom_writes_against_a_saved_location);
     RUN_TEST(test_zoom_with_no_location_anywhere_stays_pending);
     RUN_TEST(test_zoom_write_refreshes_a_live_location_for_free);
+
+    printf("\n=== Follow Me ===\n");
+    RUN_TEST(test_follow_me_writes_with_no_location_at_all);
+    RUN_TEST(test_follow_me_does_not_release_a_stuck_zoom);
+    RUN_TEST(test_follow_me_rides_along_with_a_location_write);
 
     printf("\n=== Lockdown ===\n");
     RUN_TEST(test_lockdown_never_writes_location);

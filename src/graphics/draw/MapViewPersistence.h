@@ -14,6 +14,7 @@ constexpr float kLocationMinMoveMeters = 100.0f; // GPS jitter below this never 
 
 struct Inputs {
     bool zoomPending;       // the user changed zoom since the last write
+    bool followMePending;   // ...and/or Follow Me was toggled
     bool haveLivePosition;  // localPosition holds a fix
     bool haveSavedLocation; // uiconfig already holds a non-zero home
     float metersFromSaved;  // live to saved; read only when both exist
@@ -24,6 +25,7 @@ struct Decision {
     bool write;         // save uiconfig now
     bool writeLocation; // copy the live position into home
     bool writeZoom;     // copy the current zoom into home
+    bool writeFollowMe; // copy Follow Me into map_data.follow_gps
 };
 
 inline Decision decide(const Inputs &in)
@@ -38,7 +40,9 @@ inline Decision decide(const Inputs &in)
     d.writeLocation = moved || (zoomDue && liveUsable); // already writing, so refresh it for free
     // A first-ever home needs some zoom, or device-ui opens it at world view.
     d.writeZoom = zoomDue || (d.writeLocation && !in.haveSavedLocation);
-    d.write = d.writeLocation || d.writeZoom;
+    // follow_gps is a field of Map, not of home, so it stands alone - no location needed behind it.
+    d.writeFollowMe = in.followMePending;
+    d.write = d.writeLocation || d.writeZoom || d.writeFollowMe;
     return d;
 }
 

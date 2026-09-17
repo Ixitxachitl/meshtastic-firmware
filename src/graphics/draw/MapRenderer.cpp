@@ -59,7 +59,9 @@ bool s_controlsOnScreen = false;
 
 bool s_panMode = false;
 bool s_zoomMode = false;
-bool s_followMe = true;
+bool s_followMe = true; // mirrors uiconfig.map_data.follow_gps, adopted on first use
+bool s_followMeLoaded = false;
+bool s_followMePending = false;
 float s_centerLat = 0;
 float s_centerLng = 0;
 bool s_centerInitialized = false;
@@ -186,6 +188,17 @@ bool computeNodeCentroid(float *lat, float *lng)
 MapRegionBounds::View regionView(const MapRegionBounds::Bounds &bounds)
 {
     return MapRegionBounds::fit(bounds, s_lastViewWidth, s_lastViewHeight, MapRenderer::kMinZoom, MapRenderer::kMaxZoom);
+}
+
+// device-ui writes the same field, so the two UIs agree on one setting. proto3 bools carry no presence, so a
+// config that predates this defaults to off once anything else has written map_data.
+void ensureFollowMeLoaded()
+{
+    if (s_followMeLoaded)
+        return;
+    s_followMeLoaded = true;
+    if (uiconfig.has_map_data)
+        s_followMe = uiconfig.map_data.follow_gps;
 }
 
 // A home either UI saved. 0,0 counts as none - it is what a zeroed field reads as.
@@ -320,7 +333,11 @@ static void panViewportByPixels(float lngPx, float latPx)
     ensureCenterInitialized();
     if (!s_centerInitialized)
         return;
-    s_followMe = false; // Otherwise the next redraw would immediately snap back to our own position.
+    ensureFollowMeLoaded();
+    if (s_followMe) { // Otherwise the next redraw would immediately snap back to our own position.
+        s_followMe = false;
+        s_followMePending = true;
+    }
     ensureZoomInitialized(s_centerLat, s_centerLng);
 
     const float worldPxAtZoom = 256.0f * (float)(1 << s_zoom);
@@ -849,11 +866,15 @@ void MapRenderer::panByFingerDelta(float dxPx, float dyPx)
 
 bool MapRenderer::isFollowMeEnabled()
 {
+    ensureFollowMeLoaded();
     return s_followMe;
 }
 
 void MapRenderer::setFollowMeEnabled(bool enabled)
 {
+    ensureFollowMeLoaded();
+    if (s_followMe != enabled)
+        s_followMePending = true;
     s_followMe = enabled;
     if (!enabled)
         ensureCenterInitialized(); // Freezing the view - make sure there's somewhere concrete to freeze it.
@@ -913,6 +934,7 @@ void MapRenderer::saveView()
 
     Persist::Inputs in{};
     in.zoomPending = s_zoomSavePending;
+    in.followMePending = s_followMePending;
     in.haveLivePosition = haveLive;
     in.haveSavedLocation = haveSaved;
     if (haveLive && haveSaved)
@@ -937,10 +959,14 @@ void MapRenderer::saveView()
     }
     if (decision.writeZoom)
         uiconfig.map_data.home.zoom = (int8_t)zoom();
+    if (decision.writeFollowMe)
+        uiconfig.map_data.follow_gps = s_followMe;
     if (!nodeDB->saveProto(uiconfigFileName, meshtastic_DeviceUIConfig_size, &meshtastic_DeviceUIConfig_msg, &uiconfig))
         return; // the zoom stays pending for the next save
     if (decision.writeZoom)
         s_zoomSavePending = false;
+    if (decision.writeFollowMe)
+        s_followMePending = false;
 }
 
 void MapRenderer::autosaveTick()
@@ -1030,6 +1056,7 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     y += kHeaderHeight;
     viewHeight -= kHeaderHeight;
 
+    ensureFollowMeLoaded();
     s_lastViewWidth = viewWidth;
     s_lastViewHeight = viewHeight;
 #if BASEUI_MAP_ONSCREEN_CONTROLS
