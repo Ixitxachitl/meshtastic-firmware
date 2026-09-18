@@ -138,6 +138,31 @@ template <typename T> void wakeAirohaForActiveProbe(T *serialGps)
 #endif
 }
 
+// Receivers resolve the 10-bit GPS week against their own reference; some pick the next 1024-week cycle
+// (ThinkNode M9's CM121 reported 2046). Pull a date back while it still lands at or after the build date.
+bool undoGpsWeekRollover(struct tm &t)
+{
+#ifdef BUILD_EPOCH
+    constexpr int64_t GPS_WEEK_ROLLOVER_SECS = 1024LL * 7 * SEC_PER_DAY;
+    int64_t epoch = static_cast<int64_t>(gm_mktime(&t));
+    const int64_t reported = epoch;
+    while (epoch - GPS_WEEK_ROLLOVER_SECS >= static_cast<int64_t>(BUILD_EPOCH))
+        epoch -= GPS_WEEK_ROLLOVER_SECS;
+    if (epoch == reported)
+        return false;
+
+    const time_t corrected = static_cast<time_t>(epoch);
+    const struct tm *fixed = gmtime(&corrected);
+    if (!fixed)
+        return false;
+    t = *fixed;
+    return true;
+#else
+    (void)t;
+    return false;
+#endif
+}
+
 bool isPlausibleNmeaTime(const struct tm &t)
 {
     const int year = t.tm_year + 1900;
@@ -2148,6 +2173,9 @@ The Unix epoch (or Unix time or POSIX time or Unix timestamp) is the number of s
         t.tm_year = d.year() - 1900;
         t.tm_isdst = false;
         if (t.tm_mon > -1) {
+            if (undoGpsWeekRollover(t))
+                LOG_WARN("GPS date %04d-%02d-%02d is a week rollover, using %04d-%02d-%02d", d.year(), d.month(), d.day(),
+                         t.tm_year + 1900, t.tm_mon + 1, t.tm_mday);
             if (!isPlausibleNmeaTime(t)) {
                 return false;
             }
@@ -2277,6 +2305,7 @@ bool GPS::lookForLocation()
     t.tm_mon = reader.date.month() - 1;
     t.tm_year = reader.date.year() - 1900;
     t.tm_isdst = false;
+    undoGpsWeekRollover(t);
     p.timestamp = gm_mktime(&t);
 
     // Nice to have, if available
