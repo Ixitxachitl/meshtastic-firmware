@@ -39,6 +39,10 @@ class TFTDisplay : public OLEDDisplay
     // applicable (e.g. no SDL window, or not the active display panel).
     static int heldXZone();
 
+    // Force every unlit body pixel to one solid colour, overriding the theme canvas and any
+    // background artwork. The lockscreen uses it; pass false to hand the canvas back to the theme.
+    void setCanvasOverride(bool active, uint16_t color565 = 0);
+
     // Turn the display upside down
     virtual void flipScreenVertically();
 
@@ -65,7 +69,8 @@ class TFTDisplay : public OLEDDisplay
 #endif
 
     // Functions for changing display brightness
-    void setDisplayBrightness(uint8_t);
+    // quiet skips the log line, for callers that ramp the level rather than set it once.
+    void setDisplayBrightness(uint8_t, bool quiet = false);
 
 #if defined(ST7789_CS) && !defined(USE_ARDUINO_GFX) && (defined(ST7789_VCOMS) || BASEUI_PANEL_VCOM_TUNING)
 #define TFT_HAS_PANEL_VCOM 1
@@ -183,6 +188,8 @@ class TFTDisplay : public OLEDDisplay
     uint16_t legacyBgBe = 0; // the theme's two-tone body background, which canvasBe replaces
     uint16_t canvasBe = 0;
     const uint16_t *canvasImage = nullptr; // panel-sized, native-endian; null for a solid canvas
+    bool canvasOverrideActive = false;     // see setCanvasOverride()
+    uint16_t canvasOverrideBe = 0;
     void refreshNativeThemeColors();
     // An unlit pixel in the body background takes the canvas instead: its image pixel where there is one.
     uint16_t onCanvas(bool lit, uint16_t be, int32_t x, int32_t y) const;

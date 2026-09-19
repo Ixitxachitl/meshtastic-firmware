@@ -150,6 +150,16 @@ int InputBroker::handleInputEvent(const InputEvent *event)
 #endif
 
 #if HAS_SCREEN
+    // The wake lockscreen gates input the way the boot splash does, so a press in a pocket can't
+    // drive menus unseen. Holding select unlocks; anything else just restarts the countdown.
+    if (screen && event && screen->isLockscreenShowing()) {
+        if (event->inputEvent == INPUT_BROKER_SELECT_LONG)
+            screen->unlockScreen();
+        else
+            screen->extendLockscreen();
+        return 0;
+    }
+
     // Nothing on the boot splash responds to navigation, and acting on it (a frame change, the composer
     // opening) would cut the splash short. The press still woke the device via PowerFSM above.
     if (screen && screen->isShowingBootScreen())

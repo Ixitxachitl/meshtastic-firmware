@@ -1791,6 +1791,8 @@ uint16_t TFTDisplay::onCanvas(bool lit, uint16_t be, int32_t x, int32_t y) const
 {
     if (lit || (be != legacyBgBe && be != canvasBe))
         return be;
+    if (canvasOverrideActive)
+        return canvasOverrideBe;
     return canvasImage ? nativeSwap565(canvasImage[(size_t)y * displayWidth + x]) : canvasBe;
 }
 
@@ -2739,13 +2741,32 @@ void TFTDisplay::sendCommand(uint8_t com)
     // Drop all other commands to device (we just update the buffer)
 }
 
-void TFTDisplay::setDisplayBrightness(uint8_t _brightness)
+void TFTDisplay::setDisplayBrightness(uint8_t _brightness, bool quiet)
 {
+    (void)quiet;
 #if defined(RAK14014) || defined(HELTEC_MESH_NODE_T096) || defined(HELTEC_MESH_NODE_T1)
     // todo
 #elif !defined(USE_ARDUINO_GFX)
     tft->setBrightness(_brightness);
-    LOG_DEBUG("Brightness is set to value: %i ", _brightness);
+    if (!quiet)
+        LOG_DEBUG("Brightness is set to value: %i ", _brightness);
+#endif
+}
+
+void TFTDisplay::setCanvasOverride(bool active, uint16_t color565)
+{
+#if BASEUI_NATIVE_RGB565
+    const uint16_t be = nativeSwap565(color565);
+    if (canvasOverrideActive == active && canvasOverrideBe == be)
+        return;
+    canvasOverrideActive = active;
+    canvasOverrideBe = be;
+    // The canvas is resolved per pixel as it is drawn, so everything already in the buffer is stale.
+    nativeClean = false;
+    forceNativePush = true;
+#else
+    (void)active;
+    (void)color565;
 #endif
 }
 

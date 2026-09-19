@@ -93,6 +93,8 @@
 #define BASEUI_PANEL_VCOM_TUNING 1
 // Default Dark's navy canvas drawn as the topographic artwork in graphics/img/background.h.
 #define BASEUI_BACKGROUND_IMAGE 1
+// Pocket watch: motion wakes this in a pocket, so wake onto a clock lockscreen that holds select to unlock.
+#define BASEUI_LOCKSCREEN 1
 // Read-only /flash/ page on the web server, for inspecting /prefs and the rest of the device filesystem.
 #define WEB_FLASH_BROWSER 1
 // FTP access to the SD card, for uploading map tiles in bulk from an ordinary FTP client.

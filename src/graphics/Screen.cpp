@@ -135,6 +135,19 @@ namespace graphics
 // A text message frame + debug frame + all the node infos
 FrameCallback *normalFrames;
 static uint32_t targetFramerate = IDLE_FRAMERATE;
+
+#if BASEUI_LOCKSCREEN
+// The wake lockscreen is the clock frame exactly as configured, drawn over the solid canvas
+// armLockscreen() switches on and with the nav bar overlay taken away.
+static void drawLockscreenFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
+{
+    if (uiconfig.is_clockface_analog)
+        graphics::ClockRenderer::drawAnalogClockFrame(display, state, x, y);
+    else
+        graphics::ClockRenderer::drawDigitalClockFrame(display, state, x, y);
+}
+#endif
+
 #if GRAPHICS_TFT_COLORING_ENABLED
 static inline void prepareFrameColorRegions()
 {
@@ -689,6 +702,14 @@ void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
     if (!useDisplay)
         return;
 
+#if BASEUI_LOCKSCREEN
+    // Every wake lands on the lockscreen, so the panel has to come up from dark rather than flash
+    // the frame it still holds. The boot splash is not a wake, and the lock does not take the
+    // screen off a modal module or the composer's keyboard - setFrames() could not give it back.
+    const bool lockOnWake = on && !screenOn && !isShowingBootScreen() && !hasModalModule() &&
+                            NotificationRenderer::current_notification_type != notificationTypeEnum::text_input;
+#endif
+
     if (on != screenOn) {
         if (on) {
             LOG_INFO("Turn on screen");
@@ -724,7 +745,11 @@ void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
 
 #if defined(ST7789_CS) &&                                                                                                        \
     !defined(M5STACK) // set display brightness when turning on screens. Just moved function from TFTDisplay to here.
+#if BASEUI_LOCKSCREEN
+            static_cast<TFTDisplay *>(dispdev)->setDisplayBrightness(lockOnWake ? 0 : brightness);
+#else
             static_cast<TFTDisplay *>(dispdev)->setDisplayBrightness(brightness);
+#endif
 #endif
 
             dispdev->displayOn();
@@ -829,6 +854,13 @@ void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
         }
         screenOn = on;
     }
+
+#if BASEUI_LOCKSCREEN
+    if (lockOnWake)
+        armLockscreen();
+    else if (!on)
+        clearLockscreenState();
+#endif
 }
 
 void Screen::setup()
@@ -1710,6 +1742,130 @@ static bool screenDragOwnsFramerate()
 }
 #endif // BASEUI_HAS_TOUCH_DRAG
 
+#if BASEUI_LOCKSCREEN
+// One backlight step per ~60Hz tick. runOnce() drops to IDLE_FRAMERATE once the frame is fixed,
+// so the ramp asks to be called back itself rather than riding the frame rate.
+static constexpr uint32_t kLockFadeStepMs = 16;
+
+void Screen::setPanelBrightness(uint8_t level)
+{
+#if defined(ST7789_CS) && !defined(M5STACK)
+    static_cast<TFTDisplay *>(dispdev)->setDisplayBrightness(level, true);
+#else
+    (void)level; // no brightness control: the lockscreen simply appears and disappears
+#endif
+}
+
+void Screen::clearLockscreenState()
+{
+    lockPhase = LockPhase::None;
+#if BASEUI_NATIVE_RGB565
+    static_cast<TFTDisplay *>(dispdev)->setCanvasOverride(false);
+#endif
+}
+
+void Screen::armLockscreen()
+{
+    lockPhase = LockPhase::FadeIn;
+    lockPhaseStartedMs = millis();
+    lockReturnFrame = ui->getUiState()->currentFrame;
+    lockDeferredFocus = FOCUS_PRESERVE;
+    setPanelBrightness(0);
+#if BASEUI_NATIVE_RGB565
+    static_cast<TFTDisplay *>(dispdev)->setCanvasOverride(true, TFTPalette::Black);
+#endif
+
+    // Its own frame array, so an alert the screen slept on is still there to return to.
+    static FrameCallback lockscreenFrames[] = {drawLockscreenFrame};
+    showingNormalScreen = false;
+    NotificationRenderer::pauseBanner = true;
+    ui->setOverlays(NULL, 0); // no nav bar over the lock; setFrames() puts it back on unlock
+    setFrameImmediateDraw(lockscreenFrames);
+}
+
+void Screen::handleUnlock()
+{
+    clearLockscreenState();
+    setPanelBrightness(brightness);
+    NotificationRenderer::pauseBanner = false;
+    // setFrames() takes FOCUS_PRESERVE from the live frame index, which the lock's one-frame set
+    // reset to 0 - so put the real frameset and index back before asking it to rebuild.
+    ui->setFrames(normalFrames, framesetInfo.frameCount);
+    ui->switchToFrame(lockReturnFrame);
+    setFrames(lockDeferredFocus);
+    lockDeferredFocus = FOCUS_PRESERVE;
+    setFastFramerate();
+}
+
+bool Screen::tickLockscreen()
+{
+    if (lockPhase == LockPhase::None)
+        return false;
+
+    const uint32_t elapsed = millis() - lockPhaseStartedMs;
+    switch (lockPhase) {
+    case LockPhase::FadeIn:
+        if (elapsed >= BASEUI_LOCKSCREEN_FADE_MS) {
+            setPanelBrightness(brightness);
+            lockPhase = LockPhase::Held;
+            lockPhaseStartedMs = millis();
+        } else {
+            setPanelBrightness((uint8_t)((uint32_t)brightness * elapsed / BASEUI_LOCKSCREEN_FADE_MS));
+        }
+        break;
+    case LockPhase::Held:
+        if (elapsed >= BASEUI_LOCKSCREEN_TIMEOUT_MS) {
+            lockPhase = LockPhase::FadeOut;
+            lockPhaseStartedMs = millis();
+        }
+        break;
+    case LockPhase::FadeOut:
+        if (elapsed >= BASEUI_LOCKSCREEN_FADE_MS) {
+            clearLockscreenState();
+            // PowerFSM stays in ON; its stateON self-transition on EVENT_INPUT wakes us again.
+            setOn(false);
+            return false;
+        }
+        setPanelBrightness((uint8_t)((uint32_t)brightness * (BASEUI_LOCKSCREEN_FADE_MS - elapsed) / BASEUI_LOCKSCREEN_FADE_MS));
+        break;
+    default:
+        break;
+    }
+    return true;
+}
+#endif // BASEUI_LOCKSCREEN
+
+bool Screen::isLockscreenShowing() const
+{
+#if BASEUI_LOCKSCREEN
+    // Gates all input, so like the boot splash it must never stick: a dark panel means no lock.
+    return useDisplay && screenOn && lockPhase != LockPhase::None;
+#else
+    return false;
+#endif
+}
+
+void Screen::extendLockscreen()
+{
+#if BASEUI_LOCKSCREEN
+    if (lockPhase == LockPhase::None || lockPhase == LockPhase::FadeIn)
+        return;
+    lockPhase = LockPhase::Held;
+    lockPhaseStartedMs = millis();
+    setPanelBrightness(brightness); // a press caught mid-fade-out brings the panel straight back
+#endif
+}
+
+void Screen::unlockScreen()
+{
+#if BASEUI_LOCKSCREEN
+    if (lockPhase == LockPhase::None)
+        return;
+    lockPhase = LockPhase::None; // stops the fade now; the queued command restores the frames
+    enqueueCmd(ScreenCmd{.cmd = Cmd::UNLOCK_SCREEN});
+#endif
+}
+
 bool Screen::isShowingBootScreen() const
 {
     // This gates all input, so it must never stick: no display means no splash, and the splash's own duration
@@ -1874,12 +2030,22 @@ int32_t Screen::runOnce()
                 setFrames();
             }
             break;
+        case Cmd::UNLOCK_SCREEN:
+#if BASEUI_LOCKSCREEN
+            handleUnlock();
+#endif
+            break;
         case Cmd::NOOP:
             break;
         default:
             LOG_ERROR("Invalid screen cmd");
         }
     }
+
+#if BASEUI_LOCKSCREEN
+    // May turn the screen off, so it has to run before the check below rather than after it.
+    const bool lockOwnsPanel = tickLockscreen();
+#endif
 
     if (!screenOn) { // If we didn't just wake and the screen is still off, then
                      // stop updating until it is on again
@@ -1956,6 +2122,13 @@ int32_t Screen::runOnce()
     // soon, otherwise just 1 fps (to save CPU) We also ask to be called twice
     // as fast as we really need so that any rounding errors still result with
     // the correct framerate
+#if BASEUI_LOCKSCREEN
+    // The block above drops to IDLE_FRAMERATE once the frame is fixed, which is far too slow to
+    // ramp the backlight and would overshoot the unlock deadline by up to a second.
+    if (lockOwnsPanel)
+        return lockPhase == LockPhase::Held ? 100 : (int32_t)kLockFadeStepMs;
+#endif
+
 #if SCREEN_ANIMATE_FRAME_NAV
     // Mid-transition, wake when the next frame is due - not a full interval after this one finished.
     if (ui->getUiState()->frameState == IN_TRANSITION) {
@@ -2058,6 +2231,13 @@ void Screen::setFrames(FrameFocus focus)
     if (NotificationRenderer::current_notification_type == notificationTypeEnum::text_input) {
         return;
     }
+#if BASEUI_LOCKSCREEN
+    // The lock owns the panel, so a frame change from anywhere else waits for the unlock.
+    if (isLockscreenShowing()) {
+        lockDeferredFocus = focus;
+        return;
+    }
+#endif
 #if SCREEN_ANIMATE_FRAME_NAV
     navSlideRestore(); // the rebuild below rewrites normalFrames, so a slide's stand-ins go back first
 #endif

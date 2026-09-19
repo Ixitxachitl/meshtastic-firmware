@@ -577,6 +577,19 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #undef BASEUI_COLOR_EMOTES
 #define BASEUI_COLOR_EMOTES 0
 #endif
+// Lockscreen: the panel wakes onto the clock frame over a solid black canvas, fading in, and eats
+// input until select is held. Left locked it fades back out and the screen sleeps. Opt-in per variant.
+#ifndef BASEUI_LOCKSCREEN
+#define BASEUI_LOCKSCREEN 0
+#endif
+// How long the lockscreen stays up before it fades out and the screen sleeps again.
+#ifndef BASEUI_LOCKSCREEN_TIMEOUT_MS
+#define BASEUI_LOCKSCREEN_TIMEOUT_MS 5000
+#endif
+// Length of the backlight ramp at each end. Panels without brightness control jump instead.
+#ifndef BASEUI_LOCKSCREEN_FADE_MS
+#define BASEUI_LOCKSCREEN_FADE_MS 400
+#endif
 #ifndef HAS_WIRE
 #define HAS_WIRE 0
 #endif

@@ -89,6 +89,9 @@ class Screen
     void showOverlayBanner(BannerOverlayOptions) {}
     void setFrames(FrameFocus focus) {}
     void endAlert() {}
+    bool isLockscreenShowing() const { return false; }
+    void unlockScreen() {}
+    void extendLockscreen() {}
     bool getIsI2cScreen() const { return false; }
     uint32_t getI2cFrequency() const { return 0; }
     ScanI2C::I2CPort getI2CPort() const { return ScanI2C::I2CPort::NO_I2C; }
@@ -307,6 +310,16 @@ class Screen : public concurrency::OSThread
     bool isScreenOn() { return screenOn; }
     // True for the whole boot splash (logo, then the OEM image), until normal frames or an alert take over.
     bool isShowingBootScreen() const;
+
+    // True while the wake lockscreen owns the panel. Like the boot splash it gates all input, so
+    // it is capped by its own deadline and can never outlive the screen being on.
+    bool isLockscreenShowing() const;
+
+    // Drop the lock and return to the frame the screen slept on. Safe to call when not locked.
+    void unlockScreen();
+
+    // Restart the unlock countdown, so a hold begun near the deadline still has time to land.
+    void extendLockscreen();
 
     bool isOnGamesFrame()
     {
@@ -856,6 +869,23 @@ class Screen : public concurrency::OSThread
     // Bluetooth PIN screen)
     bool showingNormalScreen = false;
     bool showingBootScreen = true;
+
+#if BASEUI_LOCKSCREEN
+    // Wake lockscreen: FadeIn ramps the backlight up on the clock frame, Held waits out
+    // BASEUI_LOCKSCREEN_TIMEOUT_MS for the unlock hold, FadeOut ramps back down into screen-off.
+    enum class LockPhase : uint8_t{None, FadeIn, Held, FadeOut};
+    LockPhase lockPhase = LockPhase::None;
+    uint32_t lockPhaseStartedMs = 0;
+    uint8_t lockReturnFrame = 0; // frame index the lock covered, for FOCUS_PRESERVE on unlock
+    // A frame change asked for while locked (a new message, a module taking focus) is replayed on
+    // unlock rather than shown through the lock. FOCUS_PRESERVE means nothing was deferred.
+    FrameFocus lockDeferredFocus = FOCUS_PRESERVE;
+    void armLockscreen();        // called from handleSetOn(true), on the screen thread
+    void handleUnlock();         // Cmd::UNLOCK_SCREEN
+    void clearLockscreenState(); // drop the phase and the solid canvas, without touching frames
+    bool tickLockscreen();       // advances the phase; true while the lock still owns the panel
+    void setPanelBrightness(uint8_t level);
+#endif
     std::atomic<bool> textMessageFrameShown{false};
     /// Track USB power state to only wake screen on actual power state changes
     bool lastPowerUSBState = false;
