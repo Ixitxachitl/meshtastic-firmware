@@ -390,11 +390,21 @@ void MotionSensor::drawFrameCalibration(OLEDDisplay *display, OLEDDisplayUiState
 #if !MESHTASTIC_EXCLUDE_POWER_FSM
 void MotionSensor::wakeScreen()
 {
-    if (powerFSM.getState() == &stateDARK) {
-        LOG_DEBUG("Motion wakeScreen detected");
-        if (config.display.wake_on_tap_or_motion)
-            powerFSM.trigger(EVENT_INPUT);
-    }
+    if (!config.display.wake_on_tap_or_motion)
+        return;
+
+    // stateDARK is only one of the ways the panel goes dark - the lockscreen timing out and the
+    // Screen Off menu item both leave the FSM in ON - so ask the panel rather than the state, once
+    // it has been dark long enough that this isn't the same movement that let it sleep.
+    bool panelIsDark = powerFSM.getState() == &stateDARK;
+#if !defined(MESHTASTIC_EXCLUDE_SCREEN) && HAS_SCREEN
+    panelIsDark = panelIsDark || (screen && screen->screenOffForAtLeast(MOTION_WAKE_REARM_MS));
+#endif
+    if (!panelIsDark)
+        return;
+
+    LOG_DEBUG("Motion wakeScreen detected");
+    powerFSM.trigger(EVENT_INPUT);
 }
 
 void MotionSensor::buttonPress()

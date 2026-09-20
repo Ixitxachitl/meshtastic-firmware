@@ -92,6 +92,7 @@ class Screen
     bool isLockscreenShowing() const { return false; }
     void unlockScreen() {}
     void extendLockscreen() {}
+    bool screenOffForAtLeast(uint32_t) const { return false; }
     bool getIsI2cScreen() const { return false; }
     uint32_t getI2cFrequency() const { return 0; }
     ScanI2C::I2CPort getI2CPort() const { return ScanI2C::I2CPort::NO_I2C; }
@@ -269,7 +270,7 @@ class Screen : public concurrency::OSThread
 
     std::vector<const uint8_t *> indicatorIcons; // Per-frame custom icon pointers
 #if defined(OLED_COMPACT_UI)
-    std::vector<const char *> frameTitles;       // Per-frame short labels, parallel to indicatorIcons
+    std::vector<const char *> frameTitles; // Per-frame short labels, parallel to indicatorIcons
 #endif
     Screen(const Screen &) = delete;
     Screen &operator=(const Screen &) = delete;
@@ -320,6 +321,10 @@ class Screen : public concurrency::OSThread
 
     // Restart the unlock countdown, so a hold begun near the deadline still has time to land.
     void extendLockscreen();
+
+    // True once the panel has been dark for at least ms, whatever turned it off - the idle
+    // timeout, the lockscreen, the Screen Off menu item. Motion wake re-arms on it.
+    bool screenOffForAtLeast(uint32_t ms) const;
 
     bool isOnGamesFrame()
     {
@@ -865,6 +870,7 @@ class Screen : public concurrency::OSThread
     bool useDisplay = false;
     /// Whether the display is currently powered
     bool screenOn = false;
+    uint32_t screenOffAtMs = 0; // when the panel last went dark; see screenOffForAtLeast()
     // Whether we are showing the regular screen (as opposed to booth screen or
     // Bluetooth PIN screen)
     bool showingNormalScreen = false;
@@ -873,7 +879,7 @@ class Screen : public concurrency::OSThread
 #if BASEUI_LOCKSCREEN
     // Wake lockscreen: FadeIn ramps the backlight up on the clock frame, Held waits out
     // BASEUI_LOCKSCREEN_TIMEOUT_MS for the unlock hold, FadeOut ramps back down into screen-off.
-    enum class LockPhase : uint8_t{None, FadeIn, Held, FadeOut};
+    enum class LockPhase : uint8_t { None, FadeIn, Held, FadeOut };
     LockPhase lockPhase = LockPhase::None;
     uint32_t lockPhaseStartedMs = 0;
     uint8_t lockReturnFrame = 0; // frame index the lock covered, for FOCUS_PRESERVE on unlock

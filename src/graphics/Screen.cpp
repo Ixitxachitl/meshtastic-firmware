@@ -853,6 +853,8 @@ void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
             enabled = false;
         }
         screenOn = on;
+        if (!on)
+            screenOffAtMs = millis();
     }
 
 #if BASEUI_LOCKSCREEN
@@ -1834,6 +1836,11 @@ bool Screen::tickLockscreen()
     return true;
 }
 #endif // BASEUI_LOCKSCREEN
+
+bool Screen::screenOffForAtLeast(uint32_t ms) const
+{
+    return useDisplay && !screenOn && Throttle::hasElapsed(screenOffAtMs, ms);
+}
 
 bool Screen::isLockscreenShowing() const
 {

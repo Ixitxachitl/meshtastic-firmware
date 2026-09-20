@@ -18,12 +18,18 @@
 #include "../graphics/ScreenFonts.h"
 #include "Wire.h"
 
+// How long the panel must have been dark before motion may wake it again. Stops the movement that
+// was still going on as the screen faded out from turning it straight back on.
+#ifndef MOTION_WAKE_REARM_MS
+#define MOTION_WAKE_REARM_MS 5000
+#endif
+
 // Base class for motion processing
 class MotionSensor
 {
   public:
     explicit MotionSensor(ScanI2C::FoundDevice foundDevice);
-    virtual ~MotionSensor(){};
+    virtual ~MotionSensor() {};
 
     // Get the device type
     ScanI2C::DeviceType deviceType();
@@ -42,7 +48,7 @@ class MotionSensor
     // Refer to /src/concurrency/OSThread.h for more information
     inline virtual int32_t runOnce() { return MOTION_SENSOR_CHECK_INTERVAL_MS; };
 
-    virtual void calibrate(uint16_t forSeconds){};
+    virtual void calibrate(uint16_t forSeconds) {};
 
     // Latest samples published by the compass-fusion drivers (accel from the IMU, mag from the magnetometer).
     // Public so an optional on-screen sensor debug readout can read them. Return false if nothing published yet.
