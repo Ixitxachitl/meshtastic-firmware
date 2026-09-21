@@ -892,9 +892,9 @@ void setup()
         playStartMelody();
 
 #if HAS_SCREEN
-        // fixed screen override?
-        // The geometry picks below are skipped on variants that pin the panel size with
-        // OLED_GEOMETRY_OVERRIDE (see the end of this block) - there they would only be dead stores.
+    // fixed screen override?
+    // The geometry picks below are skipped on variants that pin the panel size with
+    // OLED_GEOMETRY_OVERRIDE (see the end of this block) - there they would only be dead stores.
 #if defined(USE_SH1107)
     screen_model = meshtastic_Config_DisplayConfig_OledType_OLED_SH1107; // set dimension of 128x128
 #ifndef OLED_GEOMETRY_OVERRIDE
@@ -995,7 +995,7 @@ void setup()
     SPI.begin();
 #endif
 #else
-        // ESP32
+    // ESP32
 #if defined(HW_SPI1_DEVICE)
     SPI1.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
     LOG_DEBUG("SPI1.begin(SCK=%d, MISO=%d, MOSI=%d, NSS=%d)", LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
@@ -1111,7 +1111,7 @@ void setup()
         kb_found = true;
 #endif
 
-        // Set osk_found for trackball/encoder devices BEFORE setupModules so CannedMessageModule can detect it
+    // Set osk_found for trackball/encoder devices BEFORE setupModules so CannedMessageModule can detect it
 #if defined(HAS_TRACKBALL) || (defined(INPUTDRIVER_ENCODER_TYPE) && INPUTDRIVER_ENCODER_TYPE == 2)
 #ifndef HAS_PHYSICAL_KEYBOARD
     osk_found = true;
@@ -1220,7 +1220,7 @@ void setup()
 
 #ifndef ARCH_PORTDUINO
 
-        // Initialize Wifi
+    // Initialize Wifi
 #if HAS_WIFI
     initWifi();
 #endif
@@ -1279,8 +1279,11 @@ void setup()
     LOG_DEBUG("Free PSRAM : %7d bytes", ESP.getFreePsram());
 #endif
 
-    // Log the per-subsystem heap breakdown now that the big allocations are done
+    // Log the per-subsystem heap breakdown now that the big allocations are done, then the heap's
+    // own region layout - the aggregate "largest free block" cannot distinguish a fragmented arena
+    // from an idle region, and the two call for opposite fixes.
     memaudit::logBreakdown("boot");
+    memaudit::logHeapRegions();
 
     // We manually run this to update the NodeStatus
     nodeDB->notifyObservers(true);

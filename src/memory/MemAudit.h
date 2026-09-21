@@ -72,6 +72,11 @@ size_t snapshot(Tag *out, size_t max);
 // Log the whole table as a single LOG_INFO line, labeled with `when` ("boot", ...).
 void logBreakdown(const char *when);
 
+// Print every internal heap region's size, free bytes and largest block. Answers what the
+// aggregate figures cannot: whether a small "largest free block" is real fragmentation or just a
+// region nothing ever allocates from. Goes out through the IDF's own printf, not the log ring.
+void logHeapRegions();
+
 #else
 
 // No-op stubs so call sites compile away without #ifdefs.
@@ -88,6 +93,7 @@ inline size_t snapshot(Tag *, size_t)
     return 0;
 }
 inline void logBreakdown(const char *) {}
+inline void logHeapRegions() {}
 
 #endif // MESHTASTIC_MEM_AUDIT
 

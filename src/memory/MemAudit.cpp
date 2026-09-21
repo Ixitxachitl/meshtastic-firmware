@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #if defined(ARCH_ESP32)
+#include <esp_heap_caps.h>    // heap_caps_print_heap_info(), for the per-region dump
 #include <esp_memory_utils.h> // esp_ptr_external_ram(), to tell PSRAM from internal DRAM
 #endif
 
@@ -133,29 +134,54 @@ void logBreakdown(const char *when)
     if (n == 0)
         return;
 
-    // A row is "tag=<internal>+<psram>ps", or just "tag=<bytes>" where none of it is PSRAM.
-    // Worst case: 16-char tag + '=' + two "-2147483648" + '+' + "ps" + ' ' = 43 bytes.
-    char line[kMaxTags * 44 + 1];
+    // RedirectablePrint::vprintf formats through a 160-byte buffer and silently swaps the last
+    // character for a newline, so an over-long line looks like a complete one. A full table needs
+    // roughly 370 characters, so wrap onto as many lines as it takes rather than pick a buffer size
+    // a later tag would quietly overflow. 128 leaves room for the "MemAudit[periodic]: " prefix.
+    static constexpr size_t kMaxPayload = 128;
+
+    const char *label = when ? when : "?";
+    char line[kMaxPayload + 1];
     size_t pos = 0;
     int32_t totalInternal = 0;
     int32_t totalPsram = 0;
+
     for (size_t i = 0; i < n; i++) {
         const int32_t psram = rows[i].psramBytes;
         const int32_t internal = rows[i].bytes - psram;
-        int written;
-        if (psram)
-            written = snprintf(line + pos, sizeof(line) - pos, "%s%s=%ld+%ldps", pos ? " " : "", rows[i].tag, (long)internal,
-                               (long)psram);
-        else
-            written = snprintf(line + pos, sizeof(line) - pos, "%s%s=%ld", pos ? " " : "", rows[i].tag, (long)internal);
-        if (written < 0 || (size_t)written >= sizeof(line) - pos)
-            break;
-        pos += written;
+        char row[64];
+        const int rowLen = psram ? snprintf(row, sizeof(row), "%s=%ld+%ldps", rows[i].tag, (long)internal, (long)psram)
+                                 : snprintf(row, sizeof(row), "%s=%ld", rows[i].tag, (long)internal);
+        if (rowLen < 0 || (size_t)rowLen >= sizeof(row))
+            continue; // unrepresentable row; the totals below still count it
+
+        // Flush first when this row would not fit, so a row never straddles two lines.
+        if (pos && pos + 1 + (size_t)rowLen > kMaxPayload) {
+            LOG_INFO("MemAudit[%s]: %s", label, line);
+            pos = 0;
+        }
+        if (pos)
+            line[pos++] = ' ';
+        memcpy(line + pos, row, (size_t)rowLen);
+        pos += (size_t)rowLen;
+        line[pos] = '\0';
+
         totalInternal += internal;
         totalPsram += psram;
     }
-    LOG_INFO("MemAudit[%s]: %s total=%ld internal=%ld psram=%ld", when ? when : "?", line, (long)(totalInternal + totalPsram),
-             (long)totalInternal, (long)totalPsram);
+
+    if (pos)
+        LOG_INFO("MemAudit[%s]: %s", label, line);
+    LOG_INFO("MemAudit[%s]: total=%ld internal=%ld psram=%ld", label, (long)(totalInternal + totalPsram), (long)totalInternal,
+             (long)totalPsram);
+}
+
+void logHeapRegions()
+{
+#if defined(ARCH_ESP32)
+    LOG_INFO("MemAudit: internal heap regions follow, in the IDF's own format");
+    heap_caps_print_heap_info(MALLOC_CAP_INTERNAL);
+#endif
 }
 
 } // namespace memaudit

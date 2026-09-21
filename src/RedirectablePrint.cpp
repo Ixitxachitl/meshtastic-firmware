@@ -54,7 +54,9 @@ size_t RedirectablePrint::vprintf(const char *logLevel, const char *format, va_l
 #if ARCH_PORTDUINO
     static char printBuf[512];
 #else
-    static char printBuf[160];
+    // 160 silently cut any line past 158 characters - MemAudit's breakdown among them - and the
+    // substituted newline below made the result read as a complete line. .bss, so the rise is 96 bytes.
+    static char printBuf[256];
 #endif
 
 #ifdef ARCH_PORTDUINO
@@ -72,6 +74,7 @@ size_t RedirectablePrint::vprintf(const char *logLevel, const char *format, va_l
 
     if (len > sizeof(printBuf) - 1) {
         len = sizeof(printBuf) - 1;
+        printBuf[sizeof(printBuf) - 3] = '~'; // mark the cut; a bare newline reads as a whole line
         printBuf[sizeof(printBuf) - 2] = '\n';
     }
     for (size_t f = 0; f < len; f++) {

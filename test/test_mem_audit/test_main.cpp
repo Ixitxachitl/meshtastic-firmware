@@ -189,6 +189,7 @@ void test_ma_tableFull_dropsNewTagsKeepsExisting()
     TEST_ASSERT_EQUAL_INT32(7, bytesFor("t_set"));
 
     memaudit::logBreakdown("test"); // smoke: full table renders one log line
+    memaudit::logHeapRegions();     // smoke: no-op off ESP32, must still be callable
 }
 
 MA_TEST_ENTRY void setup()

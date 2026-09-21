@@ -1324,14 +1324,19 @@ void Power::logHeapUsage()
     // only use internal DRAM, and take it in several separate buffers rather than one block. So
     // they can fail with the pooled total still looking healthy, either because PSRAM is
     // flattering it or because internal DRAM has fragmented. Neither is visible without these.
+    // Both largest-block figures, because the DMA one alone misleads: it can be pinned by a small
+    // region nothing ever allocates from, reading as heavy fragmentation while the main arena is
+    // almost entirely contiguous. memaudit::logHeapRegions() prints the per-region breakdown.
     const uint32_t internalFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    const uint32_t largestInternal = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
     const uint32_t largestDma = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
     if (psramTotal)
-        LOG_INFO("Heap: %u/%u bytes free (%d since last)%s, internal %u (largest DMA blk %u), PSRAM: %u/%u bytes free", heapFree,
-                 heapTotal, delta, detail, internalFree, largestDma, memGet.getFreePsram(), psramTotal);
+        LOG_INFO("Heap: %u/%u bytes free (%d since last)%s, internal %u (largest blk %u, DMA blk %u), PSRAM: %u/%u bytes free",
+                 heapFree, heapTotal, delta, detail, internalFree, largestInternal, largestDma, memGet.getFreePsram(),
+                 psramTotal);
     else
-        LOG_INFO("Heap: %u/%u bytes free (%d since last)%s, internal %u (largest DMA blk %u)", heapFree, heapTotal, delta, detail,
-                 internalFree, largestDma);
+        LOG_INFO("Heap: %u/%u bytes free (%d since last)%s, internal %u (largest blk %u, DMA blk %u)", heapFree, heapTotal, delta,
+                 detail, internalFree, largestInternal, largestDma);
 #else
     if (psramTotal)
         LOG_INFO("Heap: %u/%u bytes free (%d since last)%s, PSRAM: %u/%u bytes free", heapFree, heapTotal, delta, detail,
