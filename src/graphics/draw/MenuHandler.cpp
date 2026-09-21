@@ -125,6 +125,18 @@ const StoredMessage *getNewestMessageForActiveThread()
     return nullptr;
 }
 
+// Freetext compose is offered whenever the device can enter text at all: a physical
+// keyboard, an on-screen keyboard driven by rotary/trackball/joystick, or a touchscreen
+// virtual keyboard.
+bool freetextAvailable()
+{
+#if defined(USE_VIRTUAL_KEYBOARD)
+    return true;
+#else
+    return kb_found || osk_found;
+#endif
+}
+
 void launchReplyForMessage(const StoredMessage &message, bool freetext)
 {
     if (message.type == MessageType::BROADCAST || message.dest == NODENUM_BROADCAST) {
@@ -160,12 +172,7 @@ uint8_t test_count = 0;
 void menuHandler::loraMenu()
 {
     static const char *optionsArray[] = {
-        "Back",
-        "Device Role",
-        "Radio Preset",
-        "Frequency Slot",
-        "LoRa Region",
-        "Transmit Enabled",
+        "Back",    "Device Role", "Radio Preset", "Frequency Slot", "LoRa Region", "Transmit Enabled",
 #if HAS_LORA_FEM
         "FEM LNA",
 #endif
@@ -933,8 +940,8 @@ void menuHandler::replyMenu()
     optionsArray[options] = "With Preset";
     optionsEnumArray[options++] = ReplyPreset;
 
-    // Freetext reply (only when keyboard exists)
-    if (kb_found) {
+    // Freetext reply (only when the device can enter text)
+    if (freetextAvailable()) {
         optionsArray[options] = "With Freetext";
         optionsEnumArray[options++] = ReplyFreetext;
     }
@@ -1333,7 +1340,7 @@ void menuHandler::textMessageBaseMenu()
     int options = 1;
     optionsArray[options] = "New Preset Msg";
     optionsEnumArray[options++] = Preset;
-    if (kb_found) {
+    if (freetextAvailable()) {
         optionsArray[options] = "New Freetext Msg";
         optionsEnumArray[options++] = Freetext;
     }
@@ -1456,7 +1463,7 @@ void menuHandler::favoriteBaseMenu()
     }
     optionsEnumArray[options++] = Preset;
 
-    if (kb_found) {
+    if (freetextAvailable()) {
         optionsArray[options] = "New Freetext Msg";
         optionsEnumArray[options++] = Freetext;
     }

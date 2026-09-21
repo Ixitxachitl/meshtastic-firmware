@@ -71,9 +71,9 @@ bool Tetris::tick()
 // Input
 // ---------------------------------------------------------------------------
 
-void Tetris::handleInput(input_broker_event ev)
+void Tetris::handleInput(const InputEvent *event)
 {
-    switch (ev) {
+    switch (event->inputEvent) {
     case INPUT_BROKER_UP:
         if (game.rotate() && lockDelayActive)
             lockDelayStartMs = millis();

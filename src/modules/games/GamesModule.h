@@ -67,12 +67,18 @@ class GamesModule : public SinglePortModule, public Observable<const UIFrameEven
     CallbackObserver<GamesModule, const InputEvent *> inputObserver =
         CallbackObserver<GamesModule, const InputEvent *>(this, &GamesModule::handleInputEvent);
 
+    // After this long with no input while the games frame is up, bounce back to the home frame so a
+    // walked-away device clearly reads as a Meshtastic node rather than sitting on a game screen.
+    static constexpr uint32_t INACTIVITY_TIMEOUT_MS = 15000;
+
     // === State transitions ===
     void startPlaying();
     void enterGameOver();
     void exitToIdle();
     void requestRedraw();
     void kickTick();
+    void noteActivity() { lastActivityMs = millis(); } // reset the inactivity timer
+    void goHome();                                     // exit any game and switch to the home frame
 
     void promptForInitials();
     void recordHighScore(const char *initials);
@@ -88,17 +94,11 @@ class GamesModule : public SinglePortModule, public Observable<const UIFrameEven
     uint8_t selected = 0;
     Game *active = nullptr;
     GamesUiState uiState = GAMES_IDLE;
-    uint32_t lastScore = 0;
-    int lastRank = -1;
-    bool lastWasNewTop = false;
-    uint32_t lastAwakeKickMs = 0;
-
-    // attract-screen cursor (index into games)
-    // game currently playing / whose scores are shown; null when idle
-    // score of the just-finished game (for the GAME OVER screen)
-    // rank achieved last game (-1 == didn't place)
-    // last game set a new all-time #1
-    // throttles the power-FSM wake nudge during long runs
+    uint32_t lastScore = 0;       // score of the just-finished game (for the GAME OVER screen)
+    int lastRank = -1;            // rank achieved last game (-1 == didn't place)
+    bool lastWasNewTop = false;   // last game set a new all-time #1
+    uint32_t lastAwakeKickMs = 0; // throttles the power-FSM wake nudge during long runs
+    uint32_t lastActivityMs = 0;  // millis() of the last input / becoming-visible (inactivity timer)
 };
 
 extern GamesModule *gamesModule;

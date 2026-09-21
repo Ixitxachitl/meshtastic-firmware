@@ -55,6 +55,18 @@ class SnakeGame
     bool setDirection(Direction d);
 
     /**
+     * Steer relative to the current heading: a quarter turn clockwise, or counter-clockwise.
+     * Clockwise is what the player sees on screen (UP -> RIGHT -> DOWN -> LEFT), remembering that
+     * y grows downward. A quarter turn from the committed heading can never be a reversal, so
+     * unlike setDirection() this always takes.
+     *
+     * Turning from the committed direction rather than the pending one is deliberate, and matches
+     * setDirection()'s reasoning: two presses inside one tick then settle on a single quarter
+     * turn instead of chaining into the 180 that would run the head into the neck.
+     */
+    void turn(bool clockwise);
+
+    /**
      * Advance the simulation by one tick. Returns true if the snake is still alive afterwards,
      * false if this move ended the game (wall hit, self-collision, or board filled == win).
      * Once dead, further step() calls are no-ops returning false.

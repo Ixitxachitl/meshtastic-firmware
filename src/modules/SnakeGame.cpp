@@ -54,6 +54,15 @@ bool SnakeGame::setDirection(Direction d)
     return true;
 }
 
+void SnakeGame::turn(bool clockwise)
+{
+    // Indexed by Direction (UP, DOWN, LEFT, RIGHT). Screen space has y growing downward, so the
+    // clockwise cycle the player sees is UP -> RIGHT -> DOWN -> LEFT.
+    static constexpr Direction CW[4] = {DIR_RIGHT, DIR_LEFT, DIR_UP, DIR_DOWN};
+    static constexpr Direction CCW[4] = {DIR_LEFT, DIR_RIGHT, DIR_DOWN, DIR_UP};
+    setDirection(clockwise ? CW[dir] : CCW[dir]);
+}
+
 uint32_t SnakeGame::nextRandom()
 {
     uint32_t x = rng;

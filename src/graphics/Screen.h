@@ -308,6 +308,17 @@ class Screen : public concurrency::OSThread
     // ignore input when the player has navigated to a different frame.
     bool isMapFrameShown();
 
+    // Jump straight to the home (device-focused) frame. Used to bounce back to a clearly "this is a
+    // Meshtastic node" screen after a game is left idle. Home is optional, so when it is hidden this
+    // falls back to the messages frame rather than staying put.
+    void showHomeFrame();
+
+    // True when the user is in the middle of something that must not be interrupted: a module (or
+    // game) is holding the D-pad, or an interactive overlay (picker / text entry) is open. Callers
+    // that would pop a transient banner should check this first -- a banner both covers the screen
+    // and REPLACES any interactive overlay, discarding a half-finished entry.
+    bool isInteractionBusy();
+
     bool isScreenOn() { return screenOn; }
     // True for the whole boot splash (logo, then the OEM image), until normal frames or an alert take over.
     bool isShowingBootScreen() const;
@@ -911,6 +922,10 @@ class Screen : public concurrency::OSThread
 #endif
 
     /// UI helper for rendering to frames and switching between them
+    // True if any module frame -- or the games frame, which is not a moduleFrame -- is currently
+    // holding the D-pad. Shared by the input router and isInteractionBusy().
+    bool anyModuleInterceptingInput();
+
     OLEDDisplayUi *ui;
 };
 
