@@ -44,7 +44,7 @@ PacketHistory::PacketHistory(uint32_t size) : recentPacketsCapacity(0) // Initia
 
     // Initialize the recent packets array to zero
     memset(recentPackets.get(), 0, sizeof(PacketRecord) * recentPacketsCapacity);
-    memaudit::set("pkthist", sizeof(PacketRecord) * recentPacketsCapacity);
+    memaudit::set("pkthist", sizeof(PacketRecord) * recentPacketsCapacity, recentPackets.get());
 
 #if !MESHTASTIC_EXCLUDE_PKT_HISTORY_HASH
     // Allocate hash index with load factor <= 0.5 for short probe chains
@@ -58,7 +58,9 @@ PacketHistory::PacketHistory(uint32_t size) : recentPacketsCapacity(0) // Initia
         return;
     }
     memset(hashIndex.get(), 0xFF, sizeof(uint16_t) * hashCapacity); // Fill with HASH_EMPTY (0xFFFF)
-    memaudit::set("pkthist", sizeof(PacketRecord) * recentPacketsCapacity + sizeof(uint16_t) * hashCapacity);
+    // Added rather than folded into the set() above: the two allocations can land in different
+    // regions, so each has to be classified against its own pointer.
+    memaudit::add("pkthist", sizeof(uint16_t) * hashCapacity, hashIndex.get());
 #endif
 }
 

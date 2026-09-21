@@ -65,7 +65,7 @@ WarmNodeStore::WarmNodeStore()
 #else
     entries = static_cast<WarmNodeEntry *>(calloc(WARM_NODE_COUNT, sizeof(WarmNodeEntry)));
 #endif
-    memaudit::set("warm", entries ? WARM_NODE_COUNT * sizeof(WarmNodeEntry) : 0);
+    memaudit::set("warm", entries ? WARM_NODE_COUNT * sizeof(WarmNodeEntry) : 0, entries);
 #if defined(NRF52840_XXAA)
     memset(pageOf, kNoPage, sizeof(pageOf));
 #endif

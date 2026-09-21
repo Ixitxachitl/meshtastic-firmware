@@ -36,6 +36,18 @@ int32_t bytesFor(const char *tag, bool *found = nullptr)
     return 0;
 }
 
+// Same, for the PSRAM portion of a tag.
+int32_t psramFor(const char *tag)
+{
+    memaudit::Tag rows[memaudit::kMaxTags];
+    size_t n = memaudit::snapshot(rows, memaudit::kMaxTags);
+    for (size_t i = 0; i < n; i++) {
+        if (strcmp(rows[i].tag, tag) == 0)
+            return rows[i].psramBytes;
+    }
+    return 0;
+}
+
 size_t registeredCount()
 {
     memaudit::Tag rows[memaudit::kMaxTags];
@@ -98,6 +110,38 @@ void test_ma_duplicateText_sharesSlot()
     TEST_ASSERT_EQUAL(before + 1, registeredCount());
 }
 
+// The host build has no PSRAM, so inPsram() is always false here and the pointer-taking overloads
+// must behave exactly like the plain ones. What this pins down is the contract the ESP32 build
+// relies on: `bytes` stays the total, and the split only ever moves within it.
+void test_ma_pointerOverloads_matchPlainArithmetic()
+{
+    static int onStack = 0;
+    TEST_ASSERT_FALSE(memaudit::inPsram(nullptr));
+    TEST_ASSERT_FALSE(memaudit::inPsram(&onStack));
+
+    memaudit::set("t_ptr", 900, &onStack);
+    TEST_ASSERT_EQUAL_INT32(900, bytesFor("t_ptr"));
+    TEST_ASSERT_EQUAL_INT32(0, psramFor("t_ptr")); // internal, so none of it is PSRAM
+
+    memaudit::add("t_ptr", 100, &onStack);
+    TEST_ASSERT_EQUAL_INT32(1000, bytesFor("t_ptr"));
+    TEST_ASSERT_EQUAL_INT32(0, psramFor("t_ptr"));
+
+    memaudit::add("t_ptr", -100, nullptr); // a null pointer is classified, not rejected
+    TEST_ASSERT_EQUAL_INT32(900, bytesFor("t_ptr"));
+}
+
+// The two-argument set() means "region unknown", so it has to clear any split left behind -
+// otherwise a free through the plain form would leave a tag reading 0 total with PSRAM still on it.
+void test_ma_plainSet_clearsPsramSplit()
+{
+    static int onStack = 0;
+    memaudit::set("t_clear", 500, &onStack);
+    memaudit::set("t_clear", 0);
+    TEST_ASSERT_EQUAL_INT32(0, bytesFor("t_clear"));
+    TEST_ASSERT_EQUAL_INT32(0, psramFor("t_clear"));
+}
+
 void test_ma_unknownAndNullTags()
 {
     bool found = true;
@@ -105,8 +149,11 @@ void test_ma_unknownAndNullTags()
     TEST_ASSERT_FALSE(found);
 
     const size_t before = registeredCount();
+    static int onStack = 0;
     memaudit::add(nullptr, 99); // null tags are dropped, not crashed on
     memaudit::set(nullptr, 99);
+    memaudit::add(nullptr, 99, &onStack);
+    memaudit::set(nullptr, 99, &onStack);
     TEST_ASSERT_EQUAL(before, registeredCount());
 }
 
@@ -152,6 +199,8 @@ MA_TEST_ENTRY void setup()
     RUN_TEST(test_ma_add_accumulatesSignedDeltas);
     RUN_TEST(test_ma_sameTag_reusesSlot);
     RUN_TEST(test_ma_duplicateText_sharesSlot);
+    RUN_TEST(test_ma_pointerOverloads_matchPlainArithmetic);
+    RUN_TEST(test_ma_plainSet_clearsPsramSplit);
     RUN_TEST(test_ma_unknownAndNullTags);
     RUN_TEST(test_ma_snapshot_respectsMax);
     RUN_TEST(test_ma_tableFull_dropsNewTagsKeepsExisting);

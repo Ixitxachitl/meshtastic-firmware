@@ -34,7 +34,7 @@ static inline void resetMessagePool()
             memaudit::set("msgstore", 0);
             return;
         }
-        memaudit::set("msgstore", MESSAGE_TEXT_POOL_SIZE);
+        memaudit::set("msgstore", MESSAGE_TEXT_POOL_SIZE, g_messagePool);
     }
     g_poolWritePos = 0;
     memset(g_messagePool, 0, MESSAGE_TEXT_POOL_SIZE);

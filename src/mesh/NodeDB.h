@@ -15,12 +15,19 @@
 #include "WarmNodeStore.h"
 #include "concurrency/Lock.h"
 #include "configuration.h"
+#include "memory/PsramAllocator.h"
 #include "mesh-pb-constants.h"
 #include "mesh/generated/meshtastic/mesh.pb.h" // For CriticalErrorCode
 
 #if ARCH_PORTDUINO
 #include "PortduinoGlue.h"
 #endif
+
+/// NodeDB's per-NodeNum satellite maps. Their tree nodes are individually far too small to cross
+/// the PSRAM malloc threshold, so the allocator sends them there rather than letting a few hundred
+/// of them sit in - and fragment - internal DRAM.
+template <class V>
+using SatelliteMap = std::map<NodeNum, V, std::less<NodeNum>, memory::PsramAllocator<std::pair<const NodeNum, V>>>;
 
 /// Decode-stream ceiling for a `nodes.proto` written by *other* firmware - a migration allowance,
 /// **not this build's node cap**. That is `MAX_NUM_NODES`, which on portduino is a runtime value
@@ -314,18 +321,19 @@ class NodeDB
     pb_size_t numMeshNodes;
 
     // Satellite per-NodeNum maps. std::map avoids unordered_map's bucket-array
-    // preallocation; O(log N) lookup is fine at these sizes.
+    // preallocation; O(log N) lookup is fine at these sizes. See SatelliteMap for where the nodes
+    // themselves are allocated.
 #if !MESHTASTIC_EXCLUDE_POSITIONDB
-    std::map<NodeNum, meshtastic_PositionLite> nodePositions;
+    SatelliteMap<meshtastic_PositionLite> nodePositions;
 #endif
 #if !MESHTASTIC_EXCLUDE_TELEMETRYDB
-    std::map<NodeNum, meshtastic_DeviceMetrics> nodeTelemetry;
+    SatelliteMap<meshtastic_DeviceMetrics> nodeTelemetry;
 #endif
 #if !MESHTASTIC_EXCLUDE_ENVIRONMENTDB
-    std::map<NodeNum, meshtastic_EnvironmentMetrics> nodeEnvironment;
+    SatelliteMap<meshtastic_EnvironmentMetrics> nodeEnvironment;
 #endif
 #if !MESHTASTIC_EXCLUDE_STATUSDB
-    std::map<NodeNum, meshtastic_StatusMessage> nodeStatus;
+    SatelliteMap<meshtastic_StatusMessage> nodeStatus;
 #endif
 
     bool keyIsLowEntropy = false;

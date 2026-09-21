@@ -242,16 +242,16 @@ bool nv3001bPanelPresent(uint8_t cs, uint8_t sck, uint8_t mosi, uint8_t dc, uint
 namespace
 {
 #if !MESHTASTIC_EXCLUDE_POSITIONDB
-std::map<NodeNum, meshtastic_PositionLite> *s_decodePositionsTarget = nullptr;
+SatelliteMap<meshtastic_PositionLite> *s_decodePositionsTarget = nullptr;
 #endif
 #if !MESHTASTIC_EXCLUDE_TELEMETRYDB
-std::map<NodeNum, meshtastic_DeviceMetrics> *s_decodeTelemetryTarget = nullptr;
+SatelliteMap<meshtastic_DeviceMetrics> *s_decodeTelemetryTarget = nullptr;
 #endif
 #if !MESHTASTIC_EXCLUDE_ENVIRONMENTDB
-std::map<NodeNum, meshtastic_EnvironmentMetrics> *s_decodeEnvironmentTarget = nullptr;
+SatelliteMap<meshtastic_EnvironmentMetrics> *s_decodeEnvironmentTarget = nullptr;
 #endif
 #if !MESHTASTIC_EXCLUDE_STATUSDB
-std::map<NodeNum, meshtastic_StatusMessage> *s_decodeStatusTarget = nullptr;
+SatelliteMap<meshtastic_StatusMessage> *s_decodeStatusTarget = nullptr;
 #endif
 
 // Keys that can never name a real node.
@@ -2080,7 +2080,25 @@ bool NodeDB::enforceSatelliteCaps()
 #if !MESHTASTIC_EXCLUDE_STATUSDB
     satBytes += nodeStatus.size() * (sizeof(decltype(nodeStatus)::value_type) + 44);
 #endif
-    memaudit::set("satmaps", satBytes);
+    // All four maps share one allocator, so any live tree node stands for the region they are in.
+    const void *satNode = nullptr;
+#if !MESHTASTIC_EXCLUDE_POSITIONDB
+    if (!satNode && !nodePositions.empty())
+        satNode = &*nodePositions.begin();
+#endif
+#if !MESHTASTIC_EXCLUDE_TELEMETRYDB
+    if (!satNode && !nodeTelemetry.empty())
+        satNode = &*nodeTelemetry.begin();
+#endif
+#if !MESHTASTIC_EXCLUDE_ENVIRONMENTDB
+    if (!satNode && !nodeEnvironment.empty())
+        satNode = &*nodeEnvironment.begin();
+#endif
+#if !MESHTASTIC_EXCLUDE_STATUSDB
+    if (!satNode && !nodeStatus.empty())
+        satNode = &*nodeStatus.begin();
+#endif
+    memaudit::set("satmaps", satBytes, satNode);
 
     return trimmedAny;
 }
@@ -2376,7 +2394,7 @@ void NodeDB::nodeDBSelfCare()
     // Normalise the backing store to the hot cap so getOrCreateMeshNode always
     // has spare slots to append into (it indexes meshNodes->at(numMeshNodes++)).
     meshNodes->resize(MAX_NUM_NODES);
-    memaudit::set("nodedb", MAX_NUM_NODES * sizeof(meshtastic_NodeInfoLite));
+    memaudit::set("nodedb", MAX_NUM_NODES * sizeof(meshtastic_NodeInfoLite), meshNodes->data());
 
     const bool satsTrimmed = enforceSatelliteCaps();
 

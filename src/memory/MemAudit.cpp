@@ -6,6 +6,9 @@
 #include <atomic>
 #include <stdio.h>
 #include <string.h>
+#if defined(ARCH_ESP32)
+#include <esp_memory_utils.h> // esp_ptr_external_ram(), to tell PSRAM from internal DRAM
+#endif
 
 namespace memaudit
 {
@@ -16,6 +19,7 @@ namespace
 struct Entry {
     std::atomic<const char *> tag; // registered literal; nullptr = free slot
     std::atomic<int32_t> bytes;
+    std::atomic<int32_t> psramBytes; // the part of bytes that came from PSRAM
 };
 
 // Static storage only - the accounting registry must never itself allocate.
@@ -62,6 +66,16 @@ Entry *findOrRegister(const char *tag)
 
 } // namespace
 
+bool inPsram(const void *p)
+{
+#if defined(ARCH_ESP32)
+    return p && esp_ptr_external_ram(p);
+#else
+    (void)p;
+    return false;
+#endif
+}
+
 void add(const char *tag, int32_t delta)
 {
     Entry *e = findOrRegister(tag);
@@ -72,8 +86,29 @@ void add(const char *tag, int32_t delta)
 void set(const char *tag, uint32_t bytes)
 {
     Entry *e = findOrRegister(tag);
-    if (e)
+    if (e) {
         e->bytes.store((int32_t)bytes, std::memory_order_relaxed);
+        e->psramBytes.store(0, std::memory_order_relaxed); // region unknown; also clears on free
+    }
+}
+
+void add(const char *tag, int32_t delta, const void *p)
+{
+    Entry *e = findOrRegister(tag);
+    if (!e)
+        return;
+    e->bytes.fetch_add(delta, std::memory_order_relaxed);
+    if (inPsram(p))
+        e->psramBytes.fetch_add(delta, std::memory_order_relaxed);
+}
+
+void set(const char *tag, uint32_t bytes, const void *p)
+{
+    Entry *e = findOrRegister(tag);
+    if (!e)
+        return;
+    e->bytes.store((int32_t)bytes, std::memory_order_relaxed);
+    e->psramBytes.store(inPsram(p) ? (int32_t)bytes : 0, std::memory_order_relaxed);
 }
 
 size_t snapshot(Tag *out, size_t max)
@@ -85,6 +120,7 @@ size_t snapshot(Tag *out, size_t max)
             break;
         out[n].tag = tag;
         out[n].bytes = table[i].bytes.load(std::memory_order_relaxed);
+        out[n].psramBytes = table[i].psramBytes.load(std::memory_order_relaxed);
         n++;
     }
     return n;
@@ -97,18 +133,29 @@ void logBreakdown(const char *when)
     if (n == 0)
         return;
 
-    // Worst case per row: 16-char tag + '=' + "-2147483648" + ' ' = 29 bytes.
-    char line[kMaxTags * 30 + 1];
+    // A row is "tag=<internal>+<psram>ps", or just "tag=<bytes>" where none of it is PSRAM.
+    // Worst case: 16-char tag + '=' + two "-2147483648" + '+' + "ps" + ' ' = 43 bytes.
+    char line[kMaxTags * 44 + 1];
     size_t pos = 0;
-    int32_t total = 0;
+    int32_t totalInternal = 0;
+    int32_t totalPsram = 0;
     for (size_t i = 0; i < n; i++) {
-        int written = snprintf(line + pos, sizeof(line) - pos, "%s%s=%ld", pos ? " " : "", rows[i].tag, (long)rows[i].bytes);
-        if (written < 0 || pos + written >= sizeof(line))
+        const int32_t psram = rows[i].psramBytes;
+        const int32_t internal = rows[i].bytes - psram;
+        int written;
+        if (psram)
+            written = snprintf(line + pos, sizeof(line) - pos, "%s%s=%ld+%ldps", pos ? " " : "", rows[i].tag, (long)internal,
+                               (long)psram);
+        else
+            written = snprintf(line + pos, sizeof(line) - pos, "%s%s=%ld", pos ? " " : "", rows[i].tag, (long)internal);
+        if (written < 0 || (size_t)written >= sizeof(line) - pos)
             break;
         pos += written;
-        total += rows[i].bytes;
+        totalInternal += internal;
+        totalPsram += psram;
     }
-    LOG_INFO("MemAudit[%s]: %s total=%ld", when ? when : "?", line, (long)total);
+    LOG_INFO("MemAudit[%s]: %s total=%ld internal=%ld psram=%ld", when ? when : "?", line, (long)(totalInternal + totalPsram),
+             (long)totalInternal, (long)totalPsram);
 }
 
 } // namespace memaudit

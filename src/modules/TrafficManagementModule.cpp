@@ -158,7 +158,7 @@ TrafficManagementModule::TrafficManagementModule() : MeshModule("TrafficManageme
     cache = new UnifiedCacheEntry[allocSize]();
 #endif
 
-    memaudit::set("tmm", cache ? allocSize * sizeof(UnifiedCacheEntry) : 0);
+    memaudit::set("tmm", cache ? allocSize * sizeof(UnifiedCacheEntry) : 0, cache);
 #endif // TRAFFIC_MANAGEMENT_CACHE_SIZE > 0
 
 #if TMM_HAS_NODEINFO_CACHE
@@ -180,7 +180,7 @@ TrafficManagementModule::TrafficManagementModule() : MeshModule("TrafficManageme
     // run in CI. nodeInfoPayloadFromPsram stays false and the destructor uses delete[].
     nodeInfoPayload = new NodeInfoPayloadEntry[nodeInfoTargetEntries()]();
 #endif
-    memaudit::set("tmm_ni", nodeInfoPayload ? nodeInfoTargetEntries() * sizeof(NodeInfoPayloadEntry) : 0);
+    memaudit::set("tmm_ni", nodeInfoPayload ? nodeInfoTargetEntries() * sizeof(NodeInfoPayloadEntry) : 0, nodeInfoPayload);
 #else
     TM_LOG_DEBUG("NodeInfo cache not available on this target");
 #endif

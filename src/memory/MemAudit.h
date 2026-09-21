@@ -41,19 +41,30 @@ constexpr size_t kMaxTags = 16;
 
 // One snapshot row, as returned by snapshot().
 struct Tag {
-    const char *tag; // the literal passed to add()/set()
-    int32_t bytes;   // current byte count for that subsystem
+    const char *tag;    // the literal passed to add()/set()
+    int32_t bytes;      // current byte count for that subsystem
+    int32_t psramBytes; // the part of `bytes` that lives in PSRAM; 0 where the region is unknown
 };
 
 #if MESHTASTIC_MEM_AUDIT
+
+// True when p was allocated from external PSRAM. Always false off ESP32.
+bool inPsram(const void *p);
 
 // Adjust a subsystem's byte count (registers the tag on first use). Safe from
 // concurrent threads; this is the form to use on per-object alloc/free paths.
 void add(const char *tag, int32_t delta);
 
 // Set a subsystem's byte count outright - for one-shot pool/table allocations
-// where the total is known (use 0 on free or allocation failure).
+// where the total is known (use 0 on free or allocation failure). Clears the
+// PSRAM split, so a tag that knows its region must use the overloads below.
 void set(const char *tag, uint32_t bytes);
+
+// Same, but classify the allocation by its address. On a PSRAM board only the internal figure is
+// ever tight, so a breakdown that cannot tell the two apart points at the wrong subsystem - the
+// display's frame buffers are 300KB+ of PSRAM and under 10KB of internal DRAM.
+void add(const char *tag, int32_t delta, const void *p);
+void set(const char *tag, uint32_t bytes, const void *p);
 
 // Copy up to max registered tags into out; returns the number written.
 size_t snapshot(Tag *out, size_t max);
@@ -64,8 +75,14 @@ void logBreakdown(const char *when);
 #else
 
 // No-op stubs so call sites compile away without #ifdefs.
+inline bool inPsram(const void *)
+{
+    return false;
+}
 inline void add(const char *, int32_t) {}
 inline void set(const char *, uint32_t) {}
+inline void add(const char *, int32_t, const void *) {}
+inline void set(const char *, uint32_t, const void *) {}
 inline size_t snapshot(Tag *, size_t)
 {
     return 0;
