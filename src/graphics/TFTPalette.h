@@ -19,6 +19,20 @@ constexpr uint16_t mix565(uint16_t a, uint16_t b, uint8_t t)
                                  (((a & 0x1F) * (255 - t) + (b & 0x1F) * t) / 255));
 }
 
+// device-ui's per-node colour (MeshtasticView::nodeColor), so a node looks the same in both UIs. Packed the same way
+// too, so a channel that overflows 255 spills into its neighbour exactly as it does there.
+constexpr uint16_t nodeColor(uint32_t nodeNum)
+{
+    uint32_t red = (nodeNum >> 16) & 0xFF, green = (nodeNum >> 8) & 0xFF, blue = nodeNum & 0xFF;
+    while (red + green + blue < 0xF0) {
+        red += red / 3 + 10;
+        green += green / 3 + 10;
+        blue += blue / 3 + 10;
+    }
+    const uint32_t rgb = (red << 16) | (green << 8) | blue;
+    return rgb565(static_cast<uint8_t>(rgb >> 16), static_cast<uint8_t>(rgb >> 8), static_cast<uint8_t>(rgb));
+}
+
 constexpr uint16_t Black = 0x0000;
 constexpr uint16_t White = 0xFFFF;
 constexpr uint16_t DarkGray = 0x4208;

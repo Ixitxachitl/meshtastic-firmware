@@ -618,8 +618,8 @@ void drawHaloXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t 
 #endif
 
 #if BASEUI_NATIVE_RGB565
-// Map pins, drawn exactly as painted: a black-edged white pin with a red (node) or green (waypoint) ring. Both share
-// one mask, which also covers the black edge and fill.
+// Map pins: a black-edged white pin with a red (node) or green (waypoint) ring. Both share one mask, which also
+// covers the black edge and fill. drawMapPin() repaints the node pin's red ring in that node's colour.
 constexpr int16_t kMapPinWidth = 16;
 constexpr int16_t kMapPinHeight = 16;
 const uint16_t nodeMarker_rgb565[] PROGMEM = {
@@ -667,8 +667,9 @@ const uint8_t kMapPinMask[] PROGMEM = {
     0xFC, 0x3F, 0xF8, 0x1F, 0xF0, 0x0F, 0xE0, 0x07, 0xE0, 0x07, 0xC0, 0x03, 0xC0, 0x03, 0x80, 0x01,
 };
 
-// The pin's tip (bottom centre) sits on the position; each row goes out as runs of masked pixels.
-void drawMapPin(OLEDDisplay *display, int16_t tipX, int16_t tipY, const uint16_t *pixels)
+// The pin's tip (bottom centre) sits on the position; each row goes out as runs of masked pixels, with the red ring
+// pixels swapped for ringColor.
+void drawMapPin(OLEDDisplay *display, int16_t tipX, int16_t tipY, const uint16_t *pixels, uint16_t ringColor = TFTPalette::Red)
 {
     TFTDisplay *const panel = static_cast<TFTDisplay *>(display);
     const int16_t left = tipX - kMapPinWidth / 2;
@@ -683,8 +684,14 @@ void drawMapPin(OLEDDisplay *display, int16_t tipX, int16_t tipY, const uint16_t
             const int16_t runStart = col;
             while (col < kMapPinWidth && (pgm_read_byte(maskRow + (col >> 3)) & (1U << (col & 7))))
                 ++col;
-            if (col > runStart)
-                panel->drawRGB565(left + runStart, top + row, col - runStart, 1, pixels + row * kMapPinWidth + runStart);
+            if (col > runStart) {
+                uint16_t run[kMapPinWidth];
+                for (int16_t i = runStart; i < col; ++i) {
+                    const uint16_t px = pgm_read_word(pixels + row * kMapPinWidth + i);
+                    run[i - runStart] = (px == TFTPalette::Red) ? ringColor : px;
+                }
+                panel->drawRGB565(left + runStart, top + row, col - runStart, 1, run);
+            }
         }
     }
 }
@@ -1257,7 +1264,7 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         }
 
 #if BASEUI_NATIVE_RGB565
-        drawMapPin(display, mx, my, nodeMarker_rgb565);
+        drawMapPin(display, mx, my, nodeMarker_rgb565, TFTPalette::nodeColor(node->num));
 #else
         drawHaloXbm(display, mx - markerSize / 2, my - markerSize / 2, 8, 8, icon_map_node, markerSize, markerSize);
 #if GRAPHICS_TFT_COLORING_ENABLED
