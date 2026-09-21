@@ -5,7 +5,9 @@
 #include "NodeDB.h"
 #include "UptimeClock.h"
 #include "WaypointStore.h"
+#include "WaypointUtils.h"
 #include "gps/GeoCoord.h"
+#include "graphics/EmoteRenderer.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/TFTColorRegions.h"
 #include "graphics/TFTPalette.h"
@@ -1296,7 +1298,19 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
             continue;
 
 #if BASEUI_NATIVE_RGB565
-        drawMapPin(display, wx, wy, waypointMarker_rgb565);
+        // A waypoint whose icon is one of our emotes shows that emote, in the pin's box so labels line up either way.
+        const graphics::Emote *wpEmote = nullptr;
+        if (wp.icon) {
+            size_t matchLen = 0;
+            wpEmote = EmoteRenderer::findEmoteAt(WaypointUtils::utf8FromCodepoint(wp.icon), 0, matchLen);
+        }
+        if (wpEmote) {
+            display->setColor(WHITE);
+            drawStretchedXbm(display, wx - wpEmote->width / 2, wy - (wpEmote->height - 1), wpEmote->width, wpEmote->height,
+                             wpEmote->bitmap, wpEmote->width, wpEmote->height);
+        } else {
+            drawMapPin(display, wx, wy, waypointMarker_rgb565);
+        }
 #else
         drawHaloXbm(display, wx - markerSize / 2, wy - markerSize / 2, 8, 8, icon_map_node, markerSize, markerSize);
 #if GRAPHICS_TFT_COLORING_ENABLED
