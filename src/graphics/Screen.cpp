@@ -137,14 +137,89 @@ FrameCallback *normalFrames;
 static uint32_t targetFramerate = IDLE_FRAMERATE;
 
 #if BASEUI_LOCKSCREEN
+// lock_icon: 16x16, 158 of 256 pixels opaque
+#define lock_icon_width 16
+#define lock_icon_height 16
+#if BASEUI_NATIVE_RGB565
+static const uint16_t lock_icon_rgb565[] PROGMEM = {
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF,
+    0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0x0000,
+    0x0000, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0xFFFF, 0x0000,
+    0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0xFFFF,
+    0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF,
+    0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0xFFFF,
+    0xFFFF, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0x0000, 0x0000, 0x0000,
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    0x0000,
+};
+static const uint8_t lock_icon_mask[] PROGMEM = {
+    0xC0, 0x03, 0xE0, 0x07, 0xF0, 0x0F, 0x38, 0x1C, 0x38, 0x1C, 0xF8, 0x1F, 0xFC, 0x3F, 0xFC, 0x3F,
+    0xFC, 0x3F, 0xFC, 0x3F, 0xFC, 0x3F, 0xFC, 0x3F, 0xFC, 0x3F, 0xFC, 0x3F, 0xFC, 0x3F, 0xF8, 0x1F,
+};
+#else
+static const uint8_t lock_icon_xbm[] PROGMEM = {
+    0x00, 0x00, 0xC0, 0x03, 0x20, 0x04, 0x10, 0x08, 0x10, 0x08, 0x10, 0x08, 0xF8, 0x1F, 0x78, 0x1E,
+    0x38, 0x1C, 0x38, 0x1C, 0x38, 0x1C, 0x78, 0x1E, 0x78, 0x1E, 0x78, 0x1E, 0xF8, 0x1F, 0x00, 0x00,
+};
+#endif
+
+// The lock icon, centred in the header's empty title slot so it sits directly over the clock.
+static void drawLockIcon(OLEDDisplay *display, int16_t x)
+{
+    const int16_t left = x + (display->getWidth() - lock_icon_width) / 2;
+    const int16_t top = 1 + BASEUI_HEADER_MARGIN + (FONT_HEIGHT_SMALL - lock_icon_height) / 2;
+#if BASEUI_NATIVE_RGB565
+    TFTDisplay *const panel = static_cast<TFTDisplay *>(display);
+    const int16_t maskRowBytes = (lock_icon_width + 7) / 8;
+    for (int16_t row = 0; row < lock_icon_height; ++row) {
+        for (int16_t col = 0; col < lock_icon_width; ++col) {
+            if (!(pgm_read_byte(lock_icon_mask + row * maskRowBytes + (col >> 3)) & (1U << (col & 7))))
+                continue;
+            const uint16_t color = pgm_read_word(lock_icon_rgb565 + row * lock_icon_width + col);
+            panel->drawRGB565(left + col, top + row, 1, 1, &color);
+        }
+    }
+#else
+    display->setColor(WHITE);
+    display->drawXbm(left, top, lock_icon_width, lock_icon_height, lock_icon_xbm);
+#endif
+}
+
+// Two dots under the clock: the first fills on the tap, the second on the hold that follows it.
+static void drawUnlockDots(OLEDDisplay *display, int16_t x, uint8_t step)
+{
+    const int16_t r = std::max<int16_t>(3, FONT_HEIGHT_SMALL / 4);
+    const int16_t cy = graphics::ClockRenderer::belowClockRowY();
+    const int16_t cx = x + display->getWidth() / 2;
+    display->setColor(WHITE);
+    for (int i = 0; i < 2; ++i) {
+        const int16_t dx = cx + (i == 0 ? -2 * r : 2 * r);
+        if (step > i)
+            display->fillCircle(dx, cy, r);
+        else
+            display->drawCircle(dx, cy, r);
+    }
+}
+
 // The wake lockscreen is the clock frame exactly as configured, drawn over the solid canvas
-// armLockscreen() switches on and with the nav bar overlay taken away.
+// armLockscreen() switches on and with the nav bar overlay taken away, plus the lock and the unlock progress.
 static void drawLockscreenFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     if (uiconfig.is_clockface_analog)
         graphics::ClockRenderer::drawAnalogClockFrame(display, state, x, y);
     else
         graphics::ClockRenderer::drawDigitalClockFrame(display, state, x, y);
+    drawLockIcon(display, x);
+    drawUnlockDots(display, x, screen ? screen->getLockUnlockStep() : 0);
 }
 #endif
 
@@ -1748,6 +1823,10 @@ static bool screenDragOwnsFramerate()
 // One backlight step per ~60Hz tick. runOnce() drops to IDLE_FRAMERATE once the frame is fixed,
 // so the ramp asks to be called back itself rather than riding the frame rate.
 static constexpr uint32_t kLockFadeStepMs = 16;
+// The hold has to land this soon after the tap. Covers the gap between presses plus the keypad's own ~700ms hold.
+static constexpr uint32_t kLockGestureWindowMs = 2000;
+// Both dots stay filled this long before the unlock, so the second one is seen to fill.
+static constexpr uint32_t kLockUnlockBeatMs = 250;
 
 void Screen::setPanelBrightness(uint8_t level)
 {
@@ -1761,6 +1840,7 @@ void Screen::setPanelBrightness(uint8_t level)
 void Screen::clearLockscreenState()
 {
     lockPhase = LockPhase::None;
+    lockUnlockStep = 0;
 #if BASEUI_NATIVE_RGB565
     static_cast<TFTDisplay *>(dispdev)->setCanvasOverride(false);
 #endif
@@ -1803,6 +1883,15 @@ bool Screen::tickLockscreen()
 {
     if (lockPhase == LockPhase::None)
         return false;
+
+    if (lockUnlockStep == 2 && Throttle::hasElapsed(lockStepAtMs, kLockUnlockBeatMs)) {
+        unlockScreen();
+        return true;
+    }
+    if (lockUnlockStep == 1 && Throttle::hasElapsed(lockStepAtMs, kLockGestureWindowMs)) {
+        lockUnlockStep = 0; // the hold never came; empty the first dot again
+        setFastFramerate();
+    }
 
     const uint32_t elapsed = millis() - lockPhaseStartedMs;
     switch (lockPhase) {
@@ -1860,6 +1949,40 @@ void Screen::extendLockscreen()
     lockPhase = LockPhase::Held;
     lockPhaseStartedMs = millis();
     setPanelBrightness(brightness); // a press caught mid-fade-out brings the panel straight back
+#endif
+}
+
+uint8_t Screen::getLockUnlockStep() const
+{
+#if BASEUI_LOCKSCREEN
+    return lockUnlockStep;
+#else
+    return 0;
+#endif
+}
+
+void Screen::lockscreenInput(input_broker_event ev)
+{
+#if BASEUI_LOCKSCREEN
+    if (lockPhase == LockPhase::None || lockUnlockStep == 2) // unlocking already; tickLockscreen() finishes it
+        return;
+    extendLockscreen();
+
+    const uint8_t before = lockUnlockStep;
+    const bool tapLive = lockUnlockStep == 1 && !Throttle::hasElapsed(lockStepAtMs, kLockGestureWindowMs);
+    if (ev == INPUT_BROKER_SELECT) {
+        lockUnlockStep = 1; // a tap; a repeat tap restarts the window from itself
+        lockStepAtMs = millis();
+    } else if (ev == INPUT_BROKER_SELECT_LONG && tapLive) {
+        lockUnlockStep = 2;
+        lockStepAtMs = millis();
+    } else {
+        lockUnlockStep = 0; // a lone hold, or any other key, resets the gesture
+    }
+    if (lockUnlockStep != before)
+        setFastFramerate();
+#else
+    (void)ev;
 #endif
 }
 

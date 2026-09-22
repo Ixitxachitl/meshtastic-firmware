@@ -579,7 +579,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define BASEUI_COLOR_EMOTES 0
 #endif
 // Lockscreen: the panel wakes onto the clock frame over a solid black canvas, fading in, and eats
-// input until select is held. Left locked it fades back out and the screen sleeps. Opt-in per variant.
+// input until select is tapped and then held. Left locked it fades back out and the screen sleeps. Opt-in per variant.
 #ifndef BASEUI_LOCKSCREEN
 #define BASEUI_LOCKSCREEN 0
 #endif

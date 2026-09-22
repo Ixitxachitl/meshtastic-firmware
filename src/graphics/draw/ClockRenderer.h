@@ -15,6 +15,8 @@ namespace ClockRenderer
 // Clock frame functions
 void drawAnalogClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
 void drawDigitalClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
+// Vertical centre of the free row under the clock last drawn, for overlays such as the lockscreen's unlock dots.
+int16_t belowClockRowY();
 
 // Segmented display functions
 void drawSegmentedDisplayCharacter(OLEDDisplay *display, int x, int y, uint8_t number, float scale = 1);

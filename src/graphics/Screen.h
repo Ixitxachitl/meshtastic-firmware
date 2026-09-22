@@ -330,6 +330,11 @@ class Screen : public concurrency::OSThread
     // Drop the lock and return to the frame the screen slept on. Safe to call when not locked.
     void unlockScreen();
 
+    // Feed a key press to the lockscreen's unlock gesture (tap select, then hold it). Any press restarts the countdown.
+    void lockscreenInput(input_broker_event ev);
+    // How far the unlock gesture has got (0-2), for the lock frame's progress dots.
+    uint8_t getLockUnlockStep() const;
+
     // Restart the unlock countdown, so a hold begun near the deadline still has time to land.
     void extendLockscreen();
 
@@ -897,6 +902,9 @@ class Screen : public concurrency::OSThread
     // A frame change asked for while locked (a new message, a module taking focus) is replayed on
     // unlock rather than shown through the lock. FOCUS_PRESERVE means nothing was deferred.
     FrameFocus lockDeferredFocus = FOCUS_PRESERVE;
+    // Unlock gesture: 0 idle, 1 the tap landed, 2 the hold followed it and the unlock is about to run.
+    uint8_t lockUnlockStep = 0;
+    uint32_t lockStepAtMs = 0;
     void armLockscreen();        // called from handleSetOn(true), on the screen thread
     void handleUnlock();         // Cmd::UNLOCK_SCREEN
     void clearLockscreenState(); // drop the phase and the solid canvas, without touching frames

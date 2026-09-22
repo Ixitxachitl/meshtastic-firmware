@@ -152,12 +152,9 @@ int InputBroker::handleInputEvent(const InputEvent *event)
 
 #if HAS_SCREEN
     // The wake lockscreen gates input the way the boot splash does, so a press in a pocket can't
-    // drive menus unseen. Holding select unlocks; anything else just restarts the countdown.
+    // drive menus unseen. Tapping select and then holding it unlocks; every press restarts the countdown.
     if (screen && event && screen->isLockscreenShowing()) {
-        if (event->inputEvent == INPUT_BROKER_SELECT_LONG)
-            screen->unlockScreen();
-        else
-            screen->extendLockscreen();
+        screen->lockscreenInput(event->inputEvent);
         return 0;
     }
 

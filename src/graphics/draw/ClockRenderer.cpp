@@ -18,6 +18,13 @@ namespace graphics
 namespace ClockRenderer
 {
 
+static int16_t s_belowClockRowY = 0;
+
+int16_t belowClockRowY()
+{
+    return s_belowClockRowY;
+}
+
 // Segment bitmaps for numerals 0-9 stored in flash to save RAM.
 // Each row is a digit, each column is a segment state (1 = on, 0 = off).
 // Segment layout reference:
@@ -186,7 +193,7 @@ void drawDigitalClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int1
 #ifdef DISPLAY_FORCE_SMALL_FONTS
         float screenwidth_target_ratio = 0.70f; // Target 70% of display width (adjustable)
 #elif defined(BICOLOR_OLED_DISPLAY)
-        float screenwidth_target_ratio = 0.60f;     // Forced for BICOLOR_OLED_DISPLAY due to two color display
+        float screenwidth_target_ratio = 0.60f; // Forced for BICOLOR_OLED_DISPLAY due to two color display
 #else
         float screenwidth_target_ratio = 0.80f; // Target 80% of display width (adjustable)
 #endif
@@ -267,6 +274,7 @@ void drawDigitalClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int1
 #else
     const uint16_t bottomRowY = (display->getHeight() - hourMinuteTextY) + 1;
 #endif
+    s_belowClockRowY = bottomRowY + FONT_HEIGHT_SMALL / 2; // centred between the am/pm and the seconds
 
     // iterate over characters in hours:minutes string and draw segmented characters
     for (size_t i = 0; i < len; i++) {
@@ -332,6 +340,7 @@ void drawAnalogClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     centerY += 6;
     radius = (display->getHeight() / 2) * 0.7;
 #endif
+    s_belowClockRowY = (centerY + radius + display->getHeight()) / 2;
 
     // noon (0 deg) coordinates (outermost circle)
     int16_t noonX = centerX;
