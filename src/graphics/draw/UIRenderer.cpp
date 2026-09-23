@@ -2216,7 +2216,7 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
     if (totalIcons == 0)
         return;
 
-        // Compact panels: briefly show current frame's icon+title centered, then nothing.
+    // Compact panels: briefly show current frame's icon+title centered, then nothing.
 #if defined(OLED_COMPACT_UI)
     if (compactPanel) {
         const bool introVisible = millis() - lastFrameChangeTime <= ICON_DISPLAY_DURATION_MS_COMPACT;
@@ -2424,24 +2424,36 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
     const int innerLeft = rectX + 1;
     const int innerRight = rectX + rectWidth - 1;
 
+    const int centerX = xStart + (int)centerSlot * step;
+    const int activePadding = compactPanel ? 1 : 2;
+    const int chipLeft = centerX - activePadding;
+#if !BASEUI_NATIVE_RGB565
+    const int chipRight = centerX + iconSize + activePadding;
     // The middle slot is a filled chip and the glyph inverts inside it - but per pixel, not per
     // glyph. Picking one colour for a whole icon made the half straddling the chip edge land on
     // matching background and disappear, which read as the box slicing icons in two. Each icon is
     // therefore blitted up to three times: clipped to the spans either side of the chip in white,
     // and to the chip itself in black, so the inversion falls exactly on the edge.
-    const int centerX = xStart + (int)centerSlot * step;
-    const int activePadding = compactPanel ? 1 : 2;
-    const int chipLeft = centerX - activePadding;
-    const int chipRight = centerX + iconSize + activePadding;
     const int chipClipL = chipLeft > innerLeft ? chipLeft : innerLeft;
     const int chipClipR = chipRight < innerRight ? chipRight : innerRight;
+#endif
 
 #if GRAPHICS_TFT_COLORING_ENABLED
     registerTFTColorRegion(TFTColorRole::NavigationBar, chipLeft, y - activePadding, iconSize + activePadding * 2,
                            iconSize + activePadding * 2);
 #endif
+#if BASEUI_NATIVE_RGB565
+    // Tint the chip toward the icon colour instead of filling it with it, so the glyph over it stays
+    // white and a colour icon keeps every colour rather than inverting inside the highlight.
+    {
+        const auto &chipRole = getActiveTheme().roles[static_cast<size_t>(TFTColorRole::NavigationBar)];
+        fillSelectionHighlight(display, chipLeft, y - activePadding, iconSize + activePadding * 2, iconSize + activePadding * 2,
+                               chipRole.offColor, chipRole.onColor);
+    }
+#else
     display->setColor(WHITE);
     display->fillRect(chipLeft, y - activePadding, iconSize + activePadding * 2, iconSize + activePadding * 2);
+#endif
 
     for (int slot = -1; slot <= (int)visibleCount; ++slot) {
         const size_t iconIndex = (anchorIndex + totalIcons * 2 + (size_t)(slot + (int)totalIcons) - centerSlot) % totalIcons;
@@ -2450,9 +2462,13 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
             continue; // entirely outside the bar
         const uint8_t *icon = screen->indicatorIcons[iconIndex];
 
-        // Either side of the chip, in white. Clipped, so an icon entering or leaving the strip is
-        // revealed a column at a time rather than popping in whole once it happens to fit.
+        // Clipped to the bar, so an icon entering or leaving the strip is revealed a column at a time
+        // rather than popping in whole once it happens to fit.
         display->setColor(WHITE);
+#if BASEUI_NATIVE_RGB565
+        // Nothing inverts over the tinted chip, so the chip edge needs no separate pass.
+        drawStretchedXbmClipped(display, x, y, 8, 8, icon, iconSize, iconSize, innerLeft, innerRight);
+#else
         if (chipLeft > innerLeft)
             drawStretchedXbmClipped(display, x, y, 8, 8, icon, iconSize, iconSize, innerLeft, chipClipL);
         if (chipRight < innerRight)
@@ -2461,6 +2477,7 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
         // Over the chip, in black.
         display->setColor(BLACK);
         drawStretchedXbmClipped(display, x, y, 8, 8, icon, iconSize, iconSize, chipClipL, chipClipR);
+#endif
     }
     display->setColor(WHITE);
 #else
@@ -2475,9 +2492,17 @@ void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *sta
             // Active icon inverts on TFT: white chip with black glyph.
             // Keep the buffer visibly different too, so dirty-rect updates include this region.
             registerTFTColorRegion(TFTColorRole::NavigationBar, x - 1, y - 1, iconSize + 2, iconSize + 2);
+#if BASEUI_NATIVE_RGB565
+            // Tinted highlight rather than an inverting fill, as in the scrolling path above.
+            {
+                const auto &chipRole = getActiveTheme().roles[static_cast<size_t>(TFTColorRole::NavigationBar)];
+                fillSelectionHighlight(display, x - 1, y - 1, iconSize + 2, iconSize + 2, chipRole.offColor, chipRole.onColor);
+            }
+#else
             display->setColor(WHITE);
             display->fillRect(x - 1, y - 1, iconSize + 2, iconSize + 2);
             display->setColor(BLACK);
+#endif
 #else
             const int activePadding = compactPanel ? 1 : 2;
             display->setColor(WHITE);

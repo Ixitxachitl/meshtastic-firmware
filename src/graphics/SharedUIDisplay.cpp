@@ -141,6 +141,22 @@ void fillRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int1
     display->fillCircle(x + w - 1 - r, y + h - 1 - r, r);
 }
 
+#if BASEUI_NATIVE_RGB565
+// How far the highlight travels from the background toward the foreground colour, 0-255. Far enough to
+// read as a selection, not so far that a white glyph on top loses its edge against it.
+static constexpr uint8_t kSelectionTint = 96;
+
+void fillSelectionHighlight(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, uint16_t bg, uint16_t fg)
+{
+    static_cast<TFTDisplay *>(display)->fillRect565(x, y, w, h, TFTPalette::mix565(bg, fg, kSelectionTint));
+}
+
+void fillSelectionHighlight(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h)
+{
+    fillSelectionHighlight(display, x, y, w, h, getThemeBodyBg(), TFTPalette::White);
+}
+#endif
+
 // ***********************
 // * Scaled bitmap blit  *
 // ***********************

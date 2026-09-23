@@ -2556,8 +2556,14 @@ void CannedMessageModule::drawEmotePickerScreen(OLEDDisplay *display, OLEDDispla
             if (idx == emotePickerIndex) {
                 const int top = std::max(cellY, gridTop);
                 const int bottom = std::min(cellY + cellSize, gridBottom);
+#if BASEUI_NATIVE_RGB565
+                // Tint the cell rather than filling it, so the emote over it keeps its own colours
+                // instead of inverting to a silhouette - see graphics::fillSelectionHighlight().
+                graphics::fillSelectionHighlight(display, cellX, top, cellSize, bottom - top);
+#else
                 display->fillRect(cellX, top, cellSize, bottom - top);
                 display->setColor(BLACK);
+#endif
             }
 
             graphics::drawScaledXbmClippedV(display, cellX + (cellSize - emote.width * drawScale) / 2,

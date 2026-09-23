@@ -137,6 +137,15 @@ void drawRoundedHighlight(OLEDDisplay *display, int16_t x, int16_t y, int16_t w,
 void drawRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r);
 void fillRoundedRect(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, int16_t r);
 
+#if BASEUI_NATIVE_RGB565
+// Highlight behind a selected nav icon or emote: the background tinted toward the foreground colour rather
+// than filled with it, so the glyph drawn on top keeps its own colours instead of inverting inside the cell.
+// The 1-bit paths have no third colour to tint with and keep filling the cell and inverting the glyph.
+void fillSelectionHighlight(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h, uint16_t bg, uint16_t fg);
+// As above, against the theme's body background and white.
+void fillSelectionHighlight(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t h);
+#endif
+
 // Nearest-neighbour XBM blit. Falls through to the library's drawXbm() at scale 1,
 // so callers can use it unconditionally. w/h are the bitmap's own dimensions; the
 // drawn area is w*scale by h*scale.
