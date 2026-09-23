@@ -22,6 +22,9 @@
 #define TFT_OFFSET_ROTATION 0
 #define SCREEN_ROTATE
 #define SCREEN_TRANSITION_FRAMERATE 30
+// Arrow/trackball slide, matched to SCREEN_TOUCH_TRANSITION_TIME so paging by wheel looks the same
+// as paging by swipe. Time-based, so the framerate only sets how many frames fill it.
+#define SCREEN_NAV_TRANSITION_MS 150
 #define BRIGHTNESS_DEFAULT 130 // Medium Low Brightness
 #define USE_TFTDISPLAY 1
 #define HAS_PHYSICAL_KEYBOARD 1
