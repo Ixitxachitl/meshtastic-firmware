@@ -41,6 +41,9 @@
 #define BASEUI_LOCKSCREEN 1
 // Zoom, pan and Follow Me as buttons on the Map frame - there is a touch panel to press them with.
 #define BASEUI_MAP_ONSCREEN_CONTROLS 1
+// The trackball's up/down are free on the Map frame - left/right page it - so zoom with them too, beside
+// the on-screen buttons. Turning on Zoom Mode is what puts the ruler up as a readout.
+#define BASEUI_MAP_UPDOWN_ZOOMS 1
 // Landscape panel: stack them in the bottom corner instead of centred, which would split the map.
 #define BASEUI_MAP_CONTROLS_BOTTOM 1
 // Read-only /flash/ page on the web server, for inspecting /prefs and the rest of the filesystem.

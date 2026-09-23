@@ -1478,7 +1478,13 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     // everything else above, so it stays readable over whatever basemap tile art is behind it.
     if (s_zoomMode) {
         constexpr int16_t kMargin = 10;
+#if BASEUI_MAP_ONSCREEN_CONTROLS
+        // The control icons own the right edge on these builds, so the ruler takes the left one instead
+        // of running down through them.
+        const int16_t rulerX = x + 6;
+#else
         const int16_t rulerX = x + viewWidth - 6;
+#endif
         const int16_t rulerTop = y + kMargin;
         const int16_t rulerBottom = y + viewHeight - kMargin;
 
@@ -1502,9 +1508,15 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
 
         char zoomText[8];
         snprintf(zoomText, sizeof(zoomText), "z%d", zoom);
-        display->setTextAlignment(TEXT_ALIGN_RIGHT);
         display->setFont(FONT_SMALL);
+        // The label sits on whichever side of the ruler the map is, so it never runs off the panel.
+#if BASEUI_MAP_ONSCREEN_CONTROLS
+        display->setTextAlignment(TEXT_ALIGN_LEFT);
+        drawHaloString(display, rulerX + 7, indicatorY - FONT_HEIGHT_SMALL / 2, zoomText);
+#else
+        display->setTextAlignment(TEXT_ALIGN_RIGHT);
         drawHaloString(display, rulerX - 7, indicatorY - FONT_HEIGHT_SMALL / 2, zoomText);
+#endif
     }
 
 #if BASEUI_MAP_ONSCREEN_CONTROLS
