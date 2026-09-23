@@ -31,13 +31,24 @@
 #define TOUCH_I2C_PORT 0
 #define TOUCH_SLAVE_ADDRESS 0x5D // GT911
 
-// Custom boot splash, shown for the second half of the boot screen. The artwork is already
-// drawn at panel resolution, so pin it to 1:1 - BASEUI_ICON_SCALE would blow 240x200 up to
-// 480x400 and clip it against this 320x240 panel.
+// Default Dark's navy canvas drawn as the topographic artwork in graphics/img/background.h,
+// which is authored at this panel's 320x240.
+#define BASEUI_BACKGROUND_IMAGE 1
+// Wake onto a clock lockscreen that holds select to unlock, so a pocketed keypress doesn't act.
+#define BASEUI_LOCKSCREEN 1
+// Zoom, pan and Follow Me as buttons on the Map frame - there is a touch panel to press them with.
+#define BASEUI_MAP_ONSCREEN_CONTROLS 1
+// Read-only /flash/ page on the web server, for inspecting /prefs and the rest of the filesystem.
+#define WEB_FLASH_BROWSER 1
+// FTP access to the SD card, for uploading map tiles in bulk from an ordinary FTP client.
+#define FTP_SERVER 1
+
+// Custom boot splash, shown for the second half of the boot screen: full-panel 320x240 artwork, drawn in
+// colour on colour-framebuffer builds. 1:1 scale - BASEUI_ICON_SCALE would double it off the panel.
 #define USERPREFS_OEM_TEXT "Ixitxachitl Build"
 #define USERPREFS_OEM_FONT_SIZE 1
 #define USERPREFS_OEM_IMAGE_SCALE 1
-#include "graphics/img/oem_splash_landscape.h"
+#include "graphics/img/oem_splash.h"
 
 #define USE_POWERSAVE
 #define SLEEP_TIME 120
