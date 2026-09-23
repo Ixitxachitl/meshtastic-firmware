@@ -550,6 +550,15 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #undef BASEUI_MAP_ONSCREEN_CONTROLS
 #define BASEUI_MAP_ONSCREEN_CONTROLS 0
 #endif
+// Put the on-screen map controls in the bottom corner rather than centred down the edge. For landscape
+// panels, where a centred column cuts the map in half. Opt-in per variant; needs BASEUI_MAP_ONSCREEN_CONTROLS.
+#ifndef BASEUI_MAP_CONTROLS_BOTTOM
+#define BASEUI_MAP_CONTROLS_BOTTOM 0
+#endif
+#if BASEUI_MAP_CONTROLS_BOTTOM && !BASEUI_MAP_ONSCREEN_CONTROLS
+#undef BASEUI_MAP_CONTROLS_BOTTOM
+#define BASEUI_MAP_CONTROLS_BOTTOM 0
+#endif
 // Whether a touchscreen tap with nothing under it pages to the next frame, and beeps for it. Physical buttons
 // reporting the same event keep both. Variants where frames are swiped between set this to 0.
 #ifndef BASEUI_TAP_ADVANCES_FRAME

@@ -752,29 +752,112 @@ void tintMarkerCenter(int16_t centerX, int16_t centerY, int16_t markerSize, int 
 
 #if BASEUI_MAP_ONSCREEN_CONTROLS
 // A column down the right edge: the header owns the top, the nav bar sweeps the bottom on every frame change, and
-// on a rounded panel mid-height is the widest part of the glass.
+// on a rounded panel mid-height is the widest part of the glass. BASEUI_MAP_CONTROLS_BOTTOM drops it into the
+// corner instead, which suits a landscape panel where a centred column cuts the map in half.
 enum class MapControl : uint8_t { ZoomIn, ZoomOut, Pan, FollowMe, Count };
 constexpr int kMapControlCount = (int)MapControl::Count;
-constexpr int16_t kMapControlRadius = 7; // the keyboard's key caps
 
 struct MapControlRect {
     int16_t x, y, w, h;
 };
 
+#if GRAPHICS_HAS_RGB565_IMAGES
+// Bare artwork, no cap behind it, so the basemap still reads between the glyphs.
+constexpr int16_t kMapControlIconSize = 32;
+constexpr int16_t kMapControlGap = 6;
+// How long a tapped icon stays inverted: long enough to register as a press, short enough that it is
+// gone before the action it triggered has finished redrawing.
+constexpr uint32_t kMapControlFlashMs = 160;
+// Half the gap, so a fingertip that lands between two icons still hits one without the targets overlapping.
+constexpr int16_t kMapControlHitPad = kMapControlGap / 2;
+
+uint8_t s_pressedControl = 0xFF;
+uint32_t s_pressedAtMs = 0;
+
+const uint8_t *mapControlIcon(MapControl control)
+{
+    switch (control) {
+    case MapControl::ZoomIn:
+        return icon_zoom_in_rgb565_mask;
+    case MapControl::ZoomOut:
+        return icon_zoom_out_rgb565_mask;
+    case MapControl::Pan:
+        return icon_pan_rgb565_mask;
+    default:
+        return icon_follow_me_rgb565_mask;
+    }
+}
+#else
+constexpr int16_t kMapControlRadius = 7; // the keyboard's key caps
+constexpr int16_t kMapControlGap = 4;
+constexpr int16_t kMapControlHitPad = 0;
+#endif
+
 // Shared by the draw and the hit test, so a button can't be drawn anywhere other than where it is pressed.
 void layoutMapControls(int16_t x, int16_t y, int16_t viewWidth, int16_t viewHeight, MapControlRect out[kMapControlCount])
 {
-    constexpr int16_t gap = 4;
+#if GRAPHICS_HAS_RGB565_IMAGES
+    const int16_t w = kMapControlIconSize * BASEUI_ICON_SCALE;
+    const int16_t h = w;
+#else
     const int16_t w = std::max<int16_t>(34, viewWidth / 7);
     const int16_t h = std::max<int16_t>(24, viewHeight / 10);
+#endif
     const int16_t inset = std::max<int16_t>(2, viewWidth / 40);
     const int16_t left = x + viewWidth - inset - w;
-    const int16_t stackHeight = kMapControlCount * h + (kMapControlCount - 1) * gap;
+    const int16_t stackHeight = kMapControlCount * h + (kMapControlCount - 1) * kMapControlGap;
+#if BASEUI_MAP_CONTROLS_BOTTOM
+    const int16_t top = std::max<int16_t>(y, y + viewHeight - inset - stackHeight);
+#else
     const int16_t top = std::max<int16_t>(y, y + (viewHeight - stackHeight) / 2);
+#endif
 
     for (int i = 0; i < kMapControlCount; ++i)
-        out[i] = {left, (int16_t)(top + i * (h + gap)), w, h};
+        out[i] = {left, (int16_t)(top + i * (h + kMapControlGap)), w, h};
 }
+
+#if GRAPHICS_HAS_RGB565_IMAGES
+// The shared blitter paints an icon's white pixels through the current draw colour and everything else
+// exactly as authored, which is what a themed glyph wants but leaves no way to flip one. These icons are
+// drawn over the basemap with no cap to invert against, so the press state inverts the artwork itself.
+void drawMapControlIcon(OLEDDisplay *display, const uint8_t *iconMask, int16_t x, int16_t y, bool invert)
+{
+    const RGB565Image *img = findRGB565Image(iconMask, kMapControlIconSize, kMapControlIconSize);
+    if (!img)
+        return;
+
+    TFTDisplay *const panel = static_cast<TFTDisplay *>(display);
+    const int16_t rowBytes = (img->width + 7) / 8;
+    constexpr int scale = BASEUI_ICON_SCALE;
+    // One row of opaque pixels, already expanded by the scale. A run can be the icon's full width.
+    uint16_t strip[kMapControlIconSize * scale];
+
+    for (int16_t sy = 0; sy < img->height; ++sy) {
+        int16_t runStart = -1;
+        int16_t runLen = 0;
+        // One extra step past the edge, so a run reaching the last column is flushed by the same branch.
+        for (int16_t sx = 0; sx <= img->width; ++sx) {
+            const bool opaque = sx < img->width && (pgm_read_byte(img->mask + sy * rowBytes + (sx >> 3)) & (1U << (sx & 7)));
+            if (opaque) {
+                if (runStart < 0)
+                    runStart = sx;
+                uint16_t color = img->pixels[sy * img->width + sx];
+                if (invert)
+                    color = (uint16_t)~color;
+                for (int i = 0; i < scale; ++i)
+                    strip[runLen++] = color;
+                continue;
+            }
+            if (runStart >= 0) {
+                for (int dy = 0; dy < scale; ++dy)
+                    panel->drawRGB565(x + runStart * scale, y + sy * scale + dy, runLen, 1, strip);
+                runStart = -1;
+                runLen = 0;
+            }
+        }
+    }
+}
+#endif
 
 void drawMapControls(OLEDDisplay *display, int16_t x, int16_t y, int16_t viewWidth, int16_t viewHeight)
 {
@@ -790,6 +873,12 @@ void drawMapControls(OLEDDisplay *display, int16_t x, int16_t y, int16_t viewWid
         // The toggles stay filled while on, like the keyboard's shift key; the zoom steps never fill.
         const bool latched = (control == MapControl::Pan && s_panMode) || (control == MapControl::FollowMe && s_followMe);
 
+#if GRAPHICS_HAS_RGB565_IMAGES
+        // Inverted means active: a toggle holds it while it is on, and any tap flashes it. XORed, so tapping a
+        // latched control flashes back to normal rather than showing nothing at all.
+        const bool flashing = s_pressedControl == i && Throttle::isWithinTimespanMs(s_pressedAtMs, kMapControlFlashMs);
+        drawMapControlIcon(display, mapControlIcon(control), r.x, r.y, latched != flashing);
+#else
         // Always filled, never a bare outline, or the tile art shows straight through the cap.
         if (latched) {
             display->setColor(WHITE);
@@ -819,6 +908,7 @@ void drawMapControls(OLEDDisplay *display, int16_t x, int16_t y, int16_t viewWid
             display->drawString(cx, r.y + (r.h - FONT_HEIGHT_SMALL) / 2, control == MapControl::Pan ? "PAN" : "ME");
             break;
         }
+#endif
 
         display->setColor(WHITE);
     }
@@ -1436,8 +1526,17 @@ bool MapRenderer::handleControlTap(int16_t tapX, int16_t tapY)
 
     for (int i = 0; i < kMapControlCount; ++i) {
         const MapControlRect &r = rects[i];
-        if (tapX < r.x || tapX >= r.x + r.w || tapY < r.y || tapY >= r.y + r.h)
+        // Inflated by half the gap: bare icons are a smaller target than the caps they replaced, and a
+        // fingertip landing just off one should still count.
+        if (tapX < r.x - kMapControlHitPad || tapX >= r.x + r.w + kMapControlHitPad || tapY < r.y - kMapControlHitPad ||
+            tapY >= r.y + r.h + kMapControlHitPad)
             continue;
+
+#if GRAPHICS_HAS_RGB565_IMAGES
+        // Recorded before the action, so the icon is already inverted on the redraw the action triggers.
+        s_pressedControl = (uint8_t)i;
+        s_pressedAtMs = millis();
+#endif
 
         switch ((MapControl)i) {
         case MapControl::ZoomIn:

@@ -41,6 +41,8 @@
 #define BASEUI_LOCKSCREEN 1
 // Zoom, pan and Follow Me as buttons on the Map frame - there is a touch panel to press them with.
 #define BASEUI_MAP_ONSCREEN_CONTROLS 1
+// Landscape panel: stack them in the bottom corner instead of centred, which would split the map.
+#define BASEUI_MAP_CONTROLS_BOTTOM 1
 // Read-only /flash/ page on the web server, for inspecting /prefs and the rest of the filesystem.
 #define WEB_FLASH_BROWSER 1
 // FTP access to the SD card, for uploading map tiles in bulk from an ordinary FTP client.
