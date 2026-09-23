@@ -917,6 +917,120 @@ void drawMapControls(OLEDDisplay *display, int16_t x, int16_t y, int16_t viewWid
 }
 #endif // BASEUI_MAP_ONSCREEN_CONTROLS
 
+#if !MESHTASTIC_EXCLUDE_WAYPOINT
+// Waypoint geofences: the circular radius and the rectangular bounding box the proto carries beside it.
+// Shaded green so the basemap still reads through, edged with a black dash. Drawn before every marker.
+constexpr uint8_t kGeofenceShadeAlpha = 64; // a quarter of the way to green
+constexpr int kGeofenceDashOn = 4;
+constexpr int kGeofenceDashOff = 4;
+
+// The map body, not the panel: the header sits above it and none of this may reach it.
+struct GeofenceClip {
+    int16_t x, y, w, h;
+};
+
+// One step of the pattern, so a straight edge and an arc break the same way.
+inline bool geofenceDashOn(int step)
+{
+    return (step % (kGeofenceDashOn + kGeofenceDashOff)) < kGeofenceDashOn;
+}
+
+void shadeGeofenceSpan(OLEDDisplay *display, int16_t left, int16_t right, int16_t row, const GeofenceClip &clip)
+{
+    if (row < clip.y || row >= clip.y + clip.h)
+        return;
+    left = std::max<int16_t>(left, clip.x);
+    right = std::min<int16_t>(right, (int16_t)(clip.x + clip.w - 1));
+    if (right < left)
+        return;
+#if BASEUI_NATIVE_RGB565
+    static_cast<TFTDisplay *>(display)->blendRect565(left, row, (int16_t)(right - left + 1), 1, TFTPalette::MeshtasticGreen,
+                                                     kGeofenceShadeAlpha);
+#else
+    (void)display; // no third colour to shade with here - the dashed edge carries the fence on its own
+#endif
+}
+
+void geofenceDashPixel(OLEDDisplay *display, int16_t px, int16_t py, const GeofenceClip &clip)
+{
+    if (px < clip.x || px >= clip.x + clip.w || py < clip.y || py >= clip.y + clip.h)
+        return;
+#if BASEUI_NATIVE_RGB565
+    static_cast<TFTDisplay *>(display)->fillRect565(px, py, 1, 1, TFTPalette::Black);
+#else
+    display->setColor(BLACK);
+    display->setPixel(px, py);
+    display->setColor(WHITE);
+#endif
+}
+
+// `step` carries across calls so the dash runs on around a corner instead of restarting at each edge.
+void drawGeofenceDashedLine(OLEDDisplay *display, int16_t x0, int16_t y0, int16_t x1, int16_t y1, int &step,
+                            const GeofenceClip &clip)
+{
+    const int steps = std::max(std::abs((int)x1 - x0), std::abs((int)y1 - y0));
+    for (int i = 0; i <= steps; ++i) {
+        const int16_t px = steps ? (int16_t)(x0 + ((int)x1 - x0) * i / steps) : x0;
+        const int16_t py = steps ? (int16_t)(y0 + ((int)y1 - y0) * i / steps) : y0;
+        if (geofenceDashOn(step++))
+            geofenceDashPixel(display, px, py, clip);
+    }
+}
+
+void drawGeofenceCircle(OLEDDisplay *display, int16_t cx, int16_t cy, float radiusPx, const GeofenceClip &clip)
+{
+    if (radiusPx < 1.0f)
+        return;
+    // A fence far bigger than the panel is ordinary once zoomed in, so clip rather than skip - but only
+    // after ruling out the ones that miss the body entirely, which would otherwise walk a huge circumference.
+    if (cx + radiusPx < clip.x || cx - radiusPx > clip.x + clip.w || cy + radiusPx < clip.y || cy - radiusPx > clip.y + clip.h)
+        return;
+
+    // Only the rows the body actually shows: the span loop is otherwise 2r iterations of nothing.
+    const int32_t r = (int32_t)lroundf(radiusPx);
+    const int32_t firstRow = std::max<int32_t>(-r, (int32_t)clip.y - cy);
+    const int32_t lastRow = std::min<int32_t>(r, (int32_t)clip.y + clip.h - 1 - cy);
+    for (int32_t dy = firstRow; dy <= lastRow; ++dy) {
+        const float half = sqrtf(std::max(0.0f, radiusPx * radiusPx - (float)dy * dy));
+        shadeGeofenceSpan(display, (int16_t)(cx - half), (int16_t)(cx + half), (int16_t)(cy + dy), clip);
+    }
+
+    // One sample per pixel of circumference, capped: past that the visible arc is near enough straight that
+    // a coarser walk reads the same, and the cap is what keeps a huge fence from costing a huge loop.
+    const int steps = std::min<int>(std::max(24, (int)(6.2832f * radiusPx)), 8 * (clip.w + clip.h));
+    int step = 0;
+    int16_t lastX = INT16_MIN, lastY = INT16_MIN;
+    for (int i = 0; i < steps; ++i) {
+        const float a = 6.2832f * i / steps;
+        const int16_t px = (int16_t)lroundf(cx + cosf(a) * radiusPx);
+        const int16_t py = (int16_t)lroundf(cy + sinf(a) * radiusPx);
+        if (px == lastX && py == lastY)
+            continue; // landing on the same pixel twice would stall the pattern there
+        lastX = px;
+        lastY = py;
+        if (geofenceDashOn(step++))
+            geofenceDashPixel(display, px, py, clip);
+    }
+}
+
+void drawGeofenceBox(OLEDDisplay *display, int16_t left, int16_t top, int16_t right, int16_t bottom, const GeofenceClip &clip)
+{
+    if (right < clip.x || left > clip.x + clip.w || bottom < clip.y || top > clip.y + clip.h)
+        return;
+
+    const int32_t firstRow = std::max<int32_t>(top, clip.y);
+    const int32_t lastRow = std::min<int32_t>(bottom, clip.y + clip.h - 1);
+    for (int32_t row = firstRow; row <= lastRow; ++row)
+        shadeGeofenceSpan(display, left, right, (int16_t)row, clip);
+
+    int step = 0;
+    drawGeofenceDashedLine(display, left, top, right, top, step, clip);
+    drawGeofenceDashedLine(display, right, top, right, bottom, step, clip);
+    drawGeofenceDashedLine(display, right, bottom, left, bottom, step, clip);
+    drawGeofenceDashedLine(display, left, bottom, left, top, step, clip);
+}
+#endif // !MESHTASTIC_EXCLUDE_WAYPOINT
+
 } // namespace
 
 bool MapRenderer::isPanModeEnabled()
@@ -1319,6 +1433,50 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
             labelCount++;
         }
     };
+
+#if !MESHTASTIC_EXCLUDE_WAYPOINT
+    // Geofences under every marker, so a pin is never lost inside its own fence. A waypoint can carry the
+    // circular radius, the bounding box, both or neither - the proto treats them as independent.
+    {
+        const GeofenceClip fenceClip = {x, y, viewWidth, viewHeight};
+        auto projectFence = [&](float lat, float lng, int16_t &px, int16_t &py) {
+            const float d = GeoCoord::latLongToMeter(centerLat, centerLng, lat, lng);
+            const float b = GeoCoord::bearing(centerLat, centerLng, lat, lng);
+            px = (int16_t)(x + viewWidth / 2 + (int16_t)(sinf(b) * d * metersToPx));
+            py = (int16_t)(y + viewHeight / 2 - (int16_t)(cosf(b) * d * metersToPx));
+        };
+
+        for (const StoredWaypoint &entry : waypointStore.getWaypoints()) {
+            const meshtastic_Waypoint &wp = entry.waypoint;
+            if (WaypointStore::isExpired(entry))
+                continue;
+            if (!wp.has_latitude_i || !wp.has_longitude_i || (wp.latitude_i == 0 && wp.longitude_i == 0))
+                continue;
+
+            if (wp.geofence_radius > 0) {
+                int16_t cx, cy;
+                projectFence(wp.latitude_i * 1e-7f, wp.longitude_i * 1e-7f, cx, cy);
+                drawGeofenceCircle(display, cx, cy, wp.geofence_radius * metersToPx, fenceClip);
+            }
+
+            if (wp.has_bounding_box) {
+                // North-up projection, so the box is axis-aligned to within a pixel at any usable zoom -
+                // take the extent of the four projected corners rather than assuming which is which.
+                const meshtastic_BoundingBox &bb = wp.bounding_box;
+                const float north = bb.latitude_north_i * 1e-7f, south = bb.latitude_south_i * 1e-7f;
+                const float west = bb.longitude_west_i * 1e-7f, east = bb.longitude_east_i * 1e-7f;
+                int16_t px[4], py[4];
+                projectFence(north, west, px[0], py[0]);
+                projectFence(north, east, px[1], py[1]);
+                projectFence(south, east, px[2], py[2]);
+                projectFence(south, west, px[3], py[3]);
+                const int16_t left = *std::min_element(px, px + 4), right = *std::max_element(px, px + 4);
+                const int16_t top = *std::min_element(py, py + 4), bottom = *std::max_element(py, py + 4);
+                drawGeofenceBox(display, left, top, right, bottom, fenceClip);
+            }
+        }
+    }
+#endif
 
     for (uint32_t i = 0; i < nodeDB->getNumMeshNodes(); i++) {
         meshtastic_NodeInfoLite *node = nodeDB->getMeshNodeByIndex(i);

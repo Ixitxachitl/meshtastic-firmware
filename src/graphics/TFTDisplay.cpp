@@ -2120,6 +2120,32 @@ void TFTDisplay::fillRect565(int16_t x, int16_t y, int16_t w, int16_t h, uint16_
     }
 }
 
+// Blend a rect toward one native-endian RGB565 colour, alpha 0 (nothing) to 255 (a plain fill). For an
+// overlay that has to let what is already drawn read through it, which fillRect565() cannot do.
+void TFTDisplay::blendRect565(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color, uint8_t alpha)
+{
+    if (!rgbPixels || alpha == 0)
+        return;
+    const int32_t x0 = x < 0 ? 0 : x;
+    const int32_t y0 = y < 0 ? 0 : y;
+    const int32_t x1 = ((int32_t)x + w) > displayWidth ? displayWidth : ((int32_t)x + w);
+    const int32_t y1 = ((int32_t)y + h) > displayHeight ? displayHeight : ((int32_t)y + h);
+    if (x1 <= x0 || y1 <= y0)
+        return;
+    nativeClean = false;
+    markNativeRowsDirty(y0, y1);
+    for (int32_t py = y0; py < y1; py++) {
+        uint16_t *const row = rgbPixels + (size_t)py * displayWidth;
+        for (int32_t px = x0; px < x1; px++) {
+            // The buffer holds big-endian; mix in native order and put it back the way it was.
+            row[px] = nativeSwap565(graphics::TFTPalette::mix565(nativeSwap565(row[px]), color, alpha));
+            nativeWriteMaskBit(buffer, displayWidth, px, py, false);
+            nativeWriteMaskBit(explicitBits, displayWidth, px, py, true);
+        }
+    }
+}
+
+// Default on/off colours plus the canvas swap, from the active theme.
 void TFTDisplay::refreshNativeThemeColors()
 {
     defaultOnBe = nativeSwap565(getThemeDefaultOnColor());

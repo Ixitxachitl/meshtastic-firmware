@@ -110,6 +110,9 @@ class TFTDisplay : public OLEDDisplay
     void drawRGB565(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *pixels, bool zeroIsTransparent = false);
     // Fill a rect with one native-endian RGB565 colour as background: unlit, and not recoloured by regions.
     void fillRect565(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color);
+    // As fillRect565(), but mixed into what is already there rather than replacing it. alpha is how far
+    // toward `color` each pixel travels, 0-255.
+    void blendRect565(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color, uint8_t alpha);
     // While set, clear() only resets the lit mask: the caller is about to cover every pixel itself (a slide
     // blitting its snapshots), so painting the background first would be thrown away.
     void setClearCovered(bool covered) { clearCovered = covered; }
