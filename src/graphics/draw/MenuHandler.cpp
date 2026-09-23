@@ -3603,20 +3603,33 @@ void menuHandler::mapBaseMenu()
 #endif // BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
 
 #if BASEUI_MAP_PNG_TILES
+#if BASEUI_MAP_ONLINE_TILES && BASEUI_MAP_ONSCREEN_CONTROLS
+// Row index of the Source entry below, or -1 while the menu is not up. The banner callback takes no
+// captures, so the index it has to recognise is parked here as the menu is built.
+static int mapStyleSourceRow = -1;
+#endif
+
 void menuHandler::mapStyleMenu()
 {
     // Labels point at MapRenderer's style names, which stay put until the next rescan (this menu's own).
-    // Back, the PNG folders, and MAP.BIN.
-    static const char *labels[graphics::MapRenderer::kMaxMapStyles + 2];
+    // Back, the PNG folders, MAP.BIN, and the Source row where this menu is the only one left.
+    static const char *labels[graphics::MapRenderer::kMaxMapStyles + 3];
     const int count = graphics::MapRenderer::refreshMapStyles();
     labels[0] = "Back";
     for (int i = 0; i < count; i++)
         labels[i + 1] = graphics::MapRenderer::mapStyleLabel(i);
+    int optionsCount = count + 1;
+#if BASEUI_MAP_ONLINE_TILES && BASEUI_MAP_ONSCREEN_CONTROLS
+    // The on-screen buttons replaced the Map menu, so this picker is the only way left to reach the
+    // online/offline choice.
+    mapStyleSourceRow = optionsCount++;
+    labels[mapStyleSourceRow] = (uiconfig.has_map_data && uiconfig.map_data.online_tiles) ? "Source: Online" : "Source: Offline";
+#endif
 
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = count > 0 ? "Map Style" : "No maps found";
     bannerOptions.optionsArrayPtr = labels;
-    bannerOptions.optionsCount = count + 1;
+    bannerOptions.optionsCount = optionsCount;
     bannerOptions.InitialSelected = graphics::MapRenderer::activeMapStyle() + 1;
     bannerOptions.bannerCallback = [](int selected) -> void {
         if (selected <= 0) {
@@ -3626,9 +3639,58 @@ void menuHandler::mapStyleMenu()
 #endif
             return;
         }
+#if BASEUI_MAP_ONLINE_TILES && BASEUI_MAP_ONSCREEN_CONTROLS
+        if (selected == mapStyleSourceRow) {
+            menuQueue = MapSourceMenu;
+            screen->runNow();
+            return;
+        }
+#endif
         graphics::MapRenderer::setMapStyle(selected - 1);
         saveUIConfig();
     };
+    screen->showOverlayBanner(bannerOptions);
+}
+#endif
+
+#if BASEUI_MAP_ONLINE_TILES
+// Whether a tile the card doesn't have is fetched over WiFi. Offline is the shipped default: online costs
+// radio time and talks to whatever provider the style's .url names.
+void menuHandler::mapSourceMenu()
+{
+    static const MapToggleOption options[] = {
+        {"Back", OptionsAction::Back},
+        {"Online", OptionsAction::Select, true},
+        {"Offline", OptionsAction::Select, false},
+    };
+    constexpr size_t count = sizeof(options) / sizeof(options[0]);
+    static std::array<const char *, count> labels{};
+
+    auto bannerOptions = createStaticBannerOptions("Map Source", options, labels, [](const MapToggleOption &option, int) -> void {
+        if (option.action == OptionsAction::Back) {
+#if BASEUI_MAP_ONSCREEN_CONTROLS
+            menuQueue = MapStyleMenu; // where it was opened from; the on-screen buttons replaced the Map menu
+#else
+            menuQueue = MapBaseMenu;
+#endif
+            screen->runNow();
+            return;
+        }
+        if (!option.hasValue)
+            return;
+        uiconfig.has_map_data = true;
+        uiconfig.map_data.online_tiles = option.value;
+        saveUIConfig();
+    });
+
+    const bool online = uiconfig.has_map_data && uiconfig.map_data.online_tiles;
+    for (size_t i = 0; i < count; ++i) {
+        if (options[i].hasValue && options[i].value == online) {
+            bannerOptions.InitialSelected = i;
+            break;
+        }
+    }
+
     screen->showOverlayBanner(bannerOptions);
 }
 #endif
@@ -3664,44 +3726,6 @@ void menuHandler::mapFollowMeMenu()
 
     screen->showOverlayBanner(bannerOptions);
 }
-
-#if BASEUI_MAP_ONLINE_TILES
-// Whether a tile the card doesn't have is fetched over WiFi. Offline is the shipped default: online costs
-// radio time and talks to whatever provider the style's .url names.
-void menuHandler::mapSourceMenu()
-{
-    static const MapToggleOption options[] = {
-        {"Back", OptionsAction::Back},
-        {"Online", OptionsAction::Select, true},
-        {"Offline", OptionsAction::Select, false},
-    };
-    constexpr size_t count = sizeof(options) / sizeof(options[0]);
-    static std::array<const char *, count> labels{};
-
-    auto bannerOptions = createStaticBannerOptions("Map Source", options, labels, [](const MapToggleOption &option, int) -> void {
-        if (option.action == OptionsAction::Back) {
-            menuQueue = MapBaseMenu;
-            screen->runNow();
-            return;
-        }
-        if (!option.hasValue)
-            return;
-        uiconfig.has_map_data = true;
-        uiconfig.map_data.online_tiles = option.value;
-        saveUIConfig();
-    });
-
-    const bool online = uiconfig.has_map_data && uiconfig.map_data.online_tiles;
-    for (size_t i = 0; i < count; ++i) {
-        if (options[i].hasValue && options[i].value == online) {
-            bannerOptions.InitialSelected = i;
-            break;
-        }
-    }
-
-    screen->showOverlayBanner(bannerOptions);
-}
-#endif
 
 void menuHandler::mapZoomLevelMenu()
 {

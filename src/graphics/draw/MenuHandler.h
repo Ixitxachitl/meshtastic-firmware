@@ -217,7 +217,9 @@ using NodeNameOption = MenuOption<bool>;
 using PositionMenuOption = MenuOption<int>;
 using ManageNodeOption = MenuOption<int>;
 using ClockFaceOption = MenuOption<bool>;
-#if BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
+#if BASEUI_HAS_MAP
+// Not narrowed to !BASEUI_MAP_ONSCREEN_CONTROLS with the Map menu itself: mapSourceMenu() is reached
+// from the style picker on those builds and still needs the toggle type.
 using MapMenuOption = MenuOption<int>;
 using MapToggleOption = MenuOption<bool>;
 #endif
