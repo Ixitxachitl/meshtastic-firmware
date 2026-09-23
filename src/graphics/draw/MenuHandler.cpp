@@ -2751,15 +2751,9 @@ void menuHandler::wifiToggleMenu()
 
 void menuHandler::screenOptionsMenu()
 {
-    // Check if brightness is supported
-#if defined(T_DECK)
-    // TDeck Doesn't seem to support brightness at all, at least not reliably
-    bool hasSupportBrightness = false;
-#elif defined(ST7789_CS) || defined(USE_OLED) || defined(USE_SSD1306) || defined(USE_SH1106) || defined(USE_SH1107)
-    bool hasSupportBrightness = true;
-#else
-    bool hasSupportBrightness = false;
-#endif
+    // Whether the backlight can be stepped at all - see BASEUI_HAS_BRIGHTNESS_CONTROL, which keeps the
+    // per-panel test (and the T-Deck's opt-in) in one place rather than here.
+    const bool hasSupportBrightness = BASEUI_HAS_BRIGHTNESS_CONTROL;
 
     enum optionsNumbers { Back, Brightness, FrameToggles, DisplayUnits, MessageBubbles, Theme, CalibrateTouch, PanelVcom };
     static const char *optionsArray[8] = {"Back"};

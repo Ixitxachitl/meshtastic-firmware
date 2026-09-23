@@ -29,6 +29,12 @@
 #define USE_TFTDISPLAY 1
 #define HAS_PHYSICAL_KEYBOARD 1
 
+// The backlight is an AW9364DNR: a 1-wire driver stepped by counting pulses on its enable pin, not a PWM
+// dimmer. TFTDisplay drives it directly and nothing else may touch GPIO 42 - see TFT_BACKLIGHT_AW9364.
+#define TFT_BACKLIGHT_AW9364 1
+// Display > Brightness. The shared default excludes this board because PWM did nothing here; with the
+// 1-wire driver above there are 16 real steps to pick from.
+#define BASEUI_HAS_BRIGHTNESS_CONTROL 1
 // Hold the trackball button to sleep the panel - this board has no Cancel key to do it with.
 #define BASEUI_SELECT_LONG_SLEEPS 1
 

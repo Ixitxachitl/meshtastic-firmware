@@ -598,6 +598,17 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #ifndef BASEUI_SELECT_LONG_SLEEPS
 #define BASEUI_SELECT_LONG_SLEEPS 0
 #endif
+// Display > Brightness. On by default wherever the backlight can be stepped, except the T-Deck: its
+// AW9364 backlight driver was found unreliable upstream, so that board opts back in per variant.
+#ifndef BASEUI_HAS_BRIGHTNESS_CONTROL
+#if defined(T_DECK)
+#define BASEUI_HAS_BRIGHTNESS_CONTROL 0
+#elif defined(ST7789_CS) || defined(USE_OLED) || defined(USE_SSD1306) || defined(USE_SH1106) || defined(USE_SH1107)
+#define BASEUI_HAS_BRIGHTNESS_CONTROL 1
+#else
+#define BASEUI_HAS_BRIGHTNESS_CONTROL 0
+#endif
+#endif
 // How long the lockscreen stays up before it fades out and the screen sleeps again.
 #ifndef BASEUI_LOCKSCREEN_TIMEOUT_MS
 #define BASEUI_LOCKSCREEN_TIMEOUT_MS 5000

@@ -30,6 +30,12 @@
 #define TFT_BACKLIGHT_PWM_ONLY 0
 #endif
 
+// Backlight driven by an AW9364-style 1-wire LED driver rather than a PWM dimmer. The enable pin is also
+// the data line, so nothing else may touch it: no LovyanGFX light instance, and no GPIO on/off.
+#ifndef TFT_BACKLIGHT_AW9364
+#define TFT_BACKLIGHT_AW9364 0
+#endif
+
 #ifdef GPIO_EXTENDER
 #include <SparkFunSX1509.h>
 #include <Wire.h>
@@ -715,7 +721,7 @@ class LGFX : public lgfx::LGFX_Device
             _panel_instance.config(cfg);
         }
 
-#ifdef ST7789_BL
+#if defined(ST7789_BL) && !TFT_BACKLIGHT_AW9364
         // Set the backlight control. (delete if not necessary)
         {
             auto cfg = _light_instance.config(); // Gets a structure for backlight settings.
@@ -1663,11 +1669,65 @@ static inline uint16_t getThemeDefaultOffColor()
 }
 } // namespace
 
+#if TFT_BACKLIGHT_AW9364
+// AW9364 1-wire dimming. The enable pin doubles as the data line: taking it high switches the driver on at
+// full brightness, and each further low-high pulse steps one level down, wrapping round from the dimmest
+// back to full. Holding it low for more than ~2.5ms shuts the driver down, which is also how it is reset.
+//
+// This is why PWM does nothing useful here - every PWM edge reads as another step-down pulse, so the level
+// just walks. The pin therefore belongs to this and nothing else; see TFT_BACKLIGHT_AW9364's uses.
+static constexpr uint8_t kAw9364Steps = 16;
+static uint8_t aw9364Level = 0; // 0 = off, else 1 (dimmest) to kAw9364Steps (full)
+
+static void aw9364SetLevel(uint8_t level)
+{
+    if (level == 0) {
+        digitalWrite(TFT_BL, LOW);
+        delay(3); // past the shutdown window, so the next enable starts from full again
+        aw9364Level = 0;
+        return;
+    }
+    if (level > kAw9364Steps)
+        level = kAw9364Steps;
+
+    if (aw9364Level == 0) {
+        digitalWrite(TFT_BL, HIGH);
+        delayMicroseconds(30);
+        aw9364Level = kAw9364Steps; // enabling lands at full brightness
+    }
+    if (level == aw9364Level)
+        return;
+
+    // Steps only ever go down, so going brighter means wrapping the whole way round the 16.
+    uint8_t pulses = (uint8_t)((kAw9364Steps + aw9364Level - level) % kAw9364Steps);
+
+    // The pulses are sub-microsecond, but a task switch stretching one low past the shutdown window would
+    // reset the driver to full and leave aw9364Level lying about it. Cheap to rule out for <= 15 writes.
+    noInterrupts();
+    while (pulses--) {
+        digitalWrite(TFT_BL, LOW);
+        digitalWrite(TFT_BL, HIGH);
+    }
+    interrupts();
+    aw9364Level = level;
+}
+
+// 0 is off; 1-255 maps onto the 16 hardware steps.
+static void aw9364SetBrightness(uint8_t brightness)
+{
+    aw9364SetLevel(brightness == 0 ? 0 : (uint8_t)(1 + ((uint32_t)(brightness - 1) * (kAw9364Steps - 1)) / 254));
+}
+#endif
+
 TFTDisplay::TFTDisplay(uint8_t address, int sda, int scl, OLEDDISPLAY_GEOMETRY geometry, HW_I2C i2cBus)
 {
     LOG_DEBUG("TFTDisplay");
 
-#if defined(TFT_BL) && !TFT_BACKLIGHT_PWM_ONLY
+#if TFT_BACKLIGHT_AW9364
+    pinMode(TFT_BL, OUTPUT);
+    digitalWrite(TFT_BL, LOW); // starts shut down, so the first setDisplayBrightness() enables from a known level
+    GpioPin *p = new GpioVirtPin();
+#elif defined(TFT_BL) && !TFT_BACKLIGHT_PWM_ONLY
     GpioPin *p = new GpioHwPin(TFT_BL);
 
     if (!TFT_BACKLIGHT_ON) { // Need to invert the pin before hardware
@@ -2060,7 +2120,6 @@ void TFTDisplay::fillRect565(int16_t x, int16_t y, int16_t w, int16_t h, uint16_
     }
 }
 
-// Default on/off colours plus the canvas swap, from the active theme.
 void TFTDisplay::refreshNativeThemeColors()
 {
     defaultOnBe = nativeSwap565(getThemeDefaultOnColor());
@@ -2736,6 +2795,11 @@ void TFTDisplay::sendCommand(uint8_t com)
     case DISPLAYOFF: {
         LOG_DEBUG("Display off");
         backlightEnable->set(false);
+#if TFT_BACKLIGHT_AW9364
+        // backlightEnable is a no-op pin here (see the constructor) - the driver goes out by being shut
+        // down, and Screen::handleSetOn() sets the level again on the way back.
+        setDisplayBrightness(0, true);
+#endif
 #if TFT_BACKLIGHT_PWM_ONLY
         // backlightEnable is a no-op pin on these boards (see the constructor); the backlight goes
         // out by driving the PWM to zero. Screen::handleSetOn() restores the level on the way back.
@@ -2792,7 +2856,11 @@ void TFTDisplay::sendCommand(uint8_t com)
 void TFTDisplay::setDisplayBrightness(uint8_t _brightness, bool quiet)
 {
     (void)quiet;
-#if defined(RAK14014) || defined(HELTEC_MESH_NODE_T096) || defined(HELTEC_MESH_NODE_T1)
+#if TFT_BACKLIGHT_AW9364
+    aw9364SetBrightness(_brightness);
+    if (!quiet)
+        LOG_DEBUG("Brightness is set to value: %i (AW9364 level %u)", _brightness, (unsigned)aw9364Level);
+#elif defined(RAK14014) || defined(HELTEC_MESH_NODE_T096) || defined(HELTEC_MESH_NODE_T1)
     // todo
 #elif !defined(USE_ARDUINO_GFX)
     tft->setBrightness(_brightness);
