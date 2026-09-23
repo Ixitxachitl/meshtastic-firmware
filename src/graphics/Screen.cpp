@@ -2990,6 +2990,18 @@ void Screen::increaseBrightness()
     /* TO DO: add little popup in center of screen saying what brightness level it is set to*/
 }
 
+void Screen::applyBrightness(uint8_t level)
+{
+    brightness = level;
+#if defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190)
+    analogWrite(VTFT_LEDA, brightness);
+#elif defined(ST7789_CS) || defined(ST7796_CS)
+    static_cast<TFTDisplay *>(dispdev)->setDisplayBrightness(brightness);
+#elif defined(USE_OLED) || defined(USE_SSD1306) || defined(USE_SH1106) || defined(USE_SH1107) || defined(USE_SPISSD1306)
+    dispdev->setBrightness(brightness);
+#endif
+}
+
 void Screen::decreaseBrightness()
 {
 #if HAS_PWM_BACKLIGHT

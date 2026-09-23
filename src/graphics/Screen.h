@@ -80,6 +80,7 @@ class Screen
     void startFirmwareUpdateScreen() {}
     void increaseBrightness() {}
     void decreaseBrightness() {}
+    void applyBrightness(uint8_t) {}
     void startAlert(const char *) {}
     void setModalModule(const MeshModule *) {}
     void clearModalModule(const MeshModule *) {}
@@ -461,6 +462,10 @@ class Screen : public concurrency::OSThread
     // functions for display brightness
     void increaseBrightness();
     void decreaseBrightness();
+    // Set the level and put it on the panel. The runtime level lives here, not in uiconfig: setup() seeds
+    // it from there at boot and handleSetOn() re-applies it on every wake, so anything that changes the
+    // brightness has to come through this or the next wake puts the old value back.
+    void applyBrightness(uint8_t level);
 
     /// Stops showing the boot screen.
     void stopBootScreen() { enqueueCmd(ScreenCmd{.cmd = Cmd::STOP_BOOT_SCREEN}); }
