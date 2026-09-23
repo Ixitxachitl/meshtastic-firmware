@@ -592,6 +592,12 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #ifndef BASEUI_LOCKSCREEN
 #define BASEUI_LOCKSCREEN 0
 #endif
+// Holding select (on the T-Deck, the trackball button) puts the panel to sleep, as a Cancel key would.
+// Only where nothing else is holding the D-pad, so a game or the on-screen keyboard keeps its own long
+// press. Opt-in per variant, and only worth it on a board whose select can actually report a hold.
+#ifndef BASEUI_SELECT_LONG_SLEEPS
+#define BASEUI_SELECT_LONG_SLEEPS 0
+#endif
 // How long the lockscreen stays up before it fades out and the screen sleeps again.
 #ifndef BASEUI_LOCKSCREEN_TIMEOUT_MS
 #define BASEUI_LOCKSCREEN_TIMEOUT_MS 5000

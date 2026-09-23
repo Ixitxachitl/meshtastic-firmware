@@ -889,6 +889,12 @@ class Screen : public concurrency::OSThread
     uint32_t screenOffAtMs = 0; // when the panel last went dark; see screenOffForAtLeast()
     // Whether we are showing the regular screen (as opposed to booth screen or
     // Bluetooth PIN screen)
+#if BASEUI_SELECT_LONG_SLEEPS
+    // When the last long press was acted on. A held select repeats every LONG_PRESS_REPEAT_INTERVAL,
+    // so this is what tells one hold from the next - stamped by the lockscreen too, since the hold
+    // that unlocks keeps repeating after the lock has gone.
+    uint32_t lastSelectLongMs = 0;
+#endif
     bool showingNormalScreen = false;
     bool showingBootScreen = true;
 

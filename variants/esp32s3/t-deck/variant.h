@@ -29,6 +29,9 @@
 #define USE_TFTDISPLAY 1
 #define HAS_PHYSICAL_KEYBOARD 1
 
+// Hold the trackball button to sleep the panel - this board has no Cancel key to do it with.
+#define BASEUI_SELECT_LONG_SLEEPS 1
+
 #define HAS_TOUCHSCREEN 1
 #define SCREEN_TOUCH_INT 16
 #define TOUCH_I2C_PORT 0

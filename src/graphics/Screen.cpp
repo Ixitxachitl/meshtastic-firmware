@@ -1825,6 +1825,12 @@ static bool screenDragOwnsFramerate()
 }
 #endif // BASEUI_HAS_TOUCH_DRAG
 
+#if BASEUI_SELECT_LONG_SLEEPS
+// Longer than TrackballInterruptBase::LONG_PRESS_REPEAT_INTERVAL, so every repeat of one hold falls
+// inside it and only a genuinely new press falls outside.
+static constexpr uint32_t kSelectLongPressGapMs = 700;
+#endif
+
 #if BASEUI_LOCKSCREEN
 // One backlight step per ~60Hz tick. runOnce() drops to IDLE_FRAMERATE once the frame is fixed,
 // so the ramp asks to be called back itself rather than riding the frame rate.
@@ -1982,6 +1988,11 @@ void Screen::lockscreenInput(input_broker_event ev)
     } else if (ev == INPUT_BROKER_SELECT_LONG && tapLive) {
         lockUnlockStep = 2;
         lockStepAtMs = millis();
+#if BASEUI_SELECT_LONG_SLEEPS
+        // This press never reaches handleInputEvent (InputBroker hands it here instead), but its repeats
+        // will once the lock is gone - so stamp it here as well, and they read as the same hold.
+        lastSelectLongMs = lockStepAtMs;
+#endif
     } else {
         lockUnlockStep = 0; // a lone hold, or any other key, resets the gesture
     }
@@ -3685,6 +3696,19 @@ int Screen::handleInputEvent(const InputEvent *event)
 #endif
             } else if (event->inputEvent == INPUT_BROKER_CANCEL) {
                 setOn(false);
+#if BASEUI_SELECT_LONG_SLEEPS
+                // Last in the chain, and only when nothing is holding the D-pad: the games frame claims this
+                // for its high-score table and the composer for its own long press, and both observe the broker
+                // before the screen does, so neither ever reaches here. The touch panel raises a plain SELECT
+                // for a long press, so this can only come from a physical select.
+            } else if (event->inputEvent == INPUT_BROKER_SELECT_LONG && !anyModuleInterceptingInput()) {
+                // A held select repeats every 300ms (TrackballInterruptBase::LongRepeat), so one hold arrives
+                // as a stream. Act on the first of a press and ignore the rest, or the hold that dismissed
+                // the lockscreen carries straight on into this and sleeps the panel again.
+                if (Throttle::hasElapsed(lastSelectLongMs, kSelectLongPressGapMs))
+                    setOn(false);
+                lastSelectLongMs = millis();
+#endif
             }
         }
     }
