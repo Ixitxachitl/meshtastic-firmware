@@ -696,7 +696,6 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         const char *messageString = "No messages";
         int center_text = x + (SCREEN_WIDTH / 2) - (display->getStringWidth(messageString) / 2);
         display->drawString(center_text, getTextPositions(display)[2], messageString);
-        graphics::drawCommonFooter(display, x, y);
         return;
     }
 
@@ -1349,7 +1348,6 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     if (!compactPanel) {
         graphics::drawCommonHeader(display, x, y, titleStr);
     }
-    graphics::drawCommonFooter(display, x, y);
 }
 
 std::vector<std::string> generateLines(OLEDDisplay *display, const char *headerStr, const char *messageBuf, int textWidth)

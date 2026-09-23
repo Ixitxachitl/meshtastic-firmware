@@ -174,6 +174,9 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
 
 // Shared battery/time/mail header
 void drawCommonFooter(OLEDDisplay *display, int16_t x, int16_t y);
+// drawCommonFooter() as an OLEDDisplayUi overlay. Register it before the nav bar and the banner, so both
+// of those still draw over it. Frames must not call drawCommonFooter() themselves as well.
+void drawConnectionFooterOverlay(OLEDDisplay *display, OLEDDisplayUiState *state);
 
 // Frame renderers must clear through this rather than calling display->clear() directly.
 //

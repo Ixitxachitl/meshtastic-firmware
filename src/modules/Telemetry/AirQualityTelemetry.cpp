@@ -393,7 +393,6 @@ void AirQualityTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiSta
 
         currentY += rowHeight;
     }
-    graphics::drawCommonFooter(display, x, y);
 }
 #endif
 

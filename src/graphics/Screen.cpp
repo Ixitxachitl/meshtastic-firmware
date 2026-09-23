@@ -437,8 +437,9 @@ void Screen::showOverlayBanner(BannerOverlayOptions banner_overlay_options)
     NotificationRenderer::curSelected = banner_overlay_options.InitialSelected;
     NotificationRenderer::pauseBanner = false;
     NotificationRenderer::current_notification_type = banner_overlay_options.notificationType;
-    static OverlayCallback overlays[] = {graphics::UIRenderer::drawNavigationBar, NotificationRenderer::drawBannercallback};
-    ui->setOverlays(overlays, 2);
+    static OverlayCallback overlays[] = {graphics::drawConnectionFooterOverlay, graphics::UIRenderer::drawNavigationBar,
+                                         NotificationRenderer::drawBannercallback};
+    ui->setOverlays(overlays, 3);
     ui->setTargetFPS(60);
     updateUiFrame(ui);
 }
@@ -459,8 +460,9 @@ void Screen::showNodePicker(const char *message, uint32_t durationMs, std::funct
     NotificationRenderer::curSelected = 0;
     NotificationRenderer::current_notification_type = notificationTypeEnum::node_picker;
 
-    static OverlayCallback overlays[] = {graphics::UIRenderer::drawNavigationBar, NotificationRenderer::drawBannercallback};
-    ui->setOverlays(overlays, 2);
+    static OverlayCallback overlays[] = {graphics::drawConnectionFooterOverlay, graphics::UIRenderer::drawNavigationBar,
+                                         NotificationRenderer::drawBannercallback};
+    ui->setOverlays(overlays, 3);
     ui->setTargetFPS(60);
     updateUiFrame(ui);
 }
@@ -486,8 +488,9 @@ void Screen::showNumberPicker(const char *message, uint32_t durationMs, uint8_t 
     NotificationRenderer::numDigits = digits;
     NotificationRenderer::currentNumber = 0;
 
-    static OverlayCallback overlays[] = {graphics::UIRenderer::drawNavigationBar, NotificationRenderer::drawBannercallback};
-    ui->setOverlays(overlays, 2);
+    static OverlayCallback overlays[] = {graphics::drawConnectionFooterOverlay, graphics::UIRenderer::drawNavigationBar,
+                                         NotificationRenderer::drawBannercallback};
+    ui->setOverlays(overlays, 3);
     ui->setTargetFPS(60);
     updateUiFrame(ui);
 }
@@ -523,8 +526,9 @@ void Screen::showAlphanumericPicker(const char *message, const char *initialText
     }
     NotificationRenderer::alphanumericValue[length] = '\0';
 
-    static OverlayCallback overlays[] = {graphics::UIRenderer::drawNavigationBar, NotificationRenderer::drawBannercallback};
-    ui->setOverlays(overlays, 2);
+    static OverlayCallback overlays[] = {graphics::drawConnectionFooterOverlay, graphics::UIRenderer::drawNavigationBar,
+                                         NotificationRenderer::drawBannercallback};
+    ui->setOverlays(overlays, 3);
     ui->setTargetFPS(60);
     updateUiFrame(ui);
 }
@@ -546,8 +550,9 @@ void Screen::showTextInput(const char *header, const char *initialText, uint32_t
     NotificationRenderer::current_notification_type = notificationTypeEnum::text_input;
 
     // Set the overlay using the same pattern as other notification types
-    static OverlayCallback overlays[] = {graphics::UIRenderer::drawNavigationBar, NotificationRenderer::drawBannercallback};
-    ui->setOverlays(overlays, 2);
+    static OverlayCallback overlays[] = {graphics::drawConnectionFooterOverlay, graphics::UIRenderer::drawNavigationBar,
+                                         NotificationRenderer::drawBannercallback};
+    ui->setOverlays(overlays, 3);
     ui->setTargetFPS(60);
     updateUiFrame(ui);
 }
@@ -1039,9 +1044,10 @@ void Screen::setup()
 
     // Set custom overlay callbacks
     static OverlayCallback overlays[] = {
+        graphics::drawConnectionFooterOverlay,  // API link indicator, under everything else
         graphics::UIRenderer::drawNavigationBar // Custom indicator icons for each frame
     };
-    ui->setOverlays(overlays, 1);
+    ui->setOverlays(overlays, 2);
 
     // Enable UTF-8 to display mapping
     dispdev->setFontTableLookupFunction(customFontTableLookup);
@@ -2608,8 +2614,9 @@ void Screen::setFrames(FrameFocus focus)
     ui->disableAllIndicators();
 
     // Add overlays: frame icons and alert banner)
-    static OverlayCallback overlays[] = {graphics::UIRenderer::drawNavigationBar, NotificationRenderer::drawBannercallback};
-    ui->setOverlays(overlays, 2);
+    static OverlayCallback overlays[] = {graphics::drawConnectionFooterOverlay, graphics::UIRenderer::drawNavigationBar,
+                                         NotificationRenderer::drawBannercallback};
+    ui->setOverlays(overlays, 3);
 
     prevFrame = -1; // Force drawFavoriteNode to pick a new node (because our list just changed)
 
@@ -3212,8 +3219,9 @@ int Screen::handleInputEvent(const InputEvent *event)
         if (event->inputEvent == INPUT_BROKER_USER_PRESS && inputEventIsTouch(event))
             touchHapticPulse(TouchHaptic::Activate);
         NotificationRenderer::inEvent = *event;
-        static OverlayCallback overlays[] = {graphics::UIRenderer::drawNavigationBar, NotificationRenderer::drawBannercallback};
-        ui->setOverlays(overlays, 2);
+        static OverlayCallback overlays[] = {graphics::drawConnectionFooterOverlay, graphics::UIRenderer::drawNavigationBar,
+                                             NotificationRenderer::drawBannercallback};
+        ui->setOverlays(overlays, 3);
         setFastFramerate(); // Draw ASAP
         updateUiFrame(ui);
         return 0;
@@ -3238,8 +3246,9 @@ int Screen::handleInputEvent(const InputEvent *event)
         if (event->inputEvent == INPUT_BROKER_USER_PRESS && inputEventIsTouch(event))
             touchHapticPulse(TouchHaptic::Activate);
         NotificationRenderer::inEvent = *event;
-        static OverlayCallback overlays[] = {graphics::UIRenderer::drawNavigationBar, NotificationRenderer::drawBannercallback};
-        ui->setOverlays(overlays, 2);
+        static OverlayCallback overlays[] = {graphics::drawConnectionFooterOverlay, graphics::UIRenderer::drawNavigationBar,
+                                             NotificationRenderer::drawBannercallback};
+        ui->setOverlays(overlays, 3);
         setFastFramerate(); // Draw ASAP
         updateUiFrame(ui);
 

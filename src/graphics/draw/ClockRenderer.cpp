@@ -311,8 +311,6 @@ void drawDigitalClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int1
 #ifndef USE_EINK
     display->drawString(hourMinuteTextX - CLOCK_CHAR_GAP - display->getStringWidth(secondString), bottomRowY, secondString);
 #endif
-
-    graphics::drawCommonFooter(display, x, y);
 }
 
 // Draw an analog clock
@@ -505,7 +503,6 @@ void drawAnalogClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         display->drawLine(centerX, centerY, secondX, secondY);
 #endif
     }
-    graphics::drawCommonFooter(display, x, y);
 }
 
 } // namespace ClockRenderer

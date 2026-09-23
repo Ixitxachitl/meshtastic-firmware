@@ -829,6 +829,16 @@ const int *getTextPositions(OLEDDisplay *display)
 // *************************
 // * Common Footer Drawing *
 // *************************
+// The footer is an overlay, not frame content: drawn after every frame, it is on whichever frame is up
+// rather than only the ones that remembered to call it, it survives a transition instead of sliding away
+// inside a frame's snapshot, and its backing fill lands on top of the body rather than under the next
+// thing the frame drew.
+void drawConnectionFooterOverlay(OLEDDisplay *display, OLEDDisplayUiState *state)
+{
+    (void)state;
+    drawCommonFooter(display, 0, 0);
+}
+
 void drawCommonFooter(OLEDDisplay *display, int16_t x, int16_t y)
 {
     if (isCompactPanel(display)) {
@@ -840,14 +850,39 @@ void drawCommonFooter(OLEDDisplay *display, int16_t x, int16_t y)
         return;
 
     const int scale = ((currentResolution == ScreenResolution::High) ? 2 : 1) * BASEUI_ICON_SCALE;
+
+#if GRAPHICS_HAS_RGB565_IMAGES
+    // The colour version of this glyph is square where the 1-bit one is 7x5, and it is shaded, with its
+    // own dark edges and a transparent surround - so it needs neither the 7:5 box drawScaledXbm() would
+    // size it into nor anything painted behind it.
+    const RGB565Image *colorIcon = findRGB565Image(connection_icon, connection_icon_width, connection_icon_height);
+#else
+    const RGB565Image *const colorIcon = nullptr;
+#endif
+
+    if (colorIcon) {
+        // Square, padded on every side, and the band ends level with the panel rather than running past it
+        // the way the 1-bit one does - there the overhang is only ever blank rows, but a square icon tall
+        // enough to fill the band would have lost its bottom edge off-screen.
+        const int pad = scale;
+        const int side = connection_icon_height * scale;
+        const int iconX = pad;
+        const int iconY = SCREEN_HEIGHT - side - pad;
+        // No backing fill and no colour region: this draws over whatever the frame put here, and a filled
+        // band was cutting a black bar through message bubbles and map tiles on these rows.
+        display->setColor(WHITE);
+        drawStretchedXbm(display, iconX, iconY, connection_icon_width, connection_icon_height, connection_icon, side, side);
+        return;
+    }
+
     const int footerY = SCREEN_HEIGHT - (1 * scale) - (connection_icon_height * scale);
     const int footerH = (connection_icon_height * scale) + (2 * scale);
     const int iconX = 0;
     const int iconY = SCREEN_HEIGHT - (connection_icon_height * scale);
-
-#if GRAPHICS_TFT_COLORING_ENABLED
     const int iconW = connection_icon_width * scale;
     const int iconH = connection_icon_height * scale;
+
+#if GRAPHICS_TFT_COLORING_ENABLED
     // Only tint the link glyph itself on TFT; keep the footer background black.
     setAndRegisterTFTColorRole(TFTColorRole::ConnectionIcon, TFTPalette::Blue, TFTPalette::Black, iconX, iconY, iconW, iconH);
 #endif
@@ -864,9 +899,10 @@ void drawCommonFooter(OLEDDisplay *display, int16_t x, int16_t y)
     if (footerY >= bodyBottom)
         display->fillRect(0, footerY, SCREEN_WIDTH, footerH);
     else
-        display->fillRect(0, footerY, connection_icon_width + 1, footerH);
+        display->fillRect(0, footerY, iconW + scale, footerH);
 #else
-    display->fillRect(0, footerY, connection_icon_width + 1, footerH);
+    // Scaled: the source-pixel width this used to be left the right of the glyph unbacked at scale > 1.
+    display->fillRect(0, footerY, iconW + scale, footerH);
 #endif
     display->setColor(WHITE);
     drawScaledXbm(display, iconX, iconY, connection_icon_width, connection_icon_height, connection_icon, scale);

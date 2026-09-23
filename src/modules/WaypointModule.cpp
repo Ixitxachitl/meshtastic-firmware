@@ -482,7 +482,6 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     // Drawn last so a card scrolled up beneath it is painted over rather than showing through.
     display->setFont(FONT_SMALL);
     graphics::drawCommonHeader(display, x, y, titleStr);
-    graphics::drawCommonFooter(display, x, y);
 #endif
 }
 

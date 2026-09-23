@@ -738,7 +738,6 @@ void drawNodeListScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t
 
     const int scrollStartY = y + 3;
     drawScrollbar(display, visibleNodeRows, totalEntries, scrollIndex, totalColumns, scrollStartY, x);
-    graphics::drawCommonFooter(display, x, y);
 
     // Scroll Popup Overlay
     if (millis() - popupTime < POPUP_DURATION_MS) {

@@ -940,7 +940,6 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
             display->setPixel(scrollbarX, thumbY + i);
         }
 
-        graphics::drawCommonFooter(display, x, y);
         return;
     }
 #endif
@@ -1333,7 +1332,6 @@ void UIRenderer::drawFavoriteNode(OLEDDisplay *display, OLEDDisplayUiState *stat
                                                statusLine1, statusLine2);
     }
 #endif
-    graphics::drawCommonFooter(display, x, y);
 }
 
 // ****************************
@@ -1561,7 +1559,6 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
 #endif
     }
 #endif
-    graphics::drawCommonFooter(display, x, y);
 }
 
 // Start Functions to write date/time to the screen
@@ -1939,7 +1936,6 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
             display->setPixel(scrollbarX, thumbY + i);
         }
 
-        graphics::drawCommonFooter(display, x, y);
         return;
     }
 #endif
@@ -2055,7 +2051,6 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
     }
 #endif
 #endif // HAS_GPS
-    graphics::drawCommonFooter(display, x, y);
 }
 
 #ifdef USERPREFS_OEM_TEXT
