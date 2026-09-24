@@ -80,6 +80,10 @@
 #define HAS_TOUCHSCREEN 1
 // Zoom, pan and Follow Me as buttons on the Map frame: a finger shouldn't travel to a menu for one zoom step.
 #define BASEUI_MAP_ONSCREEN_CONTROLS 1
+// Default Dark's navy canvas drawn as the topographic artwork. The shared art is 320x240, so it goes on
+// at 2x - 640x480 - centred on this 410x502 panel: cropped at the sides, 11 rows wrapped top and bottom.
+#define BASEUI_BACKGROUND_IMAGE_SCALE 2
+#define BASEUI_BACKGROUND_IMAGE 1
 #define HAS_SPI_TFT 1
 #define ENABLE_TOUCH_INT 1
 #define VARIANT_TOUCHSCREEN 1

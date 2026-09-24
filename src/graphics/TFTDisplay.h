@@ -176,6 +176,8 @@ class TFTDisplay : public OLEDDisplay
     void drawInternal(int16_t xMove, int16_t yMove, int16_t width, int16_t height, const uint8_t *data, uint16_t offset,
                       uint16_t bytesInData) override;
 
+    // Background artwork sampled with wrap, so it need not be the panel's size.
+    uint16_t canvasImagePixel(int32_t x, int32_t y) const;
     // Colour one pixel from its lit bit: the pen if one is set, else the regions, else the theme.
     void writeNativePixel(int16_t x, int16_t y);
     // Repaint a just-registered region's rect from the lit mask, skipping explicitly coloured pixels.

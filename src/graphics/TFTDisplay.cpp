@@ -1847,11 +1847,44 @@ static inline uint16_t nativeSwap565(uint16_t c)
     return static_cast<uint16_t>((c >> 8) | (c << 8));
 }
 
-#if BASEUI_BACKGROUND_IMAGE && __has_include("img/background.h")
-#include "img/background.h"
+// The artwork has to match the panel exactly (see refreshNativeThemeColors), so a board whose panel is
+// not the shared 320x240 points this at its own export instead.
+#ifndef BASEUI_BACKGROUND_IMAGE_INC
+#define BASEUI_BACKGROUND_IMAGE_INC "img/background.h"
+#endif
+// Whole-number zoom applied to the artwork before it is cropped to the panel. 1 draws it pixel for pixel.
+#ifndef BASEUI_BACKGROUND_IMAGE_SCALE
+#define BASEUI_BACKGROUND_IMAGE_SCALE 1
+#endif
+#if BASEUI_BACKGROUND_IMAGE && __has_include(BASEUI_BACKGROUND_IMAGE_INC)
+#include BASEUI_BACKGROUND_IMAGE_INC
 // Stays in flash; each pixel is swapped for the panel as it is read.
 static const uint16_t kCanvasImage[] PROGMEM = BACKGROUND_RGB565_DATA;
 #endif
+
+// The artwork need not be the panel's size. It is drawn at BASEUI_BACKGROUND_IMAGE_SCALE and cropped to
+// the panel, and sampling wraps so a panel bigger than the scaled artwork repeats it rather than running
+// off the end. At the default scale of 1 on a panel the artwork's own size, this is the identity.
+uint16_t TFTDisplay::canvasImagePixel(int32_t x, int32_t y) const
+{
+#if BASEUI_BACKGROUND_IMAGE && __has_include(BASEUI_BACKGROUND_IMAGE_INC)
+    constexpr int32_t scale = BASEUI_BACKGROUND_IMAGE_SCALE;
+    constexpr int32_t sw = BACKGROUND_WIDTH * scale;
+    constexpr int32_t sh = BACKGROUND_HEIGHT * scale;
+    // Centred on the panel, so what gets cropped comes off both edges evenly rather than all off one.
+    // The offsets go negative when the panel is the larger of the two, hence the second modulo.
+    const int32_t ox = (sw - displayWidth) / 2;
+    const int32_t oy = (sh - displayHeight) / 2;
+    const int32_t sx = ((((x + ox) % sw) + sw) % sw) / scale;
+    const int32_t sy = ((((y + oy) % sh) + sh) % sh) / scale;
+    return canvasImage[(size_t)sy * BACKGROUND_WIDTH + sx];
+#else
+    // canvasImage is always null without artwork, so this is unreachable - it just has to compile.
+    (void)x;
+    (void)y;
+    return 0;
+#endif
+}
 
 uint16_t TFTDisplay::onCanvas(bool lit, uint16_t be, int32_t x, int32_t y) const
 {
@@ -1859,7 +1892,7 @@ uint16_t TFTDisplay::onCanvas(bool lit, uint16_t be, int32_t x, int32_t y) const
         return be;
     if (canvasOverrideActive)
         return canvasOverrideBe;
-    return canvasImage ? nativeSwap565(canvasImage[(size_t)y * displayWidth + x]) : canvasBe;
+    return canvasImage ? nativeSwap565(canvasImagePixel(x, y)) : canvasBe;
 }
 
 void TFTDisplay::copySlideRow(int32_t row, const uint16_t *src, int32_t srcX, int32_t dstX, int32_t count)
@@ -1873,10 +1906,9 @@ void TFTDisplay::copySlideRow(int32_t row, const uint16_t *src, int32_t srcX, in
         memcpy(dst, src + srcX, (size_t)count * sizeof(uint16_t));
         return;
     }
-    const uint16_t *const image = canvasImage + (size_t)row * displayWidth;
     for (int32_t i = 0; i < count; i++) {
         const uint16_t be = src[srcX + i];
-        dst[i] = (be == nativeSwap565(image[srcX + i])) ? nativeSwap565(image[dstX + i]) : be;
+        dst[i] = (be == nativeSwap565(canvasImagePixel(srcX + i, row))) ? nativeSwap565(canvasImagePixel(dstX + i, row)) : be;
     }
 }
 
@@ -2012,14 +2044,42 @@ void TFTDisplay::clear(void)
     for (uint16_t y = 0; y < displayHeight; y++) {
         uint16_t *const row = rgbPixels + (size_t)y * displayWidth;
         nativeBeginRow(static_cast<int16_t>(y));
-        if (graphics::tftColorRowCount == 0) {
-            for (uint16_t x = 0; x < displayWidth; x++)
-                row[x] = onCanvas(false, defaultOffBe, x, y);
-        } else {
+        if (graphics::tftColorRowCount != 0) {
+            // Regions on this row resolve per pixel; there is no shortcut.
             for (uint16_t x = 0; x < displayWidth; x++)
                 row[x] = onCanvas(
                     false, graphics::resolveTFTColorPixelRow(static_cast<int16_t>(x), false, defaultOnBe, defaultOffBe), x, y);
+            continue;
         }
+        // No regions: every pixel of the row resolves the same way, so decide once instead of calling
+        // onCanvas() for each. This runs for the whole panel on every frame - 205k pixels on a 410x502 -
+        // so the per-pixel call, and the artwork's modulo/divide, dominated the frame.
+        if (canvasOverrideActive) {
+            for (uint16_t x = 0; x < displayWidth; x++)
+                row[x] = canvasOverrideBe;
+            continue;
+        }
+        if (!canvasImage) {
+            for (uint16_t x = 0; x < displayWidth; x++)
+                row[x] = canvasBe;
+            continue;
+        }
+#if BASEUI_BACKGROUND_IMAGE && __has_include(BASEUI_BACKGROUND_IMAGE_INC)
+        // The artwork row is fixed for this panel row, and x walks it with a plain wrap - so the modulo
+        // and the divide come out of the inner loop entirely.
+        constexpr int32_t scale = BASEUI_BACKGROUND_IMAGE_SCALE;
+        constexpr int32_t sw = BACKGROUND_WIDTH * scale;
+        constexpr int32_t sh = BACKGROUND_HEIGHT * scale;
+        const int32_t oy = (sh - displayHeight) / 2;
+        const int32_t ox = (sw - displayWidth) / 2;
+        const uint16_t *const src = canvasImage + (size_t)(((((y + oy) % sh) + sh) % sh) / scale) * BACKGROUND_WIDTH;
+        int32_t sxScaled = (((ox % sw) + sw) % sw);
+        for (uint16_t x = 0; x < displayWidth; x++) {
+            row[x] = nativeSwap565(src[sxScaled / scale]);
+            if (++sxScaled >= sw)
+                sxScaled = 0;
+        }
+#endif
     }
     nativeClean = true;
     cleanRegionGeneration = gen;
@@ -2156,10 +2216,9 @@ void TFTDisplay::refreshNativeThemeColors()
     canvasBe = legacyBgBe;
 #endif
     defaultOffBe = canvasBe;
-#if BASEUI_BACKGROUND_IMAGE && __has_include("img/background.h")
+#if BASEUI_BACKGROUND_IMAGE && __has_include(BASEUI_BACKGROUND_IMAGE_INC)
     // Default Dark's navy only; the other themes keep their own canvas colour.
-    const bool imageFits = displayWidth == BACKGROUND_WIDTH && displayHeight == BACKGROUND_HEIGHT;
-    canvasImage = (imageFits && graphics::getThemeCanvasBg() == graphics::TFTPalette::MidnightNavy) ? kCanvasImage : nullptr;
+    canvasImage = (graphics::getThemeCanvasBg() == graphics::TFTPalette::MidnightNavy) ? kCanvasImage : nullptr;
 #endif
 }
 
