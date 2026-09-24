@@ -132,12 +132,14 @@ class TFTDisplay : public OLEDDisplay
     // Writable access, so both count as drawing: the next clear() can no longer be skipped.
     uint16_t *nativePixels()
     {
+        flushPendingColumns();
         nativeClean = false;
         markNativeRowsDirty(0, displayHeight);
         return rgbPixels;
     }
     uint8_t *explicitMask()
     {
+        flushPendingColumns();
         nativeClean = false;
         markNativeRowsDirty(0, displayHeight);
         return explicitBits;
@@ -192,6 +194,15 @@ class TFTDisplay : public OLEDDisplay
     uint16_t canvasImagePixel(int32_t x, int32_t y) const;
     // Colour one pixel from its lit bit: the pen if one is set, else the regions, else the theme.
     void writeNativePixel(int16_t x, int16_t y);
+    // The library's fillRect() is not a hook: it fills column by column through drawVerticalLine(). In a
+    // row-major frame buffer in PSRAM that is a cache-line fill for every pixel, and it misses the
+    // per-row region cache every time. Adjacent columns of equal extent are held here and written by row.
+    struct PendingColumns {
+        int16_t x0 = 0, x1 = 0, y0 = 0, y1 = 0; // [x0,x1) x [y0,y1); empty while x1 <= x0
+        bool pen = false;
+        uint16_t penOn = 0, penOff = 0;
+    } pendingColumns;
+    void flushPendingColumns();
     // Repaint a just-registered region's rect from the lit mask, skipping explicitly coloured pixels.
     void repaintRegion(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t onColorBe, uint16_t offColorBe);
     static void onColorRegionAdded(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t onColorBe, uint16_t offColorBe);

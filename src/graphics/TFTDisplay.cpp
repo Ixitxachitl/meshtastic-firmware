@@ -1572,6 +1572,9 @@ static_assert(CO5300_ROWS_PER_PUSH == 1 || CO5300_ROWS_PER_PUSH == 2,
 // `length <= 64` branch at the top of Bus_SPI::writeBytes(). Mirrored here because it is a property
 // of the bus driver we have to design around, not something we can ask it for.
 static constexpr uint32_t kSpiFifoThresholdBytes = 64;
+
+// Column bytes between watchdog yields in the glyph blitter. A power of two - the check is a mask.
+static constexpr uint32_t kGlyphYieldInterval = 64;
 #endif
 
 namespace
@@ -1901,6 +1904,7 @@ uint16_t TFTDisplay::onCanvas(bool lit, uint16_t be, int32_t x, int32_t y) const
 
 void TFTDisplay::copySlideRow(int32_t row, const uint16_t *src, int32_t srcX, int32_t dstX, int32_t count)
 {
+    flushPendingColumns();
     if (!rgbPixels || row < 0 || row >= displayHeight || count <= 0)
         return;
     nativeClean = false;
@@ -1971,6 +1975,7 @@ void TFTDisplay::clearPen()
 
 void TFTDisplay::setPixel(int16_t x, int16_t y)
 {
+    flushPendingColumns();
     OLEDDisplay::setPixel(x, y);
     if (rgbPixels && x >= 0 && x < displayWidth && y >= 0 && y < displayHeight)
         writeNativePixel(x, y);
@@ -1978,6 +1983,7 @@ void TFTDisplay::setPixel(int16_t x, int16_t y)
 
 void TFTDisplay::setPixelColor(int16_t x, int16_t y, OLEDDISPLAY_COLOR c)
 {
+    flushPendingColumns();
     OLEDDisplay::setPixelColor(x, y, c);
     if (rgbPixels && x >= 0 && x < displayWidth && y >= 0 && y < displayHeight)
         writeNativePixel(x, y);
@@ -1985,6 +1991,7 @@ void TFTDisplay::setPixelColor(int16_t x, int16_t y, OLEDDISPLAY_COLOR c)
 
 void TFTDisplay::clearPixel(int16_t x, int16_t y)
 {
+    flushPendingColumns();
     OLEDDisplay::clearPixel(x, y);
     if (rgbPixels && x >= 0 && x < displayWidth && y >= 0 && y < displayHeight)
         writeNativePixel(x, y);
@@ -1992,6 +1999,7 @@ void TFTDisplay::clearPixel(int16_t x, int16_t y)
 
 void TFTDisplay::drawHorizontalLine(int16_t x, int16_t y, int16_t length)
 {
+    flushPendingColumns();
     OLEDDisplay::drawHorizontalLine(x, y, length);
     if (!rgbPixels || y < 0 || y >= displayHeight)
         return;
@@ -2017,17 +2025,59 @@ void TFTDisplay::drawHorizontalLine(int16_t x, int16_t y, int16_t length)
 
 void TFTDisplay::drawVerticalLine(int16_t x, int16_t y, int16_t length)
 {
-    OLEDDisplay::drawVerticalLine(x, y, length);
-    if (!rgbPixels || x < 0 || x >= displayWidth)
+    if (!rgbPixels || x < 0 || x >= displayWidth) {
+        OLEDDisplay::drawVerticalLine(x, y, length);
         return;
+    }
     const int32_t y0 = y < 0 ? 0 : y;
     const int32_t y1 = ((int32_t)y + length) > displayHeight ? displayHeight : ((int32_t)y + length);
-    for (int32_t yy = y0; yy < y1; yy++)
-        writeNativePixel(x, static_cast<int16_t>(yy));
+    if (y0 >= y1)
+        return;
+    // fillRect() arrives here as a run of adjacent columns of one height. Held and written by row (see
+    // PendingColumns); anything that breaks the run - or any other draw - writes out what is held first.
+    PendingColumns &p = pendingColumns;
+    const bool extends = p.x1 > p.x0 && x == p.x1 && y0 == p.y0 && y1 == p.y1 && p.pen == penActive &&
+                         (!penActive || (p.penOn == penOnBe && p.penOff == penOffBe));
+    if (!extends) {
+        flushPendingColumns();
+        p.x0 = x;
+        p.y0 = static_cast<int16_t>(y0);
+        p.y1 = static_cast<int16_t>(y1);
+        p.pen = penActive;
+        p.penOn = penOnBe;
+        p.penOff = penOffBe;
+    }
+    OLEDDisplay::drawVerticalLine(x, y, length); // the lit mask, which the flush resolves colours from
+    p.x1 = static_cast<int16_t>(x + 1);
+    nativeClean = false;
+}
+
+void TFTDisplay::flushPendingColumns()
+{
+    PendingColumns &p = pendingColumns;
+    if (p.x1 <= p.x0 || !rgbPixels)
+        return;
+    const int32_t x0 = p.x0, x1 = p.x1, y0 = p.y0, y1 = p.y1;
+    p.x1 = p.x0; // emptied first: nothing below may see it as still pending
+    markNativeRowsDirty(y0, y1);
+    for (int32_t yy = y0; yy < y1; yy++) {
+        uint16_t *const row = rgbPixels + (size_t)yy * displayWidth;
+        if (!p.pen)
+            nativeBeginRow(static_cast<int16_t>(yy));
+        for (int32_t xx = x0; xx < x1; xx++) {
+            const bool lit = nativeMaskBit(buffer, displayWidth, xx, yy);
+            row[xx] =
+                p.pen ? (lit ? p.penOn : p.penOff)
+                      : onCanvas(lit, graphics::resolveTFTColorPixelRow(static_cast<int16_t>(xx), lit, defaultOnBe, defaultOffBe),
+                                 xx, yy);
+            nativeWriteMaskBit(explicitBits, displayWidth, xx, yy, p.pen);
+        }
+    }
 }
 
 void TFTDisplay::clear(void)
 {
+    pendingColumns.x1 = pendingColumns.x0; // about to be painted over: nothing held needs writing
     OLEDDisplay::clear();
     penActive = false;
     if (!rgbPixels)
@@ -2106,6 +2156,7 @@ void TFTDisplay::nativeBeginRow(int16_t y)
 void TFTDisplay::drawInternal(int16_t xMove, int16_t yMove, int16_t width, int16_t height, const uint8_t *data, uint16_t offset,
                               uint16_t bytesInData)
 {
+    flushPendingColumns();
     if (!rgbPixels) {
         OLEDDisplay::drawInternal(xMove, yMove, width, height, data, offset, bytesInData);
         return;
@@ -2134,37 +2185,64 @@ void TFTDisplay::drawInternal(int16_t xMove, int16_t yMove, int16_t width, int16
             }
         }
 #ifndef __MBED__
-        yield();
+        // Feeding the watchdog, not sharing the CPU: every OSThread runs on this same task, so a yield
+        // here reaches only the IDF's own tasks. One per column byte put a context switch between every
+        // few pixels of every glyph on screen.
+        if ((i & (kGlyphYieldInterval - 1)) == 0)
+            yield();
 #endif
     }
 }
 
 void TFTDisplay::drawRGB565(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *pixels, bool zeroIsTransparent)
 {
+    flushPendingColumns();
     if (!rgbPixels || !pixels)
         return;
+    if (w <= 0 || h <= 0)
+        return;
     nativeClean = false;
-    markNativeRowsDirty(y < 0 ? 0 : y, ((int32_t)y + h) > displayHeight ? displayHeight : ((int32_t)y + h));
-    for (int32_t r = 0; r < h; r++) {
+    // Clipped once, not per pixel. The map blits a whole viewport through here - 205k pixels on a
+    // 410x502 - so two bounds tests and two mask lookups per pixel were most of what it cost.
+    const int32_t c0 = x < 0 ? -x : 0;
+    const int32_t c1 = ((int32_t)x + w) > displayWidth ? (int32_t)displayWidth - x : w;
+    const int32_t r0 = y < 0 ? -y : 0;
+    const int32_t r1 = ((int32_t)y + h) > displayHeight ? (int32_t)displayHeight - y : h;
+    if (c0 >= c1 || r0 >= r1)
+        return;
+    markNativeRowsDirty((int32_t)y + r0, (int32_t)y + r1);
+    for (int32_t r = r0; r < r1; r++) {
         const int32_t py = (int32_t)y + r;
-        if (py < 0 || py >= displayHeight)
-            continue;
-        for (int32_t c = 0; c < w; c++) {
-            const int32_t px = (int32_t)x + c;
-            if (px < 0 || px >= displayWidth)
-                continue;
-            const uint16_t color = pixels[(size_t)r * w + c];
-            if (zeroIsTransparent && color == 0)
-                continue;
-            rgbPixels[(size_t)py * displayWidth + px] = nativeSwap565(color);
-            nativeWriteMaskBit(buffer, displayWidth, px, py, true);
-            nativeWriteMaskBit(explicitBits, displayWidth, px, py, true);
+        const uint16_t *src = pixels + (size_t)r * w + c0;
+        uint16_t *dst = rgbPixels + (size_t)py * displayWidth + x + c0;
+        // The 1bpp masks are page-major: one byte per column holds eight rows, so a row walk is a
+        // walk along consecutive bytes with a fixed bit.
+        uint8_t *const litRow = buffer + (size_t)(py >> 3) * displayWidth + x + c0;
+        uint8_t *const expRow = explicitBits + (size_t)(py >> 3) * displayWidth + x + c0;
+        const uint8_t bit = static_cast<uint8_t>(1 << (py & 7));
+        const int32_t count = c1 - c0;
+        if (!zeroIsTransparent) {
+            for (int32_t i = 0; i < count; i++) {
+                dst[i] = nativeSwap565(src[i]);
+                litRow[i] |= bit;
+                expRow[i] |= bit;
+            }
+        } else {
+            for (int32_t i = 0; i < count; i++) {
+                const uint16_t color = src[i];
+                if (color == 0)
+                    continue;
+                dst[i] = nativeSwap565(color);
+                litRow[i] |= bit;
+                expRow[i] |= bit;
+            }
         }
     }
 }
 
 void TFTDisplay::fillRect565(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color)
 {
+    flushPendingColumns();
     if (!rgbPixels)
         return;
     nativeClean = false;
@@ -2188,6 +2266,7 @@ void TFTDisplay::fillRect565(int16_t x, int16_t y, int16_t w, int16_t h, uint16_
 // overlay that has to let what is already drawn read through it, which fillRect565() cannot do.
 void TFTDisplay::blendRect565(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color, uint8_t alpha)
 {
+    flushPendingColumns();
     if (!rgbPixels || alpha == 0)
         return;
     const int32_t x0 = x < 0 ? 0 : x;
@@ -2228,6 +2307,7 @@ void TFTDisplay::refreshNativeThemeColors()
 
 void TFTDisplay::repaintRegion(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t onColorBe, uint16_t offColorBe)
 {
+    flushPendingColumns();
     if (!rgbPixels)
         return;
     nativeClean = false;
@@ -2257,6 +2337,7 @@ void TFTDisplay::onColorRegionAdded(int16_t x, int16_t y, int16_t w, int16_t h, 
 // previous band's transfer.
 void TFTDisplay::display(bool fromBlank)
 {
+    flushPendingColumns(); // outside the lock: this is drawing, not pushing
     UI_PERF_TIME_FRAME();
     concurrency::LockGuard g(spiLock);
     UI_PERF_FRAME_LOCKED();
@@ -3026,6 +3107,7 @@ void TFTDisplay::setCanvasOverride(bool active, uint16_t color565)
     const uint16_t be = nativeSwap565(color565);
     if (canvasOverrideActive == active && canvasOverrideBe == be)
         return;
+    flushPendingColumns(); // held columns resolve against the canvas they were drawn over
     canvasOverrideActive = active;
     canvasOverrideBe = be;
     // The canvas is resolved per pixel as it is drawn, so everything already in the buffer is stale.
