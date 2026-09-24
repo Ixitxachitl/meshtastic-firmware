@@ -1573,10 +1573,10 @@ static_assert(CO5300_ROWS_PER_PUSH == 1 || CO5300_ROWS_PER_PUSH == 2,
 // `length <= 64` branch at the top of Bus_SPI::writeBytes(). Mirrored here because it is a property
 // of the bus driver we have to design around, not something we can ask it for.
 static constexpr uint32_t kSpiFifoThresholdBytes = 64;
+#endif
 
 // Column bytes between watchdog yields in the glyph blitter. A power of two - the check is a mask.
 static constexpr uint32_t kGlyphYieldInterval = 64;
-#endif
 
 namespace
 {
