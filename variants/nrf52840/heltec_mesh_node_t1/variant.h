@@ -143,6 +143,8 @@ extern "C" {
 #define GPS_POWER_CYCLE_IF_UNRESPONSIVE
 // The UC6580 drops GSA or switches its talker ID mid-run; don't let a stale GSA veto a fresh fix.
 #define GPS_IGNORE_STALE_GSA
+// nRF52 UARTE goes deaf after one overrun; re-open the port after 10s of silence instead of waiting for a reboot.
+#define GPS_UART_RX_REARM
 #define PERIPHERAL_WARMUP_MS 1000 // Allow I2C bus to stabilise after sensor power-on
 #define PIN_GPS_PPS (32 + 9)      // Pulse per second input from the GPS
 #define GPS_TX_PIN (0 + 7)

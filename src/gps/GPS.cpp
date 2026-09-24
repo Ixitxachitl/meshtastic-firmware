@@ -1709,7 +1709,7 @@ int32_t GPS::runOnce()
     uint8_t prev_fixQual = fixQual;
 
     if (powerState == GPS_ACTIVE) {
-#ifdef ARCH_NRF52
+#if defined(ARCH_NRF52) && defined(GPS_UART_RX_REARM)
         // This core's UARTE ISR re-arms RX only from its own ENDRX event and never enables ERROR/RXTO, so
         // one overrun leaves the port deaf until begin() runs again. Re-arm it instead of awaiting a reboot.
         if (_serial_gps && Throttle::hasElapsed(lastRxMs, GPS_RX_STALL_MS)) {
