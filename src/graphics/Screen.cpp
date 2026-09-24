@@ -2037,6 +2037,16 @@ bool Screen::isShowingBootScreen() const
 
 int32_t Screen::runOnce()
 {
+    // How long the last frame took. Read below to pace this thread; the destructor updates it after
+    // the return value has been computed, so what is read is always the previous frame's cost.
+    static uint32_t sLastFrameMs = 0;
+    struct FrameTimer {
+        uint32_t start = millis();
+        uint32_t *out;
+        explicit FrameTimer(uint32_t *o) : out(o) {}
+        ~FrameTimer() { *out = millis() - start; }
+    } frameTimer(&sLastFrameMs);
+
 #ifdef UI_PERF_DEBUG
     // How often the scheduler actually gets here, against how often we ask it to. Paired with the
     // frame count TFTDisplay reports, this separates "nothing is calling us" from "we are called
@@ -2317,7 +2327,15 @@ int32_t Screen::runOnce()
         return sinceFrame >= interval ? 0 : static_cast<int32_t>(interval - sinceFrame);
     }
 #endif
-    return (1000 / targetFramerate);
+    // Never ask to be run again sooner than the last frame took. ThreadController::runOrDelay() stamps
+    // millis() once per pass and then walks its threads in order, so a thread that overruns its own
+    // interval is due again the moment the pass ends - and every thread behind it, the touch panel
+    // included, gets exactly one run per frame however short an interval it asked for. At half a second
+    // a frame that starved the panel to roughly one sample per gesture, which is no gesture at all: the
+    // swipe never tracked, whatever the redraw after it cost. Yielding for as long as the frame took
+    // gives the input threads their own cadence back, at the price of halving an already slow framerate.
+    const int32_t paced = (int32_t)(1000 / targetFramerate);
+    return (int32_t)sLastFrameMs > paced ? (int32_t)sLastFrameMs : paced;
 }
 
 /* show a message that the SSL cert is being built

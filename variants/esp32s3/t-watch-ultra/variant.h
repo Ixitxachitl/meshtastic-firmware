@@ -27,7 +27,11 @@
 // mid-transition, when both the outgoing and incoming frame register colour regions to overprint.
 // Going higher just saturates the cooperative scheduler and starves the touch poll, since these
 // threads cannot preempt each other.
-#define SCREEN_TRANSITION_FRAMERATE 15 // fps
+// Measured with UI_PERF_DEBUG: the push is only ~31ms, but building a frame costs ~90ms idle and ~265ms
+// mid-interaction, so the real ceiling is nearer 4-10fps. Asking for more does not produce more frames -
+// it pins the screen thread at ~95% and starves the touch driver, which polled at 96ms avg / 420ms worst
+// against a 20ms target. Lower is genuinely more responsive here until frame-building gets cheaper.
+#define SCREEN_TRANSITION_FRAMERATE 10 // fps
 #define USE_TFTDISPLAY 1
 #define HAS_SCREEN 1
 #define TFT_RESET_AFTER_SLEEP
