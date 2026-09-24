@@ -840,7 +840,9 @@ bool GPS::verifyCachedProbePresence()
 
     detectedBaud = cachedProbeBaud;
     gnssModel = cachedProbeModel;
-    configLikelyIntact = true;
+#ifdef GPS_KEEP_CONFIG_ACROSS_REBOOT
+    configLikelyIntact = true; // everywhere else the receiver is still reconfigured, and reset, on every boot
+#endif
     LOG_INFO("Using cached GPS probe: %s @ %d", cachedProbeModelName, detectedBaud);
     return true;
 }

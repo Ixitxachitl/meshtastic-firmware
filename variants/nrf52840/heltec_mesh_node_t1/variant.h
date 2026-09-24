@@ -145,6 +145,9 @@ extern "C" {
 #define GPS_IGNORE_STALE_GSA
 // nRF52 UARTE goes deaf after one overrun; re-open the port after 10s of silence instead of waiting for a reboot.
 #define GPS_UART_RX_REARM
+// The receiver stays powered across a reboot (GPS_NO_HARDSLEEP), so a verified cached probe means its config
+// survived: skip the UC6580 reset that would cost the ephemeris and make every reboot a cold start.
+#define GPS_KEEP_CONFIG_ACROSS_REBOOT
 // Once-a-minute GPS state line, so a failure is diagnosable from a log grabbed any time afterwards.
 #define GPS_STATE_TRACE
 #define PERIPHERAL_WARMUP_MS 1000 // Allow I2C bus to stabilise after sensor power-on
