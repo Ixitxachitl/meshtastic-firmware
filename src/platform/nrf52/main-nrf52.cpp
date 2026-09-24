@@ -428,6 +428,10 @@ void nrf52InitSemiHosting()
 }
 #endif
 
+// hardfault.cpp: log the fault record the previous boot left, then route faults to its handlers.
+void nrf52ReportLastFault();
+void nrf52EnableFaultCapture();
+
 void nrf52Setup()
 {
 #ifdef ADC_V
@@ -442,6 +446,8 @@ void nrf52Setup()
     // per
     // https://infocenter.nordicsemi.com/index.jsp?topic=%2Fcom.nordic.infocenter.nrf52832.ps.v1.1%2Fpower.html
     LOG_DEBUG("Reset reason: 0x%x", why);
+    nrf52ReportLastFault();
+    nrf52EnableFaultCapture();
 
 #ifdef USE_SEMIHOSTING
     nrf52InitSemiHosting();
@@ -508,8 +514,8 @@ void cpuDeepSleep(uint32_t msecToWake)
     if (Serial)       // Another check in case of disabled default serial, does nothing bad
         Serial.end(); // This may cause crashes as debug messages continue to flow.
 
-        // This causes troubles with waking up on nrf52 (on pro-micro in particular):
-        // we have no Serial1 in use on nrf52, check Serial and GPS modules.
+    // This causes troubles with waking up on nrf52 (on pro-micro in particular):
+    // we have no Serial1 in use on nrf52, check Serial and GPS modules.
 #ifdef PIN_SERIAL1_RX
     if (Serial1) // A straightforward solution to the wake from deepsleep problem
         Serial1.end();

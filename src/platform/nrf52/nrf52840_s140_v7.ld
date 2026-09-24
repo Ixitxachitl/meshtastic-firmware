@@ -49,4 +49,16 @@ SECTIONS
   } > RAM
 } INSERT AFTER .data;
 
+/* Not zeroed at startup, so it survives a soft reset: the fault handlers in hardfault.cpp leave their
+ * record here for the next boot to report. */
+SECTIONS
+{
+  .noinit (NOLOAD) :
+  {
+    . = ALIGN(4);
+    KEEP(*(.noinit*))
+    . = ALIGN(4);
+  } > RAM
+} INSERT AFTER .bss;
+
 INCLUDE "nrf52_common.ld"

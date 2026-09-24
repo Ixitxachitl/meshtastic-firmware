@@ -124,3 +124,64 @@ extern "C" void HardFault_Handler(void)
                    " handler2_address_const: .word HardFault_Impl    \n");
 }
 #endif
+
+#if defined(ARCH_NRF52) && defined(INC_FREERTOS_H)
+// The core's HardFault_Handler (utility/debug.cpp) only resets and cannot be replaced - it is a strong symbol.
+// The configurable fault handlers are weak in the startup file, so enable them: bus, usage and memory faults
+// then land here instead of escalating, and leave a record in .noinit for the next boot to log over USB.
+#include "DebugConfiguration.h"
+
+namespace
+{
+constexpr uint32_t kFaultMagic = 0xFA017ED5;
+struct FaultRecord {
+    uint32_t magic;
+    uint32_t kind; // 1 memory, 2 bus, 3 usage
+    uint32_t pc, lr, cfsr, hfsr, mmfar, bfar;
+};
+FaultRecord lastFault __attribute__((section(".noinit")));
+} // namespace
+
+extern "C" __attribute__((used)) void nrf52RecordFault(uint32_t stack[], uint32_t kind)
+{
+    lastFault.kind = kind;
+    lastFault.pc = stack[pc];
+    lastFault.lr = stack[lr];
+    lastFault.cfsr = SCB->CFSR;
+    lastFault.hfsr = SCB->HFSR;
+    lastFault.mmfar = SCB->MMFAR;
+    lastFault.bfar = SCB->BFAR;
+    lastFault.magic = kFaultMagic;
+#ifdef MESHTASTIC_ENCRYPTED_STORAGE
+    EncryptedStorage::secureWipeKeys();
+#endif
+    NVIC_SystemReset();
+}
+
+// Pick whichever stack the faulting code was on (EXC_RETURN bit 2), then hand it over with the fault kind.
+#define NRF52_FAULT_ENTRY(name, kind)                                                                                            \
+    extern "C" __attribute__((naked, used)) void name(void)                                                                      \
+    {                                                                                                                            \
+        __asm volatile(" tst lr, #4\n ite eq\n mrseq r0, msp\n mrsne r0, psp\n movs r1, #" #kind "\n b nrf52RecordFault\n");     \
+    }
+NRF52_FAULT_ENTRY(MemoryManagement_Handler, 1)
+NRF52_FAULT_ENTRY(BusFault_Handler, 2)
+NRF52_FAULT_ENTRY(UsageFault_Handler, 3)
+
+void nrf52EnableFaultCapture()
+{
+    SCB->SHCSR |= SCB_SHCSR_MEMFAULTENA_Msk | SCB_SHCSR_BUSFAULTENA_Msk | SCB_SHCSR_USGFAULTENA_Msk;
+}
+
+void nrf52ReportLastFault()
+{
+    if (lastFault.magic != kFaultMagic)
+        return;
+    static const char *const kinds[] = {"?", "memory", "bus", "usage"};
+    LOG_ERROR("Previous boot crashed: %s fault pc=0x%08lx lr=0x%08lx cfsr=0x%08lx hfsr=0x%08lx mmfar=0x%08lx bfar=0x%08lx",
+              kinds[lastFault.kind < 4 ? lastFault.kind : 0], (unsigned long)lastFault.pc, (unsigned long)lastFault.lr,
+              (unsigned long)lastFault.cfsr, (unsigned long)lastFault.hfsr, (unsigned long)lastFault.mmfar,
+              (unsigned long)lastFault.bfar);
+    lastFault.magic = 0;
+}
+#endif
