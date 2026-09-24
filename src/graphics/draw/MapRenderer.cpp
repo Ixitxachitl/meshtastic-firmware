@@ -1699,6 +1699,15 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
 }
 
 #if BASEUI_MAP_ONSCREEN_CONTROLS
+bool MapRenderer::controlFlashActive()
+{
+#if GRAPHICS_HAS_RGB565_IMAGES
+    return s_pressedControl != 0xFF && Throttle::isWithinTimespanMs(s_pressedAtMs, kMapControlFlashMs);
+#else
+    return false;
+#endif
+}
+
 bool MapRenderer::handleControlTap(int16_t tapX, int16_t tapY)
 {
     if (!s_controlsOnScreen)

@@ -2231,6 +2231,24 @@ int32_t Screen::runOnce()
     }
 #endif
 
+    // An interactive overlay - a banner, a menu, a picker, text entry - has to animate and answer keys,
+    // not repaint once a second. showOverlayBanner() raises the UI object's own FPS, but it is this
+    // function's return value that paces the screen thread, so without this the thread still sleeps a
+    // full IDLE_FRAMERATE second between iterations and every menu feels a beat behind.
+    if (NotificationRenderer::current_notification_type != notificationTypeEnum::none)
+        desiredFramerate = SCREEN_TRANSITION_FRAMERATE;
+
+#if BASEUI_MAP_ONSCREEN_CONTROLS
+    // A tapped map control is drawn inverted for a moment. Holding the framerate up for that long is what
+    // makes the frame that clears it happen: the reset below drops straight back to IDLE_FRAMERATE once
+    // the frame is FIXED, so the icon would sit in its pressed state until the next idle redraw a second
+    // later - and for a latched control, which only takes its inverted state after the flash, that looks
+    // like the toggle did nothing at all.
+    if (showingNormalScreen && framesetInfo.positions.map != 255 &&
+        ui->getUiState()->currentFrame == framesetInfo.positions.map && graphics::MapRenderer::controlFlashActive())
+        desiredFramerate = SCREEN_TRANSITION_FRAMERATE;
+#endif
+
 #if BASEUI_HAS_TOUCH_DRAG
     // A finger steering a transition owns the framerate. Without this the reset below fires during
     // the first few pixels of a drag - before SCREEN_DRAG_AXIS_LOCK_PX commits an axis there is no

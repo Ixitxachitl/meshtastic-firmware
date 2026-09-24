@@ -84,6 +84,10 @@ constexpr int kMaxZoom = 18;
 // Zoom in, zoom out, and Pan and Follow Me toggles as buttons down the right edge. Coordinates are the panel's,
 // as the touch layer reports them. True if the tap landed on a button and was acted on.
 bool handleControlTap(int16_t tapX, int16_t tapY);
+// True while a tapped control is still drawn inverted. Screen holds the framerate up for it: the frame
+// that clears the flash is otherwise the next idle redraw, up to a second away, which reads as the
+// button never having reacted.
+bool controlFlashActive();
 #endif
 
 #if BASEUI_MAP_PNG_TILES
