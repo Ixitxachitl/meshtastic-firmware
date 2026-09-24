@@ -2776,6 +2776,23 @@ static constexpr uint8_t kCmdDispOn = 0x29;
 static constexpr uint32_t kSleepOutSettleMs = 120;
 #endif
 
+#if defined(CO5300_CS)
+// Display On is occasionally swallowed on this panel even with the settle delays Panel_CO5300_Delayed
+// adds to the init table - the panel then stays dark until something re-inits it, which is why it used
+// to come back only when a wake re-ran init. Widening the delay only made that rarer. Re-asserting
+// Display On and the brightness after init is idempotent and takes the race out of it entirely.
+static void assertCo5300DisplayOn()
+{
+    if (!tft)
+        return;
+    tft->startWrite();
+    tft->writeCommand(0x29); // display on
+    tft->writeCommand(0x51); // write display brightness
+    tft->writeData(0x80);
+    tft->endWrite();
+}
+#endif
+
 // Send a command to the display (low level function)
 #if TFT_HAS_PANEL_VCOM
 #ifndef ST7789_VCOMS
@@ -3272,6 +3289,9 @@ bool TFTDisplay::connect()
 #endif
 #if TFT_HAS_PANEL_VCOM
     applyPanelVcom();
+#endif
+#if defined(CO5300_CS)
+    assertCo5300DisplayOn();
 #endif
 
 #if defined(M5STACK)
