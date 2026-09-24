@@ -6,6 +6,7 @@
 #include "./MapTileSourceSD.h"
 #include "DebugConfiguration.h"
 #include "SPILock.h"
+#include "mesh/Throttle.h"
 
 #include <PNGdec.h>
 #include <esp_heap_caps.h>
@@ -313,15 +314,30 @@ int refreshStyles(const char *preferred)
     return numStyles;
 }
 
+// Fetched tiles arrive in bursts - a view at one zoom pulls its neighbours and the lower zooms behind it.
+// The renderer keys its cached basemap on generation(), and rebuilding that costs a full screen of tile
+// decoding: 400-700ms on a large panel. Bumping per tile meant paying it once per arrival, back to back,
+// with the screen thread pinned and touch starved for the whole download. Publish once the burst goes
+// quiet instead, with a ceiling so a long run of fetches still shows progress.
+constexpr uint32_t kArrivalSettleMs = 750;    // quiet period before a burst is published
+constexpr uint32_t kArrivalMaxDeferMs = 4000; // ...and the longest a steady stream can hold it off
+bool arrivalsPending = false;
+uint32_t lastArrivalMs = 0;
+uint32_t arrivalsSinceMs = 0;
+
 void noteTileArrived(int z, int32_t x, int32_t y)
 {
     for (auto &m : misses) {
         if (m.gen == gen && m.z == z && m.x == x && m.y == y)
             m = TileKey{};
     }
-    // The renderer keys its cached basemap on generation(), so without this the new tile is on the card but
-    // off the screen until something else moves the view.
-    gen++;
+    // Only the bookkeeping here; generation() decides when the screen is told, so a tile landing while the
+    // next is already downloading does not cost a rebuild of its own.
+    if (!arrivalsPending) {
+        arrivalsPending = true;
+        arrivalsSinceMs = millis();
+    }
+    lastArrivalMs = millis();
 }
 
 int styleCount()
@@ -349,6 +365,13 @@ void setActiveStyle(int index)
 
 uint32_t generation()
 {
+    // Publishing here rather than in noteTileArrived() keeps the decision on the thread that draws: the
+    // new tiles are already on the card, so all that is deferred is the rebuild that reveals them.
+    if (arrivalsPending &&
+        (Throttle::hasElapsed(lastArrivalMs, kArrivalSettleMs) || Throttle::hasElapsed(arrivalsSinceMs, kArrivalMaxDeferMs))) {
+        arrivalsPending = false;
+        gen++;
+    }
     return gen;
 }
 
