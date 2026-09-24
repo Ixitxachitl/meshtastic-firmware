@@ -56,8 +56,9 @@ extern "C" {
 #define TFT_SLEEP_WHEN_OFF              // sleep the panel on screen-off instead of driving it unlit
 #define TFT_BACKLIGHT_AFTER_FIRST_FRAME // backlight stays off until the panel shows real content
 #define DISPLAY_FORCE_SMALL_FONTS
-#define FORCE_LOW_RES 1         // 80px-wide panel causes artifacts with full-res UI elements
-#define WAYPOINT_LIST_TINY_FONT // 80px of height fits one waypoint card in FONT_SMALL, three in FONT_TINY
+#define FORCE_LOW_RES 1          // 80px-wide panel causes artifacts with full-res UI elements
+#define WAYPOINT_LIST_TINY_FONT  // 80px of height fits one waypoint card in FONT_SMALL, three in FONT_TINY
+#define WAYPOINT_LIST_AUTOSCROLL // two buttons, both taken by frame paging: nothing can scroll the list by hand
 
 // Pins
 

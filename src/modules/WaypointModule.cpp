@@ -5,6 +5,7 @@
 #include "configuration.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/draw/CompassRenderer.h"
+#include "mesh/Throttle.h"
 #include "meshUtils.h"
 #include <algorithm>
 #include <cctype>
@@ -43,6 +44,64 @@ constexpr int16_t WAYPOINT_HEADER_GAP = 2;
 // card heights vary with description and coordinate wrapping, so only the layout pass knows it.
 int16_t waypointScrollY = 0;
 int16_t waypointMaxScroll = 0;
+
+#ifdef WAYPOINT_LIST_AUTOSCROLL
+// For panels with no way to scroll a list by hand. Timed like MessageRenderer's so the two screens behave
+// the same: settle, crawl to the end, hold, snap back. Runs against the limit the previous layout published.
+constexpr uint32_t WAYPOINT_SCROLL_SETTLE_MS = 2000;
+constexpr uint32_t WAYPOINT_SCROLL_HOLD_MS = 3000;
+constexpr float WAYPOINT_SCROLL_SPEED = 2.0f;
+
+float autoScrollY = 0.0f; // fractional, so a slow crawl still advances between whole pixels
+uint32_t autoScrollTick = 0;
+uint32_t autoScrollMark = 0;
+uint32_t autoScrollSignature = 0;
+bool autoScrollRunning = false;
+bool autoScrollHolding = false;
+
+void advanceWaypointAutoscroll(uint32_t signature)
+{
+    const uint32_t now = millis();
+    if (signature != autoScrollSignature) { // the list changed: start over from the top
+        autoScrollSignature = signature;
+        autoScrollY = 0.0f;
+        autoScrollRunning = false;
+        autoScrollHolding = false;
+        autoScrollMark = now;
+        autoScrollTick = now;
+    }
+#ifdef USE_EINK
+    autoScrollY = 0.0f; // a partial refresh per frame is not worth a moving list
+#else
+    const float delta = (now - autoScrollTick) / 400.0f;
+    autoScrollTick = now;
+    if (waypointMaxScroll <= 0) {
+        autoScrollY = 0.0f;
+        autoScrollRunning = false;
+        autoScrollHolding = false;
+        autoScrollMark = now;
+    } else if (!autoScrollRunning) {
+        if (Throttle::hasElapsed(autoScrollMark, WAYPOINT_SCROLL_SETTLE_MS))
+            autoScrollRunning = true;
+    } else if (autoScrollHolding) {
+        if (Throttle::hasElapsed(autoScrollMark, WAYPOINT_SCROLL_HOLD_MS)) {
+            autoScrollY = 0.0f;
+            autoScrollHolding = false;
+            autoScrollRunning = false;
+            autoScrollMark = now;
+        }
+    } else {
+        autoScrollY += delta * WAYPOINT_SCROLL_SPEED;
+        if (autoScrollY >= waypointMaxScroll) {
+            autoScrollY = waypointMaxScroll;
+            autoScrollHolding = true;
+            autoScrollMark = now;
+        }
+    }
+#endif
+    waypointScrollY = static_cast<int16_t>(autoScrollY);
+}
+#endif
 
 // Short panels fit one card in the body font. WAYPOINT_LIST_TINY_FONT trades legibility
 // for rows; the header keeps FONT_SMALL either way, so textPos still sizes the body top.
@@ -350,6 +409,12 @@ void WaypointModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     const int16_t nameX = bodyX + iconWidth + iconGap;
     const int16_t contentBottom = display->getHeight() - 1;
     const int16_t bodyTop = textPos[1] + BASEUI_BELOW_HEADER_MARGIN + BASEUI_BODY_TOP_MARGIN + WAYPOINT_HEADER_GAP;
+#ifdef WAYPOINT_LIST_AUTOSCROLL
+    uint32_t signature = static_cast<uint32_t>(totalWaypoints);
+    for (size_t i = 0; i < totalWaypoints; ++i)
+        signature = (signature * 31u) + entries[i]->waypoint.id;
+    advanceWaypointAutoscroll(signature);
+#endif
     // Cards are laid out from bodyTop and shifted by the scroll offset. One straddling either edge
     // is drawn clipped instead of dropped - that half-card is the cue that the list continues.
     int16_t rowTop = bodyTop - waypointScrollY;
