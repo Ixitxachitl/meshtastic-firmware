@@ -72,6 +72,18 @@ class TFTDisplay : public OLEDDisplay
     // quiet skips the log line, for callers that ramp the level rather than set it once.
     void setDisplayBrightness(uint8_t, bool quiet = false);
 
+  private:
+    // Release the hold below once a push carried real content. An explicit setDisplayBrightness()
+    // cancels it instead: that caller owns the level from then on (the lockscreen's fade).
+    void lightPanelAfterFirstPush();
+    bool panelDarkUntilFirstPush = false;
+    uint32_t panelDarkSinceMs = 0;
+    uint8_t lastBrightness = 0;
+    // Take the panel dark until display() pushes a frame with something drawn in it. Armed at init and
+    // on wake, where the controller lights itself on frame memory or on the bare theme background.
+    void holdPanelDarkUntilContent();
+
+  public:
 #if defined(ST7789_CS) && !defined(USE_ARDUINO_GFX) && (defined(ST7789_VCOMS) || BASEUI_PANEL_VCOM_TUNING)
 #define TFT_HAS_PANEL_VCOM 1
     // ST7789 VCOM (VCOMS, 0xBB): 0.1V plus 0.025V a step. One that doesn't suit the panel leaves a DC bias on the

@@ -1,6 +1,7 @@
 #include "configuration.h"
 #include "main.h"
 #include "memory/MemAudit.h"
+#include "mesh/Throttle.h"
 #if USE_TFTDISPLAY
 
 #if ARCH_PORTDUINO
@@ -2326,6 +2327,7 @@ void TFTDisplay::display(bool fromBlank)
     for (auto &word : nativeDirtyBands)
         word = 0;
     graphics::clearTFTColorRegions();
+    lightPanelAfterFirstPush();
 }
 #endif // BASEUI_NATIVE_RGB565
 
@@ -2768,6 +2770,9 @@ int TFTDisplay::heldXZone()
     return 0;
 }
 
+// Backstop for the dark hold, in case a frame legitimately draws nothing at all.
+static constexpr uint32_t kPanelDarkHoldMaxMs = 1500;
+
 #ifdef TFT_BLANK_ON_DISPLAY_OFF
 // LovyanGFX exposes sleep in/out but not display on/off, so send the MIPI DCS opcodes directly.
 static constexpr uint8_t kCmdDispOff = 0x28;
@@ -2833,6 +2838,11 @@ void TFTDisplay::sendCommand(uint8_t com)
     switch (com) {
     case DISPLAYON: {
         LOG_DEBUG("Display on");
+#if defined(CO5300_CS)
+        // wakeup() below lights the panel on the frame memory it still holds, and the first ui->update()
+        // after it paints the theme background before the frame is built. Stay dark until that push.
+        holdPanelDarkUntilContent();
+#endif
 #if defined(TFT_NV3001B)
         // DISPLAYOFF cuts the panel rail, so the controller loses its configuration and sleep-out
         // alone cannot bring it back. Restore the rail, let it settle, then re-run the init sequence.
@@ -2891,8 +2901,10 @@ void TFTDisplay::sendCommand(uint8_t com)
         unphone.backlight(true); // using unPhone library
 #endif
 #if defined(RAK14014) || defined(HELTEC_MESH_NODE_T096) || defined(HELTEC_MESH_NODE_T1)
-#elif !defined(M5STACK) && !defined(ST7789_CS) &&                                                                                \
+#elif !defined(M5STACK) && !defined(ST7789_CS) && !defined(CO5300_CS) &&                                                         \
     !defined(USE_ARDUINO_GFX) // T-Deck gets brightness set in Screen.cpp in the handleSetOn function
+        // CO5300 excluded: connect() holds it dark until display() has pushed a frame, and this would
+        // light it again on the bare canvas - which is the flash it is there to prevent.
         tft->setBrightness(172);
 #endif
         break;
@@ -2905,6 +2917,7 @@ void TFTDisplay::sendCommand(uint8_t com)
         // down, and Screen::handleSetOn() sets the level again on the way back.
         setDisplayBrightness(0, true);
 #endif
+
 #if TFT_BACKLIGHT_PWM_ONLY
         // backlightEnable is a no-op pin on these boards (see the constructor); the backlight goes
         // out by driving the PWM to zero. Screen::handleSetOn() restores the level on the way back.
@@ -2961,6 +2974,10 @@ void TFTDisplay::sendCommand(uint8_t com)
 void TFTDisplay::setDisplayBrightness(uint8_t _brightness, bool quiet)
 {
     (void)quiet;
+    // An explicit level hands ownership to the caller - connect()'s hold must not undo it afterwards.
+    panelDarkUntilFirstPush = false;
+    if (_brightness != 0)
+        lastBrightness = _brightness;
 #if TFT_BACKLIGHT_AW9364
     aw9364SetBrightness(_brightness);
     if (!quiet)
@@ -2972,6 +2989,35 @@ void TFTDisplay::setDisplayBrightness(uint8_t _brightness, bool quiet)
     if (!quiet)
         LOG_DEBUG("Brightness is set to value: %i ", _brightness);
 #endif
+}
+
+// Dark until there is something to show. The caller arms this before anything can light the panel:
+// after init(), whose table ends with display-on and a brightness, and on wake, where the controller
+// comes back on its own frame memory.
+void TFTDisplay::holdPanelDarkUntilContent()
+{
+#if BASEUI_NATIVE_RGB565 && !defined(USE_ARDUINO_GFX)
+    if (lastBrightness == 0)
+        lastBrightness = BRIGHTNESS_DEFAULT;
+    setDisplayBrightness(0, true);
+    panelDarkUntilFirstPush = true; // set after, so the call above does not clear it
+    panelDarkSinceMs = millis();
+#endif
+}
+
+// Called at the end of every push. A frame with nothing drawn in it is only the theme background, and
+// lighting on that is the flash the hold exists to prevent - so wait for one that has content. The
+// deadline is the backstop for a frame that legitimately draws nothing.
+void TFTDisplay::lightPanelAfterFirstPush()
+{
+    if (!panelDarkUntilFirstPush)
+        return;
+#if BASEUI_NATIVE_RGB565
+    if (nativeClean && Throttle::isWithinTimespanMs(panelDarkSinceMs, kPanelDarkHoldMaxMs))
+        return;
+#endif
+    panelDarkUntilFirstPush = false;
+    setDisplayBrightness(lastBrightness, true);
 }
 
 void TFTDisplay::setCanvasOverride(bool active, uint16_t color565)
@@ -3293,6 +3339,9 @@ bool TFTDisplay::connect()
 #if defined(CO5300_CS)
     assertCo5300DisplayOn();
 #endif
+    // Dark from here until display() has something to show. The fillScreen below, and the whole first
+    // frame after it, are otherwise visible on a panel the init table has already lit.
+    holdPanelDarkUntilContent();
 
 #if defined(M5STACK)
     tft->setRotation(0);

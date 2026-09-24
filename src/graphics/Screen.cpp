@@ -933,8 +933,14 @@ void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
             enabled = false;
         }
         screenOn = on;
-        if (!on)
+        if (on) {
+            // Wake lands on IDLE_FRAMERATE, so the first frame after it - drawn before the frame's data
+            // has caught up - sat on screen for a full second before anything filled it in. Run fast for
+            // a moment instead; runOnce() drops back to idle on its own once the frame settles.
+            setFastFramerate();
+        } else {
             screenOffAtMs = millis();
+        }
     }
 
 #if BASEUI_LOCKSCREEN
