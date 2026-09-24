@@ -59,9 +59,8 @@
 // artwork filled only half its cell. Draw it twice as large to fill the space.
 #define EMOTE_PICKER_SCALE_BOOST 2
 
-// Custom boot splash, shown for the second half of the boot screen. The artwork is already
-// drawn at panel resolution, so pin it to 1:1 - BASEUI_ICON_SCALE would blow 216x300 up to
-// 432x600 and clip it against this 410x502 panel.
+// Custom boot splash, shown for the second half of the boot screen: 410x502 artwork, the panel's own
+// size, drawn in colour on colour-framebuffer builds. 1:1 scale - BASEUI_ICON_SCALE would double it off.
 #define USERPREFS_OEM_TEXT "Ixitxachitl Build"
 #define USERPREFS_OEM_FONT_SIZE 1
 #define USERPREFS_OEM_IMAGE_SCALE 1

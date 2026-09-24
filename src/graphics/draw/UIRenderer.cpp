@@ -2084,7 +2084,12 @@ void UIRenderer::drawOEMIconScreen(const char *upperMsg, OLEDDisplay *display, O
 #endif
     if (drawColourArtwork) {
 #if BASEUI_NATIVE_RGB565 && defined(USERPREFS_OEM_IMAGE_RGB565_DATA)
-        // The artwork's own colours; 0x0000 is transparent, so the canvas shows through.
+        // Meshtastic green behind it, for artwork that leaves a margin or has transparent pixels - without
+        // it the theme canvas shows through both. Artwork the size of the panel covers this completely,
+        // so skip it there rather than write every pixel twice.
+        if (USERPREFS_OEM_IMAGE_WIDTH < SCREEN_WIDTH || USERPREFS_OEM_IMAGE_HEIGHT < SCREEN_HEIGHT)
+            static_cast<TFTDisplay *>(display)->fillRect565(x, y, SCREEN_WIDTH, SCREEN_HEIGHT, TFTPalette::MeshtasticGreen);
+        // The artwork's own colours; 0x0000 is transparent, so the green above shows through.
         static const uint16_t rgb565[] = USERPREFS_OEM_IMAGE_RGB565_DATA;
         static_cast<TFTDisplay *>(display)->drawRGB565(oemX, oemY, USERPREFS_OEM_IMAGE_WIDTH, USERPREFS_OEM_IMAGE_HEIGHT, rgb565,
                                                        true);
