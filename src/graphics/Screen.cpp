@@ -2051,14 +2051,27 @@ int32_t Screen::runOnce()
     // How often the scheduler actually gets here, against how often we ask it to. Paired with the
     // frame count TFTDisplay reports, this separates "nothing is calling us" from "we are called
     // but OLEDDisplayUi::update() declines to redraw" - the two have nothing in common as fixes.
+    static uint32_t sBusyMs = 0;
+    // Time spent inside runOnce, which is where the frame callbacks actually draw. TFTDisplay's own
+    // counter starts after spiLock is taken - i.e. after all the drawing - so it reports the push and
+    // conversion only. The difference between the two is the cost of building the frame, and on a large
+    // panel that is the part worth knowing about.
+    struct BusyTimer {
+        uint32_t start;
+        uint32_t *acc;
+        explicit BusyTimer(uint32_t *a) : start(millis()), acc(a) {}
+        ~BusyTimer() { *acc += millis() - start; }
+    } busyTimer(&sBusyMs);
     {
         static uint32_t calls = 0, lastReportMs = 0;
         calls++;
         const uint32_t now = millis();
         if (now - lastReportMs >= 1000) {
-            LOG_INFO("Screen::runOnce: %u calls in %u ms, targetFps=%u frameState=%d", (unsigned)calls,
-                     (unsigned)(now - lastReportMs), (unsigned)targetFramerate, (int)ui->getUiState()->frameState);
+            LOG_INFO("Screen::runOnce: %u calls in %u ms, %u ms busy, targetFps=%u frameState=%d", (unsigned)calls,
+                     (unsigned)(now - lastReportMs), (unsigned)sBusyMs, (unsigned)targetFramerate,
+                     (int)ui->getUiState()->frameState);
             calls = 0;
+            sBusyMs = 0;
             lastReportMs = now;
         }
     }

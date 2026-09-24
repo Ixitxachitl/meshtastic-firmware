@@ -1612,9 +1612,29 @@ struct DisplayFrameTimer {
 };
 #define UI_PERF_TIME_FRAME() DisplayFrameTimer _uiPerfFrameTimer
 #define UI_PERF_FRAME_LOCKED() _uiPerfFrameTimer.locked()
+
+// Where the time before that timer starts actually goes. DisplayFrameTimer only begins once spiLock is
+// held - i.e. after every pixel has been drawn - so a slow frame is invisible to it. This splits the
+// build by primitive, with the pixel counts needed to tell raw volume from per-pixel overhead.
+struct NativeDrawStats {
+    uint32_t clearUs, glyphUs, imageUs, rectUs, fillUs;
+    uint32_t glyphCalls, glyphPx, imagePx, rectPx, fillPx, pixelWrites;
+};
+static NativeDrawStats sDrawStats;
+
+struct ScopedUs {
+    uint32_t *acc;
+    uint32_t start;
+    explicit ScopedUs(uint32_t *a) : acc(a), start(micros()) {}
+    ~ScopedUs() { *acc += micros() - start; }
+};
+#define UI_PERF_SCOPE(field) ScopedUs _uiPerfScope(&sDrawStats.field)
+#define UI_PERF_COUNT(field, n) (sDrawStats.field += (uint32_t)(n))
 #else
 #define UI_PERF_TIME_FRAME() (void)0
 #define UI_PERF_FRAME_LOCKED() (void)0
+#define UI_PERF_SCOPE(field) (void)0
+#define UI_PERF_COUNT(field, n) (void)0
 #endif
 
 static constexpr uint8_t kFullRepaintChunkRows = 8;
@@ -1959,6 +1979,7 @@ void TFTDisplay::writeNativePixel(int16_t x, int16_t y)
     markNativeRowDirty(y);
     nativeWriteMaskBit(explicitBits, displayWidth, x, y, penActive);
     rgbPixels[(size_t)y * displayWidth + x] = be;
+    UI_PERF_COUNT(pixelWrites, 1);
 }
 
 void TFTDisplay::setPenColors(uint16_t onColor, uint16_t offColor)
@@ -2057,7 +2078,9 @@ void TFTDisplay::flushPendingColumns()
     PendingColumns &p = pendingColumns;
     if (p.x1 <= p.x0 || !rgbPixels)
         return;
+    UI_PERF_SCOPE(fillUs);
     const int32_t x0 = p.x0, x1 = p.x1, y0 = p.y0, y1 = p.y1;
+    UI_PERF_COUNT(fillPx, (x1 - x0) * (y1 - y0));
     p.x1 = p.x0; // emptied first: nothing below may see it as still pending
     markNativeRowsDirty(y0, y1);
     for (int32_t yy = y0; yy < y1; yy++) {
@@ -2078,6 +2101,7 @@ void TFTDisplay::flushPendingColumns()
 void TFTDisplay::clear(void)
 {
     pendingColumns.x1 = pendingColumns.x0; // about to be painted over: nothing held needs writing
+    UI_PERF_SCOPE(clearUs);
     OLEDDisplay::clear();
     penActive = false;
     if (!rgbPixels)
@@ -2167,6 +2191,8 @@ void TFTDisplay::drawInternal(int16_t xMove, int16_t yMove, int16_t width, int16
         return;
     if (xMove + width < 0 || xMove > (int16_t)displayWidth)
         return;
+    UI_PERF_SCOPE(glyphUs);
+    UI_PERF_COUNT(glyphCalls, 1);
 
     const uint8_t rasterHeight = 1 + ((height - 1) >> 3);
     if (bytesInData == 0)
@@ -2182,6 +2208,7 @@ void TFTDisplay::drawInternal(int16_t xMove, int16_t yMove, int16_t width, int16
                     continue;
                 OLEDDisplay::setPixel(static_cast<int16_t>(px), static_cast<int16_t>(py)); // applies `color` to the lit mask
                 writeNativePixel(static_cast<int16_t>(px), static_cast<int16_t>(py));
+                UI_PERF_COUNT(glyphPx, 1);
             }
         }
 #ifndef __MBED__
@@ -2199,6 +2226,8 @@ void TFTDisplay::drawRGB565(int16_t x, int16_t y, int16_t w, int16_t h, const ui
     flushPendingColumns();
     if (!rgbPixels || !pixels)
         return;
+    UI_PERF_SCOPE(imageUs);
+    UI_PERF_COUNT(imagePx, (int32_t)w * h);
     if (w <= 0 || h <= 0)
         return;
     nativeClean = false;
@@ -2245,6 +2274,8 @@ void TFTDisplay::fillRect565(int16_t x, int16_t y, int16_t w, int16_t h, uint16_
     flushPendingColumns();
     if (!rgbPixels)
         return;
+    UI_PERF_SCOPE(rectUs);
+    UI_PERF_COUNT(rectPx, (int32_t)w * h);
     nativeClean = false;
     const uint16_t be = nativeSwap565(color);
     const int32_t x0 = x < 0 ? 0 : x;
@@ -2269,6 +2300,8 @@ void TFTDisplay::blendRect565(int16_t x, int16_t y, int16_t w, int16_t h, uint16
     flushPendingColumns();
     if (!rgbPixels || alpha == 0)
         return;
+    UI_PERF_SCOPE(rectUs);
+    UI_PERF_COUNT(rectPx, (int32_t)w * h);
     const int32_t x0 = x < 0 ? 0 : x;
     const int32_t y0 = y < 0 ? 0 : y;
     const int32_t x1 = ((int32_t)x + w) > displayWidth ? displayWidth : ((int32_t)x + w);
@@ -2409,6 +2442,24 @@ void TFTDisplay::display(bool fromBlank)
         word = 0;
     graphics::clearTFTColorRegions();
     lightPanelAfterFirstPush();
+#ifdef UI_PERF_DEBUG
+    {
+        static uint32_t lastReportMs = 0, frames = 0;
+        frames++;
+        const uint32_t now = millis();
+        if (now - lastReportMs >= 1000) {
+            LOG_INFO("TFT build over %u frames: clear %u ms, text %u ms (%u calls, %u px), images %u ms (%u px), rects %u ms "
+                     "(%u px), fills %u ms (%u px), %u pixel writes",
+                     (unsigned)frames, (unsigned)(sDrawStats.clearUs / 1000), (unsigned)(sDrawStats.glyphUs / 1000),
+                     (unsigned)sDrawStats.glyphCalls, (unsigned)sDrawStats.glyphPx, (unsigned)(sDrawStats.imageUs / 1000),
+                     (unsigned)sDrawStats.imagePx, (unsigned)(sDrawStats.rectUs / 1000), (unsigned)sDrawStats.rectPx,
+                     (unsigned)(sDrawStats.fillUs / 1000), (unsigned)sDrawStats.fillPx, (unsigned)sDrawStats.pixelWrites);
+            sDrawStats = NativeDrawStats{};
+            frames = 0;
+            lastReportMs = now;
+        }
+    }
+#endif
 }
 #endif // BASEUI_NATIVE_RGB565
 
