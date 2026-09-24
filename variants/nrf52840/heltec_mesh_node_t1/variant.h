@@ -58,11 +58,6 @@ extern "C" {
 #define DISPLAY_FORCE_SMALL_FONTS
 #define FORCE_LOW_RES 1         // 80px-wide panel causes artifacts with full-res UI elements
 #define WAYPOINT_LIST_TINY_FONT // 80px of height fits one waypoint card in FONT_SMALL, three in FONT_TINY
-// The frame slide is timed and drawn from snapshots, so this only sets how many frames fill it; frames the
-// panel can't keep up with are dropped rather than stretching the slide.
-#define SCREEN_TRANSITION_FRAMERATE 60
-#define SCREEN_NAV_TRANSITION_MS 200 // same slide length as the M9
-
 // Custom boot splash, shown for the second half of the boot screen: full-panel 160x80 artwork, drawn in
 // colour on colour-framebuffer builds. 1:1 scale - BASEUI_ICON_SCALE would double it off the panel.
 #define USERPREFS_OEM_TEXT "Ixitxachitl Build"
