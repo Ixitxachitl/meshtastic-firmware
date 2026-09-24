@@ -51,6 +51,10 @@
 #define BASEUI_FIXED_COMPASS_SIZE 1
 #define BASEUI_SPLASH_CORNER_INSET_PCT 25
 #define BASEUI_ICON_SCALE 2
+// The battery cluster reads fine at its authored size; doubled it crowds the header.
+#define BASEUI_BATTERY_ICON_SCALE 1
+// Pushed clear of the rounded top-right corner, which otherwise clips it. Tune against the panel.
+#define BASEUI_BATTERY_TOP_OFFSET 8
 // Emote picker cells are sized with BASEUI_ICON_SCALE already applied, so at scale 2 the
 // artwork filled only half its cell. Draw it twice as large to fill the space.
 #define EMOTE_PICKER_SCALE_BOOST 2

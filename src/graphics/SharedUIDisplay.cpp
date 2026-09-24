@@ -481,9 +481,9 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
     }
 #endif
 
-    constexpr int iconScale = BASEUI_ICON_SCALE;
+    constexpr int iconScale = BASEUI_BATTERY_ICON_SCALE;
     int batteryX = x + 1 + BASEUI_HEADER_LR_MARGIN;
-    int batteryY = HEADER_OFFSET_Y + 1 + BASEUI_HEADER_MARGIN / 2;
+    int batteryY = HEADER_OFFSET_Y + 1 + BASEUI_HEADER_MARGIN / 2 + BASEUI_BATTERY_TOP_OFFSET;
 #if !defined(OLED_TINY)
     // === Battery Icons ===
     if (usbPowered && !isCharging) { // This is a basic check to determine USB Powered is flagged but not charging

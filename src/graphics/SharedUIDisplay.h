@@ -117,6 +117,18 @@ namespace graphics
 #define BASEUI_ICON_SCALE 1
 #endif
 
+// The battery and charge glyphs in the header. Follows BASEUI_ICON_SCALE by default, but a panel that
+// raised that for the body can pin this back to 1 - these are already legible at their native size.
+#ifndef BASEUI_BATTERY_ICON_SCALE
+#define BASEUI_BATTERY_ICON_SCALE BASEUI_ICON_SCALE
+#endif
+
+// Extra rows between the top of the header and the battery cluster. For rounded panels, where the
+// corner arc cuts across where it would otherwise sit.
+#ifndef BASEUI_BATTERY_TOP_OFFSET
+#define BASEUI_BATTERY_TOP_OFFSET 0
+#endif
+
 // Quick screen access
 #define SCREEN_WIDTH display->getWidth()
 #define SCREEN_HEIGHT display->getHeight()
