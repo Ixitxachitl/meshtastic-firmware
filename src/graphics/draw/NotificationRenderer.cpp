@@ -1276,6 +1276,41 @@ bool NotificationRenderer::isOverlayBannerShowing()
     return strlen(alertBannerMessage) > 0 && (alertBannerUntil == 0 || !Throttle::deadlinePassed(alertBannerUntil));
 }
 
+bool NotificationRenderer::isScrollableList()
+{
+    return isOverlayBannerShowing() && alertBannerOptions > 0 &&
+           (current_notification_type == notificationTypeEnum::selection_picker ||
+            current_notification_type == notificationTypeEnum::node_picker);
+}
+
+// Travel not yet worth a whole row, carried between drag reports.
+static float fingerScrollCarry = 0.0f;
+
+void NotificationRenderer::scrollByFingerDelta(float dyPx)
+{
+    if (!isScrollableList())
+        return;
+    const float rowHeight = (float)(FONT_HEIGHT_SMALL - 3); // effectiveLineHeight in the drawing code
+    // Dragging up (dyPx < 0) pulls later options up under the finger, so it walks down the list. Clamped
+    // rather than wrapped: wrapping mid-drag would throw the selection to the far end of the list.
+    fingerScrollCarry -= dyPx;
+    while (fingerScrollCarry >= rowHeight && curSelected < alertBannerOptions - 1) {
+        curSelected++;
+        fingerScrollCarry -= rowHeight;
+    }
+    while (fingerScrollCarry <= -rowHeight && curSelected > 0) {
+        curSelected--;
+        fingerScrollCarry += rowHeight;
+    }
+    if ((fingerScrollCarry > 0.0f && curSelected >= alertBannerOptions - 1) || (fingerScrollCarry < 0.0f && curSelected <= 0))
+        fingerScrollCarry = 0.0f; // at an end: travel past it must not bank up and fire on the way back
+}
+
+void NotificationRenderer::endFingerScroll()
+{
+    fingerScrollCarry = 0.0f;
+}
+
 bool NotificationRenderer::isMenuShowing()
 {
     // A menu, picker, keyboard, or pairing-PIN overlay - anything interactive, as opposed to a plain

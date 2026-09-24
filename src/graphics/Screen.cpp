@@ -1805,6 +1805,9 @@ struct ListScrollDrag {
 
 static ListScrollDrag messageScrollDrag;
 static ListScrollDrag waypointScrollDrag;
+static ListScrollDrag menuScrollDrag;
+// The last menu gesture was a finger scroll, so the swipe classified from its release must not step too.
+static bool menuSwipeFollowsDrag = false;
 
 // True while a finger is steering something that owns the framerate - a frame transition, a map
 // pan, or the message list. runOnce() uses this to leave the framerate alone mid-gesture.
@@ -1827,7 +1830,7 @@ static bool screenDragOwnsFramerate()
         return true;
 #endif
     // Scrolling a list starts no transition either, so it needs the same protection.
-    if (messageScrollDrag.steering(now) || waypointScrollDrag.steering(now))
+    if (messageScrollDrag.steering(now) || waypointScrollDrag.steering(now) || menuScrollDrag.steering(now))
         return true;
     // As does the emote picker's grid, whose drag is driven from inside CannedMessageModule -
     // a module sees input before the screen does, so that one cannot live here with the rest.
@@ -3329,6 +3332,31 @@ int Screen::handleInputEvent(const InputEvent *event)
     }
 #endif
     if (NotificationRenderer::isOverlayBannerShowing()) {
+#if BASEUI_HAS_TOUCH_DRAG
+        // No banner acts on drag reports, and passing each one on cost a full redraw per report, so they
+        // stop here. A list follows the finger and redraws only when the selection moves.
+        if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG || event->inputEvent == INPUT_BROKER_TOUCH_DRAG_END) {
+            if (NotificationRenderer::isScrollableList()) {
+                const int8_t before = NotificationRenderer::curSelected;
+                if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG) {
+                    menuScrollDrag.update(event, NotificationRenderer::scrollByFingerDelta);
+                } else if (menuScrollDrag.end()) {
+                    NotificationRenderer::endFingerScroll();
+                    menuSwipeFollowsDrag = true;
+                }
+                if (NotificationRenderer::curSelected != before) {
+                    setFastFramerate();
+                    updateUiFrame(ui);
+                }
+            }
+            return 0;
+        }
+        const bool swallowSwipe = menuSwipeFollowsDrag && inputEventIsTouch(event) &&
+                                  (event->inputEvent == INPUT_BROKER_UP || event->inputEvent == INPUT_BROKER_DOWN);
+        menuSwipeFollowsDrag = false;
+        if (swallowSwipe)
+            return 0;
+#endif
         // Every tap a banner option consumes passes through here, so one pulse covers them all.
         if (event->inputEvent == INPUT_BROKER_USER_PRESS && inputEventIsTouch(event))
             touchHapticPulse(TouchHaptic::Activate);

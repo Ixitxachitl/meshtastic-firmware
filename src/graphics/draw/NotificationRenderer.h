@@ -58,6 +58,12 @@ class NotificationRenderer
     static void drawFrameFirmware(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
     static bool isOverlayBannerShowing();
     static bool isMenuShowing();
+    // A list of options the finger can scroll: a menu, or the node picker.
+    static bool isScrollableList();
+    // Moves the selection one row per row height of finger travel, following the finger like the message list.
+    static void scrollByFingerDelta(float dyPx);
+    // Drops the part-row of travel left over, so the next gesture starts from nothing.
+    static void endFingerScroll();
 
     static graphics::notificationTypeEnum current_notification_type;
 };
