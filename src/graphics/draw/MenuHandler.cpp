@@ -3247,8 +3247,9 @@ void menuHandler::themeMenu()
 void menuHandler::panelVcomMenu()
 {
 #if TFT_HAS_PANEL_VCOM
-    // The ST7789's low end up to LovyanGFX's 0x28, finest around the M9's 0x18. Applied live and logged, not saved:
-    // the winner goes in as ST7789_VCOMS.
+    // The ST7789's low end up to LovyanGFX's 0x28, finest around the M9's 0x18. Applied live and kept in
+    // uiconfig: the right value is a property of the individual panel, not the model, so it outlives the
+    // build it was found in rather than having to be baked back into ST7789_VCOMS.
     static constexpr uint8_t kValues[] = {0x00, 0x04, 0x08, 0x0A, 0x0C, 0x0E, 0x10, 0x11, 0x12, 0x13, 0x14,
                                           0x15, 0x16, 0x17, 0x18, 0x1A, 0x1C, 0x20, 0x24, 0x28, 0x30};
     constexpr size_t kCount = sizeof(kValues) / sizeof(kValues[0]);
@@ -3275,6 +3276,9 @@ void menuHandler::panelVcomMenu()
             return;
         }
         TFTDisplay::setPanelVcom(kValues[selected - 1]);
+        uiconfig.has_panel_vcom = true;
+        uiconfig.panel_vcom = kValues[selected - 1];
+        saveUIConfig();
     };
     screen->showOverlayBanner(bannerOptions);
 #endif

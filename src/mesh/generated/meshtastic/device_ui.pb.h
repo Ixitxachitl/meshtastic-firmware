@@ -200,6 +200,12 @@ typedef struct _meshtastic_DeviceUIConfig {
     bool is_clockface_analog;
     /* How the GPS coordinates are formatted on the OLED screen. */
     meshtastic_DeviceUIConfig_GpsCoordinateFormat gps_format;
+    /* ST7789 VCOM setpoint (register 0xBB), as the raw register value: 0.1V plus 0.025V a step.
+ A value that does not suit the panel leaves a DC bias on the liquid crystal, seen as a faint
+ image of whatever sat on screen. Tuned per unit rather than per model, so it is stored here
+ instead of only being compiled in. Unset means keep the value the firmware was built with. */
+    bool has_panel_vcom;
+    uint8_t panel_vcom;
 } meshtastic_DeviceUIConfig;
 
 
@@ -235,12 +241,12 @@ extern "C" {
 
 
 /* Initializer values for message structs */
-#define meshtastic_DeviceUIConfig_init_default   {0, 0, 0, 0, 0, 0, _meshtastic_Theme_MIN, 0, 0, 0, _meshtastic_Language_MIN, false, meshtastic_NodeFilter_init_default, false, meshtastic_NodeHighlight_init_default, {0, {0}}, false, meshtastic_Map_init_default, _meshtastic_CompassMode_MIN, 0, 0, _meshtastic_DeviceUIConfig_GpsCoordinateFormat_MIN}
+#define meshtastic_DeviceUIConfig_init_default   {0, 0, 0, 0, 0, 0, _meshtastic_Theme_MIN, 0, 0, 0, _meshtastic_Language_MIN, false, meshtastic_NodeFilter_init_default, false, meshtastic_NodeHighlight_init_default, {0, {0}}, false, meshtastic_Map_init_default, _meshtastic_CompassMode_MIN, 0, 0, _meshtastic_DeviceUIConfig_GpsCoordinateFormat_MIN, false, 0}
 #define meshtastic_NodeFilter_init_default       {0, 0, 0, 0, 0, "", 0}
 #define meshtastic_NodeHighlight_init_default    {0, 0, 0, 0, ""}
 #define meshtastic_GeoPoint_init_default         {0, 0, 0}
 #define meshtastic_Map_init_default              {false, meshtastic_GeoPoint_init_default, "", 0, 0}
-#define meshtastic_DeviceUIConfig_init_zero      {0, 0, 0, 0, 0, 0, _meshtastic_Theme_MIN, 0, 0, 0, _meshtastic_Language_MIN, false, meshtastic_NodeFilter_init_zero, false, meshtastic_NodeHighlight_init_zero, {0, {0}}, false, meshtastic_Map_init_zero, _meshtastic_CompassMode_MIN, 0, 0, _meshtastic_DeviceUIConfig_GpsCoordinateFormat_MIN}
+#define meshtastic_DeviceUIConfig_init_zero      {0, 0, 0, 0, 0, 0, _meshtastic_Theme_MIN, 0, 0, 0, _meshtastic_Language_MIN, false, meshtastic_NodeFilter_init_zero, false, meshtastic_NodeHighlight_init_zero, {0, {0}}, false, meshtastic_Map_init_zero, _meshtastic_CompassMode_MIN, 0, 0, _meshtastic_DeviceUIConfig_GpsCoordinateFormat_MIN, false, 0}
 #define meshtastic_NodeFilter_init_zero          {0, 0, 0, 0, 0, "", 0}
 #define meshtastic_NodeHighlight_init_zero       {0, 0, 0, 0, ""}
 #define meshtastic_GeoPoint_init_zero            {0, 0, 0}
@@ -285,6 +291,7 @@ extern "C" {
 #define meshtastic_DeviceUIConfig_screen_rgb_color_tag 17
 #define meshtastic_DeviceUIConfig_is_clockface_analog_tag 18
 #define meshtastic_DeviceUIConfig_gps_format_tag 19
+#define meshtastic_DeviceUIConfig_panel_vcom_tag 20
 
 /* Struct field encoding specification for nanopb */
 #define meshtastic_DeviceUIConfig_FIELDLIST(X, a) \
@@ -306,7 +313,8 @@ X(a, STATIC,   OPTIONAL, MESSAGE,  map_data,         15) \
 X(a, STATIC,   SINGULAR, UENUM,    compass_mode,     16) \
 X(a, STATIC,   SINGULAR, UINT32,   screen_rgb_color,  17) \
 X(a, STATIC,   SINGULAR, BOOL,     is_clockface_analog,  18) \
-X(a, STATIC,   SINGULAR, UENUM,    gps_format,       19)
+X(a, STATIC,   SINGULAR, UENUM,    gps_format,       19) \
+X(a, STATIC,   OPTIONAL, UINT32,   panel_vcom,       20)
 #define meshtastic_DeviceUIConfig_CALLBACK NULL
 #define meshtastic_DeviceUIConfig_DEFAULT NULL
 #define meshtastic_DeviceUIConfig_node_filter_MSGTYPE meshtastic_NodeFilter
@@ -364,7 +372,7 @@ extern const pb_msgdesc_t meshtastic_Map_msg;
 
 /* Maximum encoded size of messages (where known) */
 #define MESHTASTIC_MESHTASTIC_DEVICE_UI_PB_H_MAX_SIZE meshtastic_DeviceUIConfig_size
-#define meshtastic_DeviceUIConfig_size           206
+#define meshtastic_DeviceUIConfig_size           210
 #define meshtastic_GeoPoint_size                 33
 #define meshtastic_Map_size                      60
 #define meshtastic_NodeFilter_size               47

@@ -1019,6 +1019,15 @@ void Screen::setup()
 #endif
     LOG_INFO("Applied screen brightness: %d", brightness);
 
+#if TFT_HAS_PANEL_VCOM
+    // A stored VCOM beats the compiled-in ST7789_VCOMS: the value that stops this panel ghosting is a
+    // property of the individual unit. connect() has already sent the built-in one by now, so this is a
+    // second write rather than a substitution - harmless, and it keeps the ordering obvious.
+    if (uiconfig.has_panel_vcom) {
+        TFTDisplay::setPanelVcom((uint8_t)uiconfig.panel_vcom);
+    }
+#endif
+
 #if defined(MESHTASTIC_LOCKDOWN) && defined(USE_EINK)
     // M20: e-ink panels physically retain the last-rendered image without
     // power, so a power-cycled lockdown handheld would keep showing
