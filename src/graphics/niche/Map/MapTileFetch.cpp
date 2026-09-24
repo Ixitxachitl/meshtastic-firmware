@@ -10,6 +10,9 @@
 #include "SPILock.h"
 #include "concurrency/OSThread.h"
 #include "mesh/Throttle.h"
+#if defined(SENSECAP_INDICATOR)
+#include "mesh/IndicatorRemoteFS.h"
+#endif
 
 #include <HTTPClient.h>
 #include <WiFi.h>
@@ -47,6 +50,16 @@ bool templateLoaded = false;
 
 uint8_t *buffer = nullptr;
 
+#if defined(SENSECAP_INDICATOR)
+// The card is on the RP2040, reached over the interdevice link with device-ui's backend. This task's own
+// instance: its response buffers are not shared with the display task reading tiles.
+IndicatorRemoteFS &remoteCard()
+{
+    static IndicatorRemoteFS *fs = new IndicatorRemoteFS();
+    return *fs;
+}
+#endif
+
 bool onlineEnabled()
 {
     return uiconfig.has_map_data && uiconfig.map_data.online_tiles;
@@ -82,6 +95,12 @@ bool loadTemplate()
     else
         snprintf(path, sizeof(path), "/map/.url");
 
+#if defined(SENSECAP_INDICATOR)
+    uint32_t got = 0, fileSize = 0;
+    if (!remoteCard().readChunk(path, 0, reinterpret_cast<uint8_t *>(urlTemplate), sizeof(urlTemplate) - 1, &got, &fileSize))
+        return false;
+    const int read = (int)got;
+#else
     concurrency::LockGuard g(spiLock);
     SdFs *sd = mapSdCard();
     if (!sd)
@@ -91,6 +110,7 @@ bool loadTemplate()
         return false;
     const int read = file.read(urlTemplate, sizeof(urlTemplate) - 1);
     file.close();
+#endif
     if (read <= 0) {
         urlTemplate[0] = '\0';
         return false;
@@ -117,6 +137,22 @@ bool writeTile(const char *style, int z, int32_t x, int32_t y, const uint8_t *da
     snprintf(finalPath, sizeof(finalPath), "%s/%d.png", dir, (int)y);
     snprintf(tempPath, sizeof(tempPath), "%s/%d.part", dir, (int)y);
 
+#if defined(SENSECAP_INDICATOR)
+    // As device-ui's RemoteSDService::save(): the co-processor creates the folders, and the link has no
+    // rename, so the tile is written in place and removed again if any chunk fails.
+    IndicatorRemoteFS &fs = remoteCard();
+    constexpr size_t kChunk = sizeof(meshtastic_FileTransfer_filedata_t::bytes);
+    for (size_t offset = 0; offset < len; offset += kChunk) {
+        const size_t chunk = (len - offset) < kChunk ? (len - offset) : kChunk;
+        if (!fs.writeChunk(finalPath, (uint32_t)offset, data + offset, (uint32_t)chunk, offset == 0)) {
+            if (offset > 0)
+                fs.remove(finalPath); // a truncated tile would pass as present and never be fetched again
+            LOG_WARN("Map: can't write %s", finalPath);
+            return false;
+        }
+    }
+    return true;
+#else
     concurrency::LockGuard g(spiLock);
     SdFs *sd = mapSdCard();
     if (!sd)
@@ -145,6 +181,7 @@ bool writeTile(const char *style, int z, int32_t x, int32_t y, const uint8_t *da
         return false;
     }
     return true;
+#endif
 }
 
 // Returns the byte count, or 0. Body is staged in PSRAM rather than streamed to the card, so spiLock is taken

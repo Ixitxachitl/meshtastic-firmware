@@ -7,6 +7,9 @@
 #include "DebugConfiguration.h"
 #include "SPILock.h"
 #include "mesh/Throttle.h"
+#if defined(SENSECAP_INDICATOR)
+#include "mesh/IndicatorRemoteFS.h"
+#endif
 
 #include <PNGdec.h>
 #include <esp_heap_caps.h>
@@ -102,6 +105,59 @@ int drawRow(PNGDRAW *draw)
 // Missing is remembered so it isn't looked up every frame; Failed (a bad read or decode) is tried again later.
 enum class TileLoad { Loaded, Missing, Failed };
 
+bool reserveFileBuf(size_t size)
+{
+    if (size > fileBufSize) {
+        free(fileBuf);
+        fileBuf = static_cast<uint8_t *>(allocLarge(size));
+        fileBufSize = fileBuf ? size : 0;
+    }
+    return fileBuf != nullptr;
+}
+
+#if defined(SENSECAP_INDICATOR)
+// The card is on the RP2040, reached chunk-wise over the interdevice link with device-ui's backend.
+// The display task's own instance: its response buffers are not shared with the tile fetch task.
+IndicatorRemoteFS &remoteCard()
+{
+    static IndicatorRemoteFS *fs = new IndicatorRemoteFS();
+    return *fs;
+}
+
+// Reads the whole file into fileBuf. The first chunk also reports the file's size.
+TileLoad readTileFile(const char *path, size_t &size)
+{
+    IndicatorRemoteFS &fs = remoteCard();
+    constexpr uint32_t kChunk = sizeof(meshtastic_FileTransfer_filedata_t::bytes);
+    uint32_t got = 0, fileSize = 0;
+    if (!reserveFileBuf(kChunk))
+        return TileLoad::Failed;
+    if (!fs.readChunk(path, 0, fileBuf, kChunk, &got, &fileSize)) {
+        const meshtastic_FileStatus status = fs.lastFileStatus();
+        return (status == meshtastic_FileStatus_FILE_NOT_FOUND || status == meshtastic_FileStatus_FILE_NOT_A_FILE)
+                   ? TileLoad::Missing
+                   : TileLoad::Failed;
+    }
+    if (fileSize == 0 || fileSize > kMaxFileBytes)
+        return TileLoad::Missing;
+    size = fileSize;
+    if (size > fileBufSize) { // grow, keeping the chunk already read
+        auto *grown = static_cast<uint8_t *>(allocLarge(size));
+        if (!grown)
+            return TileLoad::Failed;
+        memcpy(grown, fileBuf, got);
+        free(fileBuf);
+        fileBuf = grown;
+        fileBufSize = size;
+    }
+    for (uint32_t offset = got; offset < size; offset += got) {
+        const uint32_t want = (size - offset) < kChunk ? (uint32_t)(size - offset) : kChunk;
+        if (!fs.readChunk(path, offset, fileBuf + offset, want, &got, &fileSize) || got == 0)
+            return TileLoad::Failed;
+    }
+    return TileLoad::Loaded;
+}
+#else
 // Reads the whole file into fileBuf.
 TileLoad readTileFile(const char *path, size_t &size)
 {
@@ -118,15 +174,11 @@ TileLoad readTileFile(const char *path, size_t &size)
         return TileLoad::Missing;
     }
     size = (size_t)fileSize;
-    if (size > fileBufSize) {
-        free(fileBuf);
-        fileBuf = static_cast<uint8_t *>(allocLarge(size));
-        fileBufSize = fileBuf ? size : 0;
-    }
-    const bool ok = fileBuf && file.read(fileBuf, size) == (int)size;
+    const bool ok = reserveFileBuf(size) && file.read(fileBuf, size) == (int)size;
     file.close();
     return ok ? TileLoad::Loaded : TileLoad::Failed;
 }
+#endif
 
 TileLoad loadTile(const TileKey &key, uint16_t *out)
 {
@@ -266,6 +318,30 @@ int refreshStyles(const char *preferred)
     const bool hadActive = active >= 0;
 
     numStyles = 0;
+#if defined(SENSECAP_INDICATOR)
+    {
+        // Same scan as device-ui's RemoteSdCard::loadMapStyles(): subdirectories carry a trailing slash.
+        IndicatorRemoteFS &fs = remoteCard();
+        std::set<std::string> entries;
+        if (fs.listDir("/maps", entries)) {
+            for (const std::string &entry : entries) { // a std::set, so already sorted
+                if (numStyles >= kMaxStyles)
+                    break;
+                const size_t len = entry.size() - 1;
+                if (entry.size() < 2 || entry.back() != '/' || entry[0] == '.' || len >= kNameSize)
+                    continue;
+                memcpy(styles[numStyles], entry.c_str(), len);
+                styles[numStyles][len] = '\0';
+                numStyles++;
+            }
+        }
+        std::set<std::string> mapDir;
+        if (numStyles == 0 && fs.listDir("/map", mapDir)) {
+            styles[0][0] = '\0';
+            numStyles = 1;
+        }
+    }
+#else
     {
         concurrency::LockGuard g(spiLock);
         SdFs *sd = mapSdCard();
@@ -298,6 +374,7 @@ int refreshStyles(const char *preferred)
             }
         }
     }
+#endif
 
     int pick = numStyles > 0 ? 0 : -1;
     for (int i = 0; havePreferred && i < numStyles; i++) {

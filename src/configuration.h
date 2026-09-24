@@ -523,11 +523,11 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #endif
 #endif
 // Colour map tiles in device-ui's layout (/maps/<style>/z/x/y.png on the SD card), MAP.BIN when there are none.
-// Opt-in per variant; needs BASEUI_HAS_MAP, BASEUI_NATIVE_RGB565 and HAS_SDCARD.
+// Opt-in per variant; needs BASEUI_HAS_MAP, BASEUI_NATIVE_RGB565 and a card: HAS_SDCARD, or the Indicator's RP2040 one.
 #ifndef BASEUI_MAP_PNG_TILES
 #define BASEUI_MAP_PNG_TILES 0
 #endif
-#if BASEUI_MAP_PNG_TILES && !(BASEUI_HAS_MAP && BASEUI_NATIVE_RGB565 && defined(HAS_SDCARD))
+#if BASEUI_MAP_PNG_TILES && !(BASEUI_HAS_MAP && BASEUI_NATIVE_RGB565 && (defined(HAS_SDCARD) || defined(SENSECAP_INDICATOR)))
 #undef BASEUI_MAP_PNG_TILES
 #define BASEUI_MAP_PNG_TILES 0
 #endif
