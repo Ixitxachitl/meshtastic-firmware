@@ -855,12 +855,12 @@ void drawCommonFooter(OLEDDisplay *display, int16_t x, int16_t y)
     // The colour version of this glyph is square where the 1-bit one is 7x5, and it is shaded, with its
     // own dark edges and a transparent surround - so it needs neither the 7:5 box drawScaledXbm() would
     // size it into nor anything painted behind it.
-    const RGB565Image *colorIcon = findRGB565Image(connection_icon, connection_icon_width, connection_icon_height);
+    const bool hasColorIcon = findRGB565Image(connection_icon, connection_icon_width, connection_icon_height) != nullptr;
 #else
-    const RGB565Image *const colorIcon = nullptr;
+    const bool hasColorIcon = false; // RGB565Image is only declared on native RGB565 builds
 #endif
 
-    if (colorIcon) {
+    if (hasColorIcon) {
         // Square, padded on every side, and the band ends level with the panel rather than running past it
         // the way the 1-bit one does - there the overhang is only ever blank rows, but a square icon tall
         // enough to fill the band would have lost its bottom edge off-screen.
