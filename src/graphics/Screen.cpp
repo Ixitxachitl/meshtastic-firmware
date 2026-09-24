@@ -1241,6 +1241,11 @@ static uint32_t lastScreenTransition;
 #ifndef SCREEN_ANIMATE_FRAME_NAV
 #define SCREEN_ANIMATE_FRAME_NAV 0
 #endif
+// With SCREEN_ANIMATE_FRAME_NAV: button presses page with the slide too, not only left/right. For boards whose
+// only way to page frames is a button, which would otherwise never see the animation.
+#ifndef SCREEN_ANIMATE_BUTTON_NAV
+#define SCREEN_ANIMATE_BUTTON_NAV 0
+#endif
 
 // What setTargetFPS(SCREEN_TRANSITION_FRAMERATE) stores as updateInterval, and so the length of one
 // transition tick.
@@ -3686,15 +3691,17 @@ int Screen::handleInputEvent(const InputEvent *event)
 
             // Directional input is the only kind that gets the slide (SCREEN_ANIMATE_FRAME_NAV):
             // left and right say which way the frames move, which is what the animation shows. A
-            // button press or space just means "next", so it snaps.
+            // button press or space just means "next", so it snaps - unless SCREEN_ANIMATE_BUTTON_NAV.
+            const bool buttonSlides = SCREEN_ANIMATE_BUTTON_NAV && !fromTouch;
             if (wantsPrevious || event->inputEvent == INPUT_BROKER_ALT_PRESS) {
-                showFrame(FrameDirection::PREVIOUS, wantsPrevious);
+                showFrame(FrameDirection::PREVIOUS,
+                          wantsPrevious || (buttonSlides && event->inputEvent == INPUT_BROKER_ALT_PRESS));
             } else if (wantsNext || (event->inputEvent == INPUT_BROKER_USER_PRESS && !tapFromTouchscreen) ||
                        (event->inputEvent == INPUT_BROKER_ANYKEY && event->kbchar == ' ')) {
                 // Paging the frame is a tap landing on something, so it earns the buzz.
                 if (event->inputEvent == INPUT_BROKER_USER_PRESS && inputEventIsTouch(event))
                     touchHapticPulse(TouchHaptic::Activate);
-                showFrame(FrameDirection::NEXT, wantsNext);
+                showFrame(FrameDirection::NEXT, wantsNext || (buttonSlides && event->inputEvent == INPUT_BROKER_USER_PRESS));
             } else if (event->inputEvent == INPUT_BROKER_FN_F1) {
                 this->ui->switchToFrame(0);
 #ifdef USERPREFS_UI_TEST_LOG
