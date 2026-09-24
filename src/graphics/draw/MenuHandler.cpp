@@ -1241,7 +1241,7 @@ void menuHandler::homeBaseMenu()
         }
         optionsEnumArray[options++] = Mute;
     }
-#if HAS_BACKLIGHT
+#if HAS_BACKLIGHT && defined(USE_EINK) // a frontlight is optional; a TFT is unreadable without its backlight
     optionsArray[options] = "Toggle Backlight";
     optionsEnumArray[options++] = Backlight;
 #else
@@ -1271,7 +1271,7 @@ void menuHandler::homeBaseMenu()
             }
         } else if (selected == Backlight) {
             screen->setOn(false);
-#if HAS_BACKLIGHT
+#if HAS_BACKLIGHT && defined(USE_EINK)
             graphics::backlightToggle();
             saveUIConfig();
 #endif

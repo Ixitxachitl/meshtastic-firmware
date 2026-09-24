@@ -603,7 +603,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #ifndef BASEUI_HAS_BRIGHTNESS_CONTROL
 #if defined(T_DECK)
 #define BASEUI_HAS_BRIGHTNESS_CONTROL 0
-#elif defined(ST7789_CS) || defined(USE_OLED) || defined(USE_SSD1306) || defined(USE_SH1106) || defined(USE_SH1107)
+#elif defined(PIN_PWM_BACKLIGHT) || defined(ST7789_CS) || defined(USE_OLED) || defined(USE_SSD1306) || defined(USE_SH1106) ||    \
+    defined(USE_SH1107)
 #define BASEUI_HAS_BRIGHTNESS_CONTROL 1
 #else
 #define BASEUI_HAS_BRIGHTNESS_CONTROL 0

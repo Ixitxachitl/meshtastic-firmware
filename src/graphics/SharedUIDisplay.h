@@ -40,6 +40,10 @@ namespace graphics
 #ifndef BASEUI_HEADER_MARGIN
 #define BASEUI_HEADER_MARGIN 0
 #endif
+// Rows the common header occupies, highlight plus its 2px underline. On low-res layouts the body's first
+// text line starts 2px inside this, so anything that paints a background must clip to it, not to textFirstLine.
+#define BASEUI_HEADER_HEIGHT (FONT_HEIGHT_SMALL + 1 + BASEUI_HEADER_MARGIN)
+
 #ifndef BASEUI_HEADER_LR_MARGIN
 #define BASEUI_HEADER_LR_MARGIN 0
 #endif

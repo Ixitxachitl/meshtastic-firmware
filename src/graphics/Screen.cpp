@@ -3060,7 +3060,9 @@ void Screen::increaseBrightness()
 void Screen::applyBrightness(uint8_t level)
 {
     brightness = level;
-#if defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190)
+#if HAS_PWM_BACKLIGHT
+    graphics::backlightSet(brightness);
+#elif defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190)
     analogWrite(VTFT_LEDA, brightness);
 #elif defined(ST7789_CS) || defined(ST7796_CS)
     static_cast<TFTDisplay *>(dispdev)->setDisplayBrightness(brightness);

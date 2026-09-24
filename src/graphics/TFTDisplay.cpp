@@ -1,4 +1,5 @@
 #include "configuration.h"
+#include "graphics/Backlight.h"
 #include "main.h"
 #include "memory/MemAudit.h"
 #include "mesh/Throttle.h"
@@ -3147,6 +3148,13 @@ void TFTDisplay::setDisplayBrightness(uint8_t _brightness, bool quiet)
     aw9364SetBrightness(_brightness);
     if (!quiet)
         LOG_DEBUG("Brightness is set to value: %i (AW9364 level %u)", _brightness, (unsigned)aw9364Level);
+#elif HAS_PWM_BACKLIGHT
+    // The level belongs to graphics::backlight (Display > Brightness); this only switches it, which is all the
+    // dark hold around the first frame asks of it.
+    if (_brightness == 0)
+        graphics::backlightOff();
+    else
+        graphics::backlightOn();
 #elif defined(RAK14014) || defined(HELTEC_MESH_NODE_T096) || defined(HELTEC_MESH_NODE_T1)
     // todo
 #elif !defined(USE_ARDUINO_GFX)
@@ -3545,6 +3553,10 @@ bool TFTDisplay::connect()
 #endif
 
     tft->fillScreen(getThemeDefaultOffColor());
+#if defined(TFT_BACKLIGHT_AFTER_FIRST_FRAME) && !BASEUI_NATIVE_RGB565
+    // GRAM held random data until that fill. The native frame buffer path lights it after its first push instead.
+    graphics::backlightOn();
+#endif
 
     // Both buffers have to be DMA-reachable before display() can use the DMA push, so track the
     // two allocations together.
