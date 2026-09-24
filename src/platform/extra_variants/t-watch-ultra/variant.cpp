@@ -68,11 +68,25 @@ void lateInitVariant()
     if (config.display.displaymode != meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
         pinMode(SCREEN_TOUCH_INT, INPUT_PULLUP);
         touchDrv.setPins(-1, SCREEN_TOUCH_INT);
-        if (touchDrv.begin(Wire, TOUCH_SLAVE_ADDRESS, -1, -1)) {
+        // The CST92xx shares this I2C bus with the BHI260AP, whose thread is already polling by the time
+        // we get here, and nothing serialises the two. A collision leaves i2c_master_transmit returning
+        // ESP_ERR_INVALID_STATE, which the driver reports as a firmware read error - indistinguishable
+        // from an absent controller, so touch was never created and stayed dead until the next reboot.
+        // The window is short, so retry rather than lose the whole session to it.
+        constexpr int kTouchInitAttempts = 5;
+        bool touchReady = false;
+        for (int attempt = 1; attempt <= kTouchInitAttempts && !touchReady; attempt++) {
+            if (attempt > 1)
+                delay(50);
+            touchReady = touchDrv.begin(Wire, TOUCH_SLAVE_ADDRESS, -1, -1);
+            if (!touchReady)
+                LOG_WARN("CST92xx init attempt %d/%d failed", attempt, kTouchInitAttempts);
+        }
+        if (touchReady) {
             touchScreenImpl1 = new TouchScreenImpl1(TFT_WIDTH, TFT_HEIGHT, readTouch);
             touchScreenImpl1->init();
         } else {
-            LOG_ERROR("failed to initialize CST92xx");
+            LOG_ERROR("failed to initialize CST92xx after %d attempts", kTouchInitAttempts);
         }
     }
 }
