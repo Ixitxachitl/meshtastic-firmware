@@ -3,6 +3,7 @@
 #if MESHTASTIC_MEM_AUDIT
 
 #include "DebugConfiguration.h"
+#include "memGet.h"
 #include <atomic>
 #include <stdio.h>
 #include <string.h>
@@ -174,6 +175,9 @@ void logBreakdown(const char *when)
         LOG_INFO("MemAudit[%s]: %s", label, line);
     LOG_INFO("MemAudit[%s]: total=%ld internal=%ld psram=%ld", label, (long)(totalInternal + totalPsram), (long)totalInternal,
              (long)totalPsram);
+    // What is still free, not just what the tags account for - the number that decides whether the next allocation fits.
+    LOG_INFO("MemAudit[%s]: heap free=%lu of %lu", label, (unsigned long)memGet.getFreeHeap(),
+             (unsigned long)memGet.getHeapSize());
 }
 
 void logHeapRegions()
