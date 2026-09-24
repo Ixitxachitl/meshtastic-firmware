@@ -48,13 +48,12 @@
 #define TOUCH_I2C_PORT 0
 #define TOUCH_SLAVE_ADDRESS 0x48
 
-// Custom boot splash, shown for the second half of the boot screen. Same 216x300 artwork as the
-// t-watch-ultra, drawn 1:1 (2x would be 432x600 and clip this 480x480 panel). No
-// BASEUI_SPLASH_CORNER_INSET_PCT here: that pulls the text in for round panels; this one is square.
+// Custom boot splash, shown for the second half of the boot screen: full-panel 480x480 artwork, drawn in
+// colour on colour-framebuffer builds. 1:1 scale - BASEUI_ICON_SCALE would double it off the panel.
 #define USERPREFS_OEM_TEXT "Ixitxachitl Build"
 #define USERPREFS_OEM_FONT_SIZE 1
 #define USERPREFS_OEM_IMAGE_SCALE 1
-#include "../t-watch-ultra/oem_splash.h"
+#include "oem_splash.h"
 
 #define GPS_DEFAULT_NOT_PRESENT 1
 #define HAS_GPS 1
