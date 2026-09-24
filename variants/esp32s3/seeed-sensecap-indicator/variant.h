@@ -90,6 +90,15 @@
 // is rather than growing to fill the body on sparse nodes.
 #define BASEUI_FIXED_COMPASS_SIZE 1
 
+// Zoom, pan and Follow Me as buttons on the Map frame; a long press there opens the tile style picker.
+// Centred down the edge (no BASEUI_MAP_CONTROLS_BOTTOM): that is for landscape panels, this one is square.
+#define BASEUI_MAP_ONSCREEN_CONTROLS 1
+
+// Default Dark's navy canvas drawn as the topographic artwork: the shared 320x240 art at 2x is 640x480,
+// which fills this panel's height exactly and is cropped evenly at the sides.
+#define BASEUI_BACKGROUND_IMAGE_SCALE 2
+#define BASEUI_BACKGROUND_IMAGE 1
+
 #define USE_VIRTUAL_KEYBOARD 1
 #define DISPLAY_CLOCK_FRAME 1
 
