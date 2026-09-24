@@ -599,7 +599,6 @@ typedef struct _meshtastic_Config_DisplayConfig {
     /* If false (default), the device will use short names for various display screens.
  If true, node names will show in long format */
     bool use_long_node_name;
-    /* If true, the device will display message bubbles on screen. */
     bool enable_message_bubbles;
     /* Whether the newest message appears at the top or the bottom of the message screen. */
     meshtastic_Config_DisplayConfig_MessageOrder message_order;
@@ -1174,7 +1173,7 @@ extern const pb_msgdesc_t meshtastic_Config_SessionkeyConfig_msg;
 #define meshtastic_Config_PowerConfig_size       52
 #define meshtastic_Config_SecurityConfig_size    180
 #define meshtastic_Config_SessionkeyConfig_size  0
-#define meshtastic_Config_size                   209
+#define meshtastic_Config_size                   213
 
 #ifdef __cplusplus
 } /* extern "C" */
