@@ -35,6 +35,9 @@
 #ifndef TFT_BACKLIGHT_AW9364
 #define TFT_BACKLIGHT_AW9364 0
 #endif
+#ifndef BRIGHTNESS_DEFAULT
+#define BRIGHTNESS_DEFAULT 150 // only a starting level; whatever is stored replaces it soon after
+#endif
 
 #ifdef GPIO_EXTENDER
 #include <SparkFunSX1509.h>
@@ -3243,6 +3246,12 @@ bool TFTDisplay::connect()
 
     LOG_INFO("Power to TFT Backlight");
     backlightEnable->set(true);
+#if TFT_BACKLIGHT_AW9364
+    // backlightEnable is a no-op pin here (see the constructor), so the driver has to be switched on by
+    // hand - otherwise the panel stays dark from init until Screen::setup() reaches the stored level,
+    // which is the whole boot screen. setup() overwrites this with the real level moments later.
+    setDisplayBrightness(BRIGHTNESS_DEFAULT, true);
+#endif
 
 #ifdef UNPHONE
     unphone.backlight(true); // using unPhone library
