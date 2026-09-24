@@ -2391,6 +2391,11 @@ void TFTDisplay::display(bool fromBlank)
         if (!pushAll && band < kNativeMaxBands && !(nativeDirtyBands[band >> 5] & (1u << (band & 31))))
             continue;
         const uint32_t rows = min<uint32_t>(kFullRepaintChunkRows, displayHeight - yStart);
+#if BASEUI_NATIVE_SINGLE_BUFFER
+        // Nothing to compare against, so a dirty band goes out whole.
+        int32_t first = 0;
+        int32_t last = (int32_t)displayWidth - 1;
+#else
         int32_t first = pushAll ? 0 : (int32_t)displayWidth;
         int32_t last = pushAll ? (int32_t)displayWidth - 1 : -1;
         for (uint32_t r = 0; r < rows && !pushAll; r++) {
@@ -2411,6 +2416,7 @@ void TFTDisplay::display(bool fromBlank)
         }
         if (last < first)
             continue;
+#endif
         // Even start, odd end: whole 32-bit words for the GDMA transfer, as in the 1-bit path.
         first &= ~1;
         last |= 1;
@@ -2435,7 +2441,9 @@ void TFTDisplay::display(bool fromBlank)
         for (uint32_t r = 0; r < rows; r++) {
             const size_t rowStart = (yStart + r) * displayWidth + first;
             memcpy(chunk + r * spanW, rgbPixels + rowStart, spanW * sizeof(uint16_t));
+#if !BASEUI_NATIVE_SINGLE_BUFFER
             memcpy(rgbPushed + rowStart, rgbPixels + rowStart, spanW * sizeof(uint16_t));
+#endif
         }
         pushPixelBlock(first, yStart, spanW, rows, chunk);
     }
@@ -3613,17 +3621,19 @@ bool TFTDisplay::connect()
             if (this->rgbPixels)
                 memaudit::add("display", sizeof(uint16_t) * pixels, this->rgbPixels);
         }
+#if !BASEUI_NATIVE_SINGLE_BUFFER
         if (!this->rgbPushed) {
             this->rgbPushed = allocNativeFrame(pixels);
             if (this->rgbPushed)
                 memaudit::add("display", sizeof(uint16_t) * pixels, this->rgbPushed);
         }
+#endif
         if (!this->explicitBits) {
             this->explicitBits = static_cast<uint8_t *>(calloc(displayBufferSize, 1));
             if (this->explicitBits)
                 memaudit::add("display", displayBufferSize, this->explicitBits);
         }
-        if (!this->rgbPixels || !this->rgbPushed || !this->explicitBits) {
+        if (!this->rgbPixels || (!BASEUI_NATIVE_SINGLE_BUFFER && !this->rgbPushed) || !this->explicitBits) {
             LOG_ERROR("Not enough memory for the native RGB565 frame buffers");
             return false;
         }

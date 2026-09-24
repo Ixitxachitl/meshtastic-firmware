@@ -488,6 +488,11 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #ifndef BASEUI_NATIVE_RGB565
 #define BASEUI_NATIVE_RGB565 0
 #endif
+// Native RGB565 without its second frame (the copy of what the panel was last sent): dirty bands go out full width
+// instead of trimmed to what changed. Halves the frame buffer RAM, for boards that cannot spare a second frame.
+#ifndef BASEUI_NATIVE_SINGLE_BUFFER
+#define BASEUI_NATIVE_SINGLE_BUFFER 0
+#endif
 // Opt-in: build the BaseUI map frame (basemap tiles + node markers, with pan/zoom/follow-me).
 // Off by default because it costs real flash and needs a provisioned MAP.BIN to be useful; enable
 // per build/variant with -DBASEUI_HAS_MAP=1. Independent of InkHUD's own map applet, which shares

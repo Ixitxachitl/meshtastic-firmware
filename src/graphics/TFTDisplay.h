@@ -209,7 +209,7 @@ class TFTDisplay : public OLEDDisplay
     static TFTDisplay *nativeInstance;
 
     uint16_t *rgbPixels = nullptr;   // what the panel should show, big-endian RGB565
-    uint16_t *rgbPushed = nullptr;   // what the panel was last sent, for the change scan
+    uint16_t *rgbPushed = nullptr;   // what the panel was last sent, for the change scan; unused with BASEUI_NATIVE_SINGLE_BUFFER
     uint8_t *explicitBits = nullptr; // buffer's page layout; set where a pen or image chose the colour
     uint16_t defaultOnBe = 0;
     uint16_t defaultOffBe = 0;
