@@ -80,6 +80,9 @@
 #define HAS_TOUCHSCREEN 1
 // Zoom, pan and Follow Me as buttons on the Map frame: a finger shouldn't travel to a menu for one zoom step.
 #define BASEUI_MAP_ONSCREEN_CONTROLS 1
+// Node and waypoint names on the map: the 19px face rather than the shared 13px one. There is room for
+// it on a 410x502 panel, and the markers are drawn at BASEUI_ICON_SCALE too, so the two stay in step.
+#define BASEUI_MAP_LABEL_FONT FONT_MEDIUM_LOCAL
 // Default Dark's navy canvas drawn as the topographic artwork. The shared art is 320x240, so it goes on
 // at 2x - 640x480 - centred on this 410x502 panel: cropped at the sides, 11 rows wrapped top and bottom.
 #define BASEUI_BACKGROUND_IMAGE_SCALE 2

@@ -16,6 +16,12 @@
 #include "graphics/images.h"
 #include "graphics/niche/Map/MapTileRenderer.h"
 #include "mesh/Throttle.h"
+
+// Node and waypoint names on the map. The default keeps marker labels small enough to pack together on a
+// 320x240 panel; a larger one can ask for a bigger face without dragging the rest of BaseUI's text with it.
+#ifndef BASEUI_MAP_LABEL_FONT
+#define BASEUI_MAP_LABEL_FONT FONT_SMALL_LOCAL
+#endif
 #include "meshUtils.h"
 #ifdef MESHTASTIC_ENCRYPTED_STORAGE
 #include "security/EncryptedStorage.h"
@@ -622,6 +628,9 @@ void drawHaloXbm(OLEDDisplay *display, int16_t x, int16_t y, int16_t w, int16_t 
 #if BASEUI_NATIVE_RGB565
 // Map pins: a black-edged white pin with a red (node) or green (waypoint) ring. Both share one mask, which also
 // covers the black edge and fill. drawMapPin() repaints the node pin's red ring in that node's colour.
+// Pins follow the panel's icon scale: at 16px they are lost on a high-resolution screen, where every
+// other glyph has been scaled up to suit it.
+constexpr int kMapPinScale = BASEUI_ICON_SCALE;
 constexpr int16_t kMapPinWidth = 16;
 constexpr int16_t kMapPinHeight = 16;
 const uint16_t nodeMarker_rgb565[] PROGMEM = {
@@ -674,8 +683,8 @@ const uint8_t kMapPinMask[] PROGMEM = {
 void drawMapPin(OLEDDisplay *display, int16_t tipX, int16_t tipY, const uint16_t *pixels, uint16_t ringColor = TFTPalette::Red)
 {
     TFTDisplay *const panel = static_cast<TFTDisplay *>(display);
-    const int16_t left = tipX - kMapPinWidth / 2;
-    const int16_t top = tipY - (kMapPinHeight - 1);
+    const int16_t left = tipX - (kMapPinWidth * kMapPinScale) / 2;
+    const int16_t top = tipY - (kMapPinHeight * kMapPinScale - 1);
     const int16_t maskRowBytes = (kMapPinWidth + 7) / 8;
     for (int16_t row = 0; row < kMapPinHeight; ++row) {
         const uint8_t *maskRow = kMapPinMask + row * maskRowBytes;
@@ -687,12 +696,17 @@ void drawMapPin(OLEDDisplay *display, int16_t tipX, int16_t tipY, const uint16_t
             while (col < kMapPinWidth && (pgm_read_byte(maskRow + (col >> 3)) & (1U << (col & 7))))
                 ++col;
             if (col > runStart) {
-                uint16_t run[kMapPinWidth];
+                // Expanded by the scale as it is built, then pushed once per destination row.
+                uint16_t run[kMapPinWidth * kMapPinScale];
+                int16_t runLen = 0;
                 for (int16_t i = runStart; i < col; ++i) {
                     const uint16_t px = pgm_read_word(pixels + row * kMapPinWidth + i);
-                    run[i - runStart] = (px == TFTPalette::Red) ? ringColor : px;
+                    const uint16_t c = (px == TFTPalette::Red) ? ringColor : px;
+                    for (int k = 0; k < kMapPinScale; ++k)
+                        run[runLen++] = c;
                 }
-                panel->drawRGB565(left + runStart, top + row, col - runStart, 1, run);
+                for (int dy = 0; dy < kMapPinScale; ++dy)
+                    panel->drawRGB565(left + runStart * kMapPinScale, top + row * kMapPinScale + dy, runLen, 1, run);
             }
         }
     }
@@ -703,7 +717,7 @@ void drawMapPin(OLEDDisplay *display, int16_t tipX, int16_t tipY, const uint16_t
 int16_t mapMarkerSize()
 {
 #if BASEUI_NATIVE_RGB565
-    return kMapPinWidth;
+    return kMapPinWidth * kMapPinScale;
 #else
     return 8 * BASEUI_ICON_SCALE;
 #endif
@@ -1409,10 +1423,10 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     // FONT_SMALL_LOCAL rather than FONT_SMALL deliberately: on TFT/HAS_SPI_TFT builds FONT_SMALL is
     // redirected to the 19px-tall medium font (bigger screen, so BaseUI normally wants bigger text)
     // - far too large for a map label sitting next to a marker, where many names need to fit close
-    // together without overlapping.
-    display->setFont(FONT_SMALL_LOCAL);
+    // together without overlapping. A panel with the room for it overrides BASEUI_MAP_LABEL_FONT.
+    display->setFont(BASEUI_MAP_LABEL_FONT);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
-    const int16_t labelHeight = _fontHeight(FONT_SMALL_LOCAL);
+    const int16_t labelHeight = _fontHeight(BASEUI_MAP_LABEL_FONT);
 
     // Draws a label unless it would land on one already placed. Shared by node and waypoint markers, so their names
     // respect each other instead of stacking.
