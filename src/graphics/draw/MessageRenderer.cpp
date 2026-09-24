@@ -639,7 +639,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     // Centred boxes live in a band that is symmetric about the panel centre, so both
     // senders wrap to the same width - otherwise the scrollbar side wraps wider than the
     // band and the box gets clipped rather than centred.
-    constexpr int BUBBLE_EDGE_INSET =
+    [[maybe_unused]] constexpr int BUBBLE_EDGE_INSET =
         (LEFT_MARGIN > (SCROLLBAR_WIDTH + RIGHT_MARGIN)) ? LEFT_MARGIN : (SCROLLBAR_WIDTH + RIGHT_MARGIN);
 
     // Derived widths
