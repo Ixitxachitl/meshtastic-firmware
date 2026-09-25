@@ -583,6 +583,15 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #undef BASEUI_BACKGROUND_IMAGE
 #define BASEUI_BACKGROUND_IMAGE 0
 #endif
+// Colour icons from graphics/images_high.h in place of the 1-bit set. On by default with BASEUI_NATIVE_RGB565; a variant
+// sets 0 to keep native colour (splash, themes) with the 1-bit icons, which also saves ~43KB of flash.
+#ifndef BASEUI_COLOR_ICONS
+#define BASEUI_COLOR_ICONS 1
+#endif
+#if BASEUI_COLOR_ICONS && !BASEUI_NATIVE_RGB565
+#undef BASEUI_COLOR_ICONS
+#define BASEUI_COLOR_ICONS 0
+#endif
 // Full-colour emote bitmaps (graphics/emotes_color.cpp) in place of the 1-bit set in emotes.cpp. Emotes with
 // no colour version stay 1-bit. Opt-in per variant; needs BASEUI_NATIVE_RGB565.
 #ifndef BASEUI_COLOR_EMOTES
