@@ -40,6 +40,8 @@
 #define TFT_BL 45
 #define SCREEN_ROTATE
 #define SCREEN_TRANSITION_FRAMERATE 30 // fps
+// Without WiFi the CPU otherwise drops to 80MHz after boot, and every colour frame takes ~3x as long.
+#define CPU_FAST_WHILE_SCREEN_ON
 #define USE_TFTDISPLAY 1
 
 #define HAS_TOUCHSCREEN 1

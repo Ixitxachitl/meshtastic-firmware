@@ -32,6 +32,8 @@
 // it pins the screen thread at ~95% and starves the touch driver, which polled at 96ms avg / 420ms worst
 // against a 20ms target. Lower is genuinely more responsive here until frame-building gets cheaper.
 #define SCREEN_TRANSITION_FRAMERATE 10 // fps
+// Without WiFi the CPU otherwise drops to 80MHz after boot, and every colour frame takes ~3x as long.
+#define CPU_FAST_WHILE_SCREEN_ON
 #define USE_TFTDISPLAY 1
 #define HAS_SCREEN 1
 #define TFT_RESET_AFTER_SLEEP
