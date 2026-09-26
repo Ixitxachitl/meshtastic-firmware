@@ -97,6 +97,13 @@ void setCPUFast(bool on)
         return;
     }
 
+#if defined(CPU_FAST_WHILE_SCREEN_ON) && HAS_SCREEN
+    // A colour UI takes ~3x as long per frame at 80MHz. Full speed while the screen is on; Screen::handleSetOn() calls
+    // back here as it turns on and off.
+    if (!on && screen && screen->isScreenOn())
+        on = true;
+#endif
+
 // The Heltec LORA32 V1 runs at 26 MHz base frequency and doesn't react well to switching to 80 MHz...
 #if !defined(ARDUINO_HELTEC_WIFI_LORA_32) && !defined(CONFIG_IDF_TARGET_ESP32C3)
     setCpuFrequencyMhz(on ? 240 : 80);

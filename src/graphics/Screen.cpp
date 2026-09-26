@@ -933,6 +933,9 @@ void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
             enabled = false;
         }
         screenOn = on;
+#ifdef CPU_FAST_WHILE_SCREEN_ON
+        setCPUFast(on); // 240MHz while the UI is on screen, back to 80MHz when it goes dark
+#endif
         if (on) {
             // Wake lands on IDLE_FRAMERATE, so the first frame after it - drawn before the frame's data
             // has caught up - sat on screen for a full second before anything filled it in. Run fast for
