@@ -89,8 +89,7 @@ bool BHI260APSensor::init()
         InterruptConfig intConfig;
         sensor.configureInterrupt(intConfig);
         pinMode(BHI260AP_INT, INPUT);
-        attachInterrupt(
-            BHI260AP_INT, [] { BHI_IRQ = true; }, RISING);
+        attachInterrupt(BHI260AP_INT, [] { BHI_IRQ = true; }, RISING);
 #endif
 
         // stepDetector->enable(1.0, 0);
