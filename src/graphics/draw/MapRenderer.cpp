@@ -978,20 +978,46 @@ void geofenceDashPixel(OLEDDisplay *display, int16_t px, int16_t py, const Geofe
 #endif
 }
 
+// Fence geometry stays in float until clipped: zoomed in, a fence a few km off projects past int16_t and wraps on.
+inline bool geofenceInClip(float px, float py, const GeofenceClip &clip)
+{
+    return px >= clip.x && px < clip.x + clip.w && py >= clip.y && py < clip.y + clip.h;
+}
+
+// One axis-aligned edge from `from` to `to` along one axis at `fixed` on the other, walking only the visible part.
 // `step` carries across calls so the dash runs on around a corner instead of restarting at each edge.
-void drawGeofenceDashedLine(OLEDDisplay *display, int16_t x0, int16_t y0, int16_t x1, int16_t y1, int &step,
+void drawGeofenceDashedEdge(OLEDDisplay *display, float from, float to, float fixed, bool horizontal, int &step,
                             const GeofenceClip &clip)
 {
-    const int steps = std::max(std::abs((int)x1 - x0), std::abs((int)y1 - y0));
-    for (int i = 0; i <= steps; ++i) {
-        const int16_t px = steps ? (int16_t)(x0 + ((int)x1 - x0) * i / steps) : x0;
-        const int16_t py = steps ? (int16_t)(y0 + ((int)y1 - y0) * i / steps) : y0;
-        if (geofenceDashOn(step++))
-            geofenceDashPixel(display, px, py, clip);
+    const float lo = horizontal ? clip.x : clip.y;
+    const float hi = (horizontal ? clip.x + clip.w : clip.y + clip.h) - 1;
+    const float fixedLo = horizontal ? clip.y : clip.x;
+    const float fixedHi = (horizontal ? clip.y + clip.h : clip.x + clip.w) - 1;
+    const int dir = to >= from ? 1 : -1;
+    const float length = fabsf(to - from);
+    const int period = kGeofenceDashOn + kGeofenceDashOff;
+    const int startStep = step;
+    step = (int)((startStep + (int64_t)length + 1) % period);
+    if (fixed < fixedLo || fixed > fixedHi)
+        return;
+
+    // Skip straight to the first on-screen pixel, keeping the dash phase it would have had.
+    const float first = dir > 0 ? std::max(from, lo) : std::min(from, hi);
+    const float last = dir > 0 ? std::min(to, hi) : std::max(to, lo);
+    if ((last - first) * dir < 0)
+        return;
+    const int64_t skipped = (int64_t)fabsf(first - from);
+    const int count = (int)fabsf(last - first);
+    const int16_t f = (int16_t)fixed;
+    for (int i = 0; i <= count; ++i) {
+        if (!geofenceDashOn((int)((startStep + skipped + i) % period)))
+            continue;
+        const int16_t v = (int16_t)(first + dir * i);
+        geofenceDashPixel(display, horizontal ? v : f, horizontal ? f : v, clip);
     }
 }
 
-void drawGeofenceCircle(OLEDDisplay *display, int16_t cx, int16_t cy, float radiusPx, const GeofenceClip &clip)
+void drawGeofenceCircle(OLEDDisplay *display, float cx, float cy, float radiusPx, const GeofenceClip &clip)
 {
     if (radiusPx < 1.0f)
         return;
@@ -1001,12 +1027,14 @@ void drawGeofenceCircle(OLEDDisplay *display, int16_t cx, int16_t cy, float radi
         return;
 
     // Only the rows the body actually shows: the span loop is otherwise 2r iterations of nothing.
-    const int32_t r = (int32_t)lroundf(radiusPx);
-    const int32_t firstRow = std::max<int32_t>(-r, (int32_t)clip.y - cy);
-    const int32_t lastRow = std::min<int32_t>(r, (int32_t)clip.y + clip.h - 1 - cy);
-    for (int32_t dy = firstRow; dy <= lastRow; ++dy) {
-        const float half = sqrtf(std::max(0.0f, radiusPx * radiusPx - (float)dy * dy));
-        shadeGeofenceSpan(display, (int16_t)(cx - half), (int16_t)(cx + half), (int16_t)(cy + dy), clip);
+    for (int32_t row = clip.y; row < clip.y + clip.h; ++row) {
+        const float dy = row - cy;
+        if (fabsf(dy) > radiusPx)
+            continue;
+        const float half = sqrtf(std::max(0.0f, radiusPx * radiusPx - dy * dy));
+        const float left = std::max(cx - half, (float)clip.x), right = std::min(cx + half, (float)(clip.x + clip.w - 1));
+        if (right >= left)
+            shadeGeofenceSpan(display, (int16_t)left, (int16_t)right, (int16_t)row, clip);
     }
 
     // One sample per pixel of circumference, capped: past that the visible arc is near enough straight that
@@ -1016,8 +1044,13 @@ void drawGeofenceCircle(OLEDDisplay *display, int16_t cx, int16_t cy, float radi
     int16_t lastX = INT16_MIN, lastY = INT16_MIN;
     for (int i = 0; i < steps; ++i) {
         const float a = 6.2832f * i / steps;
-        const int16_t px = (int16_t)lroundf(cx + cosf(a) * radiusPx);
-        const int16_t py = (int16_t)lroundf(cy + sinf(a) * radiusPx);
+        const float fx = roundf(cx + cosf(a) * radiusPx), fy = roundf(cy + sinf(a) * radiusPx);
+        if (!geofenceInClip(fx, fy, clip)) {
+            step++;
+            lastX = lastY = INT16_MIN;
+            continue;
+        }
+        const int16_t px = (int16_t)fx, py = (int16_t)fy;
         if (px == lastX && py == lastY)
             continue; // landing on the same pixel twice would stall the pattern there
         lastX = px;
@@ -1027,21 +1060,23 @@ void drawGeofenceCircle(OLEDDisplay *display, int16_t cx, int16_t cy, float radi
     }
 }
 
-void drawGeofenceBox(OLEDDisplay *display, int16_t left, int16_t top, int16_t right, int16_t bottom, const GeofenceClip &clip)
+void drawGeofenceBox(OLEDDisplay *display, float left, float top, float right, float bottom, const GeofenceClip &clip)
 {
     if (right < clip.x || left > clip.x + clip.w || bottom < clip.y || top > clip.y + clip.h)
         return;
 
-    const int32_t firstRow = std::max<int32_t>(top, clip.y);
-    const int32_t lastRow = std::min<int32_t>(bottom, clip.y + clip.h - 1);
+    const int16_t spanLeft = (int16_t)std::max(left, (float)clip.x);
+    const int16_t spanRight = (int16_t)std::min(right, (float)(clip.x + clip.w - 1));
+    const int32_t firstRow = (int32_t)std::max(top, (float)clip.y);
+    const int32_t lastRow = (int32_t)std::min(bottom, (float)(clip.y + clip.h - 1));
     for (int32_t row = firstRow; row <= lastRow; ++row)
-        shadeGeofenceSpan(display, left, right, (int16_t)row, clip);
+        shadeGeofenceSpan(display, spanLeft, spanRight, (int16_t)row, clip);
 
     int step = 0;
-    drawGeofenceDashedLine(display, left, top, right, top, step, clip);
-    drawGeofenceDashedLine(display, right, top, right, bottom, step, clip);
-    drawGeofenceDashedLine(display, right, bottom, left, bottom, step, clip);
-    drawGeofenceDashedLine(display, left, bottom, left, top, step, clip);
+    drawGeofenceDashedEdge(display, left, right, top, true, step, clip);
+    drawGeofenceDashedEdge(display, top, bottom, right, false, step, clip);
+    drawGeofenceDashedEdge(display, right, left, bottom, true, step, clip);
+    drawGeofenceDashedEdge(display, bottom, top, left, false, step, clip);
 }
 #endif // !MESHTASTIC_EXCLUDE_WAYPOINT
 
@@ -1453,11 +1488,11 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     // circular radius, the bounding box, both or neither - the proto treats them as independent.
     {
         const GeofenceClip fenceClip = {x, y, viewWidth, viewHeight};
-        auto projectFence = [&](float lat, float lng, int16_t &px, int16_t &py) {
+        auto projectFence = [&](float lat, float lng, float &px, float &py) {
             const float d = GeoCoord::latLongToMeter(centerLat, centerLng, lat, lng);
             const float b = GeoCoord::bearing(centerLat, centerLng, lat, lng);
-            px = (int16_t)(x + viewWidth / 2 + (int16_t)(sinf(b) * d * metersToPx));
-            py = (int16_t)(y + viewHeight / 2 - (int16_t)(cosf(b) * d * metersToPx));
+            px = roundf(x + viewWidth / 2 + sinf(b) * d * metersToPx);
+            py = roundf(y + viewHeight / 2 - cosf(b) * d * metersToPx);
         };
 
         for (const StoredWaypoint &entry : waypointStore.getWaypoints()) {
@@ -1468,7 +1503,7 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
                 continue;
 
             if (wp.geofence_radius > 0) {
-                int16_t cx, cy;
+                float cx, cy;
                 projectFence(wp.latitude_i * 1e-7f, wp.longitude_i * 1e-7f, cx, cy);
                 drawGeofenceCircle(display, cx, cy, wp.geofence_radius * metersToPx, fenceClip);
             }
@@ -1479,13 +1514,13 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
                 const meshtastic_BoundingBox &bb = wp.bounding_box;
                 const float north = bb.latitude_north_i * 1e-7f, south = bb.latitude_south_i * 1e-7f;
                 const float west = bb.longitude_west_i * 1e-7f, east = bb.longitude_east_i * 1e-7f;
-                int16_t px[4], py[4];
+                float px[4], py[4];
                 projectFence(north, west, px[0], py[0]);
                 projectFence(north, east, px[1], py[1]);
                 projectFence(south, east, px[2], py[2]);
                 projectFence(south, west, px[3], py[3]);
-                const int16_t left = *std::min_element(px, px + 4), right = *std::max_element(px, px + 4);
-                const int16_t top = *std::min_element(py, py + 4), bottom = *std::max_element(py, py + 4);
+                const float left = *std::min_element(px, px + 4), right = *std::max_element(px, px + 4);
+                const float top = *std::min_element(py, py + 4), bottom = *std::max_element(py, py + 4);
                 drawGeofenceBox(display, left, top, right, bottom, fenceClip);
             }
         }
