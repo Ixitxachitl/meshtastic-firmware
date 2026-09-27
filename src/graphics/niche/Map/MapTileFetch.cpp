@@ -2,6 +2,7 @@
 
 #if BASEUI_MAP_ONLINE_TILES
 
+#include "./MapJpegTile.h"
 #include "./MapPngTiles.h"
 #include "./MapTileSourceSD.h"
 #include "./MapTileUrl.h"
@@ -209,7 +210,8 @@ size_t download(const char *url)
     static const char *userAgent = "Meshtastic/" xstr(APP_VERSION) " (+https://meshtastic.org)";
 
     HTTPClient http;
-    http.setReuse(true);
+    // HTTP/1.0 so no server can answer chunked: the raw stream read below would save the chunk framing into the tile.
+    http.useHTTP10(true);
     http.setTimeout(kHttpTimeoutMs);
     http.setConnectTimeout(kHttpTimeoutMs);
     http.setUserAgent(userAgent);
@@ -258,7 +260,25 @@ size_t download(const char *url)
         LOG_WARN("Map: tile fetch truncated at %u of %d bytes", (unsigned)total, contentLength);
         return 0;
     }
-    return total;
+    // Save only what decodes: anything else leaves a tile that fails on every draw and is never fetched again.
+    static const uint8_t kPngSignature[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+    if (total >= sizeof(kPngSignature) && memcmp(buffer, kPngSignature, sizeof(kPngSignature)) == 0)
+        return total;
+#if BASEUI_MAP_JPEG_TILES
+    if (Jpeg::isJpeg(buffer, total))
+        return total;
+    static const char *const kFormats = "PNG and JPEG";
+#else
+    static const char *const kFormats = "PNG";
+#endif
+    const char *kind = total >= 2 && buffer[0] == 0xFF && buffer[1] == 0xD8   ? "JPEG"
+                       : total >= 4 && memcmp(buffer, "RIFF", 4) == 0         ? "WebP"
+                       : total >= 2 && buffer[0] == 0x1F && buffer[1] == 0x8B ? "gzip"
+                                                                              : "unrecognised";
+    LOG_WARN("Map: tile at %s is %s (%u bytes, starts %02x %02x %02x %02x); only %s tiles work", url, kind, (unsigned)total,
+             total > 0 ? buffer[0] : 0, total > 1 ? buffer[1] : 0, total > 2 ? buffer[2] : 0, total > 3 ? buffer[3] : 0,
+             kFormats);
+    return 0;
 }
 
 class TileFetcher : private concurrency::OSThread

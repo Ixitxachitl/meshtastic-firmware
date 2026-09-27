@@ -7,7 +7,8 @@
 #include <stdint.h>
 
 // Colour basemap in device-ui's tile layout: 256px PNGs at /maps/<style>/<z>/<x>/<y>.png, or /map/<z>/<x>/<y>.png
-// when there are no style folders. Read from the SD card and decoded with PNGdec. Display task only.
+// when there are no style folders. Read from the SD card and decoded with PNGdec, or JPEGDEC for a JPEG under the
+// same name when BASEUI_MAP_JPEG_TILES is on. Display task only.
 namespace NicheGraphics::MapTiles::Png
 {
 

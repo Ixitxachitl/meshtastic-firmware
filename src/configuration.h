@@ -536,6 +536,15 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #undef BASEUI_MAP_PNG_TILES
 #define BASEUI_MAP_PNG_TILES 0
 #endif
+// Also decode JPEG map tiles (stored under the same .png names), for imagery sources that serve only JPEG.
+// Opt-in per variant, with JPEGDEC in its lib_deps; needs BASEUI_MAP_PNG_TILES.
+#ifndef BASEUI_MAP_JPEG_TILES
+#define BASEUI_MAP_JPEG_TILES 0
+#endif
+#if BASEUI_MAP_JPEG_TILES && !BASEUI_MAP_PNG_TILES
+#undef BASEUI_MAP_JPEG_TILES
+#define BASEUI_MAP_JPEG_TILES 0
+#endif
 // Fetch a missing map tile over WiFi, from the URL template in /maps/<style>/.url, and cache it to the card beside
 // the tiles already there. On demand only - never a bulk download, and never brings WiFi up by itself.
 // Opt-in per variant; needs BASEUI_MAP_PNG_TILES and ESP32.

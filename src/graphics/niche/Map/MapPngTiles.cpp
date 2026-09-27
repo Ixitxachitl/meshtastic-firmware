@@ -2,6 +2,7 @@
 
 #if BASEUI_MAP_PNG_TILES
 
+#include "./MapJpegTile.h"
 #include "./MapTileFetch.h"
 #include "./MapTileSourceSD.h"
 #include "DebugConfiguration.h"
@@ -206,6 +207,21 @@ TileLoad loadTile(const TileKey &key, uint16_t *out)
             LOG_WARN("Map: short read of %s%s", path, attempt == 0 ? ", reading it again" : "");
             continue;
         }
+#if BASEUI_MAP_JPEG_TILES
+        // Imagery sources serve JPEG; the fetcher keeps the .png name so the layout stays device-ui's.
+        if (Jpeg::isJpeg(fileBuf, size)) {
+            int width, height, error;
+            const Jpeg::Result rc = Jpeg::decodeTile(fileBuf, size, out, kTileSize, width, height, error);
+            if (rc == Jpeg::Result::Decoded)
+                return TileLoad::Loaded;
+            if (rc == Jpeg::Result::WrongSize) {
+                LOG_WARN("Map: %s is %dx%d, tiles must be %d px", path, width, height, kTileSize);
+                return TileLoad::Missing;
+            }
+            LOG_WARN("Map: JPEG %s failed to decode (%d)%s", path, error, attempt == 0 ? ", reading it again" : "");
+            continue;
+        }
+#endif
         if (decoder->openRAM(fileBuf, (int)size, drawRow) != PNG_SUCCESS) {
             LOG_WARN("Map: can't open %s (%d)%s", path, decoder->getLastError(), attempt == 0 ? ", reading it again" : "");
             continue;
