@@ -44,7 +44,8 @@ volatile uint8_t head = 0, tail = 0;
 uint32_t lastDrawnMs = 0;
 uint32_t lastRequestMs = 0;
 
-char urlTemplate[160];
+char urlTemplate[384]; // API keys make these long: a Mapbox token alone is ~100 chars
+char tileUrl[416];     // the expanded template; static, as this runs on the main loop's stack
 char templateStyle[24];
 bool templateLoaded = false;
 
@@ -116,11 +117,19 @@ bool loadTemplate()
         return false;
     }
     urlTemplate[read] = '\0';
+    bool lineEnded = false;
     for (char *p = urlTemplate; *p; p++) { // one line; strip the newline and anything after it
         if (*p == '\r' || *p == '\n') {
             *p = '\0';
+            lineEnded = true;
             break;
         }
+    }
+    // A full buffer with no line end may have cut the key off; refuse rather than fetch with a bad one.
+    if (!lineEnded && read == (int)sizeof(urlTemplate) - 1) {
+        LOG_WARN("Map: tile URL in %s is longer than %u chars", path, (unsigned)sizeof(urlTemplate) - 1);
+        urlTemplate[0] = '\0';
+        return false;
     }
     LOG_INFO("Map: tile URL for style '%s' is %s", style[0] ? style : "map", urlTemplate);
     return urlTemplate[0] != '\0';
@@ -287,11 +296,10 @@ class TileFetcher : private concurrency::OSThread
         tail = (uint8_t)((tail + 1) % kQueueSlots);
         lastRequestMs = millis();
 
-        char url[200];
-        if (!expandTileUrl(urlTemplate, request.z, request.x, request.y, url, sizeof(url)))
+        if (!expandTileUrl(urlTemplate, request.z, request.x, request.y, tileUrl, sizeof(tileUrl)))
             return (int32_t)kMinRequestGapMs;
 
-        const size_t len = download(url);
+        const size_t len = download(tileUrl);
         if (len && writeTile(activeStyleName(), request.z, request.x, request.y, buffer, len)) {
             LOG_INFO("Map: fetched z%d/%d/%d (%u bytes)", request.z, (int)request.x, (int)request.y, (unsigned)len);
             Png::noteTileArrived(request.z, request.x, request.y);
