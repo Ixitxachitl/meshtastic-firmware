@@ -95,6 +95,14 @@ class menuHandler
 #if BASEUI_MAP_NAVIGATION || BASEUI_WIFI_MANAGER
         NoticeMenu,
 #endif
+#if BASEUI_WIFI_MANAGER
+        WifiBaseMenu,
+        WifiScanStart,
+        WifiScanResultsMenu,
+        WifiPasswordPrompt,
+        WifiSavedMenu,
+        WifiSavedActionsMenu,
+#endif
 #if BASEUI_MAP_ADDRESS_SEARCH
         NavAddressPrompt,
         NavSearchResultsMenu,
@@ -159,6 +167,13 @@ class menuHandler
     static void environmentTelemetrySourceMenu();
     static void wifiBaseMenu();
     static void wifiToggleMenu();
+#if BASEUI_WIFI_MANAGER
+    static void wifiScanResultsMenu();
+    static void wifiSavedMenu();
+    static void wifiSavedActionsMenu();
+    // Called as the WiFi frame draws: once a scan it started has finished, queues the results.
+    static void pollWifiScan();
+#endif
     static void screenOptionsMenu();
     static void powerMenu();
     static void nodeNameLengthMenu();

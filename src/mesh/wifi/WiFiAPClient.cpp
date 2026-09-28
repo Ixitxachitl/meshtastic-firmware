@@ -5,6 +5,9 @@
 #include "concurrency/Periodic.h"
 #include "gps/RTC.h"
 #include "mesh/wifi/WiFiAPClient.h"
+#if BASEUI_WIFI_MANAGER
+#include "mesh/wifi/WiFiNetworks.h"
+#endif
 
 #include "main.h"
 #include "mesh/api/WiFiServerAPI.h"
@@ -321,6 +324,9 @@ static int32_t reconnectWiFi()
     }
 #endif
 
+#if BASEUI_WIFI_MANAGER
+    WiFiNetworks::tick(WiFi.isConnected()); // remembers the network in use, or moves to another known one
+#endif
     if (config.network.wifi_enabled && !WiFi.isConnected()) {
 #ifdef ARCH_RP2040 // (ESP32 handles this in WiFiEvent)
         needReconnect = APStartupComplete;

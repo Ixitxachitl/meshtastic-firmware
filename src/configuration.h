@@ -585,6 +585,15 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #endif
 // Navigate > Address, searched over WiFi on the online tile fetcher's task. On wherever both of those are.
 #define BASEUI_MAP_ADDRESS_SEARCH (BASEUI_MAP_NAVIGATION && BASEUI_MAP_ONLINE_TILES)
+// WiFi screen menu: scan for networks, join one with a typed password, and keep a list of known networks to rejoin -
+// switching to the strongest known one when the current one stays out of reach. Opt-in per variant; ESP32 WiFi only.
+#ifndef BASEUI_WIFI_MANAGER
+#define BASEUI_WIFI_MANAGER 0
+#endif
+#if BASEUI_WIFI_MANAGER && !(HAS_WIFI && defined(ARCH_ESP32) && !defined(MESHTASTIC_EXCLUDE_WIFI))
+#undef BASEUI_WIFI_MANAGER
+#define BASEUI_WIFI_MANAGER 0
+#endif
 // Street routes for Map > Navigate, fetched the same way; without them the map draws a straight line.
 #define BASEUI_MAP_ROUTING (BASEUI_MAP_NAVIGATION && BASEUI_MAP_ONLINE_TILES)
 // Whether a touchscreen tap with nothing under it pages to the next frame, and beeps for it. Physical buttons

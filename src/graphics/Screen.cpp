@@ -2653,7 +2653,9 @@ void Screen::setFrames(FrameFocus focus)
     }
 
 #if HAS_WIFI && !defined(ARCH_PORTDUINO)
-    if (!hiddenFrames.wifi && isWifiAvailable()) {
+    // With the network menu, the frame shows as soon as WiFi is on, even before it has a network: that's where one
+    // is picked.
+    if (!hiddenFrames.wifi && (isWifiAvailable() || (BASEUI_WIFI_MANAGER && config.network.wifi_enabled))) {
         fsi.positions.wifi = numframes;
         normalFrames[numframes++] = graphics::DebugRenderer::drawFrameWiFi;
         indicatorIcons.push_back(icon_wifi);

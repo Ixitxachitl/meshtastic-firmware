@@ -3,6 +3,7 @@
 #include "../Screen.h"
 #include "DebugRenderer.h"
 #include "FSCommon.h"
+#include "MenuHandler.h"
 #include "MeshService.h"
 #include "NodeDB.h"
 #include "UIRenderer.h"
@@ -50,6 +51,9 @@ namespace DebugRenderer
 void drawFrameWiFi(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
 #if HAS_WIFI && !defined(ARCH_PORTDUINO)
+#if BASEUI_WIFI_MANAGER
+    menuHandler::pollWifiScan(); // the Networks menu's scan, once it is in
+#endif
     clearForFrame(display, state);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);

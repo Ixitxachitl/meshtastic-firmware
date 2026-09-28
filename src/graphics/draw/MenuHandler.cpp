@@ -16,6 +16,10 @@
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/TFTColorRegions.h"
 #include "graphics/draw/MapRenderer.h"
+#if BASEUI_WIFI_MANAGER
+#include "mesh/wifi/WiFiNetworks.h"
+#include <WiFi.h>
+#endif
 #if BASEUI_MAP_NAVIGATION
 #include "graphics/draw/MapCoordinateParse.h"
 #include "graphics/draw/MapNavigation.h"
@@ -71,6 +75,28 @@ static void queueNotice(const char *message)
     pendingNotice[sizeof(pendingNotice) - 1] = '\0';
     menuHandler::menuQueue = menuHandler::NoticeMenu;
     screen->runNow();
+}
+#endif
+
+#if BASEUI_WIFI_MANAGER
+static bool wifiScanAwaited = false;
+static char wifiPendingSsid[33]; // the network a password is being typed for, or an action chosen on
+
+// Joins a network and says so. `deferred`: called from inside a banner's callback, so the notice waits a loop.
+static void joinWifi(const char *ssid, const char *psk, bool deferred)
+{
+    char message[64];
+    if (WiFiNetworks::join(ssid, psk)) {
+        snprintf(message, sizeof(message), "Joining %s", ssid);
+    } else {
+        // WiFi had no network at boot, so never started: the reboot brings it up on this one.
+        snprintf(message, sizeof(message), "Rebooting to join %s", ssid);
+        rebootAtMsec = Time::timerEndsAtMillis(DEFAULT_REBOOT_SECONDS * 1000);
+    }
+    if (deferred)
+        queueNotice(message);
+    else
+        screen->showSimpleBanner(message, 3000);
 }
 #endif
 
@@ -2728,21 +2754,166 @@ void menuHandler::numberTest()
 
 void menuHandler::wifiBaseMenu()
 {
-    enum optionsNumbers { Back, Wifi_toggle };
+    enum optionsNumbers { Back, Wifi_toggle, Networks, Saved };
 
-    static const char *optionsArray[] = {"Back", "WiFi Toggle"};
+    static const char *optionsArray[4];
+    static int optionsEnumArray[4];
+    int count = 0;
+    optionsArray[count] = "Back";
+    optionsEnumArray[count++] = Back;
+#if BASEUI_WIFI_MANAGER
+    if (config.network.wifi_enabled) {
+        optionsArray[count] = "Networks";
+        optionsEnumArray[count++] = Networks;
+    }
+    optionsArray[count] = "Saved Networks";
+    optionsEnumArray[count++] = Saved;
+#endif
+    optionsArray[count] = "WiFi Toggle";
+    optionsEnumArray[count++] = Wifi_toggle;
+
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = "WiFi Menu";
     bannerOptions.optionsArrayPtr = optionsArray;
-    bannerOptions.optionsCount = 2;
+    bannerOptions.optionsEnumPtr = optionsEnumArray;
+    bannerOptions.optionsCount = count;
     bannerOptions.bannerCallback = [](int selected) -> void {
         if (selected == Wifi_toggle) {
             menuQueue = WifiToggleMenu;
+            screen->runNow();
+#if BASEUI_WIFI_MANAGER
+        } else if (selected == Networks) {
+            menuQueue = WifiScanStart;
+            screen->runNow();
+        } else if (selected == Saved) {
+            menuQueue = WifiSavedMenu;
+            screen->runNow();
+#endif
+        }
+    };
+    screen->showOverlayBanner(bannerOptions);
+}
+
+#if BASEUI_WIFI_MANAGER
+void menuHandler::pollWifiScan()
+{
+    if (!wifiScanAwaited)
+        return;
+    const WiFiNetworks::ScanState state = WiFiNetworks::scanState();
+    if (state != WiFiNetworks::ScanState::Done && state != WiFiNetworks::ScanState::Failed)
+        return;
+    wifiScanAwaited = false;
+    menuQueue = WifiScanResultsMenu;
+    screen->runNow();
+}
+
+// What a scan found, strongest first: signal, whether it's saved (*), open, or the one in use (>).
+void menuHandler::wifiScanResultsMenu()
+{
+    static char labels[20][48];
+    static const char *optionsArray[21];
+    static WiFiNetworks::ScanResult found[20];
+    static int foundCount = 0;
+
+    const bool failed = WiFiNetworks::scanState() == WiFiNetworks::ScanState::Failed;
+    foundCount = std::min(WiFiNetworks::scanCount(), 20);
+    for (int i = 0; i < foundCount; i++)
+        found[i] = WiFiNetworks::scanResult(i);
+    WiFiNetworks::clearScan();
+    if (failed || foundCount == 0) {
+        screen->showSimpleBanner(failed ? "Scan failed" : "No networks found", 3000);
+        return;
+    }
+
+    const bool connected = WiFi.status() == WL_CONNECTED;
+    optionsArray[0] = "Back";
+    for (int i = 0; i < foundCount; i++) {
+        const int quality = std::max(0, std::min(100, 2 * (found[i].rssi + 100)));
+        const bool current = connected && strcmp(found[i].ssid, config.network.wifi_ssid) == 0;
+        snprintf(labels[i], sizeof(labels[i]), "%s%s %d%%%s%s", current ? "> " : "", found[i].ssid, quality,
+                 WiFiNetworks::knownPsk(found[i].ssid) ? " *" : "", found[i].secured ? "" : " open");
+        optionsArray[i + 1] = labels[i];
+    }
+
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = "Networks";
+    bannerOptions.optionsArrayPtr = optionsArray;
+    bannerOptions.optionsCount = foundCount + 1;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        if (selected <= 0 || selected > foundCount)
+            return;
+        const WiFiNetworks::ScanResult &net = found[selected - 1];
+        if (WiFi.status() == WL_CONNECTED && strcmp(net.ssid, config.network.wifi_ssid) == 0) {
+            queueNotice("Already connected");
+            return;
+        }
+        if (const char *psk = WiFiNetworks::knownPsk(net.ssid)) {
+            joinWifi(net.ssid, psk, true);
+        } else if (!net.secured) {
+            joinWifi(net.ssid, "", true);
+        } else {
+            strncpy(wifiPendingSsid, net.ssid, sizeof(wifiPendingSsid) - 1);
+            wifiPendingSsid[sizeof(wifiPendingSsid) - 1] = '\0';
+            menuQueue = WifiPasswordPrompt; // the prompt can't open from inside this callback
             screen->runNow();
         }
     };
     screen->showOverlayBanner(bannerOptions);
 }
+
+void menuHandler::wifiSavedMenu()
+{
+    static char labels[WiFiNetworks::kMaxKnown][48];
+    static const char *optionsArray[WiFiNetworks::kMaxKnown + 1];
+    const int count = WiFiNetworks::knownCount();
+    optionsArray[0] = "Back";
+    for (int i = 0; i < count; i++) {
+        const char *ssid = WiFiNetworks::known(i).ssid;
+        snprintf(labels[i], sizeof(labels[i]), "%s%s", strcmp(ssid, config.network.wifi_ssid) == 0 ? "> " : "", ssid);
+        optionsArray[i + 1] = labels[i];
+    }
+
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = count ? "Saved Networks" : "None saved yet";
+    bannerOptions.optionsArrayPtr = optionsArray;
+    bannerOptions.optionsCount = count + 1;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        if (selected <= 0 || selected > WiFiNetworks::knownCount()) {
+            menuQueue = WifiBaseMenu;
+            screen->runNow();
+            return;
+        }
+        strncpy(wifiPendingSsid, WiFiNetworks::known(selected - 1).ssid, sizeof(wifiPendingSsid) - 1);
+        wifiPendingSsid[sizeof(wifiPendingSsid) - 1] = '\0';
+        menuQueue = WifiSavedActionsMenu;
+        screen->runNow();
+    };
+    screen->showOverlayBanner(bannerOptions);
+}
+
+void menuHandler::wifiSavedActionsMenu()
+{
+    enum optionsNumbers { Back, Connect, Forget };
+    static const char *optionsArray[] = {"Back", "Connect", "Forget"};
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = wifiPendingSsid;
+    bannerOptions.optionsArrayPtr = optionsArray;
+    bannerOptions.optionsCount = 3;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        if (selected == Connect) {
+            if (const char *psk = WiFiNetworks::knownPsk(wifiPendingSsid))
+                joinWifi(wifiPendingSsid, psk, true);
+        } else if (selected == Forget) {
+            WiFiNetworks::forget(wifiPendingSsid);
+            queueNotice("Forgotten");
+        } else {
+            menuQueue = WifiSavedMenu;
+            screen->runNow();
+        }
+    };
+    screen->showOverlayBanner(bannerOptions);
+}
+#endif
 
 void menuHandler::wifiToggleMenu()
 {
@@ -3569,6 +3740,37 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
 #if BASEUI_MAP_NAVIGATION || BASEUI_WIFI_MANAGER
     case NoticeMenu:
         screen->showSimpleBanner(pendingNotice, 3000);
+        break;
+#endif
+#if BASEUI_WIFI_MANAGER
+    case WifiBaseMenu:
+        wifiBaseMenu();
+        break;
+    case WifiScanStart:
+        if (WiFiNetworks::startScan()) {
+            wifiScanAwaited = true;
+            screen->showSimpleBanner("Scanning...", 15000);
+        } else {
+            screen->showSimpleBanner("Can't scan now", 3000);
+        }
+        break;
+    case WifiScanResultsMenu:
+        wifiScanResultsMenu();
+        break;
+    case WifiPasswordPrompt: {
+        static char title[48];
+        snprintf(title, sizeof(title), "Password: %s", wifiPendingSsid);
+        screen->showTextPrompt(title, "", 63, [](const std::string &psk) -> void {
+            if (!psk.empty())
+                joinWifi(wifiPendingSsid, psk.c_str(), false);
+        });
+        break;
+    }
+    case WifiSavedMenu:
+        wifiSavedMenu();
+        break;
+    case WifiSavedActionsMenu:
+        wifiSavedActionsMenu();
         break;
 #endif
 #if BASEUI_MAP_ADDRESS_SEARCH
