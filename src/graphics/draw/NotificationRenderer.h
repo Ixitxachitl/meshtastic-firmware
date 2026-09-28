@@ -50,6 +50,11 @@ class NotificationRenderer
     static void drawAlphanumericPicker(OLEDDisplay *display, OLEDDisplayUiState *state);
     static void drawNodePicker(OLEDDisplay *display, OLEDDisplayUiState *state);
     static void drawTextInput(OLEDDisplay *display, OLEDDisplayUiState *state);
+    // text_prompt: seeds the field (printable ASCII only) and draws/handles the popup.
+    static void startTextPrompt(const char *initialText, uint8_t maxLength);
+    static void drawTextPrompt(OLEDDisplay *display, OLEDDisplayUiState *state);
+    // The menu popup's frame and themed fill, shared by every banner box.
+    static void drawBannerPanel(OLEDDisplay *display, int16_t left, int16_t top, int16_t width, int16_t height);
     static void drawNotificationBox(OLEDDisplay *display, OLEDDisplayUiState *state, const char *lines[MAX_LINES + 1],
                                     uint16_t totalLines, uint16_t firstOptionToShow, uint16_t maxWidth = 0);
 

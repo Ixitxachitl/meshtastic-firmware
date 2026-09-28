@@ -533,6 +533,27 @@ void Screen::showAlphanumericPicker(const char *message, const char *initialText
     updateUiFrame(ui);
 }
 
+void Screen::showTextPrompt(const char *title, const char *initialText, uint8_t maxLength,
+                            std::function<void(const std::string &)> callback)
+{
+#ifdef USE_EINK
+    EINK_ADD_FRAMEFLAG(dispdev, DEMAND_FAST);
+#endif
+    strncpy(NotificationRenderer::alertBannerMessage, (title && title[0]) ? title : "Enter text", 255);
+    NotificationRenderer::alertBannerMessage[255] = '\0';
+    NotificationRenderer::alertBannerUntil = Time::timerEndsAtMillis(300000); // idle for five minutes: gone
+    NotificationRenderer::textInputCallback = callback;
+    NotificationRenderer::pauseBanner = false;
+    NotificationRenderer::current_notification_type = notificationTypeEnum::text_prompt;
+    NotificationRenderer::startTextPrompt(initialText, maxLength);
+
+    static OverlayCallback overlays[] = {graphics::drawConnectionFooterOverlay, graphics::UIRenderer::drawNavigationBar,
+                                         NotificationRenderer::drawBannercallback};
+    ui->setOverlays(overlays, 3);
+    ui->setTargetFPS(60);
+    updateUiFrame(ui);
+}
+
 void Screen::showTextInput(const char *header, const char *initialText, uint32_t durationMs,
                            std::function<void(const std::string &)> textCallback)
 {

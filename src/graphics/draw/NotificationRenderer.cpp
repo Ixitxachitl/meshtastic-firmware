@@ -5,6 +5,7 @@
 #include "NodeDB.h"
 #include "NotificationRenderer.h"
 #include "UIRenderer.h"
+#include "UptimeClock.h"
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/TFTColorRegions.h"
@@ -309,6 +310,9 @@ void NotificationRenderer::drawBannercallback(OLEDDisplay *display, OLEDDisplayU
     case notificationTypeEnum::alphanumeric_picker:
         drawAlphanumericPicker(display, state);
         break;
+    case notificationTypeEnum::text_prompt:
+        drawTextPrompt(display, state);
+        break;
     }
 }
 
@@ -497,6 +501,234 @@ void NotificationRenderer::drawHexPicker(OLEDDisplay *display, OLEDDisplayUiStat
 // Arcade-style initials entry. Mirrors drawHexPicker's cursor/confirm flow, but each position
 // holds a character from ALPHANUMERIC_CHARS (cycled with UP/DOWN) instead of a packed digit, and
 // the assembled string is returned through textInputCallback.
+namespace
+{
+// text_prompt's field. ASCII only: every input source that feeds it types ASCII, and it keeps cursor maths byte-wise.
+char promptText[64];
+uint8_t promptLength = 0, promptCursor = 0, promptMax = 0;
+
+#if defined(USE_VIRTUAL_KEYBOARD)
+// No keyboard on these boards, so a small touch keyboard sits under the popup. Four rows of characters, then actions.
+const char *const kPromptRows[] = {"1234567890", "qwertyuiop", "asdfghjkl-", "zxcvbnm,.'"};
+constexpr int kPromptRowCount = sizeof(kPromptRows) / sizeof(kPromptRows[0]);
+enum PromptAction : char { PromptEsc = 1, PromptShift, PromptSpace, PromptDelete, PromptOk };
+struct PromptKey {
+    int16_t x, y, w, h;
+    char key; // a character, or a PromptAction
+};
+PromptKey promptKeys[kPromptRowCount * 10 + 5];
+int promptKeyCount = 0;
+bool promptShift = false;
+
+char promptKeyAt(int16_t x, int16_t y)
+{
+    for (int i = 0; i < promptKeyCount; i++) {
+        const PromptKey &k = promptKeys[i];
+        if (x >= k.x && x < k.x + k.w && y >= k.y && y < k.y + k.h)
+            return k.key;
+    }
+    return 0;
+}
+#endif
+
+void promptInsert(char c)
+{
+    if (promptLength >= promptMax)
+        return;
+    memmove(promptText + promptCursor + 1, promptText + promptCursor, promptLength - promptCursor);
+    promptText[promptCursor++] = c;
+    promptText[++promptLength] = '\0';
+}
+
+void promptDelete()
+{
+    if (promptCursor == 0)
+        return;
+    memmove(promptText + promptCursor - 1, promptText + promptCursor, promptLength - promptCursor);
+    promptCursor--;
+    promptText[--promptLength] = '\0';
+}
+} // namespace
+
+void NotificationRenderer::startTextPrompt(const char *initialText, uint8_t maxLength)
+{
+    promptMax = std::min<uint8_t>(maxLength ? maxLength : sizeof(promptText) - 1, sizeof(promptText) - 1);
+    promptLength = 0;
+    for (const char *p = initialText; p && *p && promptLength < promptMax; p++) {
+        if (*p >= 0x20 && *p <= 0x7E)
+            promptText[promptLength++] = *p;
+    }
+    promptText[promptLength] = '\0';
+    promptCursor = promptLength;
+#if defined(USE_VIRTUAL_KEYBOARD)
+    promptShift = false;
+    promptKeyCount = 0;
+#endif
+}
+
+void NotificationRenderer::drawTextPrompt(OLEDDisplay *display, OLEDDisplayUiState *state)
+{
+    (void)state;
+    // Consume the event first: finishing tears the prompt down, and the callback may open something new.
+    const InputEvent event = inEvent;
+    inEvent.inputEvent = INPUT_BROKER_NONE;
+    inEvent.kbchar = 0;
+
+    bool submit = false, cancel = false;
+    const bool touch = event.touchX != 0 || event.touchY != 0;
+    if (touch) {
+#if defined(USE_VIRTUAL_KEYBOARD)
+        if (event.inputEvent == INPUT_BROKER_USER_PRESS) {
+            const char key = promptKeyAt(event.touchX, event.touchY);
+            if (key == PromptEsc) {
+                cancel = true;
+            } else if (key == PromptOk) {
+                submit = true;
+            } else if (key == PromptShift) {
+                promptShift = !promptShift;
+            } else if (key == PromptDelete) {
+                promptDelete();
+            } else if (key == PromptSpace) {
+                promptInsert(' ');
+            } else if (key) {
+                promptInsert((promptShift && key >= 'a' && key <= 'z') ? (char)(key - 'a' + 'A') : key);
+                promptShift = false;
+            }
+        }
+#endif
+    } else {
+        switch (event.inputEvent) {
+        case INPUT_BROKER_ANYKEY:
+            if (event.kbchar == 0x08)
+                promptDelete();
+            else if (event.kbchar == '\r' || event.kbchar == '\n')
+                submit = true;
+            else if (event.kbchar == 0x1B)
+                cancel = true;
+            else if (event.kbchar >= 0x20 && event.kbchar <= 0x7E)
+                promptInsert((char)event.kbchar);
+            break;
+        case INPUT_BROKER_BACK:
+            promptDelete();
+            break;
+        case INPUT_BROKER_LEFT:
+            if (promptCursor > 0)
+                promptCursor--;
+            break;
+        case INPUT_BROKER_RIGHT:
+            if (promptCursor < promptLength)
+                promptCursor++;
+            break;
+        case INPUT_BROKER_SELECT:
+            submit = true;
+            break;
+        case INPUT_BROKER_CANCEL:
+        case INPUT_BROKER_ALT_LONG:
+            cancel = true;
+            break;
+        default:
+            break;
+        }
+    }
+    if (event.inputEvent != INPUT_BROKER_NONE)
+        alertBannerUntil = Time::timerEndsAtMillis(300000); // any key keeps it open
+
+    if (submit || cancel) {
+        auto callback = textInputCallback;
+        const std::string text(promptText, promptLength);
+        textInputCallback = nullptr;
+        resetBanner();
+        if (submit && callback)
+            callback(text);
+        return;
+    }
+
+    // Layout: title, then the field; a key hint under it, or the touch keyboard below the whole popup.
+    const int16_t screenW = display->getWidth(), screenH = display->getHeight();
+    display->setFont(FONT_SMALL);
+    const int16_t lineH = FONT_HEIGHT_SMALL;
+    constexpr int16_t pad = 4;
+    const int16_t boxW = std::min<int16_t>(screenW - 12, 360);
+    const int16_t boxLeft = (screenW - boxW) / 2;
+    const int16_t fieldH = lineH + 4;
+#if defined(USE_VIRTUAL_KEYBOARD)
+    const int16_t boxH = pad + lineH + 3 + fieldH + pad;
+    const int16_t boxTop = pad;
+#else
+    const int16_t boxH = pad + lineH + 3 + fieldH + 2 + lineH + pad;
+    const int16_t boxTop = (screenH - boxH) / 2;
+#endif
+    drawBannerPanel(display, boxLeft, boxTop, boxW, boxH);
+
+    display->setColor(WHITE);
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    display->drawString(boxLeft + boxW / 2, boxTop + pad, alertBannerMessage);
+
+    // The field scrolls sideways to keep the cursor in view.
+    const int16_t fieldX = boxLeft + pad, fieldY = boxTop + pad + lineH + 3, fieldW = boxW - 2 * pad;
+    const int16_t textRoom = fieldW - 6;
+    display->drawRect(fieldX, fieldY, fieldW, fieldH);
+    int first = 0;
+    while (first < promptCursor && display->getStringWidth(promptText + first, promptCursor - first) > textRoom)
+        first++;
+    int last = first;
+    while (last < promptLength && display->getStringWidth(promptText + first, last + 1 - first) <= textRoom)
+        last++;
+    char visible[sizeof(promptText)];
+    memcpy(visible, promptText + first, last - first);
+    visible[last - first] = '\0';
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    display->drawString(fieldX + 3, fieldY + 2, visible);
+    const int16_t cursorX = fieldX + 3 + display->getStringWidth(promptText + first, promptCursor - first);
+    display->drawLine(cursorX, fieldY + 2, cursorX, fieldY + fieldH - 3);
+
+#if defined(USE_VIRTUAL_KEYBOARD)
+    // Five rows under the popup, as tall as fits up to a comfortable fingertip.
+    const int16_t kbBottom = screenH - 2;
+    const int16_t rowH = std::min<int16_t>(44, (kbBottom - (boxTop + boxH + pad)) / (kPromptRowCount + 1));
+    const int16_t kbTop = kbBottom - rowH * (kPromptRowCount + 1);
+    display->setColor(BLACK);
+    display->fillRect(0, kbTop - 2, screenW, screenH - kbTop + 2);
+    display->setColor(WHITE);
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    promptKeyCount = 0;
+    auto addKey = [&](int16_t x0, int16_t x1, int16_t y, char key, const char *label) {
+        const PromptKey k{(int16_t)(x0 + 1), (int16_t)(y + 1), (int16_t)(x1 - x0 - 2), (int16_t)(rowH - 2), key};
+        promptKeys[promptKeyCount++] = k;
+        display->drawRect(k.x, k.y, k.w, k.h);
+        display->drawString(k.x + k.w / 2, k.y + (k.h - lineH) / 2, label);
+    };
+    const int16_t kbLeft = 2, kbWidth = screenW - 4;
+    for (int r = 0; r < kPromptRowCount; r++) {
+        const int n = strlen(kPromptRows[r]);
+        for (int i = 0; i < n; i++) {
+            char c = kPromptRows[r][i];
+            if (promptShift && c >= 'a' && c <= 'z')
+                c = (char)(c - 'a' + 'A');
+            const char label[2] = {c, '\0'};
+            addKey(kbLeft + i * kbWidth / n, kbLeft + (i + 1) * kbWidth / n, kbTop + r * rowH, kPromptRows[r][i], label);
+        }
+    }
+    // Esc | Shift | space | Del | OK, in tenths of the row
+    static const struct {
+        uint8_t from, to;
+        char key;
+        const char *label;
+    } kActions[] = {{0, 15, PromptEsc, "Esc"},
+                    {15, 30, PromptShift, "Aa"},
+                    {30, 70, PromptSpace, "space"},
+                    {70, 85, PromptDelete, "Del"},
+                    {85, 100, PromptOk, "OK"}};
+    const int16_t actionY = kbTop + kPromptRowCount * rowH;
+    for (const auto &a : kActions)
+        addKey(kbLeft + a.from * kbWidth / 100, kbLeft + a.to * kbWidth / 100, actionY, a.key, a.label);
+#else
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    display->drawString(boxLeft + boxW / 2, fieldY + fieldH + 2, "Enter: OK   Esc: cancel");
+#endif
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+}
+
 void NotificationRenderer::drawAlphanumericPicker(OLEDDisplay *display, OLEDDisplayUiState *state)
 {
     static const char ALPHANUMERIC_CHARS[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -858,6 +1090,45 @@ void NotificationRenderer::drawAlertBannerOverlay(OLEDDisplay *display, OLEDDisp
     }
 }
 
+void NotificationRenderer::drawBannerPanel(OLEDDisplay *display, int16_t boxLeft, int16_t boxTop, int16_t boxWidth,
+                                           int16_t boxHeight)
+{
+    display->setColor(BLACK);
+    display->fillRect(boxLeft - 1, boxTop - 1, boxWidth + 2, boxHeight + 2);
+    display->fillRect(boxLeft, boxTop - 2, boxWidth, 1);
+    display->fillRect(boxLeft, boxTop + boxHeight + 1, boxWidth, 1);
+    display->fillRect(boxLeft - 2, boxTop, 1, boxHeight);
+    display->fillRect(boxLeft + boxWidth + 1, boxTop, 1, boxHeight);
+    display->setColor(WHITE);
+    display->drawRect(boxLeft, boxTop, boxWidth, boxHeight);
+    display->setColor(BLACK);
+    display->fillRect(boxLeft, boxTop, 1, 1);
+    display->fillRect(boxLeft + boxWidth - 1, boxTop, 1, 1);
+    display->fillRect(boxLeft, boxTop + boxHeight - 1, 1, 1);
+    display->fillRect(boxLeft + boxWidth - 1, boxTop + boxHeight - 1, 1, 1);
+    display->setColor(WHITE);
+#if GRAPHICS_TFT_COLORING_ENABLED
+    registerTFTActionMenuRegions(boxLeft, boxTop, boxWidth, boxHeight);
+#endif
+#if BASEUI_NATIVE_RGB565 && GRAPHICS_TFT_COLORING_ENABLED
+    // A solid panel instead of the canvas showing through: the menu's own background tinted toward the header, a
+    // little lighter at the top. Explicit colour, so the regions above still colour the text drawn over it.
+    uint16_t menuGradientTop = 0, menuGradientBottom = 0;
+    getThemeHeaderGradient(menuGradientTop, menuGradientBottom);
+    if (boxWidth > 2 && boxHeight > 2) {
+        const uint16_t menuBodyBg = getActiveTheme().roles[static_cast<size_t>(TFTColorRole::ActionMenuBody)].offColor;
+        const uint16_t panelTop = TFTPalette::mix565(menuBodyBg, menuGradientBottom, 72);
+        const uint16_t panelBottom = TFTPalette::mix565(menuBodyBg, menuGradientBottom, 24);
+        const int rows = boxHeight - 2;
+        for (int row = 0; row < rows; ++row) {
+            const uint8_t t = static_cast<uint8_t>(rows > 1 ? row * 255 / (rows - 1) : 0);
+            static_cast<TFTDisplay *>(display)->fillRect565(boxLeft + 1, boxTop + 1 + row, boxWidth - 2, 1,
+                                                            TFTPalette::mix565(panelTop, panelBottom, t));
+        }
+    }
+#endif
+}
+
 void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplayUiState *state, const char *lines[],
                                                uint16_t totalLines, uint16_t firstOptionToShow, uint16_t maxWidth)
 {
@@ -997,39 +1268,10 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
     }
 
     // Draw Box
-    display->setColor(BLACK);
-    display->fillRect(boxLeft - 1, boxTop - 1, boxWidth + 2, boxHeight + 2);
-    display->fillRect(boxLeft, boxTop - 2, boxWidth, 1);
-    display->fillRect(boxLeft, boxTop + boxHeight + 1, boxWidth, 1);
-    display->fillRect(boxLeft - 2, boxTop, 1, boxHeight);
-    display->fillRect(boxLeft + boxWidth + 1, boxTop, 1, boxHeight);
-    display->setColor(WHITE);
-    display->drawRect(boxLeft, boxTop, boxWidth, boxHeight);
-    display->setColor(BLACK);
-    display->fillRect(boxLeft, boxTop, 1, 1);
-    display->fillRect(boxLeft + boxWidth - 1, boxTop, 1, 1);
-    display->fillRect(boxLeft, boxTop + boxHeight - 1, 1, 1);
-    display->fillRect(boxLeft + boxWidth - 1, boxTop + boxHeight - 1, 1, 1);
-    display->setColor(WHITE);
-#if GRAPHICS_TFT_COLORING_ENABLED
-    registerTFTActionMenuRegions(boxLeft, boxTop, boxWidth, boxHeight);
-#endif
+    drawBannerPanel(display, boxLeft, boxTop, boxWidth, boxHeight);
 #if BASEUI_NATIVE_RGB565 && GRAPHICS_TFT_COLORING_ENABLED
-    // A solid panel instead of the canvas showing through: the menu's own background tinted toward the header, a
-    // little lighter at the top. Explicit colour, so the regions above still colour the text drawn over it.
-    uint16_t menuGradientTop = 0, menuGradientBottom = 0;
+    uint16_t menuGradientTop = 0, menuGradientBottom = 0; // the title bar below takes the header's gradient too
     getThemeHeaderGradient(menuGradientTop, menuGradientBottom);
-    if (boxWidth > 2 && boxHeight > 2) {
-        const uint16_t menuBodyBg = getActiveTheme().roles[static_cast<size_t>(TFTColorRole::ActionMenuBody)].offColor;
-        const uint16_t panelTop = TFTPalette::mix565(menuBodyBg, menuGradientBottom, 72);
-        const uint16_t panelBottom = TFTPalette::mix565(menuBodyBg, menuGradientBottom, 24);
-        const int rows = boxHeight - 2;
-        for (int row = 0; row < rows; ++row) {
-            const uint8_t t = static_cast<uint8_t>(rows > 1 ? row * 255 / (rows - 1) : 0);
-            static_cast<TFTDisplay *>(display)->fillRect565(boxLeft + 1, boxTop + 1 + row, boxWidth - 2, 1,
-                                                            TFTPalette::mix565(panelTop, panelBottom, t));
-        }
-    }
 #endif
 
     // Draw Content

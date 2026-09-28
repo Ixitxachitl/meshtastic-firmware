@@ -31,6 +31,9 @@ enum notificationTypeEnum {
     // Arcade-style initials entry: like number_picker/hex_picker, but each position cycles
     // through A-Z and 0-9. The assembled string is returned via a text (std::string) callback.
     alphanumeric_picker,
+    // One line of free text in a popup: typed on a keyboard, or on a small touch keyboard beneath it where there is
+    // no keyboard. The text is returned via the same std::string callback.
+    text_prompt,
 };
 
 struct BannerOverlayOptions {
@@ -432,6 +435,10 @@ class Screen : public concurrency::OSThread
     // `initialText` pre-seeds the positions (uppercased & filtered), defaulting to 'A'.
     void showAlphanumericPicker(const char *message, const char *initialText, uint32_t durationMs, uint8_t length,
                                 std::function<void(const std::string &)> bannerCallback);
+    // A popup with a one-line text field. The callback gets the text on Enter/OK, and is not called on cancel.
+    // Safe to call from anywhere but a banner's own callback, which is torn down right after it returns.
+    void showTextPrompt(const char *title, const char *initialText, uint8_t maxLength,
+                        std::function<void(const std::string &)> callback);
     void showTextInput(const char *header, const char *initialText, uint32_t durationMs,
                        std::function<void(const std::string &)> textCallback);
 
