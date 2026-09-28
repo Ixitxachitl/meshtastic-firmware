@@ -17,12 +17,12 @@ class NotificationRenderer
   public:
     static InputEvent inEvent;
     static char inKeypress;
-    static int8_t curSelected;
+    static int16_t curSelected; // wide enough for the node picker: node databases run past 127 and 255
     static char alertBannerMessage[256];
     static uint32_t alertBannerUntil; // 0 is a special case meaning forever
     static const char **optionsArrayPtr;
     static const int *optionsEnumPtr;
-    static uint8_t alertBannerOptions; // last x lines are selectable options
+    static uint16_t alertBannerOptions; // last x lines are selectable options
     static std::function<void(int)> alertBannerCallback;
     static uint32_t numDigits;
     static uint32_t currentNumber;
@@ -51,7 +51,7 @@ class NotificationRenderer
     static void drawNodePicker(OLEDDisplay *display, OLEDDisplayUiState *state);
     static void drawTextInput(OLEDDisplay *display, OLEDDisplayUiState *state);
     static void drawNotificationBox(OLEDDisplay *display, OLEDDisplayUiState *state, const char *lines[MAX_LINES + 1],
-                                    uint16_t totalLines, uint8_t firstOptionToShow, uint16_t maxWidth = 0);
+                                    uint16_t totalLines, uint16_t firstOptionToShow, uint16_t maxWidth = 0);
 
     static void drawCriticalFaultFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
     static void drawSSLScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);

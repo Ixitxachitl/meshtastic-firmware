@@ -3347,7 +3347,7 @@ int Screen::handleInputEvent(const InputEvent *event)
         // stop here. A list follows the finger and redraws only when the selection moves.
         if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG || event->inputEvent == INPUT_BROKER_TOUCH_DRAG_END) {
             if (NotificationRenderer::isScrollableList()) {
-                const int8_t before = NotificationRenderer::curSelected;
+                const int16_t before = NotificationRenderer::curSelected;
                 if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG) {
                     menuScrollDrag.update(event, NotificationRenderer::scrollByFingerDelta);
                 } else if (menuScrollDrag.end()) {

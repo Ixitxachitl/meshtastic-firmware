@@ -47,10 +47,10 @@ namespace graphics
 {
 int bannerSignalBars = -1;
 InputEvent NotificationRenderer::inEvent;
-int8_t NotificationRenderer::curSelected = 0;
+int16_t NotificationRenderer::curSelected = 0;
 char NotificationRenderer::alertBannerMessage[256] = {0};
-uint32_t NotificationRenderer::alertBannerUntil = 0;  // 0 is a special case meaning forever
-uint8_t NotificationRenderer::alertBannerOptions = 0; // last x lines are selectable options
+uint32_t NotificationRenderer::alertBannerUntil = 0;   // 0 is a special case meaning forever
+uint16_t NotificationRenderer::alertBannerOptions = 0; // last x lines are selectable options
 const char **NotificationRenderer::optionsArrayPtr = nullptr;
 const int *NotificationRenderer::optionsEnumPtr = nullptr;
 std::function<void(int)> NotificationRenderer::alertBannerCallback = NULL;
@@ -637,7 +637,7 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
     uint16_t totalLines = lineCount + alertBannerOptions;
     uint16_t screenHeight = display->height();
     uint8_t effectiveLineHeight = FONT_HEIGHT_SMALL - 3;
-    uint8_t visibleTotalLines = std::min<uint8_t>(totalLines, (screenHeight - vPadding * 2) / effectiveLineHeight);
+    uint8_t visibleTotalLines = (uint8_t)std::min<int>(totalLines, (screenHeight - vPadding * 2) / effectiveLineHeight);
     uint8_t linesShown = lineCount;
     const char *linePointers[visibleTotalLines + 1] = {0}; // this is sort of a dynamic allocation
 
@@ -647,7 +647,7 @@ void NotificationRenderer::drawNodePicker(OLEDDisplay *display, OLEDDisplayUiSta
     }
     char scratchLineBuffer[visibleTotalLines - lineCount][64];
 
-    uint8_t firstOptionToShow = 0;
+    uint16_t firstOptionToShow = 0;
     if (curSelected > 1 && alertBannerOptions > visibleTotalLines - lineCount) {
         if (curSelected > alertBannerOptions - visibleTotalLines + lineCount)
             firstOptionToShow = alertBannerOptions - visibleTotalLines + lineCount;
@@ -808,7 +808,7 @@ void NotificationRenderer::drawAlertBannerOverlay(OLEDDisplay *display, OLEDDisp
     // Pairing PIN: pass every line, drawNotificationBox fits them (tiny panels spread them over the full screen).
     uint8_t visibleTotalLines = (current_notification_type == notificationTypeEnum::pairing_pin)
                                     ? totalLines
-                                    : std::min<uint8_t>(totalLines, (screenHeight - vPadding * 2) / effectiveLineHeight);
+                                    : (uint8_t)std::min<int>(totalLines, (screenHeight - vPadding * 2) / effectiveLineHeight);
     uint8_t linesShown = lineCount;
     const char *linePointers[visibleTotalLines + 1] = {0}; // this is sort of a dynamic allocation
 
@@ -817,7 +817,7 @@ void NotificationRenderer::drawAlertBannerOverlay(OLEDDisplay *display, OLEDDisp
         linePointers[i] = lineStarts[i];
     }
 
-    uint8_t firstOptionToShow = 0;
+    uint16_t firstOptionToShow = 0;
     if (alertBannerOptions > 0) {
         if (visibleTotalLines - lineCount == 1) {
             firstOptionToShow = curSelected;
@@ -859,7 +859,7 @@ void NotificationRenderer::drawAlertBannerOverlay(OLEDDisplay *display, OLEDDisp
 }
 
 void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplayUiState *state, const char *lines[],
-                                               uint16_t totalLines, uint8_t firstOptionToShow, uint16_t maxWidth)
+                                               uint16_t totalLines, uint16_t firstOptionToShow, uint16_t maxWidth)
 {
 
     bool is_picker = false;
