@@ -6,7 +6,7 @@
 #error Regenerate this file with the current version of nanopb generator.
 #endif
 
-PB_BIND(meshtastic_DeviceUIConfig, meshtastic_DeviceUIConfig, AUTO)
+PB_BIND(meshtastic_DeviceUIConfig, meshtastic_DeviceUIConfig, 2)
 
 
 PB_BIND(meshtastic_NodeFilter, meshtastic_NodeFilter, AUTO)
@@ -19,6 +19,13 @@ PB_BIND(meshtastic_GeoPoint, meshtastic_GeoPoint, AUTO)
 
 
 PB_BIND(meshtastic_Map, meshtastic_Map, AUTO)
+
+
+PB_BIND(meshtastic_NavTarget, meshtastic_NavTarget, AUTO)
+
+
+
+
 
 
 

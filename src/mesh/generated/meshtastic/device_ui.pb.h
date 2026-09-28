@@ -10,6 +10,26 @@
 #endif
 
 /* Enum definitions */
+/* Map orientation while navigating */
+typedef enum _meshtastic_MapViewMode {
+    /* North at the top */
+    meshtastic_MapViewMode_NORTH_UP = 0,
+    /* Direction of travel at the top */
+    meshtastic_MapViewMode_HEADING_UP = 1,
+    /* Direction of travel at the top, with the map tilted away like a car navigator */
+    meshtastic_MapViewMode_TILTED = 2
+} meshtastic_MapViewMode;
+
+/* How a route to a navigation target is travelled */
+typedef enum _meshtastic_NavTravelMode {
+    /* By car */
+    meshtastic_NavTravelMode_CAR = 0,
+    /* By bicycle */
+    meshtastic_NavTravelMode_BICYCLE = 1,
+    /* On foot */
+    meshtastic_NavTravelMode_WALK = 2
+} meshtastic_NavTravelMode;
+
 typedef enum _meshtastic_CompassMode {
     /* Compass with dynamic ring and heading */
     meshtastic_CompassMode_DYNAMIC = 0,
@@ -146,6 +166,22 @@ typedef struct _meshtastic_GeoPoint {
     int32_t longitude;
 } meshtastic_GeoPoint;
 
+/* A destination the map draws a line and distance to */
+typedef struct _meshtastic_NavTarget {
+    /* Where the target was when picked: fixed for a typed location, the last known position
+ for a node or waypoint */
+    int32_t latitude_i;
+    int32_t longitude_i;
+    /* Nonzero: the target is this node, and follows its live position */
+    uint32_t node_num;
+    /* Nonzero: the target is this waypoint, and follows it if it moves */
+    uint32_t waypoint_id;
+    /* Label shown for the target */
+    char name[32];
+    /* How the route to the target is travelled */
+    meshtastic_NavTravelMode travel_mode;
+} meshtastic_NavTarget;
+
 typedef struct _meshtastic_Map {
     /* Home coordinates */
     bool has_home;
@@ -157,6 +193,11 @@ typedef struct _meshtastic_Map {
     /* Fetch missing map tiles over the network, caching them to the tile store.
  Off means the map draws only from tiles already stored locally. */
     bool online_tiles;
+    /* The last navigation target picked on the map */
+    bool has_nav_target;
+    meshtastic_NavTarget nav_target;
+    /* How the map is oriented while navigating with Follow Me on */
+    meshtastic_MapViewMode view_mode;
 } meshtastic_Map;
 
 typedef PB_BYTES_ARRAY_T(16) meshtastic_DeviceUIConfig_calibration_data_t;
@@ -214,6 +255,14 @@ extern "C" {
 #endif
 
 /* Helper constants for enums */
+#define _meshtastic_MapViewMode_MIN meshtastic_MapViewMode_NORTH_UP
+#define _meshtastic_MapViewMode_MAX meshtastic_MapViewMode_TILTED
+#define _meshtastic_MapViewMode_ARRAYSIZE ((meshtastic_MapViewMode)(meshtastic_MapViewMode_TILTED+1))
+
+#define _meshtastic_NavTravelMode_MIN meshtastic_NavTravelMode_CAR
+#define _meshtastic_NavTravelMode_MAX meshtastic_NavTravelMode_WALK
+#define _meshtastic_NavTravelMode_ARRAYSIZE ((meshtastic_NavTravelMode)(meshtastic_NavTravelMode_WALK+1))
+
 #define _meshtastic_CompassMode_MIN meshtastic_CompassMode_DYNAMIC
 #define _meshtastic_CompassMode_MAX meshtastic_CompassMode_FREEZE_HEADING
 #define _meshtastic_CompassMode_ARRAYSIZE ((meshtastic_CompassMode)(meshtastic_CompassMode_FREEZE_HEADING+1))
@@ -238,6 +287,9 @@ extern "C" {
 
 
 
+#define meshtastic_Map_view_mode_ENUMTYPE meshtastic_MapViewMode
+
+#define meshtastic_NavTarget_travel_mode_ENUMTYPE meshtastic_NavTravelMode
 
 
 /* Initializer values for message structs */
@@ -245,12 +297,14 @@ extern "C" {
 #define meshtastic_NodeFilter_init_default       {0, 0, 0, 0, 0, "", 0}
 #define meshtastic_NodeHighlight_init_default    {0, 0, 0, 0, ""}
 #define meshtastic_GeoPoint_init_default         {0, 0, 0}
-#define meshtastic_Map_init_default              {false, meshtastic_GeoPoint_init_default, "", 0, 0}
+#define meshtastic_Map_init_default              {false, meshtastic_GeoPoint_init_default, "", 0, 0, false, meshtastic_NavTarget_init_default, _meshtastic_MapViewMode_MIN}
+#define meshtastic_NavTarget_init_default        {0, 0, 0, 0, "", _meshtastic_NavTravelMode_MIN}
 #define meshtastic_DeviceUIConfig_init_zero      {0, 0, 0, 0, 0, 0, _meshtastic_Theme_MIN, 0, 0, 0, _meshtastic_Language_MIN, false, meshtastic_NodeFilter_init_zero, false, meshtastic_NodeHighlight_init_zero, {0, {0}}, false, meshtastic_Map_init_zero, _meshtastic_CompassMode_MIN, 0, 0, _meshtastic_DeviceUIConfig_GpsCoordinateFormat_MIN, false, 0}
 #define meshtastic_NodeFilter_init_zero          {0, 0, 0, 0, 0, "", 0}
 #define meshtastic_NodeHighlight_init_zero       {0, 0, 0, 0, ""}
 #define meshtastic_GeoPoint_init_zero            {0, 0, 0}
-#define meshtastic_Map_init_zero                 {false, meshtastic_GeoPoint_init_zero, "", 0, 0}
+#define meshtastic_Map_init_zero                 {false, meshtastic_GeoPoint_init_zero, "", 0, 0, false, meshtastic_NavTarget_init_zero, _meshtastic_MapViewMode_MIN}
+#define meshtastic_NavTarget_init_zero           {0, 0, 0, 0, "", _meshtastic_NavTravelMode_MIN}
 
 /* Field tags (for use in manual encoding/decoding) */
 #define meshtastic_NodeFilter_unknown_switch_tag 1
@@ -268,10 +322,18 @@ extern "C" {
 #define meshtastic_GeoPoint_zoom_tag             1
 #define meshtastic_GeoPoint_latitude_tag         2
 #define meshtastic_GeoPoint_longitude_tag        3
+#define meshtastic_NavTarget_latitude_i_tag      1
+#define meshtastic_NavTarget_longitude_i_tag     2
+#define meshtastic_NavTarget_node_num_tag        3
+#define meshtastic_NavTarget_waypoint_id_tag     4
+#define meshtastic_NavTarget_name_tag            5
+#define meshtastic_NavTarget_travel_mode_tag     7
 #define meshtastic_Map_home_tag                  1
 #define meshtastic_Map_style_tag                 2
 #define meshtastic_Map_follow_gps_tag            3
 #define meshtastic_Map_online_tiles_tag          4
+#define meshtastic_Map_nav_target_tag            5
+#define meshtastic_Map_view_mode_tag             6
 #define meshtastic_DeviceUIConfig_version_tag    1
 #define meshtastic_DeviceUIConfig_screen_brightness_tag 2
 #define meshtastic_DeviceUIConfig_screen_timeout_tag 3
@@ -352,16 +414,30 @@ X(a, STATIC,   SINGULAR, INT32,    longitude,         3)
 X(a, STATIC,   OPTIONAL, MESSAGE,  home,              1) \
 X(a, STATIC,   SINGULAR, STRING,   style,             2) \
 X(a, STATIC,   SINGULAR, BOOL,     follow_gps,        3) \
-X(a, STATIC,   SINGULAR, BOOL,     online_tiles,      4)
+X(a, STATIC,   SINGULAR, BOOL,     online_tiles,      4) \
+X(a, STATIC,   OPTIONAL, MESSAGE,  nav_target,        5) \
+X(a, STATIC,   SINGULAR, UENUM,    view_mode,         6)
 #define meshtastic_Map_CALLBACK NULL
 #define meshtastic_Map_DEFAULT NULL
 #define meshtastic_Map_home_MSGTYPE meshtastic_GeoPoint
+#define meshtastic_Map_nav_target_MSGTYPE meshtastic_NavTarget
+
+#define meshtastic_NavTarget_FIELDLIST(X, a) \
+X(a, STATIC,   SINGULAR, SFIXED32, latitude_i,        1) \
+X(a, STATIC,   SINGULAR, SFIXED32, longitude_i,       2) \
+X(a, STATIC,   SINGULAR, UINT32,   node_num,          3) \
+X(a, STATIC,   SINGULAR, UINT32,   waypoint_id,       4) \
+X(a, STATIC,   SINGULAR, STRING,   name,              5) \
+X(a, STATIC,   SINGULAR, UENUM,    travel_mode,       7)
+#define meshtastic_NavTarget_CALLBACK NULL
+#define meshtastic_NavTarget_DEFAULT NULL
 
 extern const pb_msgdesc_t meshtastic_DeviceUIConfig_msg;
 extern const pb_msgdesc_t meshtastic_NodeFilter_msg;
 extern const pb_msgdesc_t meshtastic_NodeHighlight_msg;
 extern const pb_msgdesc_t meshtastic_GeoPoint_msg;
 extern const pb_msgdesc_t meshtastic_Map_msg;
+extern const pb_msgdesc_t meshtastic_NavTarget_msg;
 
 /* Defines for backwards compatibility with code written before nanopb-0.4.0 */
 #define meshtastic_DeviceUIConfig_fields &meshtastic_DeviceUIConfig_msg
@@ -369,12 +445,14 @@ extern const pb_msgdesc_t meshtastic_Map_msg;
 #define meshtastic_NodeHighlight_fields &meshtastic_NodeHighlight_msg
 #define meshtastic_GeoPoint_fields &meshtastic_GeoPoint_msg
 #define meshtastic_Map_fields &meshtastic_Map_msg
+#define meshtastic_NavTarget_fields &meshtastic_NavTarget_msg
 
 /* Maximum encoded size of messages (where known) */
 #define MESHTASTIC_MESHTASTIC_DEVICE_UI_PB_H_MAX_SIZE meshtastic_DeviceUIConfig_size
-#define meshtastic_DeviceUIConfig_size           210
+#define meshtastic_DeviceUIConfig_size           271
 #define meshtastic_GeoPoint_size                 33
-#define meshtastic_Map_size                      60
+#define meshtastic_Map_size                      121
+#define meshtastic_NavTarget_size                57
 #define meshtastic_NodeFilter_size               47
 #define meshtastic_NodeHighlight_size            25
 
