@@ -919,6 +919,10 @@ dialog h2{font-size:14px;margin:0;flex:1;min-width:0;overflow:hidden;text-overfl
 dialog pre{margin:0;padding:14px;overflow:auto;max-height:62vh;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
  white-space:pre-wrap;word-break:break-word}
 .note{padding:8px 14px;border-top:1px solid var(--line);color:var(--muted);font-size:12px}
+#ed{width:min(900px,96vw);max-height:92vh}
+#edtext{display:block;box-sizing:border-box;width:100%;height:68vh;margin:0;padding:12px 14px;border:0;resize:none;
+ background:var(--card);color:var(--fg);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;tab-size:4;outline:none}
+#ed header .save{border-color:var(--accent);color:var(--accent)}
 </style>
 <div class=wrap>
 <h1>SD card</h1>
@@ -938,12 +942,15 @@ dialog pre{margin:0;padding:14px;overflow:auto;max-height:62vh;font:12px/1.5 ui-
 <div class=up id=up><div id=upname></div><div class=bar><i id=upbar></i></div></div>
 
 <ul id=list><li class=empty>Loading...</li></ul>
-<div class=foot><span id=count></span><span><button onclick=mkdir()>New folder</button> &middot; <button onclick=load()>Refresh</button></span></div>
-<div class=foot><span>Move a file or folder with its Move button, or drag it onto a folder, <b>..</b> or the path above.</span></div>
+<div class=foot><span id=count></span><span><button onclick=newFile()>New file</button> &middot; <button onclick=mkdir()>New folder</button> &middot; <button onclick=load()>Refresh</button></span></div>
+<div class=foot><span>Move or rename a file or folder with its Move/Rename button, or drag it onto a folder, <b>..</b> or the path above.</span></div>
 <div class=foot><span>Map tiles: <b>MAP.BIN</b> in the card root, or on colour builds a style folder of PNG tiles (z/x/y.png) inside <b>/maps</b>.</span></div>
 </div>
 <dialog id=dlg><header><h2 id=dlgname></h2><button class=view onclick="dlg.close()">Close</button></header>
 <pre id=dlgbody></pre><div class=note id=dlgnote></div></dialog>
+<dialog id=ed><header><h2 id=edname></h2><button class="view save" id=edsave onclick=edSave()>Save</button>
+<button class=view onclick=edClose()>Close</button></header>
+<textarea id=edtext spellcheck=false></textarea><div class=note id=ednote></div></dialog>
 <script>
 var L=document.getElementById('list'),cwd='/';
 function sz(n){n=+n||0;return n>=1073741824?(n/1073741824).toFixed(2)+' GB':n>=1048576?(n/1048576).toFixed(1)+' MB':n>=1024?(n/1024).toFixed(1)+' kB':n+' B'}
@@ -1033,6 +1040,49 @@ function view(f){
   document.getElementById('dlgbody').textContent=t.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g,'\u00b7')||'(empty file)';
   document.getElementById('dlgnote').textContent=shown<f.size?'First '+sz(shown)+' of '+sz(f.size)+' - preview only':sz(f.size)+' - whole file';
  }).catch(function(){document.getElementById('dlgbody').textContent='Could not read the file.'})}
+// A plain text editor. The whole file is read into the page, and saved back as one upload slice at offset 0,
+// which the device takes as "replace this file" - the same path a re-upload takes.
+var EDIT_MAX=262144,edPath='',edOriginal='',edCrlf=false;
+function edNote(t){document.getElementById('ednote').textContent=t||''}
+function edDirty(){return document.getElementById('edtext').value!==edOriginal}
+function edOpen(full,text){
+ edPath=full;edCrlf=/\r\n/.test(text);
+ edOriginal=text.replace(/\r\n/g,'\n');
+ var ta=document.getElementById('edtext');ta.value=edOriginal;
+ document.getElementById('edname').textContent=full;
+ edNote(edCrlf?'Windows line endings are kept':'');
+ document.getElementById('ed').showModal();ta.focus()}
+function edit(f){
+ var full=join(cwd,f.name);
+ if(f.size>EDIT_MAX){say(f.name+' is too large to edit here ('+sz(f.size)+'; up to '+sz(EDIT_MAX)+').');return}
+ say('');
+ fetch('/sd/?p='+encodeURIComponent(full)).then(function(r){if(!r.ok)throw 0;return r.text()}).then(function(t){
+  if(t.indexOf('\u0000')>=0){say(f.name+' looks like a binary file, not text.');return}
+  edOpen(full,t)}).catch(function(){say('Could not read '+f.name+'.')})}
+function newFile(){
+ if(busy){say('Wait for the current upload or delete to finish.');return}
+ var n=prompt('New file in '+cwd);
+ if(n===null)return;
+ n=n.trim();
+ if(!n||/[\/\\]/.test(n)||/^\.+$/.test(n)){say('A file name cannot be empty, dots only, or contain slashes.');return}
+ edOpen(join(cwd,n),'')}
+function edSave(){
+ if(busy){edNote('Wait for the current upload or delete to finish.');return}
+ var text=document.getElementById('edtext').value,body=edCrlf?text.replace(/\n/g,'\r\n'):text;
+ var blob=new Blob([body],{type:'text/plain'});
+ if(blob.size>CHUNK){edNote('Too large to save in one go ('+sz(blob.size)+').');return}
+ var slash=edPath.lastIndexOf('/'),dir=edPath.slice(0,slash)||'/',name=edPath.slice(slash+1);
+ var btn=document.getElementById('edsave');btn.disabled=true;edNote('Saving...');
+ post('/upload/sd?path='+encodeURIComponent(dir)+'&name='+encodeURIComponent(name)+'&offset=0',blob).then(function(){
+  edOriginal=text;edNote('Saved '+sz(blob.size));btn.disabled=false;load()})
+  .catch(function(e){edNote('Could not save: '+e.message);btn.disabled=false})}
+function edClose(){
+ if(edDirty()&&!confirm('Close without saving your changes?'))return;
+ document.getElementById('ed').close()}
+document.getElementById('ed').addEventListener('cancel',function(e){if(edDirty()&&!confirm('Close without saving your changes?'))e.preventDefault()});
+document.getElementById('edtext').addEventListener('keydown',function(e){
+ if((e.ctrlKey||e.metaKey)&&e.key==='s'){e.preventDefault();edSave();return}
+ if(e.key==='Tab'){e.preventDefault();var t=e.target,a=t.selectionStart;t.setRangeText('\t',a,t.selectionEnd,'end')}});
 function upRow(){
  var li=document.createElement('li');li.className='folder';
  var e=document.createElement('div');e.className='ext dir';e.textContent='\u2191';
@@ -1054,7 +1104,8 @@ function row(f){
  var s=document.createElement('div');s.className='sz';s.textContent=f.dir?'':sz(f.size);
  li.append(e,d,s);
  if(!f.dir){var v=document.createElement('button');v.className='view';v.textContent='View';v.onclick=function(){view(f)};li.append(v)}
- var m=document.createElement('button');m.className='view';m.textContent='Move';m.onclick=function(){moveAsk(f)};li.append(m);
+ if(!f.dir&&f.size<=EDIT_MAX){var ed=document.createElement('button');ed.className='view';ed.textContent='Edit';ed.onclick=function(){edit(f)};li.append(ed)}
+ var m=document.createElement('button');m.className='view';m.textContent='Move/Rename';m.onclick=function(){moveAsk(f)};li.append(m);
  var b=document.createElement('button');b.className='del';b.textContent='Delete';b.onclick=function(){del(f)};
  li.append(b);
  // Drag a row onto a folder row, the up row or a path segment to move it there.
