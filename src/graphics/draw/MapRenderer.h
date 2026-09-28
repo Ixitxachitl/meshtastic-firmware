@@ -65,6 +65,9 @@ void panByFingerDelta(float dxPx, float dyPx);
 // Follow Me: while enabled (the default), the view re-centers on our own position (or the node
 // centroid, if we have none) every frame. Disabling it freezes the view wherever it currently is.
 bool isFollowMeEnabled();
+// Navigating with Follow Me on: the view follows the fix and the heading, so the frame needs redrawing continuously
+// rather than at the idle rate.
+bool wantsLiveFramerate();
 void setFollowMeEnabled(bool enabled);
 
 // Zoom Mode: entered directly from the menu, held until Back is pressed - not a discrete picker.

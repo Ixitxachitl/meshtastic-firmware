@@ -122,6 +122,9 @@ namespace graphics
 #ifndef COMPASS_ACTIVE_FRAMERATE
 #define COMPASS_ACTIVE_FRAMERATE 20 // while a compass frame is shown; variants may raise it
 #endif
+#ifndef MAP_LIVE_FRAMERATE
+#define MAP_LIVE_FRAMERATE 15 // the map while navigating with Follow Me on; a 3D frame is paced by its own cost below this
+#endif
 
 // DEBUG
 #if BASEUI_HAS_GAMES
@@ -2290,6 +2293,14 @@ int32_t Screen::runOnce()
             desiredFramerate = COMPASS_ACTIVE_FRAMERATE;
         }
     }
+#endif
+
+#if BASEUI_HAS_MAP
+    // Navigating with Follow Me on, the map turns with the compass and moves with every fix: at the idle rate it
+    // would lag each of them by up to a second and then jump.
+    if (showingNormalScreen && framesetInfo.positions.map != 255 &&
+        ui->getUiState()->currentFrame == framesetInfo.positions.map && graphics::MapRenderer::wantsLiveFramerate())
+        desiredFramerate = MAP_LIVE_FRAMERATE;
 #endif
 
     // An interactive overlay - a banner, a menu, a picker, text entry - has to animate and answer keys,

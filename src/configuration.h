@@ -573,6 +573,20 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #undef BASEUI_MAP_CONTROLS_BOTTOM
 #define BASEUI_MAP_CONTROLS_BOTTOM 0
 #endif
+// Map > Navigate: pick a node, waypoint or typed position and the map draws a line and distance to it. Opt-in per
+// variant; needs BASEUI_HAS_MAP, and a Map menu to reach it from - the on-screen-controls builds keep theirs only with
+// BASEUI_MAP_PNG_TILES.
+#ifndef BASEUI_MAP_NAVIGATION
+#define BASEUI_MAP_NAVIGATION 0
+#endif
+#if BASEUI_MAP_NAVIGATION && !(BASEUI_HAS_MAP && (!BASEUI_MAP_ONSCREEN_CONTROLS || BASEUI_MAP_PNG_TILES))
+#undef BASEUI_MAP_NAVIGATION
+#define BASEUI_MAP_NAVIGATION 0
+#endif
+// Navigate > Address, searched over WiFi on the online tile fetcher's task. On wherever both of those are.
+#define BASEUI_MAP_ADDRESS_SEARCH (BASEUI_MAP_NAVIGATION && BASEUI_MAP_ONLINE_TILES)
+// Street routes for Map > Navigate, fetched the same way; without them the map draws a straight line.
+#define BASEUI_MAP_ROUTING (BASEUI_MAP_NAVIGATION && BASEUI_MAP_ONLINE_TILES)
 // Whether a touchscreen tap with nothing under it pages to the next frame, and beeps for it. Physical buttons
 // reporting the same event keep both. Variants where frames are swiped between set this to 0.
 #ifndef BASEUI_TAP_ADVANCES_FRAME

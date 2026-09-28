@@ -24,8 +24,12 @@ namespace NicheGraphics::MapTiles::Png
 namespace
 {
 
-constexpr size_t kNameSize = 20;             // uiconfig.map_data.style, so every listed style can be remembered
-constexpr int kTileSlots = 9;                // decoded tiles kept, 128KB of PSRAM each
+constexpr size_t kNameSize = 20; // uiconfig.map_data.style, so every listed style can be remembered
+#if BASEUI_MAP_NAVIGATION
+constexpr int kTileSlots = 24; // decoded tiles kept, 128KB of PSRAM each: a tilted view reaches many more of them
+#else
+constexpr int kTileSlots = 9; // decoded tiles kept, 128KB of PSRAM each
+#endif
 constexpr int kMissSlots = 64;               // tiles known to be absent, so they aren't looked up every frame
 constexpr int kMaxOverzoom = 4;              // zoom levels up to look for a stand-in for a missing tile
 constexpr size_t kMaxFileBytes = 512 * 1024; // larger files are not map tiles
@@ -466,6 +470,67 @@ uint32_t generation()
         gen++;
     }
     return gen;
+}
+
+// The tile covering world pixel (px, py) at zoom z, or the nearest ancestor that is on the card; `shift` says how many
+// levels up it came from. Null when neither the tile nor any of its parents are there.
+static const uint16_t *tileOrParent(int z, int32_t tx, int32_t ty, int &shift)
+{
+    for (shift = 0; shift <= kMaxOverzoom && shift <= z; shift++) {
+        if (const uint16_t *tile = fetchTile(z - shift, tx >> shift, ty >> shift))
+            return tile;
+    }
+    return nullptr;
+}
+
+void renderViewPosed(uint16_t *dst, int16_t w, int16_t h, const ViewPose &pose, int zoom, uint16_t bg, uint16_t sky)
+{
+#if BASEUI_MAP_ONLINE_TILES
+    Fetch::noteMapDrawn();
+#endif
+    for (int16_t sy = 0; sy < h; sy++) {
+        uint16_t *row = dst + (size_t)sy * w;
+        double wx, wy;
+        float stepX, stepY, scale;
+        if (active < 0 || !pose.rowToWorld(sy + 0.5f, wx, wy, stepX, stepY, scale)) {
+            for (int16_t sx = 0; sx < w; sx++)
+                row[sx] = sky;
+            continue;
+        }
+        // Shrunk ground: a level up per halving, so every source pixel still lands on about one view pixel.
+        int level = scale > 3.0f ? 2 : scale > 1.5f ? 1 : 0;
+        if (level > zoom)
+            level = zoom;
+        const int z = zoom - level;
+        const double toLevel = 1.0 / (double)(1 << level);
+        // 16.16 fixed point from the row's start, sampled at pixel centres.
+        int64_t fx = llround((wx + stepX * 0.5) * toLevel * 65536.0);
+        int64_t fy = llround((wy + stepY * 0.5) * toLevel * 65536.0);
+        const int32_t dx = (int32_t)lroundf(stepX * (float)toLevel * 65536.0f);
+        const int32_t dy = (int32_t)lroundf(stepY * (float)toLevel * 65536.0f);
+        const int32_t worldSize = kTileSize << z;
+
+        int32_t tileX = INT32_MIN, tileY = INT32_MIN;
+        const uint16_t *tile = nullptr;
+        int shift = 0;
+        for (int16_t sx = 0; sx < w; sx++, fx += dx, fy += dy) {
+            int32_t px = (int32_t)(fx >> 16);
+            const int32_t py = (int32_t)(fy >> 16);
+            if (py < 0 || py >= worldSize) { // latitude doesn't wrap
+                row[sx] = bg;
+                continue;
+            }
+            if (px < 0 || px >= worldSize) // longitude does
+                px = ((px % worldSize) + worldSize) % worldSize;
+            const int32_t tx = px >> 8, ty = py >> 8;
+            if (tx != tileX || ty != tileY) {
+                tileX = tx;
+                tileY = ty;
+                tile = tileOrParent(z, tx, ty, shift);
+            }
+            row[sx] = tile ? tile[((py >> shift) & (kTileSize - 1)) * kTileSize + ((px >> shift) & (kTileSize - 1))] : bg;
+        }
+    }
 }
 
 void renderView(uint16_t *dst, int16_t w, int16_t h, int32_t centerX, int32_t centerY, int zoom, uint16_t bg)

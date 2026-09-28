@@ -11,10 +11,12 @@
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/TFTColorRegions.h"
 #include "graphics/TFTPalette.h"
+#include "graphics/draw/MapNavigation.h"
 #include "graphics/draw/MapRegionBounds.h"
 #include "graphics/draw/MapViewPersistence.h"
 #include "graphics/images.h"
 #include "graphics/niche/Map/MapTileRenderer.h"
+#include "graphics/niche/Map/MapViewPose.h"
 #include "mesh/Throttle.h"
 
 // Node and waypoint names on the map. The default keeps marker labels small enough to pack together on a
@@ -548,11 +550,13 @@ struct ColorBasemapKey {
     int16_t zoom, width, height;
     uint16_t background;
     uint32_t generation;
+    int16_t heading;  // whole degrees, as quantised for the view
+    uint8_t poseMode; // 0 north-up, 1 heading-up, 2 tilted
 
     bool operator==(const ColorBasemapKey &o) const
     {
         return worldX == o.worldX && worldY == o.worldY && zoom == o.zoom && width == o.width && height == o.height &&
-               background == o.background && generation == o.generation;
+               background == o.background && generation == o.generation && heading == o.heading && poseMode == o.poseMode;
     }
 };
 ColorBasemapKey s_colorBasemapKey{};
@@ -568,12 +572,20 @@ void ensureMapStylesScanned()
 
 // Draws the PNG basemap. False when MAP.BIN was picked (and is loaded) or the card has no PNG tiles, so the caller
 // draws MAP.BIN instead.
+constexpr uint16_t kSkyColor = TFTPalette::rgb565(150, 185, 215); // past the horizon of the tilted view
+
+// Whether the PNG basemap is the one being drawn, rather than MAP.BIN or nothing.
+bool colorBasemapActive()
+{
+    ensureMapStylesScanned();
+    return !(s_useBinaryMap && NicheGraphics::MapTiles::hasTiles()) && NicheGraphics::MapTiles::Png::activeStyle() >= 0;
+}
+
 bool drawColorBasemap(OLEDDisplay *display, int16_t offX, int16_t offY, int16_t viewWidth, int16_t viewHeight, int32_t worldX,
-                      int32_t worldY, int zoom)
+                      int32_t worldY, int zoom, const NicheGraphics::MapTiles::ViewPose &pose, int16_t heading, uint8_t poseMode)
 {
     namespace Png = NicheGraphics::MapTiles::Png;
-    ensureMapStylesScanned();
-    if ((s_useBinaryMap && NicheGraphics::MapTiles::hasTiles()) || Png::activeStyle() < 0 || viewWidth <= 0 || viewHeight <= 0)
+    if (!colorBasemapActive() || viewWidth <= 0 || viewHeight <= 0)
         return false;
 
     const size_t needed = (size_t)viewWidth * (size_t)viewHeight * sizeof(uint16_t);
@@ -586,12 +598,16 @@ bool drawColorBasemap(OLEDDisplay *display, int16_t offX, int16_t offY, int16_t 
             return false;
     }
 
-    const ColorBasemapKey key{worldX, worldY, (int16_t)zoom, viewWidth, viewHeight, getThemeCanvasBg(), Png::generation()};
+    const ColorBasemapKey key{worldX,  worldY,  (int16_t)zoom, viewWidth, viewHeight, getThemeCanvasBg(), Png::generation(),
+                              heading, poseMode};
     if (!s_colorBasemapValid || !(s_colorBasemapKey == key)) {
 #ifdef UI_PERF_DEBUG
         const uint32_t startMs = millis();
 #endif
-        Png::renderView(s_colorBasemap, viewWidth, viewHeight, worldX, worldY, zoom, key.background);
+        if (pose.turned)
+            Png::renderViewPosed(s_colorBasemap, viewWidth, viewHeight, pose, zoom, key.background, kSkyColor);
+        else
+            Png::renderView(s_colorBasemap, viewWidth, viewHeight, worldX, worldY, zoom, key.background);
 #ifdef UI_PERF_DEBUG
         LOG_INFO("map PNG basemap rebuild: %u ms, z%d", (unsigned)(millis() - startMs), zoom);
 #endif
@@ -1080,6 +1096,393 @@ void drawGeofenceBox(OLEDDisplay *display, float left, float top, float right, f
 }
 #endif // !MESHTASTIC_EXCLUDE_WAYPOINT
 
+#if BASEUI_MAP_NAVIGATION
+// Map > Navigate: a line from us to the target, the target's marker, an arrow at the edge when it is off the view,
+// and the distance. All of it clipped in float, as the geofences are.
+constexpr uint16_t kNavColor = TFTPalette::Magenta; // stands out over street maps and imagery alike
+
+struct NavClip {
+    int16_t x, y, w, h;
+    bool contains(float px, float py) const { return px >= x && px < x + w && py >= y && py < y + h; }
+};
+
+// Liang-Barsky: trims the segment to the clip. False when none of it is inside.
+bool clipNavSegment(float &x0, float &y0, float &x1, float &y1, const NavClip &clip)
+{
+    const float dx = x1 - x0, dy = y1 - y0;
+    const float p[4] = {-dx, dx, -dy, dy};
+    const float q[4] = {x0 - clip.x, clip.x + clip.w - 1 - x0, y0 - clip.y, clip.y + clip.h - 1 - y0};
+    float t0 = 0.0f, t1 = 1.0f;
+    for (int i = 0; i < 4; i++) {
+        if (p[i] == 0.0f) {
+            if (q[i] < 0.0f)
+                return false;
+            continue;
+        }
+        const float t = q[i] / p[i];
+        if (p[i] < 0.0f)
+            t0 = std::max(t0, t);
+        else
+            t1 = std::min(t1, t);
+        if (t0 > t1)
+            return false;
+    }
+    x1 = x0 + t1 * dx;
+    y1 = y0 + t1 * dy;
+    x0 = x0 + t0 * dx;
+    y0 = y0 + t0 * dy;
+    return true;
+}
+
+// A dot of the line: coloured on a black edge on colour panels, black on a white edge elsewhere.
+void navLineDot(OLEDDisplay *display, int16_t px, int16_t py, bool edge, const NavClip &clip)
+{
+    const int16_t r = edge ? 2 : 1;
+    const int16_t left = std::max<int16_t>(px - r, clip.x), right = std::min<int16_t>(px + r, clip.x + clip.w - 1);
+    const int16_t top = std::max<int16_t>(py - r, clip.y), bottom = std::min<int16_t>(py + r, clip.y + clip.h - 1);
+    if (right < left || bottom < top)
+        return;
+#if BASEUI_NATIVE_RGB565
+    static_cast<TFTDisplay *>(display)->fillRect565(left, top, right - left + 1, bottom - top + 1,
+                                                    edge ? TFTPalette::Black : kNavColor);
+#else
+    display->setColor(edge ? WHITE : BLACK);
+    display->fillRect(left, top, right - left + 1, bottom - top + 1);
+    display->setColor(WHITE);
+#endif
+}
+
+// One pass of a segment: its edge, or its core.
+void drawNavSegment(OLEDDisplay *display, float x0, float y0, float x1, float y1, bool edge, const NavClip &clip)
+{
+    if (!clipNavSegment(x0, y0, x1, y1, clip))
+        return;
+    const int steps = std::max(1, (int)std::max(fabsf(x1 - x0), fabsf(y1 - y0)));
+    for (int i = 0; i <= steps; i++) {
+        const float t = (float)i / steps;
+        navLineDot(display, (int16_t)lroundf(x0 + (x1 - x0) * t), (int16_t)lroundf(y0 + (y1 - y0) * t), edge, clip);
+    }
+}
+
+void drawNavLine(OLEDDisplay *display, float x0, float y0, float x1, float y1, const NavClip &clip)
+{
+    for (int pass = 0; pass < 2; pass++) // the whole edge first, so the core runs unbroken over it
+        drawNavSegment(display, x0, y0, x1, y1, pass == 0, clip);
+}
+
+// The rest of the route, from where we are: its points are Web Mercator fractions (2^32 per world), so they go
+// through the same camera as the tiles. Points under a pixel apart are skipped; the last one never is.
+void drawNavRoute(OLEDDisplay *display, const NicheGraphics::MapTiles::ViewPose &pose, int zoom, int16_t offX, int16_t offY,
+                  const NavClip &clip, bool haveSelf, float selfX, float selfY)
+{
+    const uint32_t count = MapNavigation::routePointCount();
+    const uint32_t *mx = MapNavigation::routeMercatorX(), *my = MapNavigation::routeMercatorY();
+    if (count < 2 || !mx || !my)
+        return;
+    const double toWorld = ldexp(1.0, zoom + 8 - 32), world = worldPxAtZoom(zoom);
+    const uint32_t first = std::min<uint32_t>(MapNavigation::routeProgress() + 1, count - 1);
+
+    // Most of a long route is nowhere near the view. A segment whose box misses a square around the camera wide
+    // enough for any corner of the view - out to the horizon when tilted - is skipped before it is projected.
+    const double diagonal = sqrt((double)clip.w * clip.w + (double)clip.h * clip.h);
+    const double reach = pose.tilted ? std::max((double)pose.maxAhead, 2 * diagonal) : diagonal;
+    const double minX = pose.centerX - reach, maxX = pose.centerX + reach;
+    const double minY = pose.centerY - reach, maxY = pose.centerY + reach;
+    auto worldOf = [&](uint32_t i, double &wx, double &wy) {
+        wx = mx[i] * toWorld;
+        wy = my[i] * toWorld;
+        if (wx - pose.centerX > world / 2) // the copy of the world nearest the view
+            wx -= world;
+        else if (pose.centerX - wx > world / 2)
+            wx += world;
+    };
+
+    for (int pass = 0; pass < 2; pass++) {
+        bool havePrev = haveSelf && selfX > -1e5f; // screen position of the last point drawn from
+        float px = selfX, py = selfY;
+        double prevWx = pose.centerX, prevWy = pose.centerY; // world position of the point before this one
+        for (uint32_t i = first; i < count; i++) {
+            double wx, wy;
+            worldOf(i, wx, wy);
+            const bool missesView = (wx < minX && prevWx < minX) || (wx > maxX && prevWx > maxX) ||
+                                    (wy < minY && prevWy < minY) || (wy > maxY && prevWy > maxY);
+            const double fromWx = prevWx, fromWy = prevWy;
+            prevWx = wx;
+            prevWy = wy;
+            if (missesView) {
+                havePrev = false;
+                continue;
+            }
+            if (!havePrev && i > first) { // coming back into view: start from the point outside it
+                if (!pose.toScreen(fromWx, fromWy, px, py))
+                    continue;
+                px += offX;
+                py += offY;
+                havePrev = true;
+            }
+            float sx, sy;
+            if (!pose.toScreen(wx, wy, sx, sy)) {
+                havePrev = false;
+                continue;
+            }
+            sx += offX;
+            sy += offY;
+            if (havePrev && i + 1 < count && fabsf(sx - px) < 1.5f && fabsf(sy - py) < 1.5f)
+                continue;
+            if (havePrev)
+                drawNavSegment(display, px, py, sx, sy, pass == 0, clip);
+            px = sx;
+            py = sy;
+            havePrev = true;
+        }
+    }
+}
+
+// A 3px stroke with a white edge, for the turn arrows.
+void drawThickLine(OLEDDisplay *display, int16_t x0, int16_t y0, int16_t x1, int16_t y1)
+{
+    display->setColor(WHITE);
+    for (int16_t d = -2; d <= 2; d++) {
+        display->drawLine(x0 + d, y0, x1 + d, y1);
+        display->drawLine(x0, y0 + d, x1, y1 + d);
+    }
+    display->setColor(BLACK);
+    for (int16_t d = -1; d <= 1; d++) {
+        display->drawLine(x0 + d, y0, x1 + d, y1);
+        display->drawLine(x0, y0 + d, x1, y1 + d);
+    }
+    display->setColor(WHITE);
+}
+
+// Valhalla's maneuver type, drawn as an arrow in a size x size box centred on (cx, cy).
+void drawManeuverIcon(OLEDDisplay *display, int16_t cx, int16_t cy, int16_t size, uint16_t type)
+{
+    const int16_t half = size / 2;
+    if (type == 4 || type == 5 || type == 6) { // destination: a target ring
+        display->setColor(WHITE);
+        display->fillCircle(cx, cy, half - 1);
+        display->setColor(BLACK);
+        display->drawCircle(cx, cy, half - 2);
+        display->drawCircle(cx, cy, half - 5);
+        display->fillCircle(cx, cy, 2);
+        display->setColor(WHITE);
+        return;
+    }
+    // Degrees off straight ahead, right positive.
+    int angle = 0;
+    switch (type) {
+    case 9:
+    case 18:
+    case 20:
+    case 23:
+        angle = 45;
+        break;
+    case 2:
+    case 10:
+        angle = 90;
+        break;
+    case 11:
+        angle = 135;
+        break;
+    case 14:
+        angle = -135;
+        break;
+    case 3:
+    case 15:
+        angle = -90;
+        break;
+    case 16:
+    case 19:
+    case 21:
+    case 24:
+        angle = -45;
+        break;
+    default:
+        break;
+    }
+    const int16_t baseY = cy + half - 2;
+    if (type == 12 || type == 13) { // U-turn: up, over, and back down
+        const int16_t side = type == 12 ? 1 : -1;
+        const int16_t x0 = cx - side * half / 3, x1 = cx + side * half / 3, topY = cy - half / 2;
+        drawThickLine(display, x0, baseY, x0, topY);
+        drawThickLine(display, x0, topY, x1, topY);
+        drawThickLine(display, x1, topY, x1, cy + 2);
+        display->fillTriangle(x1 - 5, cy + 2, x1 + 5, cy + 2, x1, cy + 8);
+        return;
+    }
+    if (type == 26 || type == 27) { // roundabout: a ring on the stem
+        display->setColor(BLACK);
+        display->drawCircle(cx, cy + 2, half / 3);
+        display->drawCircle(cx, cy + 2, half / 3 - 1);
+        display->setColor(WHITE);
+    }
+    const float rad = angle * (float)M_PI / 180.0f;
+    const int16_t tipX = cx + (int16_t)lroundf(sinf(rad) * (half - 2)), tipY = cy - (int16_t)lroundf(cosf(rad) * (half - 2));
+    drawThickLine(display, cx, baseY, cx, cy);
+    drawThickLine(display, cx, cy, tipX, tipY);
+    // The head, across the direction of travel at the tip.
+    const float ux = sinf(rad), uy = -cosf(rad);
+    const int16_t backX = tipX - (int16_t)lroundf(ux * 7), backY = tipY - (int16_t)lroundf(uy * 7);
+    display->setColor(BLACK);
+    display->fillTriangle(tipX + (int16_t)lroundf(ux * 3), tipY + (int16_t)lroundf(uy * 3), backX - (int16_t)lroundf(uy * 6),
+                          backY + (int16_t)lroundf(ux * 6), backX + (int16_t)lroundf(uy * 6), backY - (int16_t)lroundf(ux * 6));
+    display->setColor(WHITE);
+}
+
+void formatNavDuration(char *out, size_t size, float seconds)
+{
+    const int minutes = (int)lroundf(seconds / 60.0f);
+    if (minutes < 60)
+        snprintf(out, size, "%d min", minutes < 1 ? 1 : minutes);
+    else
+        snprintf(out, size, "%dh %02dm", minutes / 60, minutes % 60);
+}
+
+// Up to two lines of `text` that fit `width`, broken at spaces where possible.
+int wrapTwoLines(OLEDDisplay *display, const char *text, int16_t width, char (&line1)[48], char (&line2)[48])
+{
+    line1[0] = line2[0] = '\0';
+    char *lines[2] = {line1, line2};
+    int count = 0;
+    const char *p = text;
+    while (*p && count < 2) {
+        while (*p == ' ')
+            p++;
+        size_t fit = 0, lastSpace = 0;
+        const size_t len = strlen(p);
+        while (fit < len && fit < 47 && display->getStringWidth(p, fit + 1) <= width) {
+            fit++;
+            if (p[fit] == ' ' || p[fit] == '\0')
+                lastSpace = fit;
+        }
+        if (fit == 0)
+            break;
+        const size_t take = (fit < len && lastSpace > 0 && count == 0) ? lastSpace : fit;
+        memcpy(lines[count], p, take);
+        lines[count][take] = '\0';
+        count++;
+        p += take;
+    }
+    return count;
+}
+
+void formatNavDistance(char *out, size_t size, float meters);
+
+// The next turn across the top of the map: its arrow, how far off it is, and what to do.
+int16_t drawGuidanceBanner(OLEDDisplay *display, int16_t x, int16_t y, int16_t width, const MapNavigation::Guidance &g)
+{
+    display->setFont(FONT_SMALL);
+    const int16_t lineH = FONT_HEIGHT_SMALL;
+    const int16_t height = 3 * lineH + 4;
+    const int16_t iconSize = std::min<int16_t>(height - 4, 40);
+#if BASEUI_NATIVE_RGB565
+    static_cast<TFTDisplay *>(display)->blendRect565(x, y, width, height, TFTPalette::White, 200);
+#else
+    display->setColor(WHITE);
+    display->fillRect(x, y, width, height);
+#endif
+    drawManeuverIcon(display, x + 2 + iconSize / 2, y + height / 2, iconSize, g.maneuverType);
+
+    const int16_t textX = x + iconSize + 6, textW = width - iconSize - 8;
+    char distance[16];
+    formatNavDistance(distance, sizeof(distance), g.metersToManeuver);
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    drawHaloString(display, textX, y + 1, distance);
+    char line1[48], line2[48];
+    wrapTwoLines(display, g.instruction ? g.instruction : "", textW, line1, line2);
+    drawHaloString(display, textX, y + 1 + lineH, line1);
+    if (line2[0])
+        drawHaloString(display, textX, y + 1 + 2 * lineH, line2);
+    return height;
+}
+
+// Us, as an arrow pointing the way we are going: up, in the turned views.
+void drawSelfArrow(OLEDDisplay *display, int16_t sx, int16_t sy)
+{
+    display->setColor(WHITE);
+    display->fillTriangle(sx, sy - 13, sx - 10, sy + 10, sx + 10, sy + 10);
+    display->setColor(BLACK);
+    display->fillTriangle(sx, sy - 9, sx - 7, sy + 7, sx, sy + 3);
+    display->fillTriangle(sx, sy - 9, sx + 7, sy + 7, sx, sy + 3);
+    display->setColor(WHITE);
+}
+
+void drawNavTarget(OLEDDisplay *display, int16_t tx, int16_t ty)
+{
+    constexpr int16_t kRadius = 7;
+    display->setColor(WHITE);
+    display->fillCircle(tx, ty, kRadius + 1);
+    display->setColor(BLACK);
+    display->drawCircle(tx, ty, kRadius);
+#if BASEUI_NATIVE_RGB565
+    constexpr int16_t kCore = 4;
+    for (int16_t dy = -kCore; dy <= kCore; dy++) {
+        const int16_t half = (int16_t)sqrtf((float)(kCore * kCore - dy * dy));
+        static_cast<TFTDisplay *>(display)->fillRect565(tx - half, ty + dy, 2 * half + 1, 1, kNavColor);
+    }
+#else
+    display->fillCircle(tx, ty, 3);
+#endif
+    display->setColor(WHITE);
+}
+
+// Points from the view's centre towards a target past its edge, sitting just inside that edge.
+void drawNavEdgeArrow(OLEDDisplay *display, float tx, float ty, const NavClip &clip)
+{
+    constexpr float kMargin = 14.0f, kLength = 13.0f, kHalfWidth = 7.0f;
+    const float cx = clip.x + clip.w / 2.0f, cy = clip.y + clip.h / 2.0f;
+    const float dx = tx - cx, dy = ty - cy;
+    const float len = sqrtf(dx * dx + dy * dy);
+    if (len < 1.0f)
+        return;
+    const float ux = dx / len, uy = dy / len;
+    const float halfW = clip.w / 2.0f - kMargin, halfH = clip.h / 2.0f - kMargin;
+    const float scale = std::min(fabsf(ux) > 1e-6f ? halfW / fabsf(ux) : 1e9f, fabsf(uy) > 1e-6f ? halfH / fabsf(uy) : 1e9f);
+    const float tipX = cx + ux * scale, tipY = cy + uy * scale;
+    auto corner = [&](float along, float across, float grow, int16_t &px, int16_t &py) {
+        px = (int16_t)lroundf(tipX - ux * (along + grow) - uy * (across + (across > 0 ? grow : -grow)));
+        py = (int16_t)lroundf(tipY - uy * (along + grow) + ux * (across + (across > 0 ? grow : -grow)));
+    };
+    int16_t ax, ay, bx, by;
+    for (int pass = 0; pass < 2; pass++) { // a white halo a little larger, then the arrow
+        const float grow = pass == 0 ? 2.0f : 0.0f;
+        corner(kLength, kHalfWidth, grow, ax, ay);
+        corner(kLength, -kHalfWidth, grow, bx, by);
+        const int16_t px = (int16_t)lroundf(tipX + ux * grow), py = (int16_t)lroundf(tipY + uy * grow);
+        display->setColor(pass == 0 ? WHITE : BLACK);
+        display->fillTriangle(px, py, ax, ay, bx, by);
+    }
+    display->setColor(WHITE);
+}
+
+void formatNavDistance(char *out, size_t size, float meters)
+{
+    if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL) {
+        const float feet = meters * METERS_TO_FEET;
+        if (feet < 1000.0f)
+            snprintf(out, size, "%d ft", (int)lroundf(feet));
+        else if (feet < 100.0f * MILES_TO_FEET)
+            snprintf(out, size, "%.1f mi", feet / MILES_TO_FEET);
+        else
+            snprintf(out, size, "%d mi", (int)lroundf(feet / MILES_TO_FEET));
+    } else if (meters < 1000.0f) {
+        snprintf(out, size, "%d m", (int)lroundf(meters));
+    } else if (meters < 100000.0f) {
+        snprintf(out, size, "%.1f km", meters / 1000.0f);
+    } else {
+        snprintf(out, size, "%d km", (int)lroundf(meters / 1000.0f));
+    }
+}
+
+const char *navCardinal(float bearingRad)
+{
+    static const char *const kPoints[8] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
+    float deg = bearingRad * 180.0f / (float)M_PI;
+    deg = fmodf(deg + 360.0f + 22.5f, 360.0f);
+    return kPoints[(int)(deg / 45.0f) & 7];
+}
+#endif // BASEUI_MAP_NAVIGATION
+
 } // namespace
 
 bool MapRenderer::isPanModeEnabled()
@@ -1124,6 +1527,16 @@ void MapRenderer::panByFingerDelta(float dxPx, float dyPx)
     // Deliberately the opposite sense to panLeft()/panRight() above: a joystick press means "move
     // the view that way", where a finger means "move the map that way".
     panViewportByPixels(-dxPx, dyPx);
+}
+
+bool MapRenderer::wantsLiveFramerate()
+{
+#if BASEUI_MAP_NAVIGATION
+    ensureFollowMeLoaded();
+    return s_followMe && MapNavigation::isActive();
+#else
+    return false;
+#endif
 }
 
 bool MapRenderer::isFollowMeEnabled()
@@ -1319,6 +1732,15 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     viewHeight -= kHeaderHeight;
 
     ensureFollowMeLoaded();
+#if BASEUI_MAP_ADDRESS_SEARCH
+    MapNavigation::pollAddressSearch();
+#endif
+#if BASEUI_MAP_NAVIGATION
+    MapNavigation::update();
+#endif
+#if BASEUI_MAP_ROUTING
+    MapNavigation::pollSavedRoutes();
+#endif
     s_lastViewWidth = viewWidth;
     s_lastViewHeight = viewHeight;
 #if BASEUI_MAP_ONSCREEN_CONTROLS
@@ -1364,6 +1786,50 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
 
     const float metersToPx = metersToPxForZoom(zoom, centerLat);
 
+    // The camera. North-up unless navigating with Follow Me on over the colour map, where the view mode can turn the
+    // direction of travel up and tilt the ground back; heading is quantised so small wobbles don't redraw the tiles.
+    namespace MT = NicheGraphics::MapTiles;
+    MT::ViewPose pose = MT::ViewPose::northUp(snappedWorldX, snappedWorldY, viewWidth / 2.0f, viewHeight / 2.0f);
+    int16_t poseHeading = 0;
+    uint8_t poseMode = 0;
+#if BASEUI_MAP_NAVIGATION && BASEUI_MAP_PNG_TILES
+    float headingDeg = 0;
+    const bool haveHeading = MapNavigation::heading(headingDeg);
+    const meshtastic_MapViewMode viewMode = MapNavigation::viewMode();
+    if (viewMode != meshtastic_MapViewMode_NORTH_UP && MapNavigation::isActive() && s_followMe && colorBasemapActive() &&
+        haveHeading) {
+        poseHeading = (int16_t)((((int)lroundf(headingDeg / 3.0f) * 3) % 360 + 360) % 360);
+        pose.setHeading(poseHeading * (float)M_PI / 180.0f);
+        if (viewMode == meshtastic_MapViewMode_TILTED) {
+            pose.anchorY = viewHeight * 0.74f;
+            pose.setTilt(55.0f * (float)M_PI / 180.0f, viewHeight * 1.1f, viewHeight * 14.0f);
+            poseMode = 2;
+        } else {
+            pose.anchorY = viewHeight * 0.66f;
+            poseMode = 1;
+        }
+    }
+#endif
+
+    // Through Web Mercator and the camera, the tiles' own projection, in float: a far position lands far off the view
+    // instead of wrapping back onto it through int16_t once zoomed in. Behind the camera lands nowhere near it.
+    const double worldWidth = worldPxAtZoom(zoom);
+    auto projectToView = [&](float lat, float lng, float &px, float &py) {
+        double wx, wy;
+        latLngToWorldPx(lat, lng, zoom, &wx, &wy);
+        if (wx - pose.centerX > worldWidth / 2) // the copy of the world nearest the view
+            wx -= worldWidth;
+        else if (pose.centerX - wx > worldWidth / 2)
+            wx += worldWidth;
+        float sx, sy;
+        if (!pose.toScreen(wx, wy, sx, sy)) {
+            px = py = -1e6f;
+            return;
+        }
+        px = x + sx;
+        py = y + sy;
+    };
+
     struct PlotCtx {
         OLEDDisplay *display;
         int16_t offX, offY;
@@ -1374,7 +1840,8 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
 
     bool colorBasemap = false;
 #if BASEUI_MAP_PNG_TILES
-    colorBasemap = drawColorBasemap(display, x, y, viewWidth, viewHeight, snappedWorldX, snappedWorldY, zoom);
+    colorBasemap =
+        drawColorBasemap(display, x, y, viewWidth, viewHeight, snappedWorldX, snappedWorldY, zoom, pose, poseHeading, poseMode);
 #endif
 
     if (colorBasemap) {
@@ -1485,15 +1952,11 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
 
 #if !MESHTASTIC_EXCLUDE_WAYPOINT
     // Geofences under every marker, so a pin is never lost inside its own fence. A waypoint can carry the
-    // circular radius, the bounding box, both or neither - the proto treats them as independent.
-    {
+    // circular radius, the bounding box, both or neither - the proto treats them as independent. North-up only: they
+    // are drawn as screen circles and boxes, which a turned or tilted view would not keep.
+    if (!pose.turned) {
         const GeofenceClip fenceClip = {x, y, viewWidth, viewHeight};
-        auto projectFence = [&](float lat, float lng, float &px, float &py) {
-            const float d = GeoCoord::latLongToMeter(centerLat, centerLng, lat, lng);
-            const float b = GeoCoord::bearing(centerLat, centerLng, lat, lng);
-            px = roundf(x + viewWidth / 2 + sinf(b) * d * metersToPx);
-            py = roundf(y + viewHeight / 2 - cosf(b) * d * metersToPx);
-        };
+        auto &projectFence = projectToView;
 
         for (const StoredWaypoint &entry : waypointStore.getWaypoints()) {
             const meshtastic_Waypoint &wp = entry.waypoint;
@@ -1527,6 +1990,25 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     }
 #endif
 
+#if BASEUI_MAP_NAVIGATION
+    // The route line goes under every marker, like the geofences; the target's own marker goes over them, below.
+    const NavClip navClip{x, y, viewWidth, viewHeight};
+    double navLat = 0, navLng = 0;
+    const bool navigating = MapNavigation::targetPosition(navLat, navLng);
+    const bool haveSelf = localPosition.latitude_i != 0 || localPosition.longitude_i != 0;
+    float navX = -1e6f, navY = -1e6f, selfX = -1e6f, selfY = -1e6f;
+    if (haveSelf)
+        projectToView(localPosition.latitude_i * 1e-7f, localPosition.longitude_i * 1e-7f, selfX, selfY);
+    const MapNavigation::Guidance guidance = MapNavigation::guidance();
+    if (navigating) {
+        projectToView((float)navLat, (float)navLng, navX, navY);
+        if (guidance.haveRoute)
+            drawNavRoute(display, pose, zoom, x, y, navClip, haveSelf, selfX, selfY);
+        else if (haveSelf && selfX > -1e5f && navX > -1e5f) // no route (yet): as the crow flies
+            drawNavLine(display, selfX, selfY, navX, navY, navClip);
+    }
+#endif
+
     for (uint32_t i = 0; i < nodeDB->getNumMeshNodes(); i++) {
         meshtastic_NodeInfoLite *node = nodeDB->getMeshNodeByIndex(i);
         if (!nodeDB->hasValidPosition(node) || node->num == ourNodeNum)
@@ -1535,17 +2017,11 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         if (!nodeDB->copyNodePosition(node->num, pos))
             continue;
 
-        float lat = pos.latitude_i * 1e-7f;
-        float lng = pos.longitude_i * 1e-7f;
-        float distance = GeoCoord::latLongToMeter(centerLat, centerLng, lat, lng);
-        float bearing = GeoCoord::bearing(centerLat, centerLng, lat, lng);
-        float northMeters = cosf(bearing) * distance;
-        float eastMeters = sinf(bearing) * distance;
-
-        int16_t mx = x + viewWidth / 2 + (int16_t)(eastMeters * metersToPx);
-        int16_t my = y + viewHeight / 2 - (int16_t)(northMeters * metersToPx);
-        if (mx < x - 2 || mx > x + viewWidth + 1 || my < y - 2 || my > y + viewHeight + 1)
+        float fx, fy;
+        projectToView(pos.latitude_i * 1e-7f, pos.longitude_i * 1e-7f, fx, fy);
+        if (fx < x - 2 || fx > x + viewWidth + 1 || fy < y - 2 || fy > y + viewHeight + 1)
             continue;
+        const int16_t mx = (int16_t)fx, my = (int16_t)fy;
 
         bool tooClose = false;
         for (int d = 0; d < drawnCount; d++) {
@@ -1585,14 +2061,11 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         if (!wp.has_latitude_i || !wp.has_longitude_i || (wp.latitude_i == 0 && wp.longitude_i == 0))
             continue;
 
-        const float wlat = wp.latitude_i * 1e-7f;
-        const float wlng = wp.longitude_i * 1e-7f;
-        const float wdistance = GeoCoord::latLongToMeter(centerLat, centerLng, wlat, wlng);
-        const float wbearing = GeoCoord::bearing(centerLat, centerLng, wlat, wlng);
-        const int16_t wx = x + viewWidth / 2 + (int16_t)(sinf(wbearing) * wdistance * metersToPx);
-        const int16_t wy = y + viewHeight / 2 - (int16_t)(cosf(wbearing) * wdistance * metersToPx);
-        if (wx < x - 2 || wx > x + viewWidth + 1 || wy < y - 2 || wy > y + viewHeight + 1)
+        float wfx, wfy;
+        projectToView(wp.latitude_i * 1e-7f, wp.longitude_i * 1e-7f, wfx, wfy);
+        if (wfx < x - 2 || wfx > x + viewWidth + 1 || wfy < y - 2 || wfy > y + viewHeight + 1)
             continue;
+        const int16_t wx = (int16_t)wfx, wy = (int16_t)wfy;
 
 #if BASEUI_NATIVE_RGB565
         // A waypoint whose icon is one of our emotes shows that emote, in the pin's box so labels line up either way.
@@ -1623,16 +2096,12 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     // `localPosition` global (see computeAutoCenter's comment) rather than nodeDB->copyNodePosition,
     // so the crosshair always lands exactly on the same position Follow Me centered on.
     if (localPosition.latitude_i != 0 || localPosition.longitude_i != 0) {
-        float lat = localPosition.latitude_i * 1e-7f;
-        float lng = localPosition.longitude_i * 1e-7f;
-        float distance = GeoCoord::latLongToMeter(centerLat, centerLng, lat, lng);
-        float bearingRad = GeoCoord::bearing(centerLat, centerLng, lat, lng);
-        float northMeters = cosf(bearingRad) * distance;
-        float eastMeters = sinf(bearingRad) * distance;
-
-        int16_t sx = x + viewWidth / 2 + (int16_t)(eastMeters * metersToPx);
-        int16_t sy = y + viewHeight / 2 - (int16_t)(northMeters * metersToPx);
-        if (sx >= x && sx <= x + viewWidth && sy >= y && sy <= y + viewHeight) {
+        float sfx, sfy;
+        projectToView(localPosition.latitude_i * 1e-7f, localPosition.longitude_i * 1e-7f, sfx, sfy);
+        if (pose.turned && sfx >= x && sfx <= x + viewWidth && sfy >= y && sfy <= y + viewHeight) {
+            drawSelfArrow(display, (int16_t)sfx, (int16_t)sfy); // the view already points the way we're going
+        } else if (sfx >= x && sfx <= x + viewWidth && sfy >= y && sfy <= y + viewHeight) {
+            const int16_t sx = (int16_t)sfx, sy = (int16_t)sfy;
             // Plain crosshair: circle with full-length lines crossing straight through it. The
             // previous version kept the ticks detached from the circle to dodge a XOR-cancellation
             // artifact from the old INVERSE draw mode; now that everything below draws with a solid
@@ -1655,6 +2124,62 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         }
     }
 
+    int16_t navBannerHeight = 0; // the turn banner takes the top of the view, where the coordinates would go
+#if BASEUI_MAP_NAVIGATION
+    if (navigating) {
+        constexpr float kInset = 8.0f; // the marker's radius: nearer the edge than this, the arrow reads better
+        const NavClip inner{(int16_t)(x + kInset), (int16_t)(y + kInset), (int16_t)(viewWidth - 2 * kInset),
+                            (int16_t)(viewHeight - 2 * kInset)};
+        if (inner.contains(navX, navY))
+            drawNavTarget(display, (int16_t)navX, (int16_t)navY);
+        else if (navX > -1e5f && !pose.turned) // turned, the route and the banner already say which way
+            drawNavEdgeArrow(display, navX, navY, navClip);
+
+        // The next turn across the top; what is left, or where the route stands, bottom-left with the target's name.
+        if (guidance.haveRoute && !guidance.arrived && guidance.instruction)
+            navBannerHeight = drawGuidanceBanner(display, x, y, viewWidth, guidance);
+        char navLine[32];
+        char distance[16], duration[16];
+        formatNavDistance(distance, sizeof(distance), guidance.metersRemaining);
+        if (guidance.arrived) {
+            snprintf(navLine, sizeof(navLine), "Arrived");
+        } else if (!haveSelf) {
+            snprintf(navLine, sizeof(navLine), "No GPS fix");
+        } else if (guidance.haveRoute) {
+            formatNavDuration(duration, sizeof(duration), guidance.secondsRemaining);
+            snprintf(navLine, sizeof(navLine), "%s  %s", distance, duration);
+        } else {
+            const float selfLat = localPosition.latitude_i * 1e-7f, selfLng = localPosition.longitude_i * 1e-7f;
+            snprintf(navLine, sizeof(navLine), "%s %s%s", distance,
+                     navCardinal(GeoCoord::bearing(selfLat, selfLng, (float)navLat, (float)navLng)),
+                     guidance.routing       ? "  Routing..."
+                     : guidance.routeFailed ? "  No route"
+                                            : "");
+        }
+        char navName[sizeof(meshtastic_NavTarget::name)];
+        strncpy(navName, MapNavigation::targetName(), sizeof(navName) - 1);
+        navName[sizeof(navName) - 1] = '\0';
+        display->setFont(FONT_SMALL);
+        const int16_t maxNameWidth = viewWidth / 2;
+        for (size_t len = strlen(navName); len > 0 && display->getStringWidth(navName) > maxNameWidth;) {
+            char dropped;
+            do { // a whole UTF-8 character at a time: its continuation bytes, then its lead
+                dropped = navName[--len];
+                navName[len] = '\0';
+            } while (len > 0 && (dropped & 0xC0) == 0x80);
+        }
+#if ROUNDED_SCREEN
+        display->setTextAlignment(TEXT_ALIGN_CENTER);
+        drawHaloString(display, x + viewWidth / 2, y + navBannerHeight + FONT_HEIGHT_SMALL, navLine);
+        drawHaloString(display, x + viewWidth / 2, y + navBannerHeight + 2 * FONT_HEIGHT_SMALL, navName);
+#else
+        display->setTextAlignment(TEXT_ALIGN_LEFT);
+        drawHaloString(display, x + 1, y + viewHeight - 2 * FONT_HEIGHT_SMALL - 1, navLine);
+        drawHaloString(display, x + 1, y + viewHeight - FONT_HEIGHT_SMALL - 1, navName);
+#endif
+    }
+#endif
+
     // Center coordinates - a concrete reference for "where am I", especially useful
     // before any basemap tiles are baked in, or after panning away from every known node.
     // Rounded panels clip their corners, so both labels are centred on those instead of
@@ -1668,11 +2193,13 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
 
 #if ROUNDED_SCREEN
     display->setTextAlignment(TEXT_ALIGN_CENTER);
-    drawHaloString(display, x + viewWidth / 2, y, coordLabel);
+    if (!navBannerHeight)
+        drawHaloString(display, x + viewWidth / 2, y, coordLabel);
     drawHaloString(display, x + viewWidth / 2, y + viewHeight - FONT_HEIGHT_SMALL - 1, statusLabel);
 #else
     display->setTextAlignment(TEXT_ALIGN_LEFT);
-    drawHaloString(display, x + 1, y, coordLabel);
+    if (!navBannerHeight)
+        drawHaloString(display, x + 1, y, coordLabel);
 
     // Status label, bottom-right corner: zoom level, plus mode/follow indicators.
     display->setTextAlignment(TEXT_ALIGN_RIGHT);

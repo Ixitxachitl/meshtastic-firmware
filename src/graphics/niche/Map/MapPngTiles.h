@@ -4,6 +4,7 @@
 
 #if BASEUI_MAP_PNG_TILES
 
+#include "./MapViewPose.h"
 #include <stdint.h>
 
 // Colour basemap in device-ui's tile layout: 256px PNGs at /maps/<style>/<z>/<x>/<y>.png, or /map/<z>/<x>/<y>.png
@@ -33,6 +34,10 @@ void noteTileArrived(int z, int32_t x, int32_t y);
 // Fills dst (w*h native-endian RGB565) with the view whose centre column/row is world pixel (centerX, centerY)
 // at `zoom`. A missing tile is scaled up from a lower zoom when one exists, else filled with bg.
 void renderView(uint16_t *dst, int16_t w, int16_t h, int32_t centerX, int32_t centerY, int zoom, uint16_t bg);
+
+// As renderView, but through a turned (and maybe tilted) camera. Rows past the horizon get `sky`. Where the ground is
+// shrunk, a lower zoom's tiles are sampled instead, which is both cheaper and steadier than skipping pixels.
+void renderViewPosed(uint16_t *dst, int16_t w, int16_t h, const ViewPose &pose, int zoom, uint16_t bg, uint16_t sky);
 
 } // namespace NicheGraphics::MapTiles::Png
 

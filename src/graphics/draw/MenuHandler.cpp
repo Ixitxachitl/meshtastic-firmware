@@ -16,6 +16,13 @@
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/TFTColorRegions.h"
 #include "graphics/draw/MapRenderer.h"
+#if BASEUI_MAP_NAVIGATION
+#include "graphics/draw/MapCoordinateParse.h"
+#include "graphics/draw/MapNavigation.h"
+#endif
+#if BASEUI_MAP_ADDRESS_SEARCH
+#include "graphics/niche/Map/MapTileFetch.h"
+#endif
 #include "graphics/draw/MessageRenderer.h"
 #include "graphics/draw/UIRenderer.h"
 #include "input/RotaryEncoderInterruptImpl1.h"
@@ -54,6 +61,18 @@
 
 namespace graphics
 {
+
+#if BASEUI_MAP_NAVIGATION || BASEUI_WIFI_MANAGER
+// A banner shown from inside another banner's callback is cleared as that one closes, so the notice waits a loop.
+static char pendingNotice[64];
+static void queueNotice(const char *message)
+{
+    strncpy(pendingNotice, message, sizeof(pendingNotice) - 1);
+    pendingNotice[sizeof(pendingNotice) - 1] = '\0';
+    menuHandler::menuQueue = menuHandler::NoticeMenu;
+    screen->runNow();
+}
+#endif
 
 namespace
 {
@@ -3482,6 +3501,18 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
         runTouchCalibration();
         break;
 #endif
+#if BASEUI_MAP_ROUTING
+    case NavSavedRoutesStart:
+        if (MapNavigation::listSavedRoutes())
+            screen->showSimpleBanner("Reading card...", 10000);
+        break;
+    case NavSavedRoutesMenu:
+        navSavedRoutesMenu();
+        break;
+    case NavSavedRouteActions:
+        navSavedRouteActions();
+        break;
+#endif
     case HamModeConfirm:
         hamModeConfirmMenu();
         break;
@@ -3512,6 +3543,49 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
         mapSourceMenu();
         break;
 #endif
+#if BASEUI_MAP_NAVIGATION
+    case NavigateMenu:
+        navigateMenu();
+        break;
+    case NavNodePickerMenu:
+        screen->showNodePicker("Navigate To", 30000, [](uint32_t nodeNum) -> void {
+            if (!MapNavigation::navigateToNode(nodeNum))
+                queueNotice("That node has no position");
+        });
+        break;
+    case NavWaypointMenu:
+        navWaypointMenu();
+        break;
+    case NavCoordinatesPrompt:
+        screen->showTextPrompt("Lat, Lon", "", 40, [](const std::string &text) -> void {
+            double lat, lon;
+            if (MapCoordinateParse::parse(text.c_str(), lat, lon))
+                MapNavigation::navigateToLocation(lat, lon, nullptr);
+            else
+                screen->showSimpleBanner("Couldn't read that position", 3000);
+        });
+        break;
+#endif
+#if BASEUI_MAP_NAVIGATION || BASEUI_WIFI_MANAGER
+    case NoticeMenu:
+        screen->showSimpleBanner(pendingNotice, 3000);
+        break;
+#endif
+#if BASEUI_MAP_ADDRESS_SEARCH
+    case NavAddressPrompt:
+        screen->showTextPrompt("Address", "", 60, [](const std::string &text) -> void {
+            if (text.empty())
+                return;
+            if (MapNavigation::startAddressSearch(text.c_str()))
+                screen->showSimpleBanner("Searching...", 20000);
+            else
+                screen->showSimpleBanner("Needs WiFi", 3000);
+        });
+        break;
+    case NavSearchResultsMenu:
+        navSearchResultsMenu();
+        break;
+#endif
 #if HAS_LORA_FEM
     case LoraFemLnaToggleMenu:
         LoRaFEMLNAToggleMenu();
@@ -3534,10 +3608,16 @@ void menuHandler::mapBaseMenu()
 #if BASEUI_MAP_ONLINE_TILES
         Source,
 #endif
+#if BASEUI_MAP_NAVIGATION
+        Navigate,
+#endif
     };
 
     static const MapMenuOption baseOptions[] = {
         {"Back", OptionsAction::Back},
+#if BASEUI_MAP_NAVIGATION
+        {"Navigate", OptionsAction::Select, static_cast<int>(MapAction::Navigate)},
+#endif
         {"Pan", OptionsAction::Select, static_cast<int>(MapAction::PanMode)},
 #if !BASEUI_MAP_UPDOWN_ZOOMS // up/down zoom directly on the Map frame instead (see Screen::handleInputEvent)
         {"Zoom", OptionsAction::Select, static_cast<int>(MapAction::ZoomLevel)},
@@ -3598,6 +3678,12 @@ void menuHandler::mapBaseMenu()
             screen->runNow();
             break;
 #endif
+#if BASEUI_MAP_NAVIGATION
+        case MapAction::Navigate:
+            menuQueue = NavigateMenu;
+            screen->runNow();
+            break;
+#endif
         }
     });
 
@@ -3611,12 +3697,15 @@ void menuHandler::mapBaseMenu()
 // captures, so the index it has to recognise is parked here as the menu is built.
 static int mapStyleSourceRow = -1;
 #endif
+#if BASEUI_MAP_NAVIGATION && BASEUI_MAP_ONSCREEN_CONTROLS
+static int mapStyleNavigateRow = -1; // as mapStyleSourceRow
+#endif
 
 void menuHandler::mapStyleMenu()
 {
     // Labels point at MapRenderer's style names, which stay put until the next rescan (this menu's own).
     // Back, the PNG folders, MAP.BIN, and the Source row where this menu is the only one left.
-    static const char *labels[graphics::MapRenderer::kMaxMapStyles + 3];
+    static const char *labels[graphics::MapRenderer::kMaxMapStyles + 4];
     const int count = graphics::MapRenderer::refreshMapStyles();
     labels[0] = "Back";
     for (int i = 0; i < count; i++)
@@ -3627,6 +3716,10 @@ void menuHandler::mapStyleMenu()
     // online/offline choice.
     mapStyleSourceRow = optionsCount++;
     labels[mapStyleSourceRow] = (uiconfig.has_map_data && uiconfig.map_data.online_tiles) ? "Source: Online" : "Source: Offline";
+#endif
+#if BASEUI_MAP_NAVIGATION && BASEUI_MAP_ONSCREEN_CONTROLS
+    mapStyleNavigateRow = optionsCount++;
+    labels[mapStyleNavigateRow] = "Navigate";
 #endif
 
     BannerOverlayOptions bannerOptions;
@@ -3645,6 +3738,13 @@ void menuHandler::mapStyleMenu()
 #if BASEUI_MAP_ONLINE_TILES && BASEUI_MAP_ONSCREEN_CONTROLS
         if (selected == mapStyleSourceRow) {
             menuQueue = MapSourceMenu;
+            screen->runNow();
+            return;
+        }
+#endif
+#if BASEUI_MAP_NAVIGATION && BASEUI_MAP_ONSCREEN_CONTROLS
+        if (selected == mapStyleNavigateRow) {
+            menuQueue = NavigateMenu;
             screen->runNow();
             return;
         }
@@ -3844,6 +3944,318 @@ void menuHandler::toggleNodeMuted(uint32_t nodeNum)
     nodeDB->notifyObservers(true);
     nodeDB->saveToDisk();
 }
+
+#if BASEUI_MAP_NAVIGATION
+// Map > Navigate: resume or stop the current target, or pick a new one.
+void menuHandler::navigateMenu()
+{
+    enum Choice { Back, Saved, Download, Stop, Node, Waypoint, Coordinates, Address, Travel, View, ChoiceCount };
+    static const char *labels[ChoiceCount];
+    static int choices[ChoiceCount];
+    static char downloadLabel[40];
+    static const char *const kTravelLabels[] = {"Travel: Car", "Travel: Bike", "Travel: Walk"};
+    static const char *const kViewLabels[] = {"View: North up", "View: Heading up", "View: 3D"};
+    static int reopenOn = -1; // the row just cycled, so the menu comes back with it still selected
+    int count = 0;
+    labels[count] = "Back";
+    choices[count++] = Back;
+#if BASEUI_MAP_ROUTING
+    labels[count] = "Saved Routes";
+    choices[count++] = Saved;
+    // The last tile download: how far it has got (selecting stops it), how it ended, or why it was refused.
+    {
+        namespace Fetch = NicheGraphics::MapTiles::Fetch;
+        const Fetch::DownloadProgress progress = Fetch::downloadProgress();
+        const unsigned done = progress.done, total = progress.total;
+        if (progress.state == Fetch::DownloadState::Queued || progress.state == Fetch::DownloadState::Running)
+            snprintf(downloadLabel, sizeof(downloadLabel), "Stop tiles %u/%u", done, total);
+        else if (progress.state == Fetch::DownloadState::Finished)
+            snprintf(downloadLabel, sizeof(downloadLabel), "Tiles done, %u failed", (unsigned)progress.failed);
+        else if (progress.state == Fetch::DownloadState::Failed)
+            snprintf(downloadLabel, sizeof(downloadLabel), "Tiles: %.30s", progress.reason);
+        else
+            downloadLabel[0] = '\0';
+        if (downloadLabel[0]) {
+            labels[count] = downloadLabel;
+            choices[count++] = Download;
+        }
+    }
+#endif
+    if (MapNavigation::isActive()) {
+        labels[count] = "Stop Navigation";
+        choices[count++] = Stop;
+    }
+    labels[count] = "To Node";
+    choices[count++] = Node;
+#if !MESHTASTIC_EXCLUDE_WAYPOINT
+    labels[count] = "To Waypoint";
+    choices[count++] = Waypoint;
+#endif
+    labels[count] = "To Coordinates";
+    choices[count++] = Coordinates;
+#if BASEUI_MAP_ADDRESS_SEARCH
+    labels[count] = "To Address";
+    choices[count++] = Address;
+#endif
+#if BASEUI_MAP_ROUTING
+    labels[count] = kTravelLabels[std::min<int>(MapNavigation::travelMode(), 2)];
+    choices[count++] = Travel;
+#endif
+#if BASEUI_MAP_PNG_TILES
+    labels[count] = kViewLabels[std::min<int>(MapNavigation::viewMode(), 2)];
+    choices[count++] = View;
+#endif
+
+    BannerOverlayOptions bannerOptions;
+    for (int i = 0; i < count; i++) {
+        if (choices[i] == reopenOn)
+            bannerOptions.InitialSelected = i;
+    }
+    reopenOn = -1;
+    bannerOptions.message = MapNavigation::isActive() ? MapNavigation::targetName() : "Navigate";
+    bannerOptions.optionsArrayPtr = labels;
+    bannerOptions.optionsEnumPtr = choices;
+    bannerOptions.optionsCount = count;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        switch (selected) {
+        case Back:
+#if BASEUI_MAP_ONSCREEN_CONTROLS
+            menuQueue = MapStyleMenu; // where it was opened from; the on-screen buttons replaced the Map menu
+#else
+            menuQueue = MapBaseMenu;
+#endif
+            screen->runNow();
+            break;
+#if BASEUI_MAP_ROUTING
+        case Saved:
+            menuQueue = NavSavedRoutesStart; // the card is read on the fetch task; the list opens once it is in
+            screen->runNow();
+            break;
+        case Download: {
+            namespace Fetch = NicheGraphics::MapTiles::Fetch;
+            const Fetch::DownloadState state = Fetch::downloadProgress().state;
+            if (state == Fetch::DownloadState::Queued || state == Fetch::DownloadState::Running) {
+                Fetch::cancelDownload();
+                queueNotice("Tile download stopped");
+            }
+            break;
+        }
+#endif
+        case Stop:
+            MapNavigation::stop();
+            break;
+        case Node:
+            menuQueue = NavNodePickerMenu;
+            screen->runNow();
+            break;
+        case Waypoint:
+            menuQueue = NavWaypointMenu;
+            screen->runNow();
+            break;
+        case Coordinates:
+            menuQueue = NavCoordinatesPrompt;
+            screen->runNow();
+            break;
+#if BASEUI_MAP_ADDRESS_SEARCH
+        case Address:
+            menuQueue = NavAddressPrompt;
+            screen->runNow();
+            break;
+#endif
+        case Travel: // each press steps to the next, and the menu comes back to show it
+            MapNavigation::setTravelMode((meshtastic_NavTravelMode)((MapNavigation::travelMode() + 1) % 3));
+            reopenOn = Travel;
+            menuQueue = NavigateMenu;
+            screen->runNow();
+            break;
+        case View:
+            MapNavigation::setViewMode((meshtastic_MapViewMode)((MapNavigation::viewMode() + 1) % 3));
+            reopenOn = View;
+            menuQueue = NavigateMenu;
+            screen->runNow();
+            break;
+        }
+    };
+    screen->showOverlayBanner(bannerOptions);
+}
+
+#if BASEUI_MAP_ROUTING
+// Saved Routes: newest first, each with its length. Copied out of the fetcher, which may list again meanwhile.
+static NicheGraphics::MapTiles::Fetch::SavedRoute savedRoutes[NicheGraphics::MapTiles::Fetch::kRouteSlots];
+static int savedRouteCount = 0;
+static int savedRoutePicked = -1; // index into savedRoutes
+
+void menuHandler::navSavedRoutesMenu()
+{
+    namespace Fetch = NicheGraphics::MapTiles::Fetch;
+    static char labels[Fetch::kRouteSlots][48];
+    static const char *optionsArray[Fetch::kRouteSlots + 1];
+
+    const Fetch::SavedRoute *found = nullptr;
+    savedRouteCount = std::min(Fetch::savedRoutes(found), (int)Fetch::kRouteSlots);
+    for (int i = 0; i < savedRouteCount; i++)
+        savedRoutes[i] = found[i];
+    Fetch::clearList();
+
+    optionsArray[0] = "Back";
+    for (int i = 0; i < savedRouteCount; i++) {
+        char distance[16];
+        const float km = savedRoutes[i].header.lengthKm;
+        if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL)
+            snprintf(distance, sizeof(distance), "%.1f mi", km * 0.621371f);
+        else
+            snprintf(distance, sizeof(distance), "%.1f km", km);
+        snprintf(labels[i], sizeof(labels[i]), "%.28s  %s", savedRoutes[i].header.name, distance);
+        optionsArray[i + 1] = labels[i];
+    }
+
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = savedRouteCount ? "Saved Routes" : "No saved routes";
+    bannerOptions.optionsArrayPtr = optionsArray;
+    bannerOptions.optionsCount = savedRouteCount + 1;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        if (selected <= 0 || selected > savedRouteCount) {
+            menuQueue = NavigateMenu;
+            screen->runNow();
+            return;
+        }
+        savedRoutePicked = selected - 1;
+        menuQueue = NavSavedRouteActions;
+        screen->runNow();
+    };
+    screen->showOverlayBanner(bannerOptions);
+}
+
+void menuHandler::navSavedRouteActions()
+{
+    namespace Fetch = NicheGraphics::MapTiles::Fetch;
+    if (savedRoutePicked < 0 || savedRoutePicked >= savedRouteCount)
+        return;
+    enum optionsNumbers { Back, Navigate, DownloadTiles, Delete };
+    static const char *optionsArray[] = {"Back", "Navigate", "Download tiles", "Delete"};
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = savedRoutes[savedRoutePicked].header.name;
+    bannerOptions.optionsArrayPtr = optionsArray;
+    bannerOptions.optionsCount = 4;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        const Fetch::SavedRoute &route = savedRoutes[savedRoutePicked];
+        switch (selected) {
+        case Navigate:
+            MapNavigation::navigateSaved(route.slot, route.header);
+            break;
+        case DownloadTiles:
+            // The fetch task checks the style and its tile server; a refusal shows next time the menu opens.
+            queueNotice(Fetch::startRouteDownload(route.slot) ? "Downloading tiles along the route"
+                                                              : "A download is already running");
+            break;
+        case Delete:
+            Fetch::deleteRoute(route.slot);
+            queueNotice("Route deleted");
+            break;
+        default:
+            menuQueue = NavSavedRoutesStart;
+            screen->runNow();
+            break;
+        }
+    };
+    screen->showOverlayBanner(bannerOptions);
+}
+#endif
+
+void menuHandler::navWaypointMenu()
+{
+#if MESHTASTIC_EXCLUDE_WAYPOINT
+    menuQueue = MenuNone;
+#else
+    static const char *optionsArray[WAYPOINT_HISTORY_LIMIT + 1];
+    static uint32_t waypointIds[WAYPOINT_HISTORY_LIMIT + 1];
+    static std::string labelStorage[WAYPOINT_HISTORY_LIMIT + 1];
+
+    optionsArray[0] = "Back";
+    int options = 1;
+    for (const StoredWaypoint &entry : waypointStore.getWaypoints()) {
+        const meshtastic_Waypoint &wp = entry.waypoint;
+        if (options > WAYPOINT_HISTORY_LIMIT || WaypointStore::isExpired(entry) || !wp.has_latitude_i || !wp.has_longitude_i)
+            continue;
+        std::string name = sanitizeString(wp.name);
+        if (name.empty())
+            name = "Unnamed Waypoint";
+        labelStorage[options] = name.substr(0, 20);
+        optionsArray[options] = labelStorage[options].c_str();
+        waypointIds[options] = wp.id;
+        options++;
+    }
+
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = options > 1 ? "Navigate To" : "No Waypoints";
+    bannerOptions.optionsArrayPtr = optionsArray;
+    bannerOptions.optionsCount = options;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        if (selected == 0) {
+            menuQueue = NavigateMenu;
+            screen->runNow();
+            return;
+        }
+        if (!MapNavigation::navigateToWaypoint(waypointIds[selected]))
+            queueNotice("That waypoint is gone");
+    };
+    screen->showOverlayBanner(bannerOptions);
+#endif
+}
+#endif // BASEUI_MAP_NAVIGATION
+
+#if BASEUI_MAP_ADDRESS_SEARCH
+// Opened by MapNavigation once the search it sent has an answer.
+void menuHandler::navSearchResultsMenu()
+{
+    namespace Fetch = NicheGraphics::MapTiles::Fetch;
+    namespace Geocode = NicheGraphics::MapTiles::Geocode;
+    // Copied out: the fetcher's results only last until its state is cleared, below.
+    static Geocode::Result places[Geocode::kMaxResults];
+    static std::string labelStorage[Geocode::kMaxResults];
+    static const char *optionsArray[Geocode::kMaxResults + 1];
+
+    const bool failed = Fetch::searchState() == Fetch::SearchState::Failed;
+    const Geocode::Result *found = nullptr;
+    const int count = Fetch::searchResults(found);
+    for (int i = 0; i < count; i++)
+        places[i] = found[i];
+    Fetch::clearSearch();
+
+    if (failed || count == 0) {
+        screen->showSimpleBanner(failed ? "Search failed" : "No places found", 3000);
+        return;
+    }
+
+    optionsArray[0] = "Back";
+    for (int i = 0; i < count; i++) {
+        labelStorage[i] = sanitizeString(places[i].name).substr(0, 28);
+        optionsArray[i + 1] = labelStorage[i].c_str();
+    }
+
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = "Navigate To";
+    bannerOptions.optionsArrayPtr = optionsArray;
+    bannerOptions.optionsCount = count + 1;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        if (selected <= 0) {
+            menuQueue = NavigateMenu;
+            screen->runNow();
+            return;
+        }
+        // A full address is too long for a label: keep up to the second comma ("12, Main Street").
+        const Geocode::Result &place = places[selected - 1];
+        char name[sizeof(meshtastic_NavTarget::name)];
+        strncpy(name, sanitizeString(place.name).c_str(), sizeof(name) - 1);
+        name[sizeof(name) - 1] = '\0';
+        if (char *first = strchr(name, ','))
+            if (char *second = strchr(first + 1, ','))
+                *second = '\0';
+        MapNavigation::navigateToLocation(place.lat, place.lon, name);
+    };
+    screen->showOverlayBanner(bannerOptions);
+}
+#endif
 
 void menuHandler::saveUIConfig()
 {

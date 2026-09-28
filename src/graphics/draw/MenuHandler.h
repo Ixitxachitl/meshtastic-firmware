@@ -86,6 +86,24 @@ class menuHandler
 #if BASEUI_MAP_ONLINE_TILES
         MapSourceMenu,
 #endif
+#if BASEUI_MAP_NAVIGATION
+        NavigateMenu,
+        NavNodePickerMenu,
+        NavWaypointMenu,
+        NavCoordinatesPrompt,
+#endif
+#if BASEUI_MAP_NAVIGATION || BASEUI_WIFI_MANAGER
+        NoticeMenu,
+#endif
+#if BASEUI_MAP_ADDRESS_SEARCH
+        NavAddressPrompt,
+        NavSearchResultsMenu,
+#endif
+#if BASEUI_MAP_ROUTING
+        NavSavedRoutesStart,
+        NavSavedRoutesMenu,
+        NavSavedRouteActions,
+#endif
     };
     static screenMenus menuQueue;
     static uint32_t pickedNodeNum; // node selected by NodePicker for ManageNodeMenu
@@ -169,6 +187,17 @@ class menuHandler
 #endif
 #if BASEUI_MAP_ONLINE_TILES
     static void mapSourceMenu();
+#endif
+#if BASEUI_MAP_NAVIGATION
+    static void navigateMenu();
+    static void navWaypointMenu();
+#endif
+#if BASEUI_MAP_ADDRESS_SEARCH
+    static void navSearchResultsMenu();
+#endif
+#if BASEUI_MAP_ROUTING
+    static void navSavedRoutesMenu();
+    static void navSavedRouteActions();
 #endif
 #if HAS_LORA_FEM
     static void LoRaFEMLNAToggleMenu();
