@@ -53,21 +53,6 @@ namespace DebugRenderer
 {
 
 #if HAS_WIFI && !defined(ARCH_PORTDUINO)
-#if BASEUI_WIFI_MANAGER
-menuHandler::pollWifiScan(); // the Networks menu's scan, once it is in
-#endif
-clearForFrame(display, state);
-display->setTextAlignment(TEXT_ALIGN_LEFT);
-display->setFont(FONT_SMALL);
-int line = 1;
-
-// === Set Title
-const char *titleStr = "WiFi";
-
-// === Header ===
-graphics::drawCommonHeader(display, x, y, titleStr);
-y += BASEUI_BELOW_HEADER_MARGIN;
-
 static void drawWiFiStatus(OLEDDisplay *display, int16_t x, int16_t y, int &line)
 {
     const char *wifiName = config.network.wifi_ssid;
@@ -134,7 +119,10 @@ static void drawWiFiStatus(OLEDDisplay *display, int16_t x, int16_t y, int &line
 void drawFrameWiFi(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
 #if HAS_WIFI && !defined(ARCH_PORTDUINO)
-    display->clear();
+#if BASEUI_WIFI_MANAGER
+    menuHandler::pollWifiScan(); // the Networks menu's scan, once it is in
+#endif
+    clearForFrame(display, state);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
     int line = 1;
