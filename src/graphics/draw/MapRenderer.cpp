@@ -12,6 +12,10 @@
 #include "graphics/TFTColorRegions.h"
 #include "graphics/TFTPalette.h"
 #include "graphics/draw/MapNavigation.h"
+#if BASEUI_MAP_ROUTING
+#include "graphics/draw/MenuHandler.h"
+#include "graphics/niche/Map/MapTileFetch.h"
+#endif
 #include "graphics/draw/MapRegionBounds.h"
 #include "graphics/draw/MapViewPersistence.h"
 #include "graphics/images.h"
@@ -1396,6 +1400,75 @@ int16_t drawGuidanceBanner(OLEDDisplay *display, int16_t x, int16_t y, int16_t w
     return height;
 }
 
+#if BASEUI_MAP_ROUTING
+// The route tile download across the top of the map while it runs, gone once it finishes. A refusal or failure shows
+// there for a few seconds instead. Returns the height taken.
+int16_t drawDownloadOverlay(OLEDDisplay *display, int16_t x, int16_t y, int16_t width)
+{
+    namespace Fetch = NicheGraphics::MapTiles::Fetch;
+    constexpr uint32_t kFailureShownMs = 5000;
+    static uint32_t failedAtMs = 0;
+    const Fetch::DownloadProgress p = Fetch::downloadProgress();
+    char text[48];
+    float fraction = -1.0f; // no bar
+    switch (p.state) {
+    case Fetch::DownloadState::Queued:
+        snprintf(text, sizeof(text), "Preparing tile download...");
+        fraction = 0.0f;
+        break;
+    case Fetch::DownloadState::Running:
+        snprintf(text, sizeof(text), "Downloading tiles %u/%u", (unsigned)p.done, (unsigned)p.total);
+        fraction = p.total ? (float)p.done / (float)p.total : 0.0f;
+        break;
+    case Fetch::DownloadState::Failed:
+        if (!failedAtMs)
+            failedAtMs = millis() ? millis() : 1;
+        if (!Throttle::isWithinTimespanMs(failedAtMs, kFailureShownMs)) {
+            Fetch::clearDownload();
+            failedAtMs = 0;
+            return 0;
+        }
+        snprintf(text, sizeof(text), "Tiles: %.40s", p.reason);
+        break;
+    case Fetch::DownloadState::Finished:
+        Fetch::clearDownload();
+        failedAtMs = 0;
+        return 0;
+    default:
+        failedAtMs = 0;
+        return 0;
+    }
+
+    display->setFont(FONT_SMALL);
+    const int16_t lineH = FONT_HEIGHT_SMALL;
+    constexpr int16_t kBarH = 6;
+    const bool bar = fraction >= 0.0f;
+    const int16_t height = lineH + 3 + (bar ? kBarH + 3 : 0);
+#if BASEUI_NATIVE_RGB565
+    static_cast<TFTDisplay *>(display)->blendRect565(x, y, width, height, TFTPalette::White, 200);
+#else
+    display->setColor(WHITE);
+    display->fillRect(x, y, width, height);
+#endif
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    drawHaloString(display, x + 4, y + 1, text);
+    if (bar) {
+        const int16_t bx = x + 4, by = y + lineH + 3, bw = width - 8;
+        const int16_t filled = (int16_t)((bw - 2) * std::min(1.0f, fraction));
+        display->setColor(BLACK);
+        display->drawRect(bx, by, bw, kBarH);
+#if BASEUI_NATIVE_RGB565
+        if (filled > 0)
+            static_cast<TFTDisplay *>(display)->fillRect565(bx + 1, by + 1, filled, kBarH - 2, TFTPalette::MeshtasticGreen);
+#else
+        display->fillRect(bx + 1, by + 1, filled, kBarH - 2);
+#endif
+        display->setColor(WHITE);
+    }
+    return height;
+}
+#endif
+
 // Us, as an arrow pointing the way we are going: up, in the turned views.
 void drawSelfArrow(OLEDDisplay *display, int16_t sx, int16_t sy)
 {
@@ -1740,6 +1813,7 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
 #endif
 #if BASEUI_MAP_ROUTING
     MapNavigation::pollSavedRoutes();
+    menuHandler::refreshNavigateMenu(); // drops Stop tile download from an open Navigate menu once the download ends
 #endif
     s_lastViewWidth = viewWidth;
     s_lastViewHeight = viewHeight;
@@ -2178,6 +2252,10 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
         drawHaloString(display, x + 1, y + viewHeight - FONT_HEIGHT_SMALL - 1, navName);
 #endif
     }
+#endif
+
+#if BASEUI_MAP_ROUTING
+    navBannerHeight += drawDownloadOverlay(display, x, y + navBannerHeight, viewWidth); // below the turn, if any
 #endif
 
     // Center coordinates - a concrete reference for "where am I", especially useful

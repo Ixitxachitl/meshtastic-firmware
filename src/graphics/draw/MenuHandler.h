@@ -213,6 +213,9 @@ class menuHandler
 #if BASEUI_MAP_ROUTING
     static void navSavedRoutesMenu();
     static void navSavedRouteActions();
+    // Called as the map draws: an open Navigate menu still offering to stop a download that has ended is rebuilt
+    // without that row.
+    static void refreshNavigateMenu();
 #endif
 #if HAS_LORA_FEM
     static void LoRaFEMLNAToggleMenu();

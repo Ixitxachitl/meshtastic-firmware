@@ -20,6 +20,9 @@
 #include "mesh/wifi/WiFiNetworks.h"
 #include <WiFi.h>
 #endif
+#if BASEUI_MAP_ROUTING
+#include "graphics/draw/NotificationRenderer.h"
+#endif
 #if BASEUI_MAP_NAVIGATION
 #include "graphics/draw/MapCoordinateParse.h"
 #include "graphics/draw/MapNavigation.h"
@@ -4147,6 +4150,31 @@ void menuHandler::toggleNodeMuted(uint32_t nodeNum)
     nodeDB->saveToDisk();
 }
 
+#if BASEUI_MAP_ROUTING
+// The Navigate menu's rows, so an open one can be told apart from any other menu, and where its Stop tile download
+// row sits (-1 when it has none). A rebuild under the user passes the cursor through navigateReselect.
+static const char **navigateLabels = nullptr;
+static int navigateStopRow = -1, navigateReselect = -1, navigateInitial = -1;
+
+void menuHandler::refreshNavigateMenu()
+{
+    namespace Fetch = NicheGraphics::MapTiles::Fetch;
+    if (navigateStopRow < 0 || !NotificationRenderer::isOverlayBannerShowing() ||
+        NotificationRenderer::optionsArrayPtr != navigateLabels)
+        return;
+    const Fetch::DownloadState state = Fetch::downloadProgress().state;
+    if (state == Fetch::DownloadState::Queued || state == Fetch::DownloadState::Running)
+        return;
+    int cursor = NotificationRenderer::curSelected;
+    if (cursor > navigateStopRow)
+        cursor--; // the rows below move up into its place
+    navigateReselect = cursor;
+    navigateStopRow = -1;
+    menuQueue = NavigateMenu;
+    screen->runNow();
+}
+#endif
+
 #if BASEUI_MAP_NAVIGATION
 // Map > Navigate: resume or stop the current target, or pick a new one.
 void menuHandler::navigateMenu()
@@ -4154,7 +4182,6 @@ void menuHandler::navigateMenu()
     enum Choice { Back, Saved, Download, Stop, Node, Waypoint, Coordinates, Address, Travel, View, ChoiceCount };
     static const char *labels[ChoiceCount];
     static int choices[ChoiceCount];
-    static char downloadLabel[40];
     static const char *const kTravelLabels[] = {"Travel: Car", "Travel: Bike", "Travel: Walk"};
     static const char *const kViewLabels[] = {"View: North up", "View: Heading up", "View: 3D"};
     static int reopenOn = -1; // the row just cycled, so the menu comes back with it still selected
@@ -4164,22 +4191,21 @@ void menuHandler::navigateMenu()
 #if BASEUI_MAP_ROUTING
     labels[count] = "Saved Routes";
     choices[count++] = Saved;
-    // The last tile download: how far it has got (selecting stops it), how it ended, or why it was refused.
+    // Progress is on the map itself; the menu only offers to stop a download that is running.
     {
         namespace Fetch = NicheGraphics::MapTiles::Fetch;
-        const Fetch::DownloadProgress progress = Fetch::downloadProgress();
-        const unsigned done = progress.done, total = progress.total;
-        if (progress.state == Fetch::DownloadState::Queued || progress.state == Fetch::DownloadState::Running)
-            snprintf(downloadLabel, sizeof(downloadLabel), "Stop tiles %u/%u", done, total);
-        else if (progress.state == Fetch::DownloadState::Finished)
-            snprintf(downloadLabel, sizeof(downloadLabel), "Tiles done, %u failed", (unsigned)progress.failed);
-        else if (progress.state == Fetch::DownloadState::Failed)
-            snprintf(downloadLabel, sizeof(downloadLabel), "Tiles: %.30s", progress.reason);
-        else
-            downloadLabel[0] = '\0';
-        if (downloadLabel[0]) {
-            labels[count] = downloadLabel;
+        const Fetch::DownloadState state = Fetch::downloadProgress().state;
+        navigateStopRow = -1;
+        if (state == Fetch::DownloadState::Queued || state == Fetch::DownloadState::Running) {
+            navigateStopRow = count;
+            labels[count] = "Stop tile download";
             choices[count++] = Download;
+        }
+        navigateLabels = labels;
+        if (navigateReselect >= 0) { // rebuilt under the user: keep the cursor where it was
+            reopenOn = -1;
+            navigateInitial = navigateReselect;
+            navigateReselect = -1;
         }
     }
 #endif
@@ -4214,6 +4240,12 @@ void menuHandler::navigateMenu()
             bannerOptions.InitialSelected = i;
     }
     reopenOn = -1;
+#if BASEUI_MAP_ROUTING
+    if (navigateInitial >= 0) {
+        bannerOptions.InitialSelected = std::min(navigateInitial, count - 1);
+        navigateInitial = -1;
+    }
+#endif
     bannerOptions.message = MapNavigation::isActive() ? MapNavigation::targetName() : "Navigate";
     bannerOptions.optionsArrayPtr = labels;
     bannerOptions.optionsEnumPtr = choices;

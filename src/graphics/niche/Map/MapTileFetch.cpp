@@ -1014,6 +1014,13 @@ void cancelDownload()
     if (fetcher)
         fetcher->poke();
 }
+
+void clearDownload()
+{
+    const DownloadState state = downloadStatus;
+    if (state == DownloadState::Finished || state == DownloadState::Failed)
+        downloadStatus = DownloadState::Idle;
+}
 #endif
 
 } // namespace NicheGraphics::MapTiles::Fetch

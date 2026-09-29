@@ -80,6 +80,8 @@ struct DownloadProgress {
 bool startRouteDownload(int slot);
 DownloadProgress downloadProgress();
 void cancelDownload();
+// Back to Idle once a finished or failed download has been shown.
+void clearDownload();
 #endif
 
 } // namespace NicheGraphics::MapTiles::Fetch
