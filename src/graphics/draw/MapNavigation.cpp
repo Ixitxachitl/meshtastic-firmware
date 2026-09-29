@@ -7,6 +7,7 @@
 #include "graphics/Screen.h"
 #include "graphics/draw/MenuHandler.h"
 #include "main.h"
+#include "memory/MemAudit.h"
 #include "mesh/Throttle.h"
 #if !MESHTASTIC_EXCLUDE_WAYPOINT
 #include "WaypointStore.h"
@@ -130,6 +131,9 @@ bool reserve(uint32_t points, uint16_t turns)
         if (!maneuverCap)
             return false;
     }
+    memaudit::set("mapnav",
+                  pointCap * (2 * sizeof(int32_t) + 2 * sizeof(uint32_t) + sizeof(float)) + maneuverCap * sizeof(Route::Maneuver),
+                  latE7);
     return true;
 }
 

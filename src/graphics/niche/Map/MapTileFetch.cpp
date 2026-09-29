@@ -12,6 +12,7 @@
 #include "NodeDB.h"
 #include "SPILock.h"
 #include "concurrency/OSThread.h"
+#include "memory/MemAudit.h"
 #include "mesh/Throttle.h"
 #if defined(SENSECAP_INDICATOR)
 #include "mesh/IndicatorRemoteFS.h"
@@ -345,13 +346,15 @@ bool ensureBuffer()
         buffer = static_cast<uint8_t *>(heap_caps_malloc(kMaxTileBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
         if (!buffer)
             buffer = static_cast<uint8_t *>(malloc(kMaxTileBytes));
+        if (buffer)
+            memaudit::add("mapfetch", kMaxTileBytes, buffer);
     }
     return buffer != nullptr;
 }
 
 // Fetches url into dst. Returns the length, or 0 on any failure (already logged) - including a reply that fills dst,
 // which may have been cut.
-size_t downloadInto(const char *url, uint8_t *dst, size_t cap, uint32_t timeoutMs)
+size_t downloadRequest(const char *url, uint8_t *dst, size_t cap, uint32_t timeoutMs)
 {
     // APP_VERSION arrives unquoted from the build flags; xstr() comes from configuration.h.
     static const char *userAgent = "Meshtastic/" xstr(APP_VERSION) " (+https://meshtastic.org)";
@@ -408,6 +411,26 @@ size_t downloadInto(const char *url, uint8_t *dst, size_t cap, uint32_t timeoutM
         return 0;
     }
     return total;
+}
+
+// Leak check for the network path, which this task drives nonstop while navigating: internal heap just before and
+// after each request, summed. A total that keeps climbing means requests leave memory behind; one near zero while the
+// free heap still falls puts the leak somewhere else. Other tasks allocate meanwhile, so only the trend means anything.
+uint32_t requestCount = 0;
+int32_t requestKept = 0;
+
+size_t downloadInto(const char *url, uint8_t *dst, size_t cap, uint32_t timeoutMs)
+{
+    const size_t before = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    const size_t len = downloadRequest(url, dst, cap, timeoutMs);
+    requestKept += (int32_t)before - (int32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    if (++requestCount % 32 == 0)
+        LOG_INFO("Map fetch: %u requests, internal kept %ld; free %u, min %u, DMA block %u; task stack left %u",
+                 (unsigned)requestCount, (long)requestKept, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA),
+                 (unsigned)uxTaskGetStackHighWaterMark(nullptr));
+    return len;
 }
 
 // Into the shared tile buffer.
@@ -534,8 +557,10 @@ bool allocRouteArrays(int32_t *&lat, int32_t *&lon, Route::Maneuver *&turns)
     lat = static_cast<int32_t *>(heap_caps_malloc(kRoutePointCap * sizeof(int32_t), MALLOC_CAP_SPIRAM));
     lon = static_cast<int32_t *>(heap_caps_malloc(kRoutePointCap * sizeof(int32_t), MALLOC_CAP_SPIRAM));
     turns = static_cast<Route::Maneuver *>(heap_caps_malloc(kRouteManeuverCap * sizeof(Route::Maneuver), MALLOC_CAP_SPIRAM));
-    if (lat && lon && turns)
+    if (lat && lon && turns) {
+        memaudit::add("mapfetch", 2 * kRoutePointCap * sizeof(int32_t) + kRouteManeuverCap * sizeof(Route::Maneuver), lat);
         return true;
+    }
     free(lat);
     free(lon);
     free(turns);
@@ -803,6 +828,7 @@ class TileFetcher : private concurrency::OSThread
 
         const Request request = queue[tail];
         tail = (uint8_t)((tail + 1) % kQueueSlots);
+
         lastRequestMs = millis();
 
         if (!expandTileUrl(urlTemplate, request.z, request.x, request.y, tileUrl, sizeof(tileUrl)))

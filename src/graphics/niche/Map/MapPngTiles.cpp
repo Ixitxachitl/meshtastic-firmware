@@ -7,6 +7,7 @@
 #include "./MapTileSourceSD.h"
 #include "DebugConfiguration.h"
 #include "SPILock.h"
+#include "memory/MemAudit.h"
 #include "mesh/Throttle.h"
 #if defined(SENSECAP_INDICATOR)
 #include "mesh/IndicatorRemoteFS.h"
@@ -271,6 +272,8 @@ const uint16_t *fetchTile(int z, int32_t x, int32_t y)
     }
     if (!slot->pixels)
         slot->pixels = static_cast<uint16_t *>(allocLarge((size_t)kTileSize * kTileSize * sizeof(uint16_t)));
+    if (slot->pixels) // the cache fills slot by slot as tiles are first needed, then stays that size
+        memaudit::add("maptiles", kTileSize * kTileSize * sizeof(uint16_t), slot->pixels);
     if (!slot->pixels)
         return nullptr;
 
