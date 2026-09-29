@@ -354,63 +354,111 @@ bool ensureBuffer()
 
 // Fetches url into dst. Returns the length, or 0 on any failure (already logged) - including a reply that fills dst,
 // which may have been cut.
+// Where a reply's body goes: the caller's buffer, and never past it. A full buffer makes the read fail rather than
+// hand back a cut-off file.
+class BufferSink : public Stream
+{
+  public:
+    BufferSink(uint8_t *dst, size_t cap) : dst(dst), cap(cap) {}
+    size_t write(uint8_t b) override { return write(&b, 1); }
+    size_t write(const uint8_t *buf, size_t n) override
+    {
+        const size_t take = n < cap - len ? n : cap - len;
+        memcpy(dst + len, buf, take);
+        len += take;
+        overflow |= take < n;
+        return take;
+    }
+    int available() override { return 0; }
+    int read() override { return -1; }
+    int peek() override { return -1; }
+    void flush() override {}
+    uint8_t *const dst;
+    const size_t cap;
+    size_t len = 0;
+    bool overflow = false;
+};
+
+// One client for every request this task makes, left connected between requests to the same server: a run of tiles
+// then costs one TLS handshake instead of one each - most of a tile's time, and most of the memory churn. It is only
+// ever used from this task.
+HTTPClient http;
+char connectedHost[96] = "";
+
+// "tile.example.org:8080" out of "https://tile.example.org:8080/z/x/y.png".
+void hostOf(const char *url, char (&host)[96])
+{
+    const char *start = strstr(url, "://");
+    start = start ? start + 3 : url;
+    size_t n = strcspn(start, "/?#");
+    n = n < sizeof(host) - 1 ? n : sizeof(host) - 1;
+    memcpy(host, start, n);
+    host[n] = '\0';
+}
+
+// Drops the connection outright, so the next request opens a fresh one.
+void closeConnection()
+{
+    http.setReuse(false);
+    http.end();
+    http.setReuse(true);
+    connectedHost[0] = '\0';
+}
+
 size_t downloadRequest(const char *url, uint8_t *dst, size_t cap, uint32_t timeoutMs)
 {
     // APP_VERSION arrives unquoted from the build flags; xstr() comes from configuration.h.
     static const char *userAgent = "Meshtastic/" xstr(APP_VERSION) " (+https://meshtastic.org)";
+    char host[96];
+    hostOf(url, host);
 
-    HTTPClient http;
-    // HTTP/1.0 so no server can answer chunked: the raw stream read below would save the chunk framing into the tile.
-    http.useHTTP10(true);
-    http.setTimeout(timeoutMs);
-    http.setConnectTimeout(kHttpTimeoutMs);
-    http.setUserAgent(userAgent);
-    if (!http.begin(url)) {
-        LOG_WARN("Map: bad URL %s", url);
-        return 0;
-    }
-
-    const int code = http.GET();
-    if (code != HTTP_CODE_OK) {
-        LOG_WARN("Map: fetch got %d for %s", code, url);
-        http.end();
-        return 0;
-    }
-
-    const int contentLength = http.getSize();
-    if (contentLength > (int)cap) {
-        LOG_WARN("Map: %s is %d bytes, too large", url, contentLength);
-        http.end();
-        return 0;
-    }
-
-    WiFiClient *stream = http.getStreamPtr();
-    size_t total = 0;
-    uint32_t idleSince = millis();
-    while (http.connected() && (contentLength < 0 || total < (size_t)contentLength)) {
-        const size_t available = stream->available();
-        if (available) {
-            const size_t room = cap - total;
-            if (room == 0)
-                break;
-            const int got = stream->readBytes(dst + total, available < room ? available : room);
-            if (got <= 0)
-                break;
-            total += (size_t)got;
-            idleSince = millis();
-        } else {
-            if (!Throttle::isWithinTimespanMs(idleSince, timeoutMs))
-                break;
-            delay(2);
+    for (int attempt = 0; attempt < 2; attempt++) {
+        // HTTPClient reuses whatever it is connected to, whichever server the URL names - so a new host closes it first.
+        const bool reusing = http.connected() && strcmp(host, connectedHost) == 0;
+        if (!reusing)
+            closeConnection();
+        http.setReuse(true);
+        http.setTimeout(timeoutMs);
+        http.setConnectTimeout(kHttpTimeoutMs);
+        http.setUserAgent(userAgent);
+        if (!http.begin(url)) {
+            LOG_WARN("Map: bad URL %s", url);
+            closeConnection();
+            return 0;
         }
-    }
-    http.end();
+        strncpy(connectedHost, host, sizeof(connectedHost) - 1);
+        connectedHost[sizeof(connectedHost) - 1] = '\0';
 
-    if ((contentLength > 0 && total != (size_t)contentLength) || (contentLength < 0 && total == cap)) {
-        LOG_WARN("Map: fetch truncated at %u of %d bytes", (unsigned)total, contentLength);
-        return 0;
+        const int code = http.GET();
+        if (code < 0 && reusing) {
+            closeConnection(); // the server dropped it while idle: one more go on a fresh connection
+            continue;
+        }
+        if (code != HTTP_CODE_OK) {
+            LOG_WARN("Map: fetch got %d for %s", code, url);
+            closeConnection(); // the body was never read, so the connection can't carry the next request
+            return 0;
+        }
+        const int contentLength = http.getSize();
+        if (contentLength > (int)cap) {
+            LOG_WARN("Map: %s is %d bytes, too large", url, contentLength);
+            closeConnection();
+            return 0;
+        }
+
+        // writeToStream reads the whole body - by its length, chunk by chunk, or to the close - so the connection is
+        // left clean for the next request.
+        BufferSink sink(dst, cap);
+        const int got = http.writeToStream(&sink);
+        if (got < 0 || sink.overflow || (contentLength > 0 && sink.len != (size_t)contentLength)) {
+            LOG_WARN("Map: reading %s failed (%d, %u bytes)", url, got, (unsigned)sink.len);
+            closeConnection();
+            return 0;
+        }
+        http.end(); // stays connected if the server allows it
+        return sink.len;
     }
-    return total;
+    return 0;
 }
 
 // Leak check for the network path, which this task drives nonstop while navigating: internal heap just before and
