@@ -829,6 +829,14 @@ class TileFetcher : private concurrency::OSThread
         const Request request = queue[tail];
         tail = (uint8_t)((tail + 1) % kQueueSlots);
 
+        // The map keeps asking for a tile while it downloads, and the queue can only drop repeats of what is still
+        // waiting - so a request can arrive for a tile that has just been saved. Found on the card, it costs no request.
+        char dir[64], finalPath[80], tempPath[80];
+        tilePaths(activeStyleName(), request.z, request.x, request.y, dir, finalPath, tempPath);
+        if (cardFileExists(finalPath)) {
+            Png::noteTileArrived(request.z, request.x, request.y);
+            return 1;
+        }
         lastRequestMs = millis();
 
         if (!expandTileUrl(urlTemplate, request.z, request.x, request.y, tileUrl, sizeof(tileUrl)))
