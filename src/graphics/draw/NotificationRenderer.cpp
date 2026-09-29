@@ -1013,6 +1013,16 @@ void NotificationRenderer::drawAlertBannerOverlay(OLEDDisplay *display, OLEDDisp
             return;
         } else if ((inEvent.inputEvent == INPUT_BROKER_CANCEL || inEvent.inputEvent == INPUT_BROKER_ALT_LONG) &&
                    alertBannerUntil != 0) {
+            // Cancel picks the menu's own Back row where it has one, so a submenu returns to its parent - each Back
+            // handler knows where that is - rather than closing everything. Without a Back row it just closes.
+            if (alertBannerCallback && optionsArrayPtr && optionsArrayPtr[0] && strcmp(optionsArrayPtr[0], "Back") == 0) {
+                if (optionsEnumPtr != nullptr) {
+                    alertBannerCallback(optionsEnumPtr[0]);
+                    optionsEnumPtr = nullptr;
+                } else {
+                    alertBannerCallback(0);
+                }
+            }
             resetBanner();
             return;
         }

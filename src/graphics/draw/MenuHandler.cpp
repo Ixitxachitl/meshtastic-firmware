@@ -216,6 +216,8 @@ uint32_t menuHandler::pickedNodeNum = 0;
 meshtastic_Config_LoRaConfig_RegionCode menuHandler::pendingRegion = meshtastic_Config_LoRaConfig_RegionCode_UNSET;
 bool test_enabled = false;
 uint8_t test_count = 0;
+// WiFi Toggle is reached from both the System and the WiFi menu: its Back returns to whichever opened it.
+static menuHandler::screenMenus wifiToggleReturn = menuHandler::MenuNone;
 
 void menuHandler::loraMenu()
 {
@@ -1470,6 +1472,7 @@ void menuHandler::systemBaseMenu()
             screen->runNow();
 #if HAS_WIFI && !defined(ARCH_PORTDUINO)
         } else if (selected == WiFiToggle) {
+            wifiToggleReturn = SystemBaseMenu;
             menuQueue = WifiToggleMenu;
             screen->runNow();
 #endif
@@ -2384,9 +2387,11 @@ void menuHandler::bluetoothToggleMenu()
     bannerOptions.optionsArrayPtr = optionsArray;
     bannerOptions.optionsCount = 3;
     bannerOptions.bannerCallback = [](int selected) -> void {
-        if (selected == 0)
+        if (selected == 0) {
+            menuQueue = SystemBaseMenu;
+            screen->runNow();
             return;
-        else if (selected != (config.bluetooth.enabled ? 1 : 2)) {
+        } else if (selected != (config.bluetooth.enabled ? 1 : 2)) {
             InputEvent event = {.inputEvent = (input_broker_event)170, .kbchar = 170, .touchX = 0, .touchY = 0};
             inputBroker->injectInputEvent(&event);
         }
@@ -2448,6 +2453,11 @@ void menuHandler::BrightnessPickerMenu()
             uiconfig.screen_brightness = SCREEN_BRIGHTNESS_LEVEL_VERY_HIGH;
         }
 
+        if (selected == 0) { // Back
+            menuHandler::menuQueue = menuHandler::ScreenOptionsMenu;
+            screen->runNow();
+            return;
+        }
         if (selected != 0) { // Not "Back"
             // Through Screen, so its own copy of the level is updated too: every wake re-applies that, and
             // setting the panel directly here left the next wake restoring the level from before the pick.
@@ -2782,6 +2792,11 @@ void menuHandler::wifiBaseMenu()
     bannerOptions.optionsCount = count;
     bannerOptions.bannerCallback = [](int selected) -> void {
         if (selected == Wifi_toggle) {
+#if BASEUI_WIFI_MANAGER
+            wifiToggleReturn = WifiBaseMenu;
+#else
+            wifiToggleReturn = MenuNone; // the WiFi menu is opened straight from the frame, with no queue entry
+#endif
             menuQueue = WifiToggleMenu;
             screen->runNow();
 #if BASEUI_WIFI_MANAGER
@@ -2843,8 +2858,11 @@ void menuHandler::wifiScanResultsMenu()
     bannerOptions.optionsArrayPtr = optionsArray;
     bannerOptions.optionsCount = foundCount + 1;
     bannerOptions.bannerCallback = [](int selected) -> void {
-        if (selected <= 0 || selected > foundCount)
+        if (selected <= 0 || selected > foundCount) {
+            menuQueue = WifiBaseMenu;
+            screen->runNow();
             return;
+        }
         const WiFiNetworks::ScanResult &net = found[selected - 1];
         if (WiFi.status() == WL_CONNECTED && strcmp(net.ssid, config.network.wifi_ssid) == 0) {
             queueNotice("Already connected");
@@ -2942,6 +2960,9 @@ void menuHandler::wifiToggleMenu()
             config.bluetooth.enabled = false;
             service->reloadConfig(SEGMENT_CONFIG);
             rebootAtMsec = Time::timerEndsAtMillis(DEFAULT_REBOOT_SECONDS * 1000);
+        } else if (wifiToggleReturn != MenuNone) {
+            menuQueue = wifiToggleReturn;
+            screen->runNow();
         }
     };
     screen->showOverlayBanner(bannerOptions);
