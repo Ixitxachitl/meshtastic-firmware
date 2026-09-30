@@ -68,6 +68,16 @@ char searchUrl[512];
 Geocode::Result searchHits[Geocode::kMaxResults];
 int searchHitCount = 0;
 uint32_t lastSearchMs = 0;
+
+constexpr uint32_t kMinSuggestGapMs = 700; // live suggestions: at most this often, however fast the typing
+std::atomic<SearchState> suggestStatus{SearchState::Idle};
+char suggestQuery[128], suggestAnswered[128];
+bool suggestNear = false;
+double suggestLat = 0, suggestLon = 0;
+Geocode::Result suggestHits[Geocode::kMaxResults];
+int suggestHitCount = 0;
+uint32_t lastSuggestMs = 0;
+char suggestUrl[512], suggestEncoded[3 * sizeof(suggestQuery)]; // not on this task's stack, which is tight
 #endif
 
 #if BASEUI_MAP_ROUTING
@@ -574,6 +584,34 @@ int32_t runSearch()
 }
 #endif
 
+#if BASEUI_MAP_ADDRESS_SEARCH
+int32_t runSuggest()
+{
+    if (lastSuggestMs && Throttle::isWithinTimespanMs(lastSuggestMs, kMinSuggestGapMs))
+        return (int32_t)kMinSuggestGapMs;
+    suggestStatus = SearchState::Running;
+    lastSuggestMs = millis() ? millis() : 1;
+    strncpy(suggestAnswered, suggestQuery, sizeof(suggestAnswered) - 1);
+    suggestAnswered[sizeof(suggestAnswered) - 1] = '\0';
+
+    if (WiFi.status() != WL_CONNECTED || !Geocode::encodeQuery(suggestQuery, suggestEncoded, sizeof(suggestEncoded)) ||
+        !Geocode::expandSearchUrl(Geocode::kPhotonSearchUrl, suggestEncoded, suggestUrl, sizeof(suggestUrl))) {
+        suggestStatus = SearchState::Failed;
+        return 100;
+    }
+    if (suggestNear) {
+        const size_t used = strlen(suggestUrl);
+        snprintf(suggestUrl + used, sizeof(suggestUrl) - used, "&lat=%.4f&lon=%.4f", suggestLat, suggestLon);
+    }
+    const size_t len = downloadRaw(suggestUrl);
+    const int count =
+        len ? Geocode::parsePhoton(reinterpret_cast<const char *>(buffer), len, suggestHits, Geocode::kMaxResults) : -1;
+    suggestHitCount = count > 0 ? count : 0;
+    suggestStatus = count < 0 ? SearchState::Failed : SearchState::Done;
+    return 100;
+}
+#endif
+
 #if BASEUI_MAP_ROUTING
 void slotPaths(int slot, char (&finalPath)[48], char (&tempPath)[48])
 {
@@ -844,6 +882,8 @@ class TileFetcher : private concurrency::OSThread
 #if BASEUI_MAP_ADDRESS_SEARCH
         if (searchStatus == SearchState::Queued) // asked for by hand, so ahead of any tiles
             return runSearch();
+        if (suggestStatus == SearchState::Queued)
+            return runSuggest();
 #endif
 #if BASEUI_MAP_ROUTING
         if (routeStatus == RouteState::Queued)
@@ -954,6 +994,42 @@ int searchResults(const Geocode::Result *&results)
 {
     results = searchHits;
     return searchStatus == SearchState::Done ? searchHitCount : 0;
+}
+
+bool startSuggest(const char *query, bool near, double lat, double lon)
+{
+    const SearchState state = suggestStatus;
+    if (state == SearchState::Queued || state == SearchState::Running || !query || !query[0] || WiFi.status() != WL_CONNECTED)
+        return false;
+    strncpy(suggestQuery, query, sizeof(suggestQuery) - 1);
+    suggestQuery[sizeof(suggestQuery) - 1] = '\0';
+    suggestNear = near;
+    suggestLat = lat;
+    suggestLon = lon;
+    suggestStatus = SearchState::Queued;
+    if (!fetcher)
+        fetcher = new TileFetcher();
+    fetcher->poke();
+    return true;
+}
+
+SearchState suggestState()
+{
+    return suggestStatus;
+}
+
+int suggestResults(const Geocode::Result *&results, const char *&query)
+{
+    results = suggestHits;
+    query = suggestAnswered;
+    return suggestStatus == SearchState::Done ? suggestHitCount : 0;
+}
+
+void clearSuggest()
+{
+    const SearchState state = suggestStatus;
+    if (state == SearchState::Done || state == SearchState::Failed)
+        suggestStatus = SearchState::Idle;
 }
 
 void clearSearch()

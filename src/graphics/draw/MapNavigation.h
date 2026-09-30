@@ -9,6 +9,7 @@
 #include "graphics/niche/Map/MapRouteStore.h"
 #endif
 #include <stdint.h>
+#include <string>
 
 // Map > Navigate: the target, the street route to it, and progress along that route. Display task only.
 namespace graphics::MapNavigation
@@ -75,6 +76,14 @@ bool heading(float &degrees);
 bool startAddressSearch(const char *query);
 // Called as the map draws: once the search has finished, queues the results menu.
 void pollAddressSearch();
+
+// Live suggestions under the Address prompt: begin when it opens, feed it each edit, poll as the map draws (it asks once
+// typing pauses and posts what comes back), and end when it closes. A picked suggestion is navigated to.
+void beginAddressSuggestions();
+void addressTyped(const std::string &text);
+void pollAddressSuggestions();
+void pickAddressSuggestion(int index);
+void endAddressSuggestions();
 #endif
 
 } // namespace graphics::MapNavigation

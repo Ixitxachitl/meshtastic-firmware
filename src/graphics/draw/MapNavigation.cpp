@@ -6,6 +6,7 @@
 #include "gps/GeoCoord.h"
 #include "graphics/Screen.h"
 #include "graphics/draw/MenuHandler.h"
+#include "graphics/draw/NotificationRenderer.h"
 #include "main.h"
 #include "memory/MemAudit.h"
 #include "mesh/Throttle.h"
@@ -25,6 +26,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <utility>
 
 namespace graphics::MapNavigation
 {
@@ -36,6 +38,16 @@ bool active = false;
 bool loaded = false;
 #if BASEUI_MAP_ADDRESS_SEARCH
 bool awaitingSearch = false;
+
+// Live suggestions: what has been typed, when, and what was last asked for - asked only once typing pauses, and only
+// for text that has changed since.
+constexpr uint32_t kSuggestPauseMs = 500;
+constexpr size_t kSuggestMinChars = 3;
+bool suggesting = false;
+char typed[128], requested[128];
+uint32_t typedAtMs = 0;
+NicheGraphics::MapTiles::Geocode::Result suggestions[NicheGraphics::MapTiles::Geocode::kMaxResults];
+int suggestionCount = 0;
 #endif
 
 // Direction of travel, kept so a heading-up map holds still while stopped.
@@ -592,6 +604,116 @@ void pollAddressSearch()
     menuHandler::menuQueue = menuHandler::NavSearchResultsMenu;
     if (screen)
         screen->runNow();
+}
+#endif
+
+#if BASEUI_MAP_ADDRESS_SEARCH
+namespace
+{
+// A suggestion's label: the place, cut short, then how far it is when there is a fix to measure from.
+void suggestionLabel(const NicheGraphics::MapTiles::Geocode::Result &place, float meters, bool haveFix, char (&out)[48])
+{
+    char distance[16] = "";
+    if (haveFix) {
+        const bool imperial = config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL;
+        const float units = imperial ? meters / 1609.344f : meters / 1000.0f;
+        if (!imperial && meters < 1000.0f)
+            snprintf(distance, sizeof(distance), "  %d m", (int)lroundf(meters));
+        else
+            snprintf(distance, sizeof(distance), units < 100.0f ? "  %.1f %s" : "  %.0f %s", units, imperial ? "mi" : "km");
+    }
+    snprintf(out, sizeof(out), "%.30s%s", place.name, distance);
+}
+} // namespace
+
+void beginAddressSuggestions()
+{
+    suggesting = true;
+    typed[0] = requested[0] = '\0';
+    typedAtMs = 0;
+    suggestionCount = 0;
+    NicheGraphics::MapTiles::Fetch::clearSuggest();
+}
+
+void addressTyped(const std::string &text)
+{
+    strncpy(typed, text.c_str(), sizeof(typed) - 1);
+    typed[sizeof(typed) - 1] = '\0';
+    typedAtMs = millis() ? millis() : 1;
+    if (strlen(typed) < kSuggestMinChars && suggestionCount) { // too short to suggest for: clear what is showing
+        suggestionCount = 0;
+        NotificationRenderer::setTextPromptSuggestions(nullptr, 0);
+    }
+}
+
+void pollAddressSuggestions()
+{
+    namespace Fetch = NicheGraphics::MapTiles::Fetch;
+    namespace Geocode = NicheGraphics::MapTiles::Geocode;
+    if (!suggesting)
+        return;
+    const bool haveFix = localPosition.latitude_i != 0 || localPosition.longitude_i != 0;
+    const double selfLat = localPosition.latitude_i * 1e-7, selfLon = localPosition.longitude_i * 1e-7;
+
+    // An answer in: shown only if it is for what is typed now, nearest first.
+    const Fetch::SearchState state = Fetch::suggestState();
+    if (state == Fetch::SearchState::Done) {
+        const Geocode::Result *found = nullptr;
+        const char *answered = nullptr;
+        const int count = Fetch::suggestResults(found, answered);
+        if (strcmp(answered, typed) == 0 && strlen(typed) >= kSuggestMinChars) {
+            float meters[Geocode::kMaxResults] = {};
+            suggestionCount = count;
+            for (int i = 0; i < count; i++) {
+                suggestions[i] = found[i];
+                meters[i] = haveFix ? GeoCoord::latLongToMeter(selfLat, selfLon, found[i].lat, found[i].lon) : 0;
+            }
+            for (int i = 1; i < count; i++)
+                for (int j = i; j > 0 && meters[j] < meters[j - 1]; j--) {
+                    std::swap(meters[j], meters[j - 1]);
+                    std::swap(suggestions[j], suggestions[j - 1]);
+                }
+            static char labels[Geocode::kMaxResults][48];
+            const char *rows[Geocode::kMaxResults];
+            for (int i = 0; i < count; i++) {
+                suggestionLabel(suggestions[i], meters[i], haveFix, labels[i]);
+                rows[i] = labels[i];
+            }
+            NotificationRenderer::setTextPromptSuggestions(rows, count);
+            if (screen)
+                screen->runNow();
+        }
+        Fetch::clearSuggest();
+    } else if (state == Fetch::SearchState::Failed) {
+        Fetch::clearSuggest();
+    }
+
+    // Typing has paused on text not yet asked about: ask. Busy, it is asked again on a later frame.
+    if (typedAtMs && strlen(typed) >= kSuggestMinChars && strcmp(typed, requested) != 0 &&
+        !Throttle::isWithinTimespanMs(typedAtMs, kSuggestPauseMs) && Fetch::startSuggest(typed, haveFix, selfLat, selfLon)) {
+        strncpy(requested, typed, sizeof(requested) - 1);
+        requested[sizeof(requested) - 1] = '\0';
+    }
+}
+
+void pickAddressSuggestion(int index)
+{
+    suggesting = false;
+    if (index < 0 || index >= suggestionCount)
+        return;
+    // As a searched place: the full address is too long for a label, so up to the second comma.
+    char name[sizeof(meshtastic_NavTarget::name)];
+    strncpy(name, suggestions[index].name, sizeof(name) - 1);
+    name[sizeof(name) - 1] = '\0';
+    if (char *first = strchr(name, ','))
+        if (char *second = strchr(first + 1, ','))
+            *second = '\0';
+    navigateToLocation(suggestions[index].lat, suggestions[index].lon, name);
+}
+
+void endAddressSuggestions()
+{
+    suggesting = false;
 }
 #endif
 

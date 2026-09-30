@@ -3995,14 +3995,20 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
 #endif
 #if BASEUI_MAP_ADDRESS_SEARCH
     case NavAddressPrompt:
-        screen->showTextPrompt("Address", "", 60, [](const std::string &text) -> void {
-            if (text.empty())
-                return;
-            if (MapNavigation::startAddressSearch(text.c_str()))
-                screen->showSimpleBanner("Searching...", 20000);
-            else
-                screen->showSimpleBanner("Needs WiFi", 3000);
-        });
+        MapNavigation::beginAddressSuggestions();
+        screen->showTextPrompt(
+            "Address", "", 60,
+            [](const std::string &text) -> void {
+                MapNavigation::endAddressSuggestions();
+                if (text.empty())
+                    return;
+                if (MapNavigation::startAddressSearch(text.c_str()))
+                    screen->showSimpleBanner("Searching...", 20000);
+                else
+                    screen->showSimpleBanner("Needs WiFi", 3000);
+            },
+            []() { MapNavigation::endAddressSuggestions(); }, [](const std::string &text) { MapNavigation::addressTyped(text); },
+            [](int index) { MapNavigation::pickAddressSuggestion(index); });
         break;
     case NavSearchResultsMenu:
         navSearchResultsMenu();

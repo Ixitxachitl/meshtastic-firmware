@@ -34,6 +34,14 @@ SearchState searchState();
 int searchResults(const Geocode::Result *&results);
 // Back to Idle once the result has been shown.
 void clearSearch();
+
+// Live suggestions while an address is typed, from Photon - made for search-as-you-type, where Nominatim's policy
+// forbids it - ranked toward (lat, lon) when near is set. False while one is queued or running; ask again later.
+bool startSuggest(const char *query, bool near, double lat, double lon);
+SearchState suggestState();
+// The places found for `query` (the text they answer), while the state is Done.
+int suggestResults(const Geocode::Result *&results, const char *&query);
+void clearSuggest();
 #endif
 
 #if BASEUI_MAP_ROUTING

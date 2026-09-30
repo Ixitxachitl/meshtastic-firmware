@@ -1807,6 +1807,7 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     ensureFollowMeLoaded();
 #if BASEUI_MAP_ADDRESS_SEARCH
     MapNavigation::pollAddressSearch();
+    MapNavigation::pollAddressSuggestions();
 #endif
 #if BASEUI_MAP_NAVIGATION
     MapNavigation::update();
