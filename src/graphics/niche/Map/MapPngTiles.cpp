@@ -270,12 +270,12 @@ const uint16_t *fetchTile(int z, int32_t x, int32_t y)
         if (t.lastUse < slot->lastUse)
             slot = &t;
     }
-    if (!slot->pixels)
+    if (!slot->pixels) { // the cache fills slot by slot as tiles are first needed, then stays that size
         slot->pixels = static_cast<uint16_t *>(allocLarge((size_t)kTileSize * kTileSize * sizeof(uint16_t)));
-    if (slot->pixels) // the cache fills slot by slot as tiles are first needed, then stays that size
+        if (!slot->pixels)
+            return nullptr;
         memaudit::add("maptiles", kTileSize * kTileSize * sizeof(uint16_t), slot->pixels);
-    if (!slot->pixels)
-        return nullptr;
+    }
 
     slot->valid = false; // a failed decode may have half-overwritten it
     const TileLoad result = loadTile(key, slot->pixels);
