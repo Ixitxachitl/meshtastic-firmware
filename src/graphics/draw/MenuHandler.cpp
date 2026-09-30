@@ -27,8 +27,10 @@
 #include "graphics/draw/MapCoordinateParse.h"
 #include "graphics/draw/MapNavigation.h"
 #endif
-#if BASEUI_MAP_ADDRESS_SEARCH
+#if BASEUI_MAP_NAVIGATION
 #include "gps/GeoCoord.h"
+#endif
+#if BASEUI_MAP_ADDRESS_SEARCH
 #include "graphics/niche/Map/MapTileFetch.h"
 #endif
 #include "graphics/draw/MessageRenderer.h"
@@ -4413,7 +4415,21 @@ void menuHandler::refreshNavigateMenu()
 // Map > Navigate: resume or stop the current target, or pick a new one.
 void menuHandler::navigateMenu()
 {
-    enum Choice { Back, Saved, Download, Stop, Node, Waypoint, Coordinates, Address, Travel, View, NewWaypoint, ChoiceCount };
+    enum Choice {
+        Back,
+        Saved,
+        Download,
+        Stop,
+        Node,
+        Waypoint,
+        Coordinates,
+        Address,
+        MapCenter,
+        Travel,
+        View,
+        NewWaypoint,
+        ChoiceCount
+    };
     static const char *labels[ChoiceCount];
     static int choices[ChoiceCount];
     static const char *const kTravelLabels[] = {"Travel: Car", "Travel: Bike", "Travel: Walk"};
@@ -4423,7 +4439,7 @@ void menuHandler::navigateMenu()
     labels[count] = "Back";
     choices[count++] = Back;
 #if BASEUI_MAP_ROUTING
-    labels[count] = "Saved Routes";
+    labels[count] = "Saved Destinations";
     choices[count++] = Saved;
     // Progress is on the map itself; the menu only offers to stop a download that is running.
     {
@@ -4586,10 +4602,16 @@ void menuHandler::navSavedRoutesMenu()
         savedRoutes[i] = found[i];
     Fetch::clearList();
 
+    // Each is a place to go back to: labelled by how far it is from here, or by its route's length without a fix.
+    const bool haveFix = localPosition.latitude_i != 0 || localPosition.longitude_i != 0;
     optionsArray[0] = "Back";
     for (int i = 0; i < savedRouteCount; i++) {
         char distance[16];
-        const float km = savedRoutes[i].header.lengthKm;
+        const auto &h = savedRoutes[i].header;
+        const float km = haveFix ? GeoCoord::latLongToMeter(localPosition.latitude_i * 1e-7, localPosition.longitude_i * 1e-7,
+                                                            h.targetLatE7 * 1e-7, h.targetLonE7 * 1e-7) /
+                                       1000.0f
+                                 : h.lengthKm;
         if (config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL)
             snprintf(distance, sizeof(distance), "%.1f mi", km * 0.621371f);
         else
@@ -4599,7 +4621,7 @@ void menuHandler::navSavedRoutesMenu()
     }
 
     BannerOverlayOptions bannerOptions;
-    bannerOptions.message = savedRouteCount ? "Saved Routes" : "No saved routes";
+    bannerOptions.message = savedRouteCount ? "Saved Destinations" : "No saved destinations";
     bannerOptions.optionsArrayPtr = optionsArray;
     bannerOptions.optionsCount = savedRouteCount + 1;
     bannerOptions.bannerCallback = [](int selected) -> void {
@@ -4621,7 +4643,7 @@ void menuHandler::navSavedRouteActions()
     if (savedRoutePicked < 0 || savedRoutePicked >= savedRouteCount)
         return;
     enum optionsNumbers { Back, Navigate, DownloadTiles, Delete };
-    static const char *optionsArray[] = {"Back", "Navigate", "Download tiles", "Delete"};
+    static const char *optionsArray[] = {"Back", "Navigate", "Download tiles on route", "Delete"};
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = savedRoutes[savedRoutePicked].header.name;
     bannerOptions.optionsArrayPtr = optionsArray;
@@ -4639,7 +4661,7 @@ void menuHandler::navSavedRouteActions()
             break;
         case Delete:
             Fetch::deleteRoute(route.slot);
-            queueNotice("Route deleted");
+            queueNotice("Destination deleted");
             break;
         default:
             menuQueue = NavSavedRoutesStart;

@@ -64,6 +64,7 @@ constexpr uint32_t kRerouteGapMs = 30000; // and never more often than this
 constexpr uint32_t kRetryMs = 20000;      // after a request that couldn't be sent, or failed
 constexpr float kArrivedMeters = 25.0f;
 constexpr float kTargetMovedMeters = 150.0f; // a node target this far from the route's end gets a new route
+constexpr float kSavedStartMeters = 100.0f;  // a saved route begun further than this from its start is fetched afresh
 
 // The route being followed, copied out of the fetcher so a reroute can land while this one is still drawn.
 uint32_t pointCount = 0, pointCap = 0;
@@ -80,8 +81,9 @@ bool arrived = false;
 bool requestInFlight = false, lastRequestFailed = false;
 bool discardInFlight = false; // the target changed under a request: its reply is for the old one
 uint32_t lastRequestMs = 0, offRouteSinceMs = 0;
-int sessionSlot = -1;      // the saved route this trip writes to, so rerouting replaces it instead of adding another
-bool awaitingList = false; // the Saved Routes menu is waiting on the card
+int sessionSlot = -1;         // the saved route this trip writes to, so rerouting replaces it instead of adding another
+bool awaitingList = false;    // the Saved Routes menu is waiting on the card
+bool checkSavedStart = false; // a saved route was just loaded: reroute from here unless we are at its start
 #endif
 
 void ensureLoaded()
@@ -269,6 +271,7 @@ void start(const meshtastic_NavTarget &next)
     lastRequestMs = 0;
     lastRequestFailed = false;
     sessionSlot = -1; // a new trip: its route gets a slot of its own
+    checkSavedStart = false;
 #endif
     save();
 }
@@ -399,6 +402,7 @@ void navigateSaved(int slot, const NicheGraphics::MapTiles::RouteStore::Header &
     target.travel_mode = (meshtastic_NavTravelMode)saved.travelMode;
     save();
     sessionSlot = slot; // rerouting on this trip replaces this saved route
+    checkSavedStart = true;
     // Read back from the card rather than fetched, so it works with no WiFi; a failed read falls back to fetching.
     lastRequestMs = millis() ? millis() : 1;
     Fetch::clearRoute();
@@ -465,6 +469,16 @@ void update()
 
     if (!active || !haveFix())
         return;
+    // A saved destination picked from elsewhere: route from here now rather than waiting to be off the old route. With
+    // no WiFi the request fails and the stored route stays up.
+    if (checkSavedStart && pointCount > 0 && !requestInFlight) {
+        checkSavedStart = false;
+        if (GeoCoord::latLongToMeter(localPosition.latitude_i * 1e-7, localPosition.longitude_i * 1e-7, latE7[0] * 1e-7,
+                                     lonE7[0] * 1e-7) > kSavedStartMeters) {
+            LOG_INFO("Nav: not at the saved route's start, rerouting from here");
+            requestRoute();
+        }
+    }
     const bool waited = lastRequestMs == 0 || !Throttle::isWithinTimespanMs(lastRequestMs, kRetryMs);
     if (pointCount == 0) {
         if (!requestInFlight && waited)
