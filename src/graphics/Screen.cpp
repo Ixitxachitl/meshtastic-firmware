@@ -537,7 +537,8 @@ void Screen::showAlphanumericPicker(const char *message, const char *initialText
 }
 
 void Screen::showTextPrompt(const char *title, const char *initialText, uint8_t maxLength,
-                            std::function<void(const std::string &)> callback)
+                            std::function<void(const std::string &)> callback, std::function<void()> onCancel,
+                            std::function<void(const std::string &)> onChange, std::function<void(int)> onPickSuggestion)
 {
 #ifdef USE_EINK
     EINK_ADD_FRAMEFLAG(dispdev, DEMAND_FAST);
@@ -546,6 +547,9 @@ void Screen::showTextPrompt(const char *title, const char *initialText, uint8_t 
     NotificationRenderer::alertBannerMessage[255] = '\0';
     NotificationRenderer::alertBannerUntil = Time::timerEndsAtMillis(300000); // idle for five minutes: gone
     NotificationRenderer::textInputCallback = callback;
+    NotificationRenderer::textPromptCancelCallback = onCancel;
+    NotificationRenderer::textPromptChangedCallback = onChange;
+    NotificationRenderer::textPromptPickCallback = onPickSuggestion;
     NotificationRenderer::pauseBanner = false;
     NotificationRenderer::current_notification_type = notificationTypeEnum::text_prompt;
     NotificationRenderer::startTextPrompt(initialText, maxLength);
@@ -3347,6 +3351,15 @@ int Screen::handleInputEvent(const InputEvent *event)
     ui->setTimePerTransition(0);
     sTransitionTicks = 0;
 #endif
+
+    // A text prompt takes the key now and redraws when the frame loop next runs, rather than drawing a whole frame
+    // per key here - behind it may be a map that is slow to draw.
+    if (NotificationRenderer::handleTextPromptInput(*event)) {
+        if (event->inputEvent == INPUT_BROKER_USER_PRESS && inputEventIsTouch(event))
+            touchHapticPulse(TouchHaptic::Activate);
+        setFastFramerate();
+        return 0;
+    }
 
     // Handle text input notifications specially - pass input to virtual keyboard
     if (NotificationRenderer::current_notification_type == notificationTypeEnum::text_input) {

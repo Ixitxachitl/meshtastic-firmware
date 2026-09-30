@@ -29,6 +29,9 @@ class NotificationRenderer
     static char alphanumericValue[16]; // working buffer for the alphanumeric_picker
     static VirtualKeyboard *virtualKeyboard;
     static std::function<void(const std::string &)> textInputCallback;
+    static std::function<void()> textPromptCancelCallback;                     // text_prompt only; may be empty
+    static std::function<void(const std::string &)> textPromptChangedCallback; // text_prompt: after each edit
+    static std::function<void(int)> textPromptPickCallback;                    // text_prompt: a suggestion taken
 
     static bool pauseBanner;
 
@@ -53,6 +56,10 @@ class NotificationRenderer
     // text_prompt: seeds the field (printable ASCII only) and draws/handles the popup.
     static void startTextPrompt(const char *initialText, uint8_t maxLength);
     static void drawTextPrompt(OLEDDisplay *display, OLEDDisplayUiState *state);
+    // Applies a key to an open text prompt as it arrives. False when no prompt is open.
+    static bool handleTextPromptInput(const InputEvent &event);
+    // Replaces the suggestions offered under an open text prompt's field (up to five; 0 clears them).
+    static void setTextPromptSuggestions(const char *const *labels, int count);
     // The menu popup's frame and themed fill, shared by every banner box.
     static void drawBannerPanel(OLEDDisplay *display, int16_t left, int16_t top, int16_t width, int16_t height);
     static void drawNotificationBox(OLEDDisplay *display, OLEDDisplayUiState *state, const char *lines[MAX_LINES + 1],

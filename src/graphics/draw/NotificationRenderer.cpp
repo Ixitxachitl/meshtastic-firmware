@@ -21,6 +21,9 @@
 #include "input/ButtonThread.h"
 #endif
 #include "main.h"
+#if defined(USE_VIRTUAL_KEYBOARD)
+#include "modules/CannedMessageModule.h"
+#endif
 #include <algorithm>
 #include <string>
 #include <vector>
@@ -62,6 +65,9 @@ uint32_t NotificationRenderer::currentNumber = 0;
 char NotificationRenderer::alphanumericValue[16] = {0};
 VirtualKeyboard *NotificationRenderer::virtualKeyboard = nullptr;
 std::function<void(const std::string &)> NotificationRenderer::textInputCallback = nullptr;
+std::function<void()> NotificationRenderer::textPromptCancelCallback = nullptr;
+std::function<void(const std::string &)> NotificationRenderer::textPromptChangedCallback = nullptr;
+std::function<void(int)> NotificationRenderer::textPromptPickCallback = nullptr;
 
 uint32_t pow_of_10(uint32_t n)
 {
@@ -504,8 +510,14 @@ void NotificationRenderer::drawHexPicker(OLEDDisplay *display, OLEDDisplayUiStat
 namespace
 {
 // text_prompt's field. ASCII only: every input source that feeds it types ASCII, and it keeps cursor maths byte-wise.
-char promptText[64];
+char promptText[128]; // a waypoint description is up to 99
 uint8_t promptLength = 0, promptCursor = 0, promptMax = 0;
+
+// Suggestions the caller offers under the field (address search's live results). -1 selects the field itself.
+constexpr int kMaxPromptSuggestions = 5;
+char promptSuggestions[kMaxPromptSuggestions][48];
+int promptSuggestionCount = 0, promptSuggestionSel = -1;
+int16_t suggestLeft = 0, suggestWidth = 0, suggestTop = 0, suggestRowH = 0; // where the last draw put them, for taps
 
 #if defined(USE_VIRTUAL_KEYBOARD)
 // No keyboard on these boards, so a small touch keyboard sits under the popup. Four rows of characters, then actions.
@@ -560,25 +572,67 @@ void NotificationRenderer::startTextPrompt(const char *initialText, uint8_t maxL
     }
     promptText[promptLength] = '\0';
     promptCursor = promptLength;
+    promptSuggestionCount = 0;
+    promptSuggestionSel = -1;
 #if defined(USE_VIRTUAL_KEYBOARD)
     promptShift = false;
     promptKeyCount = 0;
 #endif
 }
 
-void NotificationRenderer::drawTextPrompt(OLEDDisplay *display, OLEDDisplayUiState *state)
+// Keys go into the field the moment they arrive, not at the next draw: a frame behind the popup can be slow (a 3D map
+// re-rendering), and the banner holds only one pending event, so keys typed during one would be lost or lag behind.
+void NotificationRenderer::setTextPromptSuggestions(const char *const *labels, int count)
 {
-    (void)state;
-    // Consume the event first: finishing tears the prompt down, and the callback may open something new.
-    const InputEvent event = inEvent;
-    inEvent.inputEvent = INPUT_BROKER_NONE;
-    inEvent.kbchar = 0;
+    promptSuggestionCount = count < kMaxPromptSuggestions ? count : kMaxPromptSuggestions;
+    for (int i = 0; i < promptSuggestionCount; i++) {
+        strncpy(promptSuggestions[i], labels[i], sizeof(promptSuggestions[i]) - 1);
+        promptSuggestions[i][sizeof(promptSuggestions[i]) - 1] = '\0';
+    }
+    if (promptSuggestionSel >= promptSuggestionCount)
+        promptSuggestionSel = promptSuggestionCount - 1;
+}
 
+bool NotificationRenderer::handleTextPromptInput(const InputEvent &event)
+{
+    if (current_notification_type != notificationTypeEnum::text_prompt)
+        return false;
     bool submit = false, cancel = false;
+    int picked = -1;
+    const uint8_t lengthBefore = promptLength;
+    const std::string textBefore(promptText, promptLength);
     const bool touch = event.touchX != 0 || event.touchY != 0;
-    if (touch) {
+    // A tap on a suggestion picks it, keyboard or not.
+    if (touch && event.inputEvent == INPUT_BROKER_USER_PRESS && promptSuggestionCount > 0 && suggestRowH > 0 &&
+        event.touchX >= suggestLeft && event.touchX < suggestLeft + suggestWidth && event.touchY >= suggestTop &&
+        event.touchY < suggestTop + suggestRowH * promptSuggestionCount) {
+        picked = (event.touchY - suggestTop) / suggestRowH;
+    } else if (touch) {
 #if defined(USE_VIRTUAL_KEYBOARD)
-        if (event.inputEvent == INPUT_BROKER_USER_PRESS) {
+        if (event.inputEvent == INPUT_BROKER_USER_PRESS && cannedMessageModule) {
+            // The composer's keyboard, as the message screen types on it.
+            const String key = cannedMessageModule->keyForCoordinates(event.touchX, event.touchY);
+            if (key == "ESC") {
+                cancel = true;
+            } else if (key == "\u21b5") { // enter
+                if (promptSuggestionSel >= 0)
+                    picked = promptSuggestionSel;
+                else
+                    submit = true;
+            } else if (key == "\u21e7") { // shift
+                cannedMessageModule->setKeyboardShift(!cannedMessageModule->keyboardShift());
+            } else if (key == "\u232b") { // backspace
+                cannedMessageModule->flashKeyboardKey(key);
+                promptDelete();
+            } else if (key == "SPACE" || key == " ") {
+                cannedMessageModule->flashKeyboardKey(key);
+                promptInsert(' ');
+            } else if (key.length() == 1) {
+                cannedMessageModule->flashKeyboardKey(key);
+                promptInsert(cannedMessageModule->keyboardChar(key));
+                cannedMessageModule->setKeyboardShift(false);
+            }
+        } else if (event.inputEvent == INPUT_BROKER_USER_PRESS) {
             const char key = promptKeyAt(event.touchX, event.touchY);
             if (key == PromptEsc) {
                 cancel = true;
@@ -619,8 +673,19 @@ void NotificationRenderer::drawTextPrompt(OLEDDisplay *display, OLEDDisplayUiSta
             if (promptCursor < promptLength)
                 promptCursor++;
             break;
+        case INPUT_BROKER_DOWN:
+            if (promptSuggestionSel + 1 < promptSuggestionCount)
+                promptSuggestionSel++;
+            break;
+        case INPUT_BROKER_UP:
+            if (promptSuggestionSel >= 0)
+                promptSuggestionSel--;
+            break;
         case INPUT_BROKER_SELECT:
-            submit = true;
+            if (promptSuggestionSel >= 0)
+                picked = promptSuggestionSel;
+            else
+                submit = true;
             break;
         case INPUT_BROKER_CANCEL:
         case INPUT_BROKER_ALT_LONG:
@@ -629,19 +694,49 @@ void NotificationRenderer::drawTextPrompt(OLEDDisplay *display, OLEDDisplayUiSta
         default:
             break;
         }
+        // Enter typed as a character submits the field, or the suggestion that is selected.
+        if (submit && promptSuggestionSel >= 0 && event.inputEvent == INPUT_BROKER_ANYKEY) {
+            submit = false;
+            picked = promptSuggestionSel;
+        }
     }
     if (event.inputEvent != INPUT_BROKER_NONE)
         alertBannerUntil = Time::timerEndsAtMillis(300000); // any key keeps it open
 
-    if (submit || cancel) {
+    if (picked >= 0 && !textPromptPickCallback)
+        picked = -1; // suggestions without a taker: nothing to pick
+    if (submit || cancel || picked >= 0) {
         auto callback = textInputCallback;
+        auto onCancel = textPromptCancelCallback;
+        auto onPick = textPromptPickCallback;
         const std::string text(promptText, promptLength);
         textInputCallback = nullptr;
+        textPromptCancelCallback = nullptr;
+        textPromptChangedCallback = nullptr;
+        textPromptPickCallback = nullptr;
         resetBanner();
-        if (submit && callback)
+        if (picked >= 0)
+            onPick(picked);
+        else if (submit && callback)
             callback(text);
-        return;
+        else if (cancel && onCancel)
+            onCancel();
+        return true;
     }
+    // Typing goes back to the field, and tells whoever offers suggestions what there is now.
+    if (promptLength != lengthBefore || textBefore.compare(0, std::string::npos, promptText, promptLength) != 0) {
+        promptSuggestionSel = -1;
+        if (textPromptChangedCallback)
+            textPromptChangedCallback(std::string(promptText, promptLength));
+    }
+    return true;
+}
+
+void NotificationRenderer::drawTextPrompt(OLEDDisplay *display, OLEDDisplayUiState *state)
+{
+    (void)state;
+    inEvent.inputEvent = INPUT_BROKER_NONE; // keys were taken as they arrived, by handleTextPromptInput()
+    inEvent.kbchar = 0;
 
     // Layout: title, then the field; a key hint under it, or the touch keyboard below the whole popup.
     const int16_t screenW = display->getWidth(), screenH = display->getHeight();
@@ -651,11 +746,13 @@ void NotificationRenderer::drawTextPrompt(OLEDDisplay *display, OLEDDisplayUiSta
     const int16_t boxW = std::min<int16_t>(screenW - 12, 360);
     const int16_t boxLeft = (screenW - boxW) / 2;
     const int16_t fieldH = lineH + 4;
+    const int16_t rowH = lineH + 2;
+    const int16_t suggestionsH = promptSuggestionCount ? promptSuggestionCount * rowH + 3 : 0;
 #if defined(USE_VIRTUAL_KEYBOARD)
-    const int16_t boxH = pad + lineH + 3 + fieldH + pad;
+    const int16_t boxH = pad + lineH + 3 + fieldH + suggestionsH + pad;
     const int16_t boxTop = pad;
 #else
-    const int16_t boxH = pad + lineH + 3 + fieldH + 2 + lineH + pad;
+    const int16_t boxH = pad + lineH + 3 + fieldH + suggestionsH + 2 + lineH + pad;
     const int16_t boxTop = (screenH - boxH) / 2;
 #endif
     drawBannerPanel(display, boxLeft, boxTop, boxW, boxH);
@@ -680,20 +777,56 @@ void NotificationRenderer::drawTextPrompt(OLEDDisplay *display, OLEDDisplayUiSta
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->drawString(fieldX + 3, fieldY + 2, visible);
     const int16_t cursorX = fieldX + 3 + display->getStringWidth(promptText + first, promptCursor - first);
-    display->drawLine(cursorX, fieldY + 2, cursorX, fieldY + fieldH - 3);
+    if (promptSuggestionSel < 0) // the caret shows where keys go; with a suggestion selected they pick instead
+        display->drawLine(cursorX, fieldY + 2, cursorX, fieldY + fieldH - 3);
+
+    // Suggestions under the field, the selected one inverted. Each is cut to the width, on a character.
+    suggestLeft = fieldX;
+    suggestWidth = fieldW;
+    suggestTop = fieldY + fieldH + 3;
+    suggestRowH = rowH;
+    for (int i = 0; i < promptSuggestionCount; i++) {
+        char row[sizeof(promptSuggestions[0])];
+        strncpy(row, promptSuggestions[i], sizeof(row) - 1);
+        row[sizeof(row) - 1] = '\0';
+        for (size_t n = strlen(row); n > 0 && display->getStringWidth(row) > fieldW - 6;) {
+            char dropped;
+            do {
+                dropped = row[--n];
+                row[n] = '\0';
+            } while (n > 0 && (dropped & 0xC0) == 0x80);
+        }
+        const int16_t y = suggestTop + i * rowH;
+        if (i == promptSuggestionSel) {
+            display->setColor(WHITE);
+            display->fillRect(fieldX, y, fieldW, rowH);
+            display->setColor(BLACK);
+        }
+        display->drawString(fieldX + 3, y + 1, row);
+        display->setColor(WHITE);
+    }
 
 #if defined(USE_VIRTUAL_KEYBOARD)
-    // Five rows under the popup, as tall as fits up to a comfortable fingertip.
+    // The message screen's own keyboard, so typing looks and works the same everywhere; this board has no other.
+    if (cannedMessageModule) {
+        display->setColor(BLACK);
+        display->fillRect(0, boxTop + boxH + 2, screenW, screenH - (boxTop + boxH + 2));
+        display->setColor(WHITE);
+        cannedMessageModule->drawKeyboardKeys(display, 0, 0, false); // plain text: no emote key
+        display->setTextAlignment(TEXT_ALIGN_LEFT);
+        return;
+    }
+    // Without the composer, a small keyboard of its own: five rows under the popup, up to a comfortable fingertip.
     const int16_t kbBottom = screenH - 2;
-    const int16_t rowH = std::min<int16_t>(44, (kbBottom - (boxTop + boxH + pad)) / (kPromptRowCount + 1));
-    const int16_t kbTop = kbBottom - rowH * (kPromptRowCount + 1);
+    const int16_t keyRowH = std::min<int16_t>(44, (kbBottom - (boxTop + boxH + pad)) / (kPromptRowCount + 1));
+    const int16_t kbTop = kbBottom - keyRowH * (kPromptRowCount + 1);
     display->setColor(BLACK);
     display->fillRect(0, kbTop - 2, screenW, screenH - kbTop + 2);
     display->setColor(WHITE);
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     promptKeyCount = 0;
     auto addKey = [&](int16_t x0, int16_t x1, int16_t y, char key, const char *label) {
-        const PromptKey k{(int16_t)(x0 + 1), (int16_t)(y + 1), (int16_t)(x1 - x0 - 2), (int16_t)(rowH - 2), key};
+        const PromptKey k{(int16_t)(x0 + 1), (int16_t)(y + 1), (int16_t)(x1 - x0 - 2), (int16_t)(keyRowH - 2), key};
         promptKeys[promptKeyCount++] = k;
         display->drawRect(k.x, k.y, k.w, k.h);
         display->drawString(k.x + k.w / 2, k.y + (k.h - lineH) / 2, label);
@@ -706,7 +839,7 @@ void NotificationRenderer::drawTextPrompt(OLEDDisplay *display, OLEDDisplayUiSta
             if (promptShift && c >= 'a' && c <= 'z')
                 c = (char)(c - 'a' + 'A');
             const char label[2] = {c, '\0'};
-            addKey(kbLeft + i * kbWidth / n, kbLeft + (i + 1) * kbWidth / n, kbTop + r * rowH, kPromptRows[r][i], label);
+            addKey(kbLeft + i * kbWidth / n, kbLeft + (i + 1) * kbWidth / n, kbTop + r * keyRowH, kPromptRows[r][i], label);
         }
     }
     // Esc | Shift | space | Del | OK, in tenths of the row
@@ -719,12 +852,13 @@ void NotificationRenderer::drawTextPrompt(OLEDDisplay *display, OLEDDisplayUiSta
                     {30, 70, PromptSpace, "space"},
                     {70, 85, PromptDelete, "Del"},
                     {85, 100, PromptOk, "OK"}};
-    const int16_t actionY = kbTop + kPromptRowCount * rowH;
+    const int16_t actionY = kbTop + kPromptRowCount * keyRowH;
     for (const auto &a : kActions)
         addKey(kbLeft + a.from * kbWidth / 100, kbLeft + a.to * kbWidth / 100, actionY, a.key, a.label);
 #else
     display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->drawString(boxLeft + boxW / 2, fieldY + fieldH + 2, "Enter: OK   Esc: cancel");
+    display->drawString(boxLeft + boxW / 2, fieldY + fieldH + suggestionsH + 2,
+                        promptSuggestionCount ? "Down: suggestions   Enter: OK" : "Enter: OK   Esc: cancel");
 #endif
     display->setTextAlignment(TEXT_ALIGN_LEFT);
 }

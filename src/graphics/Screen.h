@@ -438,7 +438,9 @@ class Screen : public concurrency::OSThread
     // A popup with a one-line text field. The callback gets the text on Enter/OK, and is not called on cancel.
     // Safe to call from anywhere but a banner's own callback, which is torn down right after it returns.
     void showTextPrompt(const char *title, const char *initialText, uint8_t maxLength,
-                        std::function<void(const std::string &)> callback);
+                        std::function<void(const std::string &)> callback, std::function<void()> onCancel = nullptr,
+                        std::function<void(const std::string &)> onChange = nullptr,
+                        std::function<void(int)> onPickSuggestion = nullptr);
     void showTextInput(const char *header, const char *initialText, uint32_t durationMs,
                        std::function<void(const std::string &)> textCallback);
 
