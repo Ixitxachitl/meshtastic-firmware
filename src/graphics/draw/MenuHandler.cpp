@@ -57,6 +57,10 @@
 #include "modules/WaypointModule.h"
 #if !MESHTASTIC_EXCLUDE_WAYPOINT
 #include "WaypointStore.h"
+#if BASEUI_WAYPOINT_EDITOR
+#include "WaypointUtils.h"
+#include "gps/RTC.h"
+#endif
 #endif
 #if defined(USE_SDL_AUDIO) && defined(MESHTASTIC_ENABLE_TTS)
 #include "platform/portduino/SamPlayback.h"
@@ -70,7 +74,7 @@
 namespace graphics
 {
 
-#if BASEUI_MAP_NAVIGATION || BASEUI_WIFI_MANAGER
+#if BASEUI_MAP_NAVIGATION || BASEUI_WIFI_MANAGER || BASEUI_WAYPOINT_EDITOR
 // A banner shown from inside another banner's callback is cleared as that one closes, so the notice waits a loop.
 static char pendingNotice[64];
 static void queueNotice(const char *message)
@@ -80,6 +84,16 @@ static void queueNotice(const char *message)
     menuHandler::menuQueue = menuHandler::NoticeMenu;
     screen->runNow();
 }
+#endif
+
+#if BASEUI_WAYPOINT_EDITOR
+// The waypoint New Waypoint Here is writing, kept across the prompts and pickers that fill it in.
+static struct {
+    char name[sizeof(meshtastic_Waypoint::name)];
+    char description[sizeof(meshtastic_Waypoint::description)];
+    uint32_t icon;       // a codepoint, drawn as its emote where there is one
+    uint32_t expireSecs; // from now; 0 never
+} waypointDraft;
 #endif
 
 #if BASEUI_WIFI_MANAGER
@@ -2563,14 +2577,24 @@ void menuHandler::removeFavoriteMenu()
 
 void menuHandler::waypointBaseMenu()
 {
-    enum optionsNumbers { Back, GeofenceAlerts, RemoveWaypoint };
+    enum optionsNumbers { Back, GeofenceAlerts, RemoveWaypoint, NewHere };
+#if BASEUI_WAYPOINT_EDITOR
+    static const char *optionsArray[] = {"Back", "Geofence Alerts", "Remove Waypoint", "New Waypoint Here"};
+#else
     static const char *optionsArray[] = {"Back", "Geofence Alerts", "Remove Waypoint"};
+#endif
 
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = "Waypoint Action";
     bannerOptions.optionsArrayPtr = optionsArray;
-    bannerOptions.optionsCount = 3;
+    bannerOptions.optionsCount = sizeof(optionsArray) / sizeof(optionsArray[0]);
     bannerOptions.bannerCallback = [](int selected) -> void {
+#if BASEUI_WAYPOINT_EDITOR
+        if (selected == NewHere) {
+            newWaypointHere();
+            return;
+        }
+#endif
         if (selected == GeofenceAlerts) {
             menuQueue = GeofenceWaypointMenu;
             screen->runNow();
@@ -2581,6 +2605,137 @@ void menuHandler::waypointBaseMenu()
     };
     screen->showOverlayBanner(bannerOptions);
 }
+
+#if BASEUI_WAYPOINT_EDITOR
+namespace
+{
+struct ExpiryChoice {
+    const char *label;
+    uint32_t seconds;
+};
+const ExpiryChoice kWaypointExpiries[] = {{"Never", 0},          {"1 hour", 3600},      {"8 hours", 8 * 3600},  {"1 day", 86400},
+                                          {"3 days", 3 * 86400}, {"1 week", 7 * 86400}, {"30 days", 30 * 86400}};
+
+constexpr uint32_t kWaypointPushpin = 0x1F4CD; // the emote set's pushpin, and the default pin
+
+const char *expiryLabel(uint32_t seconds)
+{
+    for (const auto &choice : kWaypointExpiries)
+        if (choice.seconds == seconds)
+            return choice.label;
+    return "Never";
+}
+} // namespace
+
+void menuHandler::newWaypointHere()
+{
+    if (localPosition.latitude_i == 0 && localPosition.longitude_i == 0) {
+        queueNotice("No GPS position yet");
+        return;
+    }
+    memset(&waypointDraft, 0, sizeof(waypointDraft));
+    waypointDraft.icon = kWaypointPushpin;
+    waypointDraft.expireSecs = 86400; // a day: long enough to be useful, short enough not to litter the map
+    menuQueue = WaypointEditorMenu;
+    screen->runNow();
+}
+
+// Each row shows what it is set to; picking one edits it and comes back here.
+void menuHandler::waypointEditorMenu()
+{
+    enum Row { Back, Send, Name, Note, Pin, Expires, RowCount };
+    static char nameLabel[48], noteLabel[48], expiryLabelText[24];
+    static const char *labels[RowCount];
+    snprintf(nameLabel, sizeof(nameLabel), "Name: %.28s", waypointDraft.name[0] ? waypointDraft.name : "(none)");
+    snprintf(noteLabel, sizeof(noteLabel), "Note: %.28s", waypointDraft.description[0] ? waypointDraft.description : "(none)");
+    snprintf(expiryLabelText, sizeof(expiryLabelText), "Expires: %s", expiryLabel(waypointDraft.expireSecs));
+    labels[Back] = "Back";
+    labels[Send] = "Send";
+    labels[Name] = nameLabel;
+    labels[Note] = noteLabel;
+    labels[Pin] = waypointDraft.icon == kWaypointPushpin ? "Pin: pushpin" : waypointDraft.icon ? "Pin: chosen" : "Pin: plain";
+    labels[Expires] = expiryLabelText;
+
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = "New Waypoint";
+    bannerOptions.optionsArrayPtr = labels;
+    bannerOptions.optionsCount = RowCount;
+    bannerOptions.InitialSelected = Send;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        switch (selected) {
+        case Name:
+            menuQueue = WaypointNamePrompt;
+            break;
+        case Note:
+            menuQueue = WaypointNotePrompt;
+            break;
+        case Pin:
+            menuQueue = WaypointPinPicker;
+            break;
+        case Expires:
+            menuQueue = WaypointExpiryMenu;
+            break;
+        case Send: {
+            if (localPosition.latitude_i == 0 && localPosition.longitude_i == 0) {
+                queueNotice("No GPS position yet");
+                return;
+            }
+            uint32_t expire = 0;
+            if (waypointDraft.expireSecs) {
+                // An expiry is a date, so it needs the clock: a guess would expire it at once, or never.
+                const uint32_t now = getValidTime(RTCQualityDevice);
+                if (!now) {
+                    queueNotice("Clock not set: pick Never");
+                    return;
+                }
+                expire = now + waypointDraft.expireSecs;
+            }
+            meshtastic_Waypoint wp = meshtastic_Waypoint_init_zero;
+            wp.id = (uint32_t)random(1, 0x7FFFFFFF);
+            wp.has_latitude_i = true;
+            wp.latitude_i = localPosition.latitude_i;
+            wp.has_longitude_i = true;
+            wp.longitude_i = localPosition.longitude_i;
+            wp.expire = expire;
+            wp.icon = waypointDraft.icon;
+            strncpy(wp.name, waypointDraft.name[0] ? waypointDraft.name : "Waypoint", sizeof(wp.name) - 1);
+            strncpy(wp.description, waypointDraft.description, sizeof(wp.description) - 1);
+            queueNotice(waypointModule && waypointModule->broadcastNew(wp) ? "Waypoint sent" : "Couldn't send the waypoint");
+            return;
+        }
+        default:
+            return; // Back: the draft is dropped
+        }
+        screen->runNow();
+    };
+    screen->showOverlayBanner(bannerOptions);
+}
+
+void menuHandler::waypointExpiryMenu()
+{
+    constexpr int kCount = sizeof(kWaypointExpiries) / sizeof(kWaypointExpiries[0]);
+    static const char *labels[kCount + 1];
+    labels[0] = "Back";
+    int current = 1;
+    for (int i = 0; i < kCount; i++) {
+        labels[i + 1] = kWaypointExpiries[i].label;
+        if (kWaypointExpiries[i].seconds == waypointDraft.expireSecs)
+            current = i + 1;
+    }
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = "Expires";
+    bannerOptions.optionsArrayPtr = labels;
+    bannerOptions.optionsCount = kCount + 1;
+    bannerOptions.InitialSelected = current;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        if (selected >= 1 && selected <= kCount)
+            waypointDraft.expireSecs = kWaypointExpiries[selected - 1].seconds;
+        menuQueue = WaypointEditorMenu;
+        screen->runNow();
+    };
+    screen->showOverlayBanner(bannerOptions);
+}
+#endif
 
 void menuHandler::geofenceWaypointMenu()
 {
@@ -3709,6 +3864,46 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
         navSavedRouteActions();
         break;
 #endif
+#if BASEUI_WAYPOINT_EDITOR
+    case WaypointEditorMenu:
+        waypointEditorMenu();
+        break;
+    case WaypointNamePrompt:
+    case WaypointNotePrompt: {
+        const bool isName = menuQueue == WaypointNamePrompt;
+        char *field = isName ? waypointDraft.name : waypointDraft.description;
+        const uint8_t room = isName ? sizeof(waypointDraft.name) - 1 : sizeof(waypointDraft.description) - 1;
+        auto backToEditor = []() {
+            menuQueue = WaypointEditorMenu;
+            screen->runNow();
+        };
+        screen->showTextPrompt(
+            isName ? "Waypoint name" : "Waypoint note", field, room,
+            [field, room, backToEditor](const std::string &text) {
+                strncpy(field, text.c_str(), room);
+                field[room] = '\0';
+                backToEditor();
+            },
+            backToEditor);
+        break;
+    }
+    case WaypointPinPicker:
+        if (cannedMessageModule) {
+            cannedMessageModule->pickEmote([](const char *label) {
+                if (label)
+                    waypointDraft.icon = WaypointUtils::codepointFromUtf8(label);
+                menuQueue = WaypointEditorMenu;
+                screen->runNow();
+            });
+        } else {
+            menuQueue = WaypointEditorMenu; // no emote grid on this build: the pin stays the default
+            screen->runNow();
+        }
+        break;
+    case WaypointExpiryMenu:
+        waypointExpiryMenu();
+        break;
+#endif
     case HamModeConfirm:
         hamModeConfirmMenu();
         break;
@@ -3762,7 +3957,7 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
         });
         break;
 #endif
-#if BASEUI_MAP_NAVIGATION || BASEUI_WIFI_MANAGER
+#if BASEUI_MAP_NAVIGATION || BASEUI_WIFI_MANAGER || BASEUI_WAYPOINT_EDITOR
     case NoticeMenu:
         screen->showSimpleBanner(pendingNotice, 3000);
         break;
@@ -4201,7 +4396,7 @@ void menuHandler::refreshNavigateMenu()
 // Map > Navigate: resume or stop the current target, or pick a new one.
 void menuHandler::navigateMenu()
 {
-    enum Choice { Back, Saved, Download, Stop, Node, Waypoint, Coordinates, Address, Travel, View, ChoiceCount };
+    enum Choice { Back, Saved, Download, Stop, Node, Waypoint, Coordinates, Address, Travel, View, NewWaypoint, ChoiceCount };
     static const char *labels[ChoiceCount];
     static int choices[ChoiceCount];
     static const char *const kTravelLabels[] = {"Travel: Car", "Travel: Bike", "Travel: Walk"};
@@ -4254,6 +4449,10 @@ void menuHandler::navigateMenu()
 #if BASEUI_MAP_PNG_TILES
     labels[count] = kViewLabels[std::min<int>(MapNavigation::viewMode(), 2)];
     choices[count++] = View;
+#endif
+#if BASEUI_WAYPOINT_EDITOR
+    labels[count] = "New Waypoint Here";
+    choices[count++] = NewWaypoint;
 #endif
 
     BannerOverlayOptions bannerOptions;
@@ -4324,6 +4523,11 @@ void menuHandler::navigateMenu()
             menuQueue = NavigateMenu;
             screen->runNow();
             break;
+#if BASEUI_WAYPOINT_EDITOR
+        case NewWaypoint:
+            newWaypointHere();
+            break;
+#endif
         case View:
             MapNavigation::setViewMode((meshtastic_MapViewMode)((MapNavigation::viewMode() + 1) % 3));
             reopenOn = View;

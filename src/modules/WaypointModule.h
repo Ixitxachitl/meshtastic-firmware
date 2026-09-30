@@ -24,6 +24,8 @@ class WaypointModule : public SinglePortModule, public Observable<const UIFrameE
 #if !MESHTASTIC_EXCLUDE_WAYPOINT
     /// Broadcast an expired copy of the waypoint so the mesh (and we) discard it.
     bool broadcastDelete(uint32_t waypointId);
+    // Sends a waypoint made on this device to the mesh on the primary channel, and keeps it as ours.
+    bool broadcastNew(const meshtastic_Waypoint &wp);
 #endif
   protected:
     /** Called to handle a particular incoming message

@@ -92,7 +92,7 @@ class menuHandler
         NavWaypointMenu,
         NavCoordinatesPrompt,
 #endif
-#if BASEUI_MAP_NAVIGATION || BASEUI_WIFI_MANAGER
+#if BASEUI_MAP_NAVIGATION || BASEUI_WIFI_MANAGER || BASEUI_WAYPOINT_EDITOR
         NoticeMenu,
 #endif
 #if BASEUI_WIFI_MANAGER
@@ -106,6 +106,13 @@ class menuHandler
 #if BASEUI_MAP_ADDRESS_SEARCH
         NavAddressPrompt,
         NavSearchResultsMenu,
+#endif
+#if BASEUI_WAYPOINT_EDITOR
+        WaypointEditorMenu,
+        WaypointNamePrompt,
+        WaypointNotePrompt,
+        WaypointPinPicker,
+        WaypointExpiryMenu,
 #endif
 #if BASEUI_MAP_ROUTING
         NavSavedRoutesStart,
@@ -209,6 +216,12 @@ class menuHandler
 #endif
 #if BASEUI_MAP_ADDRESS_SEARCH
     static void navSearchResultsMenu();
+#endif
+#if BASEUI_WAYPOINT_EDITOR
+    // New Waypoint Here: starts a fresh waypoint at our position and opens its editor.
+    static void newWaypointHere();
+    static void waypointEditorMenu();
+    static void waypointExpiryMenu();
 #endif
 #if BASEUI_MAP_ROUTING
     static void navSavedRoutesMenu();

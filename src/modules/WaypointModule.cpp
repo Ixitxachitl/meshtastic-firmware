@@ -338,6 +338,29 @@ bool WaypointModule::broadcastDelete(uint32_t waypointId)
 }
 #endif
 
+#if !MESHTASTIC_EXCLUDE_WAYPOINT
+bool WaypointModule::broadcastNew(const meshtastic_Waypoint &wp)
+{
+    if (!service || !router)
+        return false;
+    meshtastic_MeshPacket *p = router->allocForSending();
+    if (!p)
+        return false;
+    p->decoded.portnum = meshtastic_PortNum_WAYPOINT_APP;
+    p->channel = 0; // the primary channel
+    p->decoded.payload.size =
+        pb_encode_to_bytes(p->decoded.payload.bytes, sizeof(p->decoded.payload.bytes), &meshtastic_Waypoint_msg, &wp);
+    if (p->decoded.payload.size == 0) {
+        packetPool.release(p);
+        return false;
+    }
+    // Stored as authored here from the start, as a waypoint sent from the phone is; the echo matches it by id.
+    waypointStore.addFromPacket(*p, true);
+    service->sendToMesh(p, RX_SRC_USER);
+    return true;
+}
+#endif
+
 #if HAS_SCREEN
 bool WaypointModule::shouldDraw()
 {

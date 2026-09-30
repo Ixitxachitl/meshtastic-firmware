@@ -35,4 +35,24 @@ inline std::string utf8FromCodepoint(uint32_t codepoint)
     return std::string(buf, 4);
 }
 
+// The first codepoint of a UTF-8 string - a waypoint's icon is one codepoint, and an emote's label may carry more
+// (a variation selector) after it. 0 for an empty or malformed string.
+inline uint32_t codepointFromUtf8(const char *s)
+{
+    if (!s || !*s)
+        return 0;
+    const unsigned char c = (unsigned char)s[0];
+    const int n = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : (c >> 3) == 0x1E ? 4 : 0;
+    if (!n)
+        return 0;
+    uint32_t cp = n == 1 ? c : c & (0x7F >> n);
+    for (int i = 1; i < n; i++) {
+        const unsigned char cc = (unsigned char)s[i];
+        if ((cc & 0xC0) != 0x80)
+            return 0;
+        cp = (cp << 6) | (cc & 0x3F);
+    }
+    return cp;
+}
+
 } // namespace WaypointUtils

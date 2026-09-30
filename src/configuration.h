@@ -586,6 +586,15 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #undef BASEUI_MAP_NAVIGATION
 #define BASEUI_MAP_NAVIGATION 0
 #endif
+// Waypoints > New Waypoint Here: a name, note, emote pin and expiry for a waypoint at our position, sent on the
+// primary channel. Opt-in per variant - the text needs a keyboard, or a touch keyboard.
+#ifndef BASEUI_WAYPOINT_EDITOR
+#define BASEUI_WAYPOINT_EDITOR 0
+#endif
+#if BASEUI_WAYPOINT_EDITOR && MESHTASTIC_EXCLUDE_WAYPOINT
+#undef BASEUI_WAYPOINT_EDITOR
+#define BASEUI_WAYPOINT_EDITOR 0
+#endif
 // Navigate > Address, searched over WiFi on the online tile fetcher's task. On wherever both of those are.
 #define BASEUI_MAP_ADDRESS_SEARCH (BASEUI_MAP_NAVIGATION && BASEUI_MAP_ONLINE_TILES)
 // WiFi screen menu: scan for networks, join one with a typed password, and keep a list of known networks to rejoin -
