@@ -660,6 +660,9 @@ void CannedMessageModule::updateState(cannedMessageModuleRunState newState, bool
     // scrolled to; out of range is the signal for the next draw to recentre on the selection.
     if (newState == CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER && runState != CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER)
         emoteScrollOffset = -1;
+    // A pickEmote() grid left any other way (a timeout, the screen moving on) must not hand a later pick to its caller.
+    if (newState != CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER)
+        emotePickedCallback = nullptr;
 
 #if defined(USE_VIRTUAL_KEYBOARD)
     // Shift is a property of the on-screen keyboard, so it must not outlive the composer.
@@ -1448,10 +1451,35 @@ bool isEmoteScrollFingerSteering()
 #endif
 }
 
+void CannedMessageModule::pickEmote(std::function<void(const char *label)> onPicked)
+{
+    emotePickedCallback = std::move(onPicked);
+    updateState(CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER, true);
+    screen->forceDisplay(true);
+}
+
+// Leaves a pickEmote() grid: the composer stays closed, and the caller gets the pick (null on cancel).
+void CannedMessageModule::finishEmotePick(const char *label)
+{
+    auto callback = std::move(emotePickedCallback);
+    emotePickedCallback = nullptr;
+    updateState(CANNED_MESSAGE_RUN_STATE_INACTIVE);
+    UIFrameEvent e;
+    e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+    notifyObservers(&e);
+    screen->forceDisplay(true);
+    if (callback)
+        callback(label);
+}
+
 int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
 {
     const std::vector<uint16_t> &unique = uniqueEmoteIndices();
     const int numUnique = (int)unique.size();
+    if (numUnique == 0 && emotePickedCallback) {
+        finishEmotePick(nullptr);
+        return 1;
+    }
     if (numUnique == 0) { // EXCLUDE_EMOJI: emotes[] is empty, any index would read out of bounds
         updateState(CANNED_MESSAGE_RUN_STATE_FREETEXT, true);
         // forceDisplay() without the flag is a no-op on non-eink, and the picker returns 1 for every
@@ -1573,6 +1601,10 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
     if (isSelect) {
         if (touchedIdx >= 0)
             emotePickerIndex = touchedIdx;
+        if (emotePickedCallback) {
+            finishEmotePick(graphics::emotes[unique[emotePickerIndex]].label);
+            return 1;
+        }
 
         String emoteInsert = graphics::emotes[unique[emotePickerIndex]].label;
         if (cursor == freetext.length()) {
@@ -1586,9 +1618,13 @@ int CannedMessageModule::handleEmotePickerInput(const InputEvent *event)
         return 1;
     }
 
-    // Cancel or backspace returns to freetext
+    // Cancel or backspace returns to freetext, or to whoever opened the grid
     if (event->inputEvent == INPUT_BROKER_CANCEL || event->inputEvent == INPUT_BROKER_ALT_LONG ||
         event->inputEvent == INPUT_BROKER_BACK) {
+        if (emotePickedCallback) {
+            finishEmotePick(nullptr);
+            return 1;
+        }
         updateState(CANNED_MESSAGE_RUN_STATE_FREETEXT, true);
         screen->forceDisplay(true);
         return 1;
@@ -2032,6 +2068,15 @@ int CannedMessageModule::getPrevIndex()
 
 #if defined(USE_VIRTUAL_KEYBOARD)
 
+char CannedMessageModule::keyboardChar(const String &key) const
+{
+    const char c = key[0];
+    const char shifted = shift ? shiftedSymbol(c) : 0;
+    if (shifted)
+        return shifted;
+    return shift ? c : (char)std::tolower((unsigned char)c);
+}
+
 String CannedMessageModule::keyForCoordinates(uint x, uint y)
 {
     int outerSize = *(&this->keyboard[0] + 1) - this->keyboard[0];
@@ -2078,6 +2123,15 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
     drawWrappedEmoteText(display, draftX, y + FONT_HEIGHT_SMALL + BASEUI_HEADER_MARGIN, draft.c_str(),
                          display->getWidth() - draftX - BASEUI_BODY_LR_MARGIN, FONT_HEIGHT_SMALL);
 
+    drawKeyboardKeys(display, x, y, true);
+}
+
+// The keys alone, in the lower part of the screen: the composer draws its header and draft above them, and a text
+// prompt on a touch-only board draws its popup there instead, so both type on the same keyboard.
+void CannedMessageModule::drawKeyboardKeys(OLEDDisplay *display, int16_t x, int16_t y, bool withEmoteKey)
+{
+    const int outerSize = *(&this->keyboard[0] + 1) - this->keyboard[0];
+    display->setColor(OLEDDISPLAY_COLOR::WHITE);
     // Keys fill what is left below the draft, inset by whatever the variant asks for. The key grid
     // deliberately ignores BASEUI_BODY_LR_MARGIN - that one insets text, and fourteen columns cannot
     // spare it - so a device that needs its edges kept clear says so with the keyboard margins.
@@ -2150,11 +2204,12 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
                 // Hand-laid: ESC and the emote key are fixed, space takes three quarters of what is
                 // left and enter the rest. An even split would make space no easier to hit than 'q'.
                 const int escWidth = std::max(30, keyAreaWidth / 5);
-                const int emoteWidth = graphics::numEmotes > 0 ? std::max(24, keyAreaWidth / 9) : 0;
+                // A plain-text prompt hides the emote key: it keeps its slot, at no width.
+                const int emoteWidth = (graphics::numEmotes > 0 && withEmoteKey) ? std::max(24, keyAreaWidth / 9) : 0;
                 const int remaining = keyAreaWidth - escWidth - emoteWidth;
                 const int spaceWidth = (remaining * 3) / 4;
                 // Index 1 is the emote key only while it exists; without it space moves up one slot
-                const int slot = (emoteWidth == 0 && innerIndex > 0) ? innerIndex + 1 : innerIndex;
+                const int slot = (graphics::numEmotes == 0 && innerIndex > 0) ? innerIndex + 1 : innerIndex;
 
                 switch (slot) {
                 case 0:
@@ -2191,6 +2246,8 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
             }
 #endif
             this->keyboard[0][outerIndex][innerIndex] = updatedLetter;
+            if (cellWidth <= 0)
+                continue; // the hidden emote key: nothing to draw, and nothing for a tap to land on
 
             const int capX = xOffset + buttonPadding;
             const int capY = yOffset + buttonPadding;

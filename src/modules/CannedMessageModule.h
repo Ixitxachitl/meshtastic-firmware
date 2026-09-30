@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 #if HAS_SCREEN
 #include "ProtobufModule.h"
 #include "input/InputBroker.h"
@@ -77,6 +78,21 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
 
     // === Emote Picker ===
     int handleEmotePickerInput(const InputEvent *event);
+    // Opens the emote grid for someone other than the composer: the pick goes to onPicked (null on cancel) instead of
+    // into a message, and the composer is left closed.
+    void pickEmote(std::function<void(const char *label)> onPicked);
+
+#if defined(USE_VIRTUAL_KEYBOARD)
+    // The composer's touch keyboard, for other text entry on touch-only boards to share: drawn in the lower part of
+    // the screen, with the composer's own tap flash and shift. keyForCoordinates() reads the last draw's layout.
+    void drawKeyboardKeys(OLEDDisplay *display, int16_t x, int16_t y, bool withEmoteKey);
+    String keyForCoordinates(uint x, uint y);
+    bool keyboardShift() const { return shift; }
+    void setKeyboardShift(bool on) { shift = on; }
+    void flashKeyboardKey(const String &key) { highlight = key; }
+    // What a character key types now: its shifted symbol, or its letter in the case shift says.
+    char keyboardChar(const String &key) const;
+#endif
     void drawEmotePickerScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
 
     // Touch scroll - moves the emote grid by an exact finger displacement in screen pixels, for
@@ -122,7 +138,6 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
 
 #if defined(USE_VIRTUAL_KEYBOARD)
     void drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
-    String keyForCoordinates(uint x, uint y);
     void drawShiftIcon(OLEDDisplay *display, int x, int y, float scale = 1);
     void drawBackspaceIcon(OLEDDisplay *display, int x, int y, float scale = 1);
     void drawEnterIcon(OLEDDisplay *display, int x, int y, float scale = 1);
@@ -145,6 +160,8 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
     void installDefaultCannedMessageModuleConfig();
 
   private:
+    std::function<void(const char *label)> emotePickedCallback; // set while pickEmote() owns the grid
+    void finishEmotePick(const char *label);
     // === Input Observers ===
     CallbackObserver<CannedMessageModule, const InputEvent *> inputObserver =
         CallbackObserver<CannedMessageModule, const InputEvent *>(this, &CannedMessageModule::handleInputEvent);
