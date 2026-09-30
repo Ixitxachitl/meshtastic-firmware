@@ -69,6 +69,8 @@ bool isFollowMeEnabled();
 // rather than at the idle rate.
 bool wantsLiveFramerate();
 void setFollowMeEnabled(bool enabled);
+// Where the view is centred while Follow Me is off - the spot the user panned to. False while it follows.
+bool pannedCenter(double &lat, double &lng);
 
 // Zoom Mode: entered directly from the menu, held until Back is pressed - not a discrete picker.
 // While active, up/down adjust zoom by one level at a time and a zoom ruler is drawn on screen.

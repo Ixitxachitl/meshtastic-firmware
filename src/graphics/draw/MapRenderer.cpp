@@ -1628,6 +1628,15 @@ void MapRenderer::setFollowMeEnabled(bool enabled)
         ensureCenterInitialized(); // Freezing the view - make sure there's somewhere concrete to freeze it.
 }
 
+bool MapRenderer::pannedCenter(double &lat, double &lng)
+{
+    if (isFollowMeEnabled() || !s_centerInitialized)
+        return false;
+    lat = s_centerLat;
+    lng = s_centerLng;
+    return true;
+}
+
 bool MapRenderer::isZoomModeEnabled()
 {
     return s_zoomMode;

@@ -218,8 +218,9 @@ class menuHandler
     static void navSearchResultsMenu();
 #endif
 #if BASEUI_WAYPOINT_EDITOR
-    // New Waypoint Here: starts a fresh waypoint at our position and opens its editor.
-    static void newWaypointHere();
+    // New Waypoint Here: starts a fresh waypoint at our position and opens its editor. From the map with Follow Me
+    // off, at the centre of the panned view instead.
+    static void newWaypointHere(bool fromMap = false);
     static void waypointEditorMenu();
     static void waypointExpiryMenu();
 #endif

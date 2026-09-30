@@ -93,6 +93,8 @@ static struct {
     char description[sizeof(meshtastic_Waypoint::description)];
     uint32_t icon;       // a codepoint, drawn as its emote where there is one
     uint32_t expireSecs; // from now; 0 never
+    bool atMapCenter;    // placed where the panned map is centred; otherwise at our fix when sent
+    int32_t latitudeI, longitudeI;
 } waypointDraft;
 #endif
 
@@ -2627,13 +2629,22 @@ const char *expiryLabel(uint32_t seconds)
 }
 } // namespace
 
-void menuHandler::newWaypointHere()
+void menuHandler::newWaypointHere(bool fromMap)
 {
-    if (localPosition.latitude_i == 0 && localPosition.longitude_i == 0) {
+    double lat = 0, lng = 0;
+#if BASEUI_MAP_NAVIGATION
+    const bool atCenter = fromMap && graphics::MapRenderer::pannedCenter(lat, lng);
+#else
+    const bool atCenter = false;
+#endif
+    if (!atCenter && localPosition.latitude_i == 0 && localPosition.longitude_i == 0) {
         queueNotice("No GPS position yet");
         return;
     }
     memset(&waypointDraft, 0, sizeof(waypointDraft));
+    waypointDraft.atMapCenter = atCenter;
+    waypointDraft.latitudeI = (int32_t)lround(lat * 1e7);
+    waypointDraft.longitudeI = (int32_t)lround(lng * 1e7);
     waypointDraft.icon = kWaypointPushpin;
     waypointDraft.expireSecs = 86400; // a day: long enough to be useful, short enough not to litter the map
     menuQueue = WaypointEditorMenu;
@@ -2657,7 +2668,7 @@ void menuHandler::waypointEditorMenu()
     labels[Expires] = expiryLabelText;
 
     BannerOverlayOptions bannerOptions;
-    bannerOptions.message = "New Waypoint";
+    bannerOptions.message = waypointDraft.atMapCenter ? "Waypoint at Map Center" : "New Waypoint";
     bannerOptions.optionsArrayPtr = labels;
     bannerOptions.optionsCount = RowCount;
     bannerOptions.InitialSelected = Send;
@@ -2676,7 +2687,7 @@ void menuHandler::waypointEditorMenu()
             menuQueue = WaypointExpiryMenu;
             break;
         case Send: {
-            if (localPosition.latitude_i == 0 && localPosition.longitude_i == 0) {
+            if (!waypointDraft.atMapCenter && localPosition.latitude_i == 0 && localPosition.longitude_i == 0) {
                 queueNotice("No GPS position yet");
                 return;
             }
@@ -2693,9 +2704,9 @@ void menuHandler::waypointEditorMenu()
             meshtastic_Waypoint wp = meshtastic_Waypoint_init_zero;
             wp.id = (uint32_t)random(1, 0x7FFFFFFF);
             wp.has_latitude_i = true;
-            wp.latitude_i = localPosition.latitude_i;
+            wp.latitude_i = waypointDraft.atMapCenter ? waypointDraft.latitudeI : localPosition.latitude_i;
             wp.has_longitude_i = true;
-            wp.longitude_i = localPosition.longitude_i;
+            wp.longitude_i = waypointDraft.atMapCenter ? waypointDraft.longitudeI : localPosition.longitude_i;
             wp.expire = expire;
             wp.icon = waypointDraft.icon;
             strncpy(wp.name, waypointDraft.name[0] ? waypointDraft.name : "Waypoint", sizeof(wp.name) - 1);
@@ -4448,6 +4459,12 @@ void menuHandler::navigateMenu()
     labels[count] = "To Address";
     choices[count++] = Address;
 #endif
+    double centerLat, centerLng; // only while panned: following, the centre is where we already are
+    const bool panned = graphics::MapRenderer::pannedCenter(centerLat, centerLng);
+    if (panned) {
+        labels[count] = "To Map Center";
+        choices[count++] = MapCenter;
+    }
 #if BASEUI_MAP_ROUTING
     labels[count] = kTravelLabels[std::min<int>(MapNavigation::travelMode(), 2)];
     choices[count++] = Travel;
@@ -4457,7 +4474,7 @@ void menuHandler::navigateMenu()
     choices[count++] = View;
 #endif
 #if BASEUI_WAYPOINT_EDITOR
-    labels[count] = "New Waypoint Here";
+    labels[count] = panned ? "New Waypoint at Center" : "New Waypoint Here";
     choices[count++] = NewWaypoint;
 #endif
 
@@ -4531,9 +4548,15 @@ void menuHandler::navigateMenu()
             break;
 #if BASEUI_WAYPOINT_EDITOR
         case NewWaypoint:
-            newWaypointHere();
+            newWaypointHere(true);
             break;
 #endif
+        case MapCenter: {
+            double lat, lng;
+            if (graphics::MapRenderer::pannedCenter(lat, lng))
+                MapNavigation::navigateToLocation(lat, lng, nullptr); // named by its coordinates
+            break;
+        }
         case View:
             MapNavigation::setViewMode((meshtastic_MapViewMode)((MapNavigation::viewMode() + 1) % 3));
             reopenOn = View;
