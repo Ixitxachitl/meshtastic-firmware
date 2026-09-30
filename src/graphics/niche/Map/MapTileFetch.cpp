@@ -389,10 +389,45 @@ class BufferSink : public Stream
     bool overflow = false;
 };
 
+// Offering TLS 1.3 makes mbedTLS fail a TLS 1.2-only server that signs with RSA-PSS (Photon's does: -0x6600). Such a
+// host is retried capped at TLS 1.2, which then sticks for it.
+class FetchClient : public NetworkClientSecure
+{
+  public:
+    FetchClient() { setInsecure(); }
+    using NetworkClientSecure::connect;
+    int connect(const char *host, uint16_t port, int32_t timeout) override
+    {
+        if (strcmp(host, tls12Host) != 0) {
+            if (NetworkClientSecure::connect(host, port, timeout))
+                return 1;
+            if (sslclient->last_error != MBEDTLS_ERR_SSL_ILLEGAL_PARAMETER)
+                return 0;
+            LOG_INFO("Map: %s failed the TLS 1.3 offer, retrying with TLS 1.2", host);
+            strncpy(tls12Host, host, sizeof(tls12Host) - 1);
+            tls12Host[sizeof(tls12Host) - 1] = '\0';
+        }
+        // Plain start stops after mbedTLS setup; a session reset then re-reads the capped config.
+        setPlainStart();
+        if (NetworkClientSecure::connect(host, port, timeout)) {
+            mbedtls_ssl_conf_max_tls_version(&sslclient->ssl_conf, MBEDTLS_SSL_VERSION_TLS1_2);
+            if (mbedtls_ssl_session_reset(&sslclient->ssl_ctx) == 0 && startTLS())
+                return 1;
+            stop();
+        }
+        _stillinPlainStart = false; // a failed startTLS leaves it set, which would skip the next handshake
+        return 0;
+    }
+
+  private:
+    char tls12Host[96] = "";
+};
+
 // One client for every request this task makes, left connected between requests to the same server: a run of tiles
 // then costs one TLS handshake instead of one each - most of a tile's time, and most of the memory churn. It is only
 // ever used from this task.
 HTTPClient http;
+FetchClient *fetchClient = nullptr; // made on first use, so builds that never fetch don't hold its TLS state
 char connectedHost[96] = "";
 
 // "tile.example.org:8080" out of "https://tile.example.org:8080/z/x/y.png".
@@ -421,6 +456,8 @@ size_t downloadRequest(const char *url, uint8_t *dst, size_t cap, uint32_t timeo
     static const char *userAgent = "Meshtastic/" xstr(APP_VERSION) " (+https://meshtastic.org)";
     char host[96];
     hostOf(url, host);
+    if (!fetchClient)
+        fetchClient = new FetchClient();
 
     for (int attempt = 0; attempt < 2; attempt++) {
         // HTTPClient reuses whatever it is connected to, whichever server the URL names - so a new host closes it first.
@@ -431,7 +468,7 @@ size_t downloadRequest(const char *url, uint8_t *dst, size_t cap, uint32_t timeo
         http.setTimeout(timeoutMs);
         http.setConnectTimeout(kHttpTimeoutMs);
         http.setUserAgent(userAgent);
-        if (!http.begin(url)) {
+        if (!http.begin(*fetchClient, url)) {
             LOG_WARN("Map: bad URL %s", url);
             closeConnection();
             return 0;
