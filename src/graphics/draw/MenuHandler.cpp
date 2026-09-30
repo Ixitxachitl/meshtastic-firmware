@@ -28,6 +28,7 @@
 #include "graphics/draw/MapNavigation.h"
 #endif
 #if BASEUI_MAP_ADDRESS_SEARCH
+#include "gps/GeoCoord.h"
 #include "graphics/niche/Map/MapTileFetch.h"
 #endif
 #include "graphics/draw/MessageRenderer.h"
@@ -4482,9 +4483,35 @@ void menuHandler::navSearchResultsMenu()
         return;
     }
 
+    // Nearest first, each with how far it is, once there is a fix to measure from; otherwise the provider's order.
+    const bool haveFix = localPosition.latitude_i != 0 || localPosition.longitude_i != 0;
+    float meters[Geocode::kMaxResults] = {};
+    if (haveFix) {
+        const double selfLat = localPosition.latitude_i * 1e-7, selfLon = localPosition.longitude_i * 1e-7;
+        for (int i = 0; i < count; i++)
+            meters[i] = GeoCoord::latLongToMeter(selfLat, selfLon, places[i].lat, places[i].lon);
+        for (int i = 1; i < count; i++) // a handful of places: insertion sort, keeping places and distances paired
+            for (int j = i; j > 0 && meters[j] < meters[j - 1]; j--) {
+                std::swap(meters[j], meters[j - 1]);
+                std::swap(places[j], places[j - 1]);
+            }
+    }
+
     optionsArray[0] = "Back";
     for (int i = 0; i < count; i++) {
-        labelStorage[i] = sanitizeString(places[i].name).substr(0, 28);
+        char distance[16] = "";
+        if (haveFix) {
+            const bool imperial = config.display.units == meshtastic_Config_DisplayConfig_DisplayUnits_IMPERIAL;
+            const float units = imperial ? meters[i] / 1609.344f : meters[i] / 1000.0f;
+            const char *unit = imperial ? "mi" : "km";
+            if (!imperial && meters[i] < 1000.0f)
+                snprintf(distance, sizeof(distance), "  %d m", (int)lroundf(meters[i]));
+            else if (units < 100.0f)
+                snprintf(distance, sizeof(distance), "  %.1f %s", units, unit);
+            else
+                snprintf(distance, sizeof(distance), "  %d %s", (int)lroundf(units), unit);
+        }
+        labelStorage[i] = sanitizeString(places[i].name).substr(0, haveFix ? 22 : 28) + distance;
         optionsArray[i + 1] = labelStorage[i].c_str();
     }
 
