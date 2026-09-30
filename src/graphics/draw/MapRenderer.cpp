@@ -2182,6 +2182,25 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     }
 #endif
 
+    // Panned: a thin cross on the view's centre, where To Map Center and a centred waypoint go. The gap in the middle
+    // leaves the spot itself visible, and keeps it from reading as the self marker.
+    if (!s_followMe && s_centerInitialized) {
+        float cfx, cfy;
+        projectToView(s_centerLat, s_centerLng, cfx, cfy);
+        const int16_t cx = (int16_t)cfx, cy = (int16_t)cfy;
+        constexpr int16_t kGap = 3, kArm = 10;
+        display->setColor(WHITE);
+        display->fillRect(cx - kArm, cy - 1, kArm - kGap + 1, 3);
+        display->fillRect(cx + kGap, cy - 1, kArm - kGap + 1, 3);
+        display->fillRect(cx - 1, cy - kArm, 3, kArm - kGap + 1);
+        display->fillRect(cx - 1, cy + kGap, 3, kArm - kGap + 1);
+        display->setColor(BLACK);
+        display->drawLine(cx - kArm, cy, cx - kGap, cy);
+        display->drawLine(cx + kGap, cy, cx + kArm, cy);
+        display->drawLine(cx, cy - kArm, cx, cy - kGap);
+        display->drawLine(cx, cy + kGap, cx, cy + kArm);
+    }
+
     // Self marker: crosshair, drawn last so it's always visible when on-screen. Uses the live
     // `localPosition` global (see computeAutoCenter's comment) rather than nodeDB->copyNodePosition,
     // so the crosshair always lands exactly on the same position Follow Me centered on.
