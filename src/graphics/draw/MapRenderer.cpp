@@ -1872,7 +1872,13 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     const meshtastic_MapViewMode viewMode = MapNavigation::viewMode();
     if (viewMode != meshtastic_MapViewMode_NORTH_UP && MapNavigation::isActive() && s_followMe && colorBasemapActive() &&
         haveHeading) {
-        poseHeading = (int16_t)((((int)lroundf(headingDeg / 3.0f) * 3) % 360 + 360) % 360);
+        // Hysteresis over the quantising: a compass wobbling a degree or two either side of a step boundary would
+        // otherwise flip the view back and forth, and each flip re-renders the whole turned or tilted basemap.
+        static float shownHeading = -1.0f;
+        const float drift = fabsf(fmodf(headingDeg - shownHeading + 540.0f, 360.0f) - 180.0f);
+        if (shownHeading < 0.0f || drift >= 4.0f)
+            shownHeading = headingDeg;
+        poseHeading = (int16_t)((((int)lroundf(shownHeading / 3.0f) * 3) % 360 + 360) % 360);
         pose.setHeading(poseHeading * (float)M_PI / 180.0f);
         if (viewMode == meshtastic_MapViewMode_TILTED) {
             pose.anchorY = viewHeight * 0.74f;
