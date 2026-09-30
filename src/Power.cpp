@@ -26,10 +26,13 @@
 #include "graphics/draw/MapRenderer.h"
 #include "main.h"
 #include "memory/MemAudit.h"
+#include "mesh/RadioLibInterface.h"
 #include "meshUtils.h"
 #include "power/PowerHAL.h"
 #include "power/SGM41562.h"
 #include "sleep.h"
+#include <math.h>
+#include <string.h>
 #ifdef ARCH_ESP32
 // #include <driver/adc.h>
 #include <esp_adc/adc_cali.h>
@@ -1347,6 +1350,48 @@ void Power::logHeapUsage()
 
     // Which tagged subsystem moved since boot
     memaudit::logBreakdown("periodic");
+
+    // Hourly: the slope over the last six hours, so one line says whether the heap is still sliding. Packets queued for
+    // a phone are also added back, as that queue fills to a fixed cap and then stops.
+    static constexpr uint32_t kTrendIntervalMs = 60 * 60 * 1000;
+    static constexpr int kTrendSamples = 7;
+    // Blocks held and packets heard as well: a leak per packet shows as a steady cost per packet received.
+    static struct {
+        uint32_t atMs;
+        int32_t freeBytes, withQueued, blocks, rxPackets;
+    } trend[kTrendSamples];
+    static int trendCount = 0;
+    const uint32_t nowMs = Time::skipZero(Time::getMillis());
+    if (trendCount == 0 || !Throttle::isWithinTimespanMs(trend[trendCount - 1].atMs, kTrendIntervalMs)) {
+        int32_t queued = 0;
+        memaudit::Tag tags[memaudit::kMaxTags];
+        const size_t tagCount = memaudit::snapshot(tags, memaudit::kMaxTags);
+        for (size_t i = 0; i < tagCount; i++)
+            if (strcmp(tags[i].tag, "pktpool(live)") == 0)
+                queued = tags[i].bytes - tags[i].psramBytes;
+        if (trendCount == kTrendSamples) {
+            memmove(&trend[0], &trend[1], sizeof(trend[0]) * (kTrendSamples - 1));
+            trendCount--;
+        }
+        int32_t blocks = 0, rxPackets = 0;
+#ifdef ARCH_ESP32
+        multi_heap_info_t info;
+        heap_caps_get_info(&info, MALLOC_CAP_INTERNAL);
+        blocks = (int32_t)info.allocated_blocks;
+#endif
+        if (RadioLibInterface::instance)
+            rxPackets = (int32_t)RadioLibInterface::instance->rxGood;
+        trend[trendCount++] = {nowMs, (int32_t)heapFree, (int32_t)heapFree + queued, blocks, rxPackets};
+        if (trendCount > 1) {
+            const auto &first = trend[0], &last = trend[trendCount - 1];
+            const float hours = (last.atMs - first.atMs) / 3600000.0f;
+            LOG_INFO("Heap trend: %+ld B/h over %.1f h, %+ld B/h not counting queued packets, %+ld blocks/h, %ld packets/h, "
+                     "min %u",
+                     lroundf((last.freeBytes - first.freeBytes) / hours), hours,
+                     lroundf((last.withQueued - first.withQueued) / hours), lroundf((last.blocks - first.blocks) / hours),
+                     lroundf((last.rxPackets - first.rxPackets) / hours), minFree);
+        }
+    }
 
     lastHeapLogFree = heapFree;
     lastHeapLogTime = Time::skipZero(Time::getMillis());
