@@ -11,6 +11,7 @@
 #include "MessageStore.h"
 #include "NodeDB.h"
 #include "SPILock.h"
+#include "WaypointUtils.h"
 #include "buzz.h"
 #include "detect/ScanI2C.h"
 #include "gps/RTC.h"
@@ -1451,10 +1452,22 @@ bool isEmoteScrollFingerSteering()
 #endif
 }
 
-void CannedMessageModule::pickEmote(std::function<void(const char *label)> onPicked)
+void CannedMessageModule::pickEmote(std::function<void(const char *label)> onPicked, uint32_t selected)
 {
     emotePickedCallback = std::move(onPicked);
+    const std::vector<uint16_t> &unique = uniqueEmoteIndices();
+    for (size_t i = 0; selected && i < unique.size(); i++) {
+        if (WaypointUtils::codepointFromUtf8(graphics::emotes[unique[i]].label) == selected) {
+            emotePickerIndex = (int)i; // opening the grid recentres its scroll on this
+            break;
+        }
+    }
+    emotePickFromMap = screen && screen->isMapFrameShown();
     updateState(CANNED_MESSAGE_RUN_STATE_EMOTE_PICKER, true);
+    // The grid draws in this module's frame, which only joins the frameset - and takes focus - on a regenerate.
+    UIFrameEvent e;
+    e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+    notifyObservers(&e);
     screen->forceDisplay(true);
 }
 
@@ -1464,9 +1477,14 @@ void CannedMessageModule::finishEmotePick(const char *label)
     auto callback = std::move(emotePickedCallback);
     emotePickedCallback = nullptr;
     updateState(CANNED_MESSAGE_RUN_STATE_INACTIVE);
-    UIFrameEvent e;
-    e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
-    notifyObservers(&e);
+    // Back where the pick was asked from, not to whichever frame a plain regenerate falls back on.
+    if (emotePickFromMap) {
+        screen->setFrames(graphics::Screen::FOCUS_MAP);
+    } else {
+        UIFrameEvent e;
+        e.action = UIFrameEvent::Action::REGENERATE_FRAMESET_BACKGROUND;
+        notifyObservers(&e);
+    }
     screen->forceDisplay(true);
     if (callback)
         callback(label);

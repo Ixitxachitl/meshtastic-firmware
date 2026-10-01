@@ -79,8 +79,8 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
     // === Emote Picker ===
     int handleEmotePickerInput(const InputEvent *event);
     // Opens the emote grid for someone other than the composer: the pick goes to onPicked (null on cancel) instead of
-    // into a message, and the composer is left closed.
-    void pickEmote(std::function<void(const char *label)> onPicked);
+    // into a message, and the composer is left closed. The grid opens on `selected`'s emote when it has one.
+    void pickEmote(std::function<void(const char *label)> onPicked, uint32_t selected = 0);
 
 #if defined(USE_VIRTUAL_KEYBOARD)
     // The composer's touch keyboard, for other text entry on touch-only boards to share: drawn in the lower part of
@@ -161,6 +161,7 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
 
   private:
     std::function<void(const char *label)> emotePickedCallback; // set while pickEmote() owns the grid
+    bool emotePickFromMap = false;                              // pickEmote() was asked from the map: return there
     void finishEmotePick(const char *label);
     // === Input Observers ===
     CallbackObserver<CannedMessageModule, const InputEvent *> inputObserver =

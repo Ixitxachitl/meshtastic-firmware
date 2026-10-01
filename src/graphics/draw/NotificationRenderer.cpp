@@ -1273,6 +1273,18 @@ void NotificationRenderer::drawBannerPanel(OLEDDisplay *display, int16_t boxLeft
 #endif
 }
 
+// A row is drawn with emotes in the node picker (names), and wherever it holds non-ASCII text - an emote the font
+// can't draw. Plain rows keep the cheaper drawString.
+static bool rowDrawsEmotes(const char *row)
+{
+    if (NotificationRenderer::current_notification_type == notificationTypeEnum::node_picker)
+        return true;
+    for (const char *c = row; *c; c++)
+        if ((unsigned char)*c >= 0x80)
+            return true;
+    return false;
+}
+
 void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplayUiState *state, const char *lines[],
                                                uint16_t totalLines, uint16_t firstOptionToShow, uint16_t maxWidth)
 {
@@ -1474,7 +1486,7 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
 #endif
             display->setColor(BLACK);
             const int yOffset = graphics::isCompactPanel(display) ? 2 : 3;
-            if (current_notification_type == notificationTypeEnum::node_picker) {
+            if (rowDrawsEmotes(lineBuffer)) {
                 UIRenderer::drawStringWithEmotes(display, textX, lineY - yOffset, lineBuffer, FONT_HEIGHT_SMALL, 1, false);
             } else {
                 display->drawString(textX, lineY - yOffset, lineBuffer);
@@ -1498,7 +1510,7 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
                 int totalWidth = textWidth + barsWidth;
                 int groupStartX = boxLeft + (boxWidth - totalWidth) / 2;
 
-                if (current_notification_type == notificationTypeEnum::node_picker) {
+                if (rowDrawsEmotes(lineBuffer)) {
                     UIRenderer::drawStringWithEmotes(display, groupStartX, lineY, lineBuffer, FONT_HEIGHT_SMALL, 1, false);
                 } else {
                     display->drawString(groupStartX, lineY, lineBuffer);
@@ -1532,7 +1544,7 @@ void NotificationRenderer::drawNotificationBox(OLEDDisplay *display, OLEDDisplay
                     }
                 }
             } else {
-                if (current_notification_type == notificationTypeEnum::node_picker) {
+                if (rowDrawsEmotes(lineBuffer)) {
                     UIRenderer::drawStringWithEmotes(display, textX, lineY, lineBuffer, FONT_HEIGHT_SMALL, 1, false);
                 } else {
                     display->drawString(textX, lineY, lineBuffer);

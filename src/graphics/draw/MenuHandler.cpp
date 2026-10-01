@@ -2657,7 +2657,7 @@ void menuHandler::newWaypointHere(bool fromMap)
 void menuHandler::waypointEditorMenu()
 {
     enum Row { Back, Send, Name, Note, Pin, Expires, RowCount };
-    static char nameLabel[48], noteLabel[48], expiryLabelText[24];
+    static char nameLabel[48], noteLabel[48], expiryLabelText[24], pinLabel[16];
     static const char *labels[RowCount];
     snprintf(nameLabel, sizeof(nameLabel), "Name: %.28s", waypointDraft.name[0] ? waypointDraft.name : "(none)");
     snprintf(noteLabel, sizeof(noteLabel), "Note: %.28s", waypointDraft.description[0] ? waypointDraft.description : "(none)");
@@ -2666,7 +2666,10 @@ void menuHandler::waypointEditorMenu()
     labels[Send] = "Send";
     labels[Name] = nameLabel;
     labels[Note] = noteLabel;
-    labels[Pin] = waypointDraft.icon == kWaypointPushpin ? "Pin: pushpin" : waypointDraft.icon ? "Pin: chosen" : "Pin: plain";
+    // The pin itself, drawn as its emote by the menu.
+    snprintf(pinLabel, sizeof(pinLabel), "Pin: %s",
+             waypointDraft.icon ? WaypointUtils::utf8FromCodepoint(waypointDraft.icon).c_str() : "none");
+    labels[Pin] = pinLabel;
     labels[Expires] = expiryLabelText;
 
     BannerOverlayOptions bannerOptions;
@@ -3902,12 +3905,14 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
     }
     case WaypointPinPicker:
         if (cannedMessageModule) {
-            cannedMessageModule->pickEmote([](const char *label) {
-                if (label)
-                    waypointDraft.icon = WaypointUtils::codepointFromUtf8(label);
-                menuQueue = WaypointEditorMenu;
-                screen->runNow();
-            });
+            cannedMessageModule->pickEmote(
+                [](const char *label) {
+                    if (label)
+                        waypointDraft.icon = WaypointUtils::codepointFromUtf8(label);
+                    menuQueue = WaypointEditorMenu;
+                    screen->runNow();
+                },
+                waypointDraft.icon ? waypointDraft.icon : kWaypointPushpin); // opens on the current pin
         } else {
             menuQueue = WaypointEditorMenu; // no emote grid on this build: the pin stays the default
             screen->runNow();
