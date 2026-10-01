@@ -3633,6 +3633,14 @@ int Screen::handleInputEvent(const InputEvent *event)
                 graphics::MapRenderer::setZoomModeEnabled(false);
             }
         }
+#if BASEUI_WAYPOINT_EDITOR && BASEUI_MAP_NAVIGATION
+        // The composer's emote key (the M9's triangle) makes a waypoint here: at the centre when panned, as
+        // Navigate's New Waypoint row does.
+        if (event->inputEvent == INPUT_BROKER_ANYKEY && event->kbchar == INPUT_BROKER_MSG_EMOTE_LIST) {
+            graphics::menuHandler::newWaypointHere(true);
+            return 0;
+        }
+#endif
 #if BASEUI_MAP_UPDOWN_ZOOMS
         // No Zoom entry in the Map menu here: up/down zoom straight away, turning on Zoom Mode for its
         // ruler. Pan Mode, when active, has already claimed them above.
