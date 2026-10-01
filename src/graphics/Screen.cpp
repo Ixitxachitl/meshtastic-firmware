@@ -3723,7 +3723,7 @@ int Screen::handleInputEvent(const InputEvent *event)
             // for that, and tap-to-advance turns any stray contact into a frame change. Keyed on
             // the source, because INPUT_BROKER_USER_PRESS is also how single-button devices
             // navigate - see i2cButton, SeesawRotary and InputBroker's singlePress config.
-            const bool tapFromTouchscreen = fromTouch && !BASEUI_TAP_ADVANCES_FRAME;
+            const bool tapFromTouchscreen = inputEventIsTouch(event) && !BASEUI_TAP_ADVANCES_FRAME;
 
             // Where a finger-tracked transition exists, it is the only thing that pages frames -
             // the swipe the touch layer classifies on release never does, whether or not the drag
@@ -3741,13 +3741,13 @@ int Screen::handleInputEvent(const InputEvent *event)
 
             // Directional input is the only kind that gets the slide (SCREEN_ANIMATE_FRAME_NAV):
             // left and right say which way the frames move, which is what the animation shows. A
-            // button press or space just means "next", so it snaps - unless SCREEN_ANIMATE_BUTTON_NAV.
+            // button press just means "next", so it snaps - unless SCREEN_ANIMATE_BUTTON_NAV. Space no
+            // longer pages: on a keyboard it is a key to type or act on, not a frame change.
             const bool buttonSlides = SCREEN_ANIMATE_BUTTON_NAV && !fromTouch;
             if (wantsPrevious || event->inputEvent == INPUT_BROKER_ALT_PRESS) {
                 showFrame(FrameDirection::PREVIOUS,
                           wantsPrevious || (buttonSlides && event->inputEvent == INPUT_BROKER_ALT_PRESS));
-            } else if (wantsNext || (event->inputEvent == INPUT_BROKER_USER_PRESS && !tapFromTouchscreen) ||
-                       (event->inputEvent == INPUT_BROKER_ANYKEY && event->kbchar == ' ')) {
+            } else if (wantsNext || (event->inputEvent == INPUT_BROKER_USER_PRESS && !tapFromTouchscreen)) {
                 // Paging the frame is a tap landing on something, so it earns the buzz.
                 if (event->inputEvent == INPUT_BROKER_USER_PRESS && inputEventIsTouch(event))
                     touchHapticPulse(TouchHaptic::Activate);

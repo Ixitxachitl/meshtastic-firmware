@@ -608,10 +608,10 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #endif
 // Street routes for Map > Navigate, fetched the same way; without them the map draws a straight line.
 #define BASEUI_MAP_ROUTING (BASEUI_MAP_NAVIGATION && BASEUI_MAP_ONLINE_TILES)
-// Whether a touchscreen tap with nothing under it pages to the next frame, and beeps for it. Physical buttons
-// reporting the same event keep both. Variants where frames are swiped between set this to 0.
+// Whether a touchscreen tap with nothing under it pages to the next frame, and beeps for it. Off: frames are swiped
+// between, and a stray touch shouldn't change them. Physical buttons reporting the same event page either way.
 #ifndef BASEUI_TAP_ADVANCES_FRAME
-#define BASEUI_TAP_ADVANCES_FRAME 1
+#define BASEUI_TAP_ADVANCES_FRAME 0
 #endif
 // Display > Panel VCOM: steps an ST7789's VCOM live, to find the value that stops image retention before baking it
 // in as ST7789_VCOMS. A tuning aid, opt-in per variant.
