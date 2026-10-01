@@ -3550,6 +3550,13 @@ int Screen::handleInputEvent(const InputEvent *event)
             }
         }
 #endif
+        // Space toggles Pan Mode: a keypad that can't report a held modifier still gets panning without the menu.
+        if (event->inputEvent == INPUT_BROKER_ANYKEY && event->kbchar == ' ') {
+            graphics::MapRenderer::setZoomModeEnabled(false);
+            graphics::MapRenderer::setPanModeEnabled(!graphics::MapRenderer::isPanModeEnabled());
+            setFastFramerate();
+            return 0;
+        }
         // A touch drag arrives as a continuous stream of reports alongside the swipe the touch
         // layer still classifies on release. While Zoom Mode is held it is that swipe which zooms -
         // there is no continuous equivalent of a zoom step - so the drag reports are neither a
