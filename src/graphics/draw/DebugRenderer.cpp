@@ -17,6 +17,17 @@
 #include "graphics/images.h"
 #include "main.h"
 #include "mesh/Throttle.h"
+#if defined(ARCH_ESP32) && defined(HAS_SDCARD) && !defined(SDCARD_USE_SOFT_SPI) && !defined(HAS_SD_MMC)
+#include "SPILock.h"
+#include <SD.h>
+#include <ff.h>
+#define SYSTEM_SHOWS_SD_USAGE 1
+
+// SDFS keeps its FatFs drive number protected; a member pointer taken through a subclass reads it legally.
+struct SDDrive : fs::SDFS {
+    static uint8_t of(const fs::SDFS &sd) { return sd.*(&SDDrive::_pdrv); }
+};
+#endif
 
 #if HAS_WIFI && !defined(ARCH_PORTDUINO)
 #include "mesh/wifi/WiFiAPClient.h"
@@ -399,16 +410,20 @@ void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x
     } else {
         barX += 40;
     }
-    auto drawUsageRow = [&](const char *label, uint32_t used, uint32_t total, bool isHeap = false) {
+    // 64-bit with a selectable unit: an SD card's byte count overflows 32 bits, and its KB count overflows the label.
+    auto drawUsageRow = [&](const char *label, uint64_t used, uint64_t total, const char *unit = "KB",
+                            uint32_t unitBytes = 1024) {
         if (total == 0)
             return;
 
-        int percent = (used * 100) / total;
+        if (used > total)
+            used = total;
+        int percent = (int)((used * 100) / total);
 
         char combinedStr[24];
         if (currentResolution == ScreenResolution::High) {
-            snprintf(combinedStr, sizeof(combinedStr), "%s%3d%%  %u/%uKB", (percent > 80) ? "! " : "", percent, used / 1024,
-                     total / 1024);
+            snprintf(combinedStr, sizeof(combinedStr), "%s%3d%%  %u/%u%s", (percent > 80) ? "! " : "", percent,
+                     (unsigned)(used / unitBytes), (unsigned)(total / unitBytes), unit);
         } else {
             snprintf(combinedStr, sizeof(combinedStr), "%s%3d%%", (percent > 80) ? "! " : "", percent);
         }
@@ -422,7 +437,7 @@ void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x
         if (adjustedBarWidth < 10)
             adjustedBarWidth = 10;
 
-        int fillWidth = (used * adjustedBarWidth) / total;
+        int fillWidth = (int)((used * adjustedBarWidth) / total);
 
         // Label
         display->setTextAlignment(TEXT_ALIGN_LEFT);
@@ -476,19 +491,55 @@ void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x
     flashTotal = flashTotalCached;
 #endif
 
-    uint32_t sdUsed = 0, sdTotal = 0;
-    bool hasSD = false;
-    /*
-    #ifdef HAS_SDCARD
-        hasSD = SD.cardType() != CARD_NONE;
-        if (hasSD) {
-            sdUsed = SD.usedBytes();
-            sdTotal = SD.totalBytes();
+    uint64_t sdUsed = 0, sdTotal = 0;
+    const char *sdLabel = "SD:";
+#if SYSTEM_SHOWS_SD_USAGE
+    // setupSDCard() mounts once at boot, so a card absent then stays absent. f_getfree() can walk the FAT; throttle it too.
+    static uint32_t sdSampledAtMs = 0;
+    static uint64_t sdUsedCached = 0, sdTotalCached = 0;
+    static uint8_t sdFsType = 0;
+    static bool sdSampled = false;
+    if (!sdSampled || Throttle::hasElapsed(sdSampledAtMs, SYSTEM_FLASH_USAGE_INTERVAL_MS)) {
+        concurrency::LockGuard g(spiLock);
+        sdTotalCached = sdUsedCached = 0;
+        sdFsType = 0;
+        FATFS *fatfs = nullptr;
+        DWORD freeClusters = 0;
+        const char drv[3] = {(char)('0' + SDDrive::of(SD)), ':', 0};
+        if (SD.cardType() != CARD_NONE && f_getfree(drv, &freeClusters, &fatfs) == FR_OK && fatfs) {
+            // Only fs_type, the first field: FATFS's later layout hangs on ffconf options the prebuilt lib may not share.
+            sdFsType = fatfs->fs_type;
+            sdTotalCached = SD.totalBytes();
+            sdUsedCached = SD.usedBytes();
         }
-    #endif
-    */
+        sdSampledAtMs = millis();
+        sdSampled = true;
+    }
+    sdUsed = sdUsedCached;
+    sdTotal = sdTotalCached;
+    if (currentResolution != ScreenResolution::UltraLow) {
+        switch (sdFsType) {
+        case FS_FAT12:
+            sdLabel = "SD FAT12:";
+            break;
+        case FS_FAT16:
+            sdLabel = "SD FAT16:";
+            break;
+        case FS_FAT32:
+            sdLabel = "SD FAT32:";
+            break;
+        case FS_EXFAT:
+            sdLabel = "SD exFAT:";
+            break;
+        }
+    }
+#endif
+    // Make room for the SD label up front so every bar starts at the same x.
+    if (sdTotal > 0 && barX < labelX + display->getStringWidth(sdLabel))
+        barX = labelX + display->getStringWidth(sdLabel);
+
     // === Draw memory rows
-    drawUsageRow("Heap:", heapUsed, heapTotal, true);
+    drawUsageRow("Heap:", heapUsed, heapTotal);
 #ifdef ESP32
 #ifndef T5_S3_EPAPER_PRO
     if (psramUsed > 0) {
@@ -501,9 +552,9 @@ void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x
         drawUsageRow("Flash:", flashUsed, flashTotal);
     }
 #endif
-    if (hasSD && sdTotal > 0) {
+    if (sdTotal > 0) {
         line += 1;
-        drawUsageRow("SD:", sdUsed, sdTotal);
+        drawUsageRow(sdLabel, sdUsed, sdTotal, "MB", 1024 * 1024);
     }
 
     display->setTextAlignment(TEXT_ALIGN_LEFT);
@@ -602,9 +653,12 @@ void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x
             snprintf(api_state, sizeof(api_state), "%s Connected (Ethernet)", clientWord);
         }
 #endif
-        if (api_state[0] != '\0') {
-            display->drawString(x + (SCREEN_WIDTH - display->getStringWidth(api_state)) / 2,
-                                getTextPositions(display)[line++] + y, api_state);
+        // With PSRAM, Flash and SD rows this lands past the 7-entry position table; continue its spacing if it fits.
+        const int *pos = getTextPositions(display);
+        const int rowY = (line <= 6) ? pos[line] : pos[6] + (line - 6) * (pos[6] - pos[5]);
+        if (api_state[0] != '\0' && rowY + FONT_HEIGHT_SMALL <= SCREEN_HEIGHT) {
+            display->drawString(x + (SCREEN_WIDTH - display->getStringWidth(api_state)) / 2, rowY + y, api_state);
+            line++;
         }
     }
 }
