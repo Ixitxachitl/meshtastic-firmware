@@ -809,6 +809,7 @@ int32_t runList()
     }
     if (listStatus == ListState::Queued) {
         listedCount = readSavedHeaders(listed);
+        LOG_INFO("Map: %d saved route(s) on the card", listedCount);
         listStatus = ListState::Done;
     }
     return 100;

@@ -374,6 +374,7 @@ bool listSavedRoutes()
 {
     Fetch::clearList();
     awaitingList = Fetch::startListRoutes();
+    LOG_INFO("Nav: reading saved destinations%s", awaitingList ? "" : " refused, a read is already queued");
     return awaitingList;
 }
 
@@ -385,6 +386,7 @@ void pollSavedRoutes()
     if (state != Fetch::ListState::Done && state != Fetch::ListState::Failed)
         return;
     awaitingList = false;
+    LOG_INFO("Nav: saved destinations read %s", state == Fetch::ListState::Done ? "done" : "failed");
     menuHandler::menuQueue = menuHandler::NavSavedRoutesMenu;
     if (screen)
         screen->runNow();

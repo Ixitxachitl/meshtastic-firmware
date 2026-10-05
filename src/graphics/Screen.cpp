@@ -45,6 +45,7 @@ extern NicheGraphics::BaseUIEInkDisplay *setupNicheGraphicsBaseUI();
 #include "TimeFormatters.h"
 #include "draw/ClockRenderer.h"
 #include "draw/DebugRenderer.h"
+#include "draw/MapNavigation.h"
 #include "draw/MapRenderer.h"
 #include "draw/MenuHandler.h"
 #include "draw/MessageRenderer.h"
@@ -2324,6 +2325,10 @@ int32_t Screen::runOnce()
         lastFrameIndex = currentFrameIndex;
     }
 
+#if BASEUI_MAP_ROUTING
+    // Opens the saved-destinations list once the card read is in, whether or not the map drew this pass.
+    MapNavigation::pollSavedRoutes();
+#endif
     menuHandler::handleMenuSwitch(dispdev);
 
     // Show boot screen for first logo_timeout seconds, then switch to normal operation.
