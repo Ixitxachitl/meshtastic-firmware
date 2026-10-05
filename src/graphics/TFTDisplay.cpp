@@ -2059,7 +2059,7 @@ void TFTDisplay::drawVerticalLine(int16_t x, int16_t y, int16_t length)
     // fillRect() arrives here as a run of adjacent columns of one height. Held and written by row (see
     // PendingColumns); anything that breaks the run - or any other draw - writes out what is held first.
     PendingColumns &p = pendingColumns;
-    const bool extends = p.x1 > p.x0 && x == p.x1 && y0 == p.y0 && y1 == p.y1 && p.pen == penActive &&
+    const bool extends = p.x1 > p.x0 && x == p.x1 && y0 == p.y0 && y1 == p.y1 && p.pen == penActive && p.color == getColor() &&
                          (!penActive || (p.penOn == penOnBe && p.penOff == penOffBe));
     if (!extends) {
         flushPendingColumns();
@@ -2069,6 +2069,7 @@ void TFTDisplay::drawVerticalLine(int16_t x, int16_t y, int16_t length)
         p.pen = penActive;
         p.penOn = penOnBe;
         p.penOff = penOffBe;
+        p.color = getColor();
     }
     OLEDDisplay::drawVerticalLine(x, y, length); // the lit mask, which the flush resolves colours from
     p.x1 = static_cast<int16_t>(x + 1);
@@ -2085,6 +2086,48 @@ void TFTDisplay::flushPendingColumns()
     UI_PERF_COUNT(fillPx, (x1 - x0) * (y1 - y0));
     p.x1 = p.x0; // emptied first: nothing below may see it as still pending
     markNativeRowsDirty(y0, y1);
+    if (p.color != INVERSE) {
+        // Every pixel held is lit (WHITE) or every one unlit (BLACK), so colours resolve per run of a row rather than
+        // per pixel, and the explicit mask is set a byte per column per page. A menu box fill is the panel's whole area.
+        const bool lit = p.color == WHITE;
+        for (int32_t page = y0 >> 3; page <= (y1 - 1) >> 3; page++) {
+            const int32_t from = max<int32_t>(y0, page * 8), to = min<int32_t>(y1, page * 8 + 8);
+            const uint8_t bits = static_cast<uint8_t>(((1u << (to - from)) - 1) << (from & 7));
+            uint8_t *const mask = explicitBits + (size_t)page * displayWidth;
+            for (int32_t xx = x0; xx < x1; xx++)
+                mask[xx] = p.pen ? (mask[xx] | bits) : (mask[xx] & static_cast<uint8_t>(~bits));
+        }
+        for (int32_t yy = y0; yy < y1; yy++) {
+            uint16_t *const row = rgbPixels + (size_t)yy * displayWidth;
+            if (p.pen) {
+                const uint16_t be = lit ? p.penOn : p.penOff;
+                for (int32_t xx = x0; xx < x1; xx++)
+                    row[xx] = be;
+                continue;
+            }
+            nativeBeginRow(static_cast<int16_t>(yy));
+            for (int32_t xx = x0; xx < x1;) {
+                const uint16_t be = graphics::resolveTFTColorPixelRow(static_cast<int16_t>(xx), lit, defaultOnBe, defaultOffBe);
+                int32_t end = x1; // the answer can only change at a region edge
+                for (uint8_t j = 0; j < graphics::tftColorRowCount; j++) {
+                    const graphics::TFTColorRegion &r = graphics::colorRegions[graphics::tftColorRowRegions[j]];
+                    const int32_t rEnd = (int32_t)r.x + r.width;
+                    if (r.x > xx && r.x < end)
+                        end = r.x;
+                    if (rEnd > xx && rEnd < end)
+                        end = rEnd;
+                }
+                if (lit || (be != legacyBgBe && be != canvasBe)) {
+                    for (; xx < end; xx++)
+                        row[xx] = be;
+                } else {
+                    for (; xx < end; xx++) // the canvas, which may be artwork
+                        row[xx] = onCanvas(false, be, xx, yy);
+                }
+            }
+        }
+        return;
+    }
     for (int32_t yy = y0; yy < y1; yy++) {
         uint16_t *const row = rgbPixels + (size_t)yy * displayWidth;
         if (!p.pen)

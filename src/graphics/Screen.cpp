@@ -1598,6 +1598,33 @@ static struct {
     FrameCallback original;
 } sMenuBackdrop;
 static uint32_t sFramesGen = 0;
+#ifdef UI_PERF_DEBUG
+// Why the backdrop was or wasn't used, reported once a second while a menu is involved.
+static struct {
+    uint16_t captures, captureFailed, frozen, ineligible, frameChanged, expired, rebuilt, refused;
+    uint8_t refusedType, refusedFrameState, refusedSlide; // the last menu turned away, and why
+    uint32_t lastReportMs;
+} sBackdropPerf;
+static void menuBackdropReport()
+{
+    auto &p = sBackdropPerf;
+    if (!Throttle::hasElapsed(p.lastReportMs, 1000))
+        return;
+    if (p.captures || p.captureFailed || p.frozen || p.frameChanged || p.expired || p.rebuilt)
+        LOG_INFO("Menu backdrop: %u captures (%u failed), %u frozen redraws; dropped: %u ineligible, %u frame changed, %u "
+                 "expired, %u setFrames",
+                 p.captures, p.captureFailed, p.frozen, p.ineligible, p.frameChanged, p.expired, p.rebuilt);
+    if (p.refused)
+        LOG_INFO("Menu backdrop: %u menu draws refused (type %u, frameState %u, nav slide %u)", p.refused, p.refusedType,
+                 p.refusedFrameState, p.refusedSlide);
+    const uint32_t now = millis();
+    p = {};
+    p.lastReportMs = now;
+}
+#define BACKDROP_PERF(field) (sBackdropPerf.field++)
+#else
+#define BACKDROP_PERF(field) ((void)0)
+#endif
 // Long enough to cover a run of menu steps; short enough that a clock or status line under the menu catches up.
 static constexpr uint32_t kMenuBackdropMaxAgeMs = 5000;
 
@@ -1625,11 +1652,24 @@ static bool menuBackdropEligible(const OLEDDisplayUiState *state)
 static void menuBackdropBeforeUpdate(OLEDDisplayUi *ui)
 {
     const OLEDDisplayUiState *state = ui->getUiState();
-    if (!menuBackdropEligible(state) || state->currentFrame != sMenuBackdrop.frame ||
-        Throttle::hasElapsed(sMenuBackdrop.capturedMs, kMenuBackdropMaxAgeMs))
-        sMenuBackdrop.valid = false;
+#ifdef UI_PERF_DEBUG
+    menuBackdropReport();
+#endif
+    if (sMenuBackdrop.valid) {
+        if (!menuBackdropEligible(state)) {
+            BACKDROP_PERF(ineligible);
+            sMenuBackdrop.valid = false;
+        } else if (state->currentFrame != sMenuBackdrop.frame) {
+            BACKDROP_PERF(frameChanged);
+            sMenuBackdrop.valid = false;
+        } else if (Throttle::hasElapsed(sMenuBackdrop.capturedMs, kMenuBackdropMaxAgeMs)) {
+            BACKDROP_PERF(expired);
+            sMenuBackdrop.valid = false;
+        }
+    }
     if (!sMenuBackdrop.valid)
         return;
+    BACKDROP_PERF(frozen);
     sMenuBackdrop.frozen = true;
     sMenuBackdrop.framesGen = sFramesGen;
     sMenuBackdrop.original = normalFrames[sMenuBackdrop.frame];
@@ -1657,12 +1697,25 @@ bool menuBackdropFrozen()
 
 bool menuBackdropBeginBanner(OLEDDisplay *display, const OLEDDisplayUiState *state)
 {
-    if (!menuBackdropEligible(state))
+    if (!menuBackdropEligible(state)) {
+#ifdef UI_PERF_DEBUG
+        sBackdropPerf.refused++;
+        sBackdropPerf.refusedType = static_cast<uint8_t>(NotificationRenderer::current_notification_type);
+        sBackdropPerf.refusedFrameState = static_cast<uint8_t>(state->frameState);
+#if SCREEN_ANIMATE_FRAME_NAV
+        sBackdropPerf.refusedSlide = sNavSlide.armed;
+#endif
+#endif
         return false;
+    }
     TFTDisplay *const panel = static_cast<TFTDisplay *>(display);
     if (!sMenuBackdrop.frozen) {
         // Everything under the menu is drawn by now; keep it before the menu goes on top.
         sMenuBackdrop.valid = panel->captureBackdrop();
+        if (sMenuBackdrop.valid)
+            BACKDROP_PERF(captures);
+        else
+            BACKDROP_PERF(captureFailed);
         sMenuBackdrop.frame = state->currentFrame;
         sMenuBackdrop.capturedMs = millis();
     }
@@ -2610,6 +2663,8 @@ void Screen::setFrames(FrameFocus focus)
 {
 #if BASEUI_MENU_BACKDROP
     sFramesGen++; // a menu's restore stand-in must not be written back over the rebuilt list
+    if (sMenuBackdrop.valid)
+        BACKDROP_PERF(rebuilt);
     sMenuBackdrop.valid = false;
 #endif
     // Block setFrames calls when virtual keyboard is active to prevent overlay interference

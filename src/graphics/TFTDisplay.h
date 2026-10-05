@@ -209,6 +209,7 @@ class TFTDisplay : public OLEDDisplay
         int16_t x0 = 0, x1 = 0, y0 = 0, y1 = 0; // [x0,x1) x [y0,y1); empty while x1 <= x0
         bool pen = false;
         uint16_t penOn = 0, penOff = 0;
+        OLEDDISPLAY_COLOR color = WHITE; // WHITE lights every pixel held, BLACK none; INVERSE mixes them
     } pendingColumns;
     void flushPendingColumns();
     // Repaint a just-registered region's rect from the lit mask, skipping explicitly coloured pixels.
