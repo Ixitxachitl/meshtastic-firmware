@@ -1841,6 +1841,16 @@ struct ListScrollDrag {
 
 static ListScrollDrag messageScrollDrag;
 static ListScrollDrag waypointScrollDrag;
+
+// A drag that starts on the message screen's tab strip scrolls the strip sideways, and nothing else.
+struct TabStripDrag {
+    bool active = false;
+    uint16_t lastX = 0;
+    uint32_t lastMs = 0;
+
+    bool steering(uint32_t now) const { return active && (now - lastMs) <= DRAG_ANCHOR_STALE_MS; }
+};
+static TabStripDrag tabStripDrag;
 static ListScrollDrag menuScrollDrag;
 // The last menu gesture was a finger scroll, so the swipe classified from its release must not step too.
 static bool menuSwipeFollowsDrag = false;
@@ -1866,7 +1876,8 @@ static bool screenDragOwnsFramerate()
         return true;
 #endif
     // Scrolling a list starts no transition either, so it needs the same protection.
-    if (messageScrollDrag.steering(now) || waypointScrollDrag.steering(now) || menuScrollDrag.steering(now))
+    if (messageScrollDrag.steering(now) || waypointScrollDrag.steering(now) || menuScrollDrag.steering(now) ||
+        tabStripDrag.steering(now))
         return true;
     // As does the emote picker's grid, whose drag is driven from inside CannedMessageModule -
     // a module sees input before the screen does, so that one cannot live here with the rest.
@@ -3436,7 +3447,38 @@ int Screen::handleInputEvent(const InputEvent *event)
     }
     // UP/DOWN in message screen scrolls through message threads
     if (ui->getUiState()->currentFrame == framesetInfo.positions.textMessage) {
+        // A tap on a conversation tab switches to it.
+        if (event->inputEvent == INPUT_BROKER_USER_PRESS && inputEventIsTouch(event) &&
+            graphics::MessageRenderer::tapTabStrip((int16_t)event->touchX, (int16_t)event->touchY)) {
+            touchHapticPulse(TouchHaptic::Activate);
+            setFastFramerate();
+            return 0;
+        }
 #if BASEUI_HAS_TOUCH_DRAG
+        // A drag begun on the tab strip scrolls the strip; one begun anywhere else keeps its own meaning.
+        if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG) {
+            const uint32_t now = millis();
+            const bool otherDrag =
+                messageScrollDrag.steering(now) || (dragAnchorValid && (now - dragAnchorMs) <= DRAG_ANCHOR_STALE_MS);
+            if (tabStripDrag.steering(now) ||
+                (!otherDrag && graphics::MessageRenderer::tabStripContains((int16_t)event->touchX, (int16_t)event->touchY))) {
+                if (tabStripDrag.steering(now))
+                    graphics::MessageRenderer::dragTabStrip((float)((int32_t)event->touchX - (int32_t)tabStripDrag.lastX));
+                tabStripDrag.active = true;
+                tabStripDrag.lastX = event->touchX;
+                tabStripDrag.lastMs = now;
+                setFastFramerate();
+                return 0;
+            }
+        }
+        if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG_END) {
+            const bool ours = tabStripDrag.steering(millis());
+            tabStripDrag.active = false;
+            if (ours) {
+                setFastFramerate();
+                return 0;
+            }
+        }
         if (messageStore.hasVisibleMessages()) {
             // Only swallowed when the list claimed it; a horizontal drag falls through to page.
             if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG &&

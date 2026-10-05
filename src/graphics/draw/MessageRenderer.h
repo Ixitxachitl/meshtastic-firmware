@@ -43,6 +43,13 @@ std::vector<ThreadTab> getActiveThreads();
 // Step to the next active conversation, wrapping back to All (the message screen shortcut key).
 void cycleThread();
 
+// Touch on the tab strip, in screen coordinates. False when the last frame drew no strip or the point is off it.
+bool tabStripContains(int16_t x, int16_t y);
+// Switches to the tab under the point; true if the point was on the strip at all.
+bool tapTabStrip(int16_t x, int16_t y);
+// Scrolls the strip sideways as a finger moves dx pixels along it.
+void dragTabStrip(float dx);
+
 // Registry accessors for menuHandler
 const std::vector<int> &getSeenChannels();
 const std::vector<uint32_t> &getSeenPeers();

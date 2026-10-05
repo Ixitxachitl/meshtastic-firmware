@@ -283,6 +283,16 @@ static ThreadMode currentMode = ThreadMode::ALL;
 static int currentChannel = -1;
 static uint32_t currentPeer = 0;
 
+// Where the last frame drew each tab, for touch. Emptied every frame, so a frame without the strip has none.
+struct TabHit {
+    int16_t left, right;
+    ThreadTab tab;
+};
+static std::vector<TabHit> tabHits;
+static int16_t tabStripTop = 0, tabStripBottom = 0;
+static int tabStripShownScroll = 0, tabStripMaxScroll = 0;
+static float tabStripFingerScroll = -1.0f; // set by a drag along the strip; below 0 keeps the active tab in view
+
 // Registry of seen threads for manual toggle
 static std::vector<int> seenChannels;
 static std::vector<uint32_t> seenPeers;
@@ -300,7 +310,8 @@ void setThreadMode(ThreadMode mode, int channel /* = -1 */, uint32_t peer /* = 0
     currentMode = mode;
     currentChannel = channel;
     currentPeer = peer;
-    didReset = false; // force reset when mode changes
+    didReset = false;             // force reset when mode changes
+    tabStripFingerScroll = -1.0f; // bring the newly active tab into view
 
     // Track channels we’ve seen
     if (mode == ThreadMode::CHANNEL && channel >= 0) {
@@ -450,7 +461,12 @@ static void drawThreadTabs(OLEDDisplay *display, int16_t x, int top, int height,
     int activeLeft = 0;
     for (size_t i = 0; i < active; ++i)
         activeLeft += widths[i] + TAB_GAP;
-    const int scroll = std::max(0, activeLeft + widths[active] - stripW);
+    tabStripMaxScroll = std::max(0, tabsW - stripW);
+    const int scroll = tabStripFingerScroll >= 0.0f ? std::min((int)tabStripFingerScroll, tabStripMaxScroll)
+                                                    : std::max(0, activeLeft + widths[active] - stripW);
+    tabStripShownScroll = scroll;
+    tabStripTop = top;
+    tabStripBottom = top + height;
     const int firstTabX = x + edge - scroll;
     const int activeX = firstTabX + activeLeft;
 
@@ -480,6 +496,7 @@ static void drawThreadTabs(OLEDDisplay *display, int16_t x, int top, int height,
     int tabX = firstTabX;
     for (size_t i = 0; i < tabs.size(); ++i) {
         if (tabX + widths[i] > x && tabX < x + SCREEN_WIDTH) {
+            tabHits.push_back({(int16_t)tabX, (int16_t)(tabX + widths[i]), tabs[i]});
             if (i == active) {
                 display->fillRect(tabX, top, widths[i], height - 1);
                 display->setColor(BLACK);
@@ -496,6 +513,32 @@ static void drawThreadTabs(OLEDDisplay *display, int16_t x, int top, int height,
         tabX += widths[i] + TAB_GAP;
     }
     display->drawHorizontalLine(x, top + height - 1, SCREEN_WIDTH);
+}
+
+bool tabStripContains(int16_t x, int16_t y)
+{
+    (void)x;
+    return !tabHits.empty() && y >= tabStripTop && y < tabStripBottom;
+}
+
+bool tapTabStrip(int16_t x, int16_t y)
+{
+    if (!tabStripContains(x, y))
+        return false;
+    for (const TabHit &hit : tabHits) {
+        if (x >= hit.left && x < hit.right) {
+            if (!isCurrentThread(hit.tab))
+                setThreadMode(hit.tab.mode, hit.tab.channel, hit.tab.peer);
+            break;
+        }
+    }
+    return true; // the strip's padding and dividers are still the strip, not the list under it
+}
+
+void dragTabStrip(float dx)
+{
+    const float from = tabStripFingerScroll >= 0.0f ? tabStripFingerScroll : (float)tabStripShownScroll;
+    tabStripFingerScroll = std::max(0.0f, std::min((float)tabStripMaxScroll, from - dx));
 }
 
 static int centerYForRow(int y, int size)
@@ -714,6 +757,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 {
     // Ensure any boot-relative timestamps are upgraded if RTC is valid
     messageStore.upgradeBootRelativeTimestamps();
+    tabHits.clear(); // refilled below if the tab strip is drawn
 
     if (!didReset) {
         resetScrollState();
