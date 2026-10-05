@@ -1625,8 +1625,9 @@ static void menuBackdropReport()
 #else
 #define BACKDROP_PERF(field) ((void)0)
 #endif
-// Long enough to cover a run of menu steps; short enough that a clock or status line under the menu catches up.
-static constexpr uint32_t kMenuBackdropMaxAgeMs = 5000;
+// A menu times out after 30 s anyway. Refreshing sooner redrew the frame under it - mid-navigation, a full map rebuild of
+// over a second - and stalled the menu each time.
+static constexpr uint32_t kMenuBackdropMaxAgeMs = 30000;
 
 static bool menuBackdropEligible(const OLEDDisplayUiState *state)
 {
@@ -1637,6 +1638,10 @@ static bool menuBackdropEligible(const OLEDDisplayUiState *state)
         return false;
 #endif
     switch (NotificationRenderer::current_notification_type) {
+    case notificationTypeEnum::text_banner:
+        // Most menus are text banners with options; without options it is a timed notification, which may sit over a
+        // live frame such as the map following us.
+        return NotificationRenderer::alertBannerOptions > 0;
     case notificationTypeEnum::selection_picker:
     case notificationTypeEnum::node_picker:
     case notificationTypeEnum::number_picker:
@@ -1645,7 +1650,7 @@ static bool menuBackdropEligible(const OLEDDisplayUiState *state)
     case notificationTypeEnum::text_prompt:
         return true; // waiting on the user, so nothing under them needs to move
     default:
-        return false; // a timed banner may sit over a live frame, such as the map following us
+        return false;
     }
 }
 
