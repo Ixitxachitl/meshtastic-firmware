@@ -29,6 +29,20 @@ int getThreadChannel();
 // Getter for current peer (valid if mode == DIRECT)
 uint32_t getThreadPeer();
 
+// One conversation the message screen can show.
+struct ThreadTab {
+    ThreadMode mode;
+    int channel;   // valid if mode == CHANNEL
+    uint32_t peer; // valid if mode == DIRECT
+};
+
+// All, then every channel and DM peer with visible messages - the message screen's tabs and the
+// Select Conversation menu both list exactly these, in this order.
+std::vector<ThreadTab> getActiveThreads();
+
+// Step to the next active conversation, wrapping back to All (the message screen shortcut key).
+void cycleThread();
+
 // Registry accessors for menuHandler
 const std::vector<int> &getSeenChannels();
 const std::vector<uint32_t> &getSeenPeers();

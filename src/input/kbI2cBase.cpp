@@ -18,6 +18,7 @@
 #if defined(ELECROW_ThinkNode_M9)
 #include "STC8HKeyboard.h"
 #include "graphics/Screen.h"                    // for the global `screen` + FrameFocus
+#include "graphics/draw/MessageRenderer.h"      // for cycleThread()
 #include "graphics/draw/NotificationRenderer.h" // for resetBanner()
 #include "modules/CannedMessageModule.h"        // for the global `cannedMessageModule`
 #endif
@@ -600,8 +601,13 @@ int32_t KbI2cBase::runOnce()
             e.inputEvent = INPUT_BROKER_ANYKEY;
             graphics::NotificationRenderer::resetBanner();
             // TODO(M9): also reset CannedMessage/PresetMessage state once those modules are ported
-            if (screen)
+            // Already on the message screen: step to the next conversation tab instead.
+            if (screen && screen->isScreenOn() && screen->isTextMessageFrameShown()) {
+                graphics::MessageRenderer::cycleThread();
+                screen->forceDisplay(true);
+            } else if (screen) {
                 screen->setFrames(graphics::Screen::FOCUS_TEXTMESSAGE);
+            }
             break;
         case 0x84: // GPS
             e.inputEvent = INPUT_BROKER_ANYKEY;

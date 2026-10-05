@@ -1190,68 +1190,28 @@ void menuHandler::messageViewModeMenu()
     labels.push_back("View All Chats");
     ids.push_back(-2);
 
-    // Channels with messages
-    for (int ch = 0; ch < 8; ++ch) {
-        auto msgs = messageStore.getChannelMessages((uint8_t)ch);
-        if (!msgs.empty()) {
+    // Same conversations, in the same order, as the message screen's tabs.
+    for (const auto &t : graphics::MessageRenderer::getActiveThreads()) {
+        if (t.mode == graphics::MessageRenderer::ThreadMode::CHANNEL) {
             char buf[40];
-            const char *cname = channels.getName(ch);
-            snprintf(buf, sizeof(buf), cname && cname[0] ? "#%s" : "#Ch%d", cname ? cname : "", ch);
+            const char *cname = channels.getName(t.channel);
+            snprintf(buf, sizeof(buf), cname && cname[0] ? "#%s" : "#Ch%d", cname ? cname : "", t.channel);
             labels.push_back(buf);
-            ids.push_back(encodeChannelId(ch));
-            LOG_DEBUG("messageViewModeMenu: Added live channel %s (id=%d)", buf, encodeChannelId(ch));
+            ids.push_back(encodeChannelId(t.channel));
+        } else if (t.mode == graphics::MessageRenderer::ThreadMode::DIRECT) {
+            const auto *node = nodeDB->getMeshNode(t.peer);
+            std::string name;
+            if (nodeInfoLiteHasUser(node))
+                name = sanitizeString(node->long_name).substr(0, 15);
+            else {
+                char buf[20];
+                snprintf(buf, sizeof(buf), "Node !%08x", (unsigned int)t.peer);
+                name = buf;
+            }
+            labels.push_back("@" + name);
+            ids.push_back(1000 + (int)idToPeer.size());
+            idToPeer.push_back(t.peer);
         }
-    }
-
-    // Registry channels
-    for (int ch : graphics::MessageRenderer::getSeenChannels()) {
-        if (ch < 0 || ch >= 8)
-            continue;
-        auto msgs = messageStore.getChannelMessages((uint8_t)ch);
-        if (msgs.empty())
-            continue;
-        int enc = encodeChannelId(ch);
-        if (std::find(ids.begin(), ids.end(), enc) == ids.end()) {
-            char buf[40];
-            const char *cname = channels.getName(ch);
-            snprintf(buf, sizeof(buf), cname && cname[0] ? "#%s" : "#Ch%d", cname ? cname : "", ch);
-            labels.push_back(buf);
-            ids.push_back(enc);
-            LOG_DEBUG("messageViewModeMenu: Added registry channel %s (id=%d)", buf, enc);
-        }
-    }
-
-    // Gather unique peers
-    auto dms = messageStore.getDirectMessages();
-    std::vector<uint32_t> uniquePeers;
-    for (const auto &m : dms) {
-        uint32_t peer = (m.sender == nodeDB->getNodeNum()) ? m.dest : m.sender;
-        if (peer != nodeDB->getNodeNum() && std::find(uniquePeers.begin(), uniquePeers.end(), peer) == uniquePeers.end())
-            uniquePeers.push_back(peer);
-    }
-    for (uint32_t peer : graphics::MessageRenderer::getSeenPeers()) {
-        if (peer != nodeDB->getNodeNum() && std::find(uniquePeers.begin(), uniquePeers.end(), peer) == uniquePeers.end())
-            uniquePeers.push_back(peer);
-    }
-    std::sort(uniquePeers.begin(), uniquePeers.end());
-
-    // Encode peers
-    for (size_t i = 0; i < uniquePeers.size(); ++i) {
-        uint32_t peer = uniquePeers[i];
-        const auto *node = nodeDB->getMeshNode(peer);
-        std::string name;
-        if (nodeInfoLiteHasUser(node))
-            name = sanitizeString(node->long_name).substr(0, 15);
-        else {
-            char buf[20];
-            snprintf(buf, sizeof(buf), "Node !%08x", (unsigned int)peer);
-            name = buf;
-        }
-        labels.push_back("@" + name);
-        int encPeer = 1000 + (int)idToPeer.size();
-        ids.push_back(encPeer);
-        idToPeer.push_back(peer);
-        LOG_DEBUG("messageViewModeMenu: Added DM %s peer=0x%08x id=%d", name.c_str(), (unsigned int)peer, encPeer);
     }
 
     // Active ID

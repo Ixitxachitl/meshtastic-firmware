@@ -25,6 +25,7 @@
 #include "main.h"
 #include "meshUtils.h"
 #include "modules/CannedMessageModule.h"
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -341,6 +342,162 @@ const std::vector<uint32_t> &getSeenPeers()
     return seenPeers;
 }
 
+std::vector<ThreadTab> getActiveThreads()
+{
+    const uint32_t localNode = nodeDB->getNodeNum();
+    uint8_t channelMask = 0;
+    std::vector<uint32_t> peers;
+    for (const auto &m : messageStore.getLiveMessages()) {
+        if (!messageStore.isMessageVisible(m))
+            continue;
+        if (m.type == MessageType::BROADCAST) {
+            if (m.channelIndex < 8)
+                channelMask |= (uint8_t)(1u << m.channelIndex);
+        } else {
+            const uint32_t peer = (m.sender == localNode) ? m.dest : m.sender;
+            if (peer != localNode && std::find(peers.begin(), peers.end(), peer) == peers.end())
+                peers.push_back(peer);
+        }
+    }
+    std::sort(peers.begin(), peers.end());
+
+    std::vector<ThreadTab> threads;
+    threads.reserve(1 + 8 + peers.size());
+    threads.push_back({ThreadMode::ALL, -1, 0});
+    for (int ch = 0; ch < 8; ++ch) {
+        if (channelMask & (1u << ch))
+            threads.push_back({ThreadMode::CHANNEL, ch, 0});
+    }
+    for (uint32_t peer : peers)
+        threads.push_back({ThreadMode::DIRECT, -1, peer});
+    return threads;
+}
+
+static bool isCurrentThread(const ThreadTab &t)
+{
+    if (t.mode != currentMode)
+        return false;
+    if (t.mode == ThreadMode::CHANNEL)
+        return t.channel == currentChannel;
+    if (t.mode == ThreadMode::DIRECT)
+        return t.peer == currentPeer;
+    return true;
+}
+
+void cycleThread()
+{
+    const std::vector<ThreadTab> threads = getActiveThreads();
+    size_t next = 0;
+    for (size_t i = 0; i < threads.size(); ++i) {
+        if (isCurrentThread(threads[i])) {
+            next = (i + 1) % threads.size();
+            break;
+        }
+    }
+    setThreadMode(threads[next].mode, threads[next].channel, threads[next].peer);
+}
+
+static std::string threadTabLabel(const ThreadTab &t)
+{
+    char buf[40];
+    switch (t.mode) {
+    case ThreadMode::CHANNEL: {
+        const char *cname = channels.getName(t.channel);
+        if (cname && cname[0])
+            snprintf(buf, sizeof(buf), "#%s", cname);
+        else
+            snprintf(buf, sizeof(buf), "#Ch%d", t.channel);
+        break;
+    }
+    case ThreadMode::DIRECT: {
+        const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(t.peer);
+        if (nodeInfoLiteHasUser(node) && node->short_name[0])
+            snprintf(buf, sizeof(buf), "@%s", node->short_name);
+        else
+            snprintf(buf, sizeof(buf), "@%04x", (unsigned int)(t.peer & 0xFFFF));
+        break;
+    }
+    default:
+        snprintf(buf, sizeof(buf), "All");
+        break;
+    }
+    return buf;
+}
+
+// One tab per active conversation, drawn over whatever the scrolled list left beneath it. The strip
+// scrolls sideways so the active tab is always fully visible.
+static void drawThreadTabs(OLEDDisplay *display, int16_t x, int top, int height, const std::vector<ThreadTab> &tabs)
+{
+    constexpr int TAB_PAD_X = 3;
+    constexpr int TAB_GAP = 1; // The divider column between neighbouring tabs
+    const int edge = 2 + BASEUI_BODY_LR_MARGIN;
+    const int stripW = SCREEN_WIDTH - edge * 2;
+
+    std::vector<std::string> labels;
+    std::vector<int> widths;
+    labels.reserve(tabs.size());
+    widths.reserve(tabs.size());
+    size_t active = 0;
+    int tabsW = -TAB_GAP;
+    for (size_t i = 0; i < tabs.size(); ++i) {
+        labels.push_back(graphics::UIRenderer::truncateStringWithEmotes(display, threadTabLabel(tabs[i]), SCREEN_WIDTH / 3));
+        widths.push_back(display->getStringWidth(labels.back().c_str()) + TAB_PAD_X * 2);
+        tabsW += widths.back() + TAB_GAP;
+        if (isCurrentThread(tabs[i]))
+            active = i;
+    }
+
+    int activeLeft = 0;
+    for (size_t i = 0; i < active; ++i)
+        activeLeft += widths[i] + TAB_GAP;
+    const int scroll = std::max(0, activeLeft + widths[active] - stripW);
+    const int firstTabX = x + edge - scroll;
+    const int activeX = firstTabX + activeLeft;
+
+    display->setColor(BLACK);
+    display->fillRect(x, top, SCREEN_WIDTH, height);
+#if GRAPHICS_TFT_COLORING_ENABLED
+    // Inactive tabs sit on a faint shade of the body colour; the active one is cut back to the body
+    // background so its inverted label stays crisp. Registered after the bubbles so they can't bleed in.
+    const uint16_t bodyBg = getThemeBodyBg();
+    const uint16_t bodyFg = getThemeBodyFg();
+    const uint16_t shade = TFTPalette::mix565(bodyBg, bodyFg, 48);
+    const int shadeLeft = std::max<int>(x, firstTabX);
+    const int shadeRight = std::min<int>(x + SCREEN_WIDTH, firstTabX + tabsW);
+    registerTFTColorRegionDirect(x, top, SCREEN_WIDTH, height, bodyFg, bodyBg);
+    if (shadeRight > shadeLeft)
+        registerTFTColorRegionDirect(shadeLeft, top, shadeRight - shadeLeft, height - 1, bodyFg, shade);
+    registerTFTColorRegionDirect(activeX, top, widths[active], height - 1, bodyFg, bodyBg);
+#if BASEUI_NATIVE_RGB565
+    TFTDisplay *const panel = static_cast<TFTDisplay *>(display);
+    panel->fillRect565(x, top, SCREEN_WIDTH, height, bodyBg);
+    if (shadeRight > shadeLeft)
+        panel->fillRect565(shadeLeft, top, shadeRight - shadeLeft, height - 1, shade);
+#endif
+#endif
+    display->setColor(WHITE);
+
+    int tabX = firstTabX;
+    for (size_t i = 0; i < tabs.size(); ++i) {
+        if (tabX + widths[i] > x && tabX < x + SCREEN_WIDTH) {
+            if (i == active) {
+                display->fillRect(tabX, top, widths[i], height - 1);
+                display->setColor(BLACK);
+                display->drawString(tabX + TAB_PAD_X, top, labels[i].c_str());
+                display->setColor(WHITE);
+            } else {
+                display->drawString(tabX + TAB_PAD_X, top, labels[i].c_str());
+            }
+        }
+        // Divider to the next tab; the active tab's own fill already marks its edges.
+        const int dividerX = tabX + widths[i];
+        if (i + 1 < tabs.size() && i != active && i + 1 != active && dividerX >= x && dividerX < x + SCREEN_WIDTH)
+            display->drawVerticalLine(dividerX, top + 2, height - 5);
+        tabX += widths[i] + TAB_GAP;
+    }
+    display->drawHorizontalLine(x, top + height - 1, SCREEN_WIDTH);
+}
+
 static int centerYForRow(int y, int size)
 {
     int midY = y + (FONT_HEIGHT_SMALL / 2);
@@ -606,6 +763,11 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     constexpr int BUBBLE_MIN_W = 24;
     constexpr int BUBBLE_TEXT_INDENT = 2;
 
+    // Compact panels have no header to hang the tabs from, and no rows to spare.
+    const std::vector<ThreadTab> tabs = compactPanel ? std::vector<ThreadTab>() : getActiveThreads();
+    const bool showTabs = tabs.size() > 1;
+    const int tabBarHeight = showTabs ? FONT_HEIGHT_SMALL + 1 : 0;
+
     // Vertical anchor for the first line of content.
 #if BASEUI_BELOW_HEADER_MARGIN > 0
     // These variants draw a header taller than the generic first-line offset, so anchoring
@@ -613,12 +775,12 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     // on the header's painted bottom edge (drawCommonHeader fills down to headerHeight) and
     // deliberately skip the below-header margin other screens reserve, leaving only enough
     // room for the bubble's own top padding so the clamp further down is a no-op.
-    const int contentTop = FONT_HEIGHT_SMALL + 1 + BASEUI_HEADER_MARGIN;
+    const int contentTop = FONT_HEIGHT_SMALL + 1 + BASEUI_HEADER_MARGIN + tabBarHeight;
     const int firstLineTop = contentTop + 1 + BUBBLE_PAD_TOP_HEADER;
 #else
     // Compact panels draw no header, so content starts at the very top of the panel.
-    const int contentTop = navHeight;
-    const int firstLineTop = compactPanel ? 0 : getTextPositions(display)[1];
+    const int contentTop = navHeight + tabBarHeight;
+    const int firstLineTop = compactPanel ? 0 : getTextPositions(display)[1] + tabBarHeight;
 #endif
 
     // The viewport is the band actually drawn into: firstLineTop down to scrollBottom. Deliberately
@@ -1345,6 +1507,8 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
 
     // Draw scrollbar
     drawMessageScrollbar(display, usableHeight, totalHeight, finalScroll, firstLineTop, x);
+    if (showTabs)
+        drawThreadTabs(display, x, BASEUI_HEADER_HEIGHT, tabBarHeight, tabs);
     if (!compactPanel) {
         graphics::drawCommonHeader(display, x, y, titleStr);
     }
