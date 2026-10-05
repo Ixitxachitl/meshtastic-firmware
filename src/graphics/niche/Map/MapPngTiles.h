@@ -18,6 +18,10 @@ constexpr int kTileSize = 256;
 
 // Rescans the card for style folders and selects `preferred` if present, else the first. Returns the count.
 int refreshStyles(const char *preferred);
+#if BASEUI_MAP_ONLINE_TILES && !defined(SENSECAP_INDICATOR)
+// Writes /maps/osm/.url (OpenStreetMap) so a card with no map yet can fetch tiles. False with no card or on a write error.
+bool seedDefaultStyle();
+#endif
 int styleCount();
 // Folder name under /maps, or "" for the bare /map tree.
 const char *styleName(int index);

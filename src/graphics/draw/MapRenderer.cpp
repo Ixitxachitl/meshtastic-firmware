@@ -571,7 +571,16 @@ void ensureMapStylesScanned()
         return;
     s_mapStylesScanned = true;
     s_useBinaryMap = savedStyleIsBinary();
-    NicheGraphics::MapTiles::Png::refreshStyles((uiconfig.has_map_data && !s_useBinaryMap) ? uiconfig.map_data.style : nullptr);
+    namespace Png = NicheGraphics::MapTiles::Png;
+    const char *preferred = (uiconfig.has_map_data && !s_useBinaryMap) ? uiconfig.map_data.style : nullptr;
+    const int found = Png::refreshStyles(preferred);
+#if BASEUI_MAP_ONLINE_TILES && !defined(SENSECAP_INDICATOR)
+    // A card with no map at all (no styles, no /map, no MAP.BIN) gets an OSM style so online tiles work out of the box.
+    if (found == 0 && !NicheGraphics::MapTiles::hasTiles() && Png::seedDefaultStyle())
+        Png::refreshStyles(preferred);
+#else
+    (void)found;
+#endif
 }
 
 // Draws the PNG basemap. False when MAP.BIN was picked (and is loaded) or the card has no PNG tiles, so the caller

@@ -414,6 +414,35 @@ int refreshStyles(const char *preferred)
     return numStyles;
 }
 
+#if BASEUI_MAP_ONLINE_TILES && !defined(SENSECAP_INDICATOR)
+bool seedDefaultStyle()
+{
+    static const char kUrl[] = "https://tile.openstreetmap.org/{z}/{x}/{y}.png\n";
+    concurrency::LockGuard g(spiLock);
+    SdFs *sd = mapSdCard();
+    if (!sd)
+        return false;
+    if (!sd->exists("/maps/osm") && !sd->mkdir("/maps/osm", true)) {
+        LOG_WARN("Map: can't create /maps/osm");
+        return false;
+    }
+    FsFile file = sd->open("/maps/osm/.url", O_WRONLY | O_CREAT | O_TRUNC);
+    if (!file) {
+        LOG_WARN("Map: can't open /maps/osm/.url");
+        return false;
+    }
+    const bool ok = file.write(kUrl, sizeof(kUrl) - 1) == sizeof(kUrl) - 1;
+    file.close();
+    if (!ok) {
+        sd->remove("/maps/osm/.url");
+        LOG_WARN("Map: short write of /maps/osm/.url");
+        return false;
+    }
+    LOG_INFO("Map: seeded /maps/osm with the OpenStreetMap tile URL");
+    return true;
+}
+#endif
+
 // Fetched tiles arrive in bursts - a view at one zoom pulls its neighbours and the lower zooms behind it.
 // The renderer keys its cached basemap on generation(), and rebuilding that costs a full screen of tile
 // decoding: 400-700ms on a large panel. Bumping per tile meant paying it once per arrival, back to back,
