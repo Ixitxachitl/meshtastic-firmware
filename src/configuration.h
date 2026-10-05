@@ -677,6 +677,13 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #undef BASEUI_MENU_BACKDROP
 #define BASEUI_MENU_BACKDROP 0
 #endif
+// Extra height and side padding, in pixels, for the message screen's conversation tabs: a bigger target for a finger.
+#ifndef BASEUI_MESSAGE_TAB_EXTRA_HEIGHT
+#define BASEUI_MESSAGE_TAB_EXTRA_HEIGHT 0
+#endif
+#ifndef BASEUI_MESSAGE_TAB_PAD_X
+#define BASEUI_MESSAGE_TAB_PAD_X 3
+#endif
 // How long the lockscreen stays up before it fades out and the screen sleeps again.
 #ifndef BASEUI_LOCKSCREEN_TIMEOUT_MS
 #define BASEUI_LOCKSCREEN_TIMEOUT_MS 5000

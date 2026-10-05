@@ -439,8 +439,9 @@ static std::string threadTabLabel(const ThreadTab &t)
 // scrolls sideways so the active tab is always fully visible.
 static void drawThreadTabs(OLEDDisplay *display, int16_t x, int top, int height, const std::vector<ThreadTab> &tabs)
 {
-    constexpr int TAB_PAD_X = 3;
-    constexpr int TAB_GAP = 1; // The divider column between neighbouring tabs
+    constexpr int TAB_PAD_X = BASEUI_MESSAGE_TAB_PAD_X;
+    const int labelY = top + BASEUI_MESSAGE_TAB_EXTRA_HEIGHT / 2; // centred in a strip taller than the text
+    constexpr int TAB_GAP = 1;                                    // The divider column between neighbouring tabs
     const int edge = 2 + BASEUI_BODY_LR_MARGIN;
     const int stripW = SCREEN_WIDTH - edge * 2;
 
@@ -500,10 +501,10 @@ static void drawThreadTabs(OLEDDisplay *display, int16_t x, int top, int height,
             if (i == active) {
                 display->fillRect(tabX, top, widths[i], height - 1);
                 display->setColor(BLACK);
-                display->drawString(tabX + TAB_PAD_X, top, labels[i].c_str());
+                display->drawString(tabX + TAB_PAD_X, labelY, labels[i].c_str());
                 display->setColor(WHITE);
             } else {
-                display->drawString(tabX + TAB_PAD_X, top, labels[i].c_str());
+                display->drawString(tabX + TAB_PAD_X, labelY, labels[i].c_str());
             }
         }
         // Divider to the next tab; the active tab's own fill already marks its edges.
@@ -810,7 +811,7 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     // Compact panels have no header to hang the tabs from, and no rows to spare.
     const std::vector<ThreadTab> tabs = compactPanel ? std::vector<ThreadTab>() : getActiveThreads();
     const bool showTabs = tabs.size() > 1;
-    const int tabBarHeight = showTabs ? FONT_HEIGHT_SMALL + 1 : 0;
+    const int tabBarHeight = showTabs ? FONT_HEIGHT_SMALL + 1 + BASEUI_MESSAGE_TAB_EXTRA_HEIGHT : 0;
 
     // Vertical anchor for the first line of content.
 #if BASEUI_BELOW_HEADER_MARGIN > 0
