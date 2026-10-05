@@ -2027,19 +2027,26 @@ uint8_t Screen::getLockUnlockStep() const
 #endif
 }
 
-void Screen::lockscreenInput(input_broker_event ev)
+void Screen::lockscreenInput(const InputEvent &ev)
 {
 #if BASEUI_LOCKSCREEN
     if (lockPhase == LockPhase::None || lockUnlockStep == 2) // unlocking already; tickLockscreen() finishes it
         return;
     extendLockscreen();
 
+    // Touch reports a tap as USER_PRESS and a press-and-hold as SELECT; a finger sliding about is neither.
+    const bool touch = inputEventIsTouch(&ev);
+    if (touch && (ev.inputEvent == INPUT_BROKER_TOUCH_DRAG || ev.inputEvent == INPUT_BROKER_TOUCH_DRAG_END))
+        return;
+    const input_broker_event tap = touch ? INPUT_BROKER_USER_PRESS : INPUT_BROKER_SELECT;
+    const input_broker_event hold = touch ? INPUT_BROKER_SELECT : INPUT_BROKER_SELECT_LONG;
+
     const uint8_t before = lockUnlockStep;
     const bool tapLive = lockUnlockStep == 1 && !Throttle::hasElapsed(lockStepAtMs, kLockGestureWindowMs);
-    if (ev == INPUT_BROKER_SELECT) {
+    if (ev.inputEvent == tap) {
         lockUnlockStep = 1; // a tap; a repeat tap restarts the window from itself
         lockStepAtMs = millis();
-    } else if (ev == INPUT_BROKER_SELECT_LONG && tapLive) {
+    } else if (ev.inputEvent == hold && tapLive) {
         lockUnlockStep = 2;
         lockStepAtMs = millis();
 #if BASEUI_SELECT_LONG_SLEEPS

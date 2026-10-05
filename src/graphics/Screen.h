@@ -335,8 +335,9 @@ class Screen : public concurrency::OSThread
     // Drop the lock and return to the frame the screen slept on. Safe to call when not locked.
     void unlockScreen();
 
-    // Feed a key press to the lockscreen's unlock gesture (tap select, then hold it). Any press restarts the countdown.
-    void lockscreenInput(input_broker_event ev);
+    // Feed a press to the lockscreen's unlock gesture: tap select then hold it, or tap the touchscreen then press and
+    // hold it. Any press restarts the countdown.
+    void lockscreenInput(const InputEvent &ev);
     // How far the unlock gesture has got (0-2), for the lock frame's progress dots.
     uint8_t getLockUnlockStep() const;
 

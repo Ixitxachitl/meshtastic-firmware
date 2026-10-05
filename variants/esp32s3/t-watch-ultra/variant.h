@@ -184,3 +184,5 @@
 
 #define USE_VIRTUAL_KEYBOARD 1
 #define DISPLAY_CLOCK_FRAME 1
+// Wake onto the clock lockscreen; tap the touchscreen, then press and hold it, to unlock.
+#define BASEUI_LOCKSCREEN 1
