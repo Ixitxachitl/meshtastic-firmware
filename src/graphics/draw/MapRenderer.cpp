@@ -1109,6 +1109,17 @@ void drawGeofenceBox(OLEDDisplay *display, float left, float top, float right, f
 }
 #endif // !MESHTASTIC_EXCLUDE_WAYPOINT
 
+// Us, as an arrow pointing the way we are going: up, in the turned views.
+void drawSelfArrow(OLEDDisplay *display, int16_t sx, int16_t sy)
+{
+    display->setColor(WHITE);
+    display->fillTriangle(sx, sy - 13, sx - 10, sy + 10, sx + 10, sy + 10);
+    display->setColor(BLACK);
+    display->fillTriangle(sx, sy - 9, sx - 7, sy + 7, sx, sy + 3);
+    display->fillTriangle(sx, sy - 9, sx + 7, sy + 7, sx, sy + 3);
+    display->setColor(WHITE);
+}
+
 #if BASEUI_MAP_NAVIGATION
 // Map > Navigate: a line from us to the target, the target's marker, an arrow at the edge when it is off the view,
 // and the distance. All of it clipped in float, as the geofences are.
@@ -1477,17 +1488,6 @@ int16_t drawDownloadOverlay(OLEDDisplay *display, int16_t x, int16_t y, int16_t 
     return height;
 }
 #endif
-
-// Us, as an arrow pointing the way we are going: up, in the turned views.
-void drawSelfArrow(OLEDDisplay *display, int16_t sx, int16_t sy)
-{
-    display->setColor(WHITE);
-    display->fillTriangle(sx, sy - 13, sx - 10, sy + 10, sx + 10, sy + 10);
-    display->setColor(BLACK);
-    display->fillTriangle(sx, sy - 9, sx - 7, sy + 7, sx, sy + 3);
-    display->fillTriangle(sx, sy - 9, sx + 7, sy + 7, sx, sy + 3);
-    display->setColor(WHITE);
-}
 
 void drawNavTarget(OLEDDisplay *display, int16_t tx, int16_t ty)
 {
