@@ -128,6 +128,14 @@ class TFTDisplay : public OLEDDisplay
     // While set, clear() only resets the lit mask: the caller is about to cover every pixel itself (a slide
     // blitting its snapshots), so painting the background first would be thrown away.
     void setClearCovered(bool covered) { clearCovered = covered; }
+#if BASEUI_MENU_BACKDROP
+    // The frame under an open menu. captureBackdrop() keeps the whole frame; restoreBackdrop() puts back only the
+    // bands the menu covered, recorded between beginBackdropCover() and endBackdropCover() around its drawing.
+    bool captureBackdrop();
+    void restoreBackdrop();
+    void beginBackdropCover();
+    void endBackdropCover();
+#endif
 
     // Writable access, so both count as drawing: the next clear() can no longer be skipped.
     uint16_t *nativePixels()
@@ -237,6 +245,13 @@ class TFTDisplay : public OLEDDisplay
     static constexpr uint8_t kNativeBandRows = 8;
     static constexpr uint32_t kNativeMaxBands = 256;
     uint32_t nativeDirtyBands[kNativeMaxBands / 32] = {};
+#if BASEUI_MENU_BACKDROP
+    uint16_t *backdropRgb = nullptr;
+    uint8_t *backdropLit = nullptr;
+    uint8_t *backdropExplicit = nullptr;
+    uint32_t backdropCovered[kNativeMaxBands / 32] = {}; // bands the menu drew into last time
+    uint32_t coverSavedBands[kNativeMaxBands / 32] = {}; // the dirty bands set aside while the menu draws
+#endif
     void markNativeRowDirty(int32_t y)
     {
         const uint32_t band = (uint32_t)y / kNativeBandRows;

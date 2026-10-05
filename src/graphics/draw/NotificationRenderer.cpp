@@ -279,6 +279,18 @@ void NotificationRenderer::drawBannercallback(OLEDDisplay *display, OLEDDisplayU
     if (!isOverlayBannerShowing() || pauseBanner) {
         return;
     }
+#if BASEUI_MENU_BACKDROP
+    // Brackets every return below: the bands this menu draws into are the ones its next redraw restores.
+    struct BackdropCover {
+        OLEDDisplay *display;
+        bool active;
+        ~BackdropCover()
+        {
+            if (active)
+                graphics::menuBackdropEndBanner(display);
+        }
+    } backdropCover{display, graphics::menuBackdropBeginBanner(display, state)};
+#endif
 
     // Compact panels: DOWN cancels menus instead of scrolling (covers every picker below).
     if (graphics::isCompactPanel(display) && inEvent.inputEvent == INPUT_BROKER_DOWN) {

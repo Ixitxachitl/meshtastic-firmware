@@ -668,6 +668,15 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define BASEUI_HAS_BRIGHTNESS_CONTROL 0
 #endif
 #endif
+// Keep the frame under an open menu, so each menu step restores only the bands the menu covered instead of redrawing
+// the whole frame. One more frame buffer in PSRAM. Opt-in per variant; needs BASEUI_NATIVE_RGB565.
+#ifndef BASEUI_MENU_BACKDROP
+#define BASEUI_MENU_BACKDROP 0
+#endif
+#if BASEUI_MENU_BACKDROP && !BASEUI_NATIVE_RGB565
+#undef BASEUI_MENU_BACKDROP
+#define BASEUI_MENU_BACKDROP 0
+#endif
 // How long the lockscreen stays up before it fades out and the screen sleeps again.
 #ifndef BASEUI_LOCKSCREEN_TIMEOUT_MS
 #define BASEUI_LOCKSCREEN_TIMEOUT_MS 5000

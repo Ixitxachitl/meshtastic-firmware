@@ -2100,6 +2100,66 @@ void TFTDisplay::flushPendingColumns()
     }
 }
 
+#if BASEUI_MENU_BACKDROP
+bool TFTDisplay::captureBackdrop()
+{
+    if (!rgbPixels || !explicitBits)
+        return false;
+    flushPendingColumns(); // held columns are part of the frame being kept
+    const size_t pixels = (size_t)displayWidth * displayHeight;
+    if (!backdropRgb)
+        backdropRgb = allocNativeFrame(pixels);
+    if (!backdropLit)
+        backdropLit = static_cast<uint8_t *>(malloc(displayBufferSize));
+    if (!backdropExplicit)
+        backdropExplicit = static_cast<uint8_t *>(malloc(displayBufferSize));
+    if (!backdropRgb || !backdropLit || !backdropExplicit)
+        return false;
+    memcpy(backdropRgb, rgbPixels, pixels * sizeof(uint16_t));
+    memcpy(backdropLit, buffer, displayBufferSize);
+    memcpy(backdropExplicit, explicitBits, displayBufferSize);
+    memset(backdropCovered, 0, sizeof(backdropCovered));
+    return true;
+}
+
+void TFTDisplay::restoreBackdrop()
+{
+    if (!rgbPixels || !backdropRgb)
+        return;
+    pendingColumns.x1 = pendingColumns.x0;
+    memcpy(buffer, backdropLit, displayBufferSize); // the masks are small; only the colours are worth restoring by band
+    memcpy(explicitBits, backdropExplicit, displayBufferSize);
+    for (uint32_t band = 0; band < kNativeMaxBands; band++) {
+        if (!(backdropCovered[band >> 5] & (1u << (band & 31))))
+            continue;
+        const uint32_t y0 = band * kNativeBandRows;
+        if (y0 >= displayHeight)
+            break;
+        const uint32_t rows = min<uint32_t>(kNativeBandRows, displayHeight - y0);
+        memcpy(rgbPixels + (size_t)y0 * displayWidth, backdropRgb + (size_t)y0 * displayWidth,
+               (size_t)rows * displayWidth * sizeof(uint16_t));
+        markNativeRowDirty((int32_t)y0);
+    }
+    nativeClean = false;
+    penActive = false;
+}
+
+void TFTDisplay::beginBackdropCover()
+{
+    memcpy(coverSavedBands, nativeDirtyBands, sizeof(nativeDirtyBands));
+    memset(nativeDirtyBands, 0, sizeof(nativeDirtyBands));
+}
+
+void TFTDisplay::endBackdropCover()
+{
+    flushPendingColumns(); // so held columns count toward the bands the menu covered
+    for (size_t i = 0; i < sizeof(nativeDirtyBands) / sizeof(nativeDirtyBands[0]); i++) {
+        backdropCovered[i] = nativeDirtyBands[i];
+        nativeDirtyBands[i] |= coverSavedBands[i];
+    }
+}
+#endif
+
 void TFTDisplay::clear(void)
 {
     pendingColumns.x1 = pendingColumns.x0; // about to be painted over: nothing held needs writing

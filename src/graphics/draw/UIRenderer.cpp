@@ -2194,6 +2194,10 @@ void UIRenderer::notifyScreenWoke()
 // cppcheck-suppress constParameterPointer; signature must match OverlayCallback typedef from OLEDDisplayUi library
 void UIRenderer::drawNavigationBar(OLEDDisplay *display, OLEDDisplayUiState *state)
 {
+#if BASEUI_MENU_BACKDROP
+    if (graphics::menuBackdropFrozen())
+        return; // already in the restored frame
+#endif
 #if BASEUI_HAS_GAMES
     // Hide the navigation bar while a game owns the screen (the attract screen doesn't intercept,
     // so the nav bar stays visible there).

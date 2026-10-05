@@ -283,6 +283,9 @@ static void drawLockdownLockScreen(OLEDDisplay *display)
 // Timed arrow-key slide, applied around each redraw; defined with the nav transition settings.
 static void navSlideBeforeUpdate(OLEDDisplayUi *ui);
 static void navSlideAfterUpdate(OLEDDisplayUi *ui);
+// Menu backdrop (BASEUI_MENU_BACKDROP), applied inside the slide's bracket.
+static void menuBackdropBeforeUpdate(OLEDDisplayUi *ui);
+static void menuBackdropAfterUpdate();
 
 static inline void updateUiFrame(OLEDDisplayUi *ui)
 {
@@ -318,7 +321,9 @@ static inline void updateUiFrame(OLEDDisplayUi *ui)
     prepareFrameColorRegions();
 #endif
     navSlideBeforeUpdate(ui);
+    menuBackdropBeforeUpdate(ui);
     ui->update();
+    menuBackdropAfterUpdate();
     navSlideAfterUpdate(ui);
 }
 // Global variables for alert banner - explicitly define with extern "C" linkage to prevent optimization
@@ -1578,6 +1583,106 @@ static void navSlideAfterUpdate(OLEDDisplayUi *ui)
 }
 #endif
 
+#if BASEUI_MENU_BACKDROP
+// ---- Menu backdrop --------------------------------------------------------------------------
+//
+// A menu step changes only the menu, but a redraw rebuilds the whole frame under it - the map, the message list.
+// The panel keeps that frame (with the footer and nav bar) from the menu's first draw, and later redraws stand a
+// restore of the bands the menu covered in for the frame. Dropped whenever the frame could have moved on.
+static struct {
+    bool valid = false;  // the panel holds the frame under the current menu
+    bool frozen = false; // this redraw restores it instead of drawing the frame
+    uint8_t frame = 0;
+    uint32_t capturedMs = 0;
+    uint32_t framesGen = 0; // setFrames() count at the swap, so a rebuilt frame list is never overwritten
+    FrameCallback original;
+} sMenuBackdrop;
+static uint32_t sFramesGen = 0;
+// Long enough to cover a run of menu steps; short enough that a clock or status line under the menu catches up.
+static constexpr uint32_t kMenuBackdropMaxAgeMs = 5000;
+
+static bool menuBackdropEligible(const OLEDDisplayUiState *state)
+{
+    if (!NotificationRenderer::isOverlayBannerShowing() || NotificationRenderer::pauseBanner || state->frameState != FIXED)
+        return false;
+#if SCREEN_ANIMATE_FRAME_NAV
+    if (sNavSlide.armed)
+        return false;
+#endif
+    switch (NotificationRenderer::current_notification_type) {
+    case notificationTypeEnum::selection_picker:
+    case notificationTypeEnum::node_picker:
+    case notificationTypeEnum::number_picker:
+    case notificationTypeEnum::hex_picker:
+    case notificationTypeEnum::alphanumeric_picker:
+    case notificationTypeEnum::text_prompt:
+        return true; // waiting on the user, so nothing under them needs to move
+    default:
+        return false; // a timed banner may sit over a live frame, such as the map following us
+    }
+}
+
+static void menuBackdropBeforeUpdate(OLEDDisplayUi *ui)
+{
+    const OLEDDisplayUiState *state = ui->getUiState();
+    if (!menuBackdropEligible(state) || state->currentFrame != sMenuBackdrop.frame ||
+        Throttle::hasElapsed(sMenuBackdrop.capturedMs, kMenuBackdropMaxAgeMs))
+        sMenuBackdrop.valid = false;
+    if (!sMenuBackdrop.valid)
+        return;
+    sMenuBackdrop.frozen = true;
+    sMenuBackdrop.framesGen = sFramesGen;
+    sMenuBackdrop.original = normalFrames[sMenuBackdrop.frame];
+    normalFrames[sMenuBackdrop.frame] = [](OLEDDisplay *display, OLEDDisplayUiState *, int16_t, int16_t) {
+        static_cast<TFTDisplay *>(display)->restoreBackdrop();
+    };
+    static_cast<TFTDisplay *>(screen->getDisplayDevice())->setClearCovered(true); // the restore covers what clear() would
+}
+
+static void menuBackdropAfterUpdate()
+{
+    if (!sMenuBackdrop.frozen)
+        return;
+    if (sMenuBackdrop.framesGen == sFramesGen)
+        normalFrames[sMenuBackdrop.frame] = sMenuBackdrop.original;
+    sMenuBackdrop.original = nullptr;
+    sMenuBackdrop.frozen = false;
+    static_cast<TFTDisplay *>(screen->getDisplayDevice())->setClearCovered(false);
+}
+
+bool menuBackdropFrozen()
+{
+    return sMenuBackdrop.frozen;
+}
+
+bool menuBackdropBeginBanner(OLEDDisplay *display, const OLEDDisplayUiState *state)
+{
+    if (!menuBackdropEligible(state))
+        return false;
+    TFTDisplay *const panel = static_cast<TFTDisplay *>(display);
+    if (!sMenuBackdrop.frozen) {
+        // Everything under the menu is drawn by now; keep it before the menu goes on top.
+        sMenuBackdrop.valid = panel->captureBackdrop();
+        sMenuBackdrop.frame = state->currentFrame;
+        sMenuBackdrop.capturedMs = millis();
+    }
+    panel->beginBackdropCover();
+    return true;
+}
+
+void menuBackdropEndBanner(OLEDDisplay *display)
+{
+    static_cast<TFTDisplay *>(display)->endBackdropCover();
+}
+#else
+static void menuBackdropBeforeUpdate(OLEDDisplayUi *ui)
+{
+    (void)ui;
+}
+
+static void menuBackdropAfterUpdate() {}
+#endif
+
 #if BASEUI_HAS_TOUCH_DRAG
 // Nominal transition length for touch-initiated frame changes. Not milliseconds on screen:
 // ticksPerTransition = time / updateInterval, updateInterval starts at 33ms but drops to 16ms once
@@ -2503,6 +2608,10 @@ void Screen::setScreensaverFrames(FrameCallback einkScreensaver)
 
 void Screen::setFrames(FrameFocus focus)
 {
+#if BASEUI_MENU_BACKDROP
+    sFramesGen++; // a menu's restore stand-in must not be written back over the rebuilt list
+    sMenuBackdrop.valid = false;
+#endif
     // Block setFrames calls when virtual keyboard is active to prevent overlay interference
     if (NotificationRenderer::current_notification_type == notificationTypeEnum::text_input) {
         return;

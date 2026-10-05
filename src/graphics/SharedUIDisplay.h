@@ -193,6 +193,13 @@ void drawCommonFooter(OLEDDisplay *display, int16_t x, int16_t y);
 // drawCommonFooter() as an OLEDDisplayUi overlay. Register it before the nav bar and the banner, so both
 // of those still draw over it. Frames must not call drawCommonFooter() themselves as well.
 void drawConnectionFooterOverlay(OLEDDisplay *display, OLEDDisplayUiState *state);
+#if BASEUI_MENU_BACKDROP
+// Menu backdrop (Screen.cpp). Frozen: this redraw restores the frame under a menu, footer and nav bar included.
+bool menuBackdropFrozen();
+// Around a menu's drawing: keeps the frame under it on the first draw, and records the bands the menu covers.
+bool menuBackdropBeginBanner(OLEDDisplay *display, const OLEDDisplayUiState *state);
+void menuBackdropEndBanner(OLEDDisplay *display);
+#endif
 
 // Frame renderers must clear through this rather than calling display->clear() directly.
 //

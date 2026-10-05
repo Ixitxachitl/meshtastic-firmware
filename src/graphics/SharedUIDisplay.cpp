@@ -836,6 +836,10 @@ const int *getTextPositions(OLEDDisplay *display)
 void drawConnectionFooterOverlay(OLEDDisplay *display, OLEDDisplayUiState *state)
 {
     (void)state;
+#if BASEUI_MENU_BACKDROP
+    if (menuBackdropFrozen())
+        return; // already in the restored frame
+#endif
     drawCommonFooter(display, 0, 0);
 }
 
