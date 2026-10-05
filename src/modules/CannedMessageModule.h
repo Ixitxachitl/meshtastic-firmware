@@ -106,6 +106,8 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
     /// Slide the on-screen keyboard horizontally. Pass the delta between consecutive drag
     /// reports; clamped so the grid can never be dragged away from the screen edges.
     void panKeyboardByFingerDelta(float dxPx);
+    // The keyboard's finger pan, for the text prompt that borrows it. True when the drag report was a pan.
+    bool keyboardPanDrag(const InputEvent *event);
 
     // === Admin Handlers ===
     void handleGetCannedMessageModuleMessages(const meshtastic_MeshPacket &req, meshtastic_AdminMessage *response);

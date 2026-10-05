@@ -1363,6 +1363,19 @@ static bool keyboardPanDragEnd()
 }
 #endif // BASEUI_HAS_TOUCH_DRAG
 
+bool CannedMessageModule::keyboardPanDrag(const InputEvent *event)
+{
+#if BASEUI_HAS_TOUCH_DRAG
+    if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG)
+        return keyboardPanDragUpdate(event, this);
+    if (event->inputEvent == INPUT_BROKER_TOUCH_DRAG_END)
+        return keyboardPanDragEnd();
+#else
+    (void)event;
+#endif
+    return false;
+}
+
 bool isKeyboardPanFingerSteering()
 {
 #if BASEUI_HAS_TOUCH_DRAG

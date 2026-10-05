@@ -430,6 +430,13 @@ bool NotificationRenderer::handleTextPromptInput(const InputEvent &event)
         picked = (event.touchY - suggestTop) / suggestRowH;
     } else if (touch) {
 #if defined(USE_VIRTUAL_KEYBOARD)
+        if (cannedMessageModule &&
+            (event.inputEvent == INPUT_BROKER_TOUCH_DRAG || event.inputEvent == INPUT_BROKER_TOUCH_DRAG_END)) {
+            cannedMessageModule->keyboardPanDrag(&event); // a sideways drag pans the keyboard, as on the message screen
+            return true;
+        }
+        if (event.inputEvent == INPUT_BROKER_USER_PRESS && isKeyboardPanFingerSteering())
+            return true; // the tap reported as a pan lets go is not a key press
         if (event.inputEvent == INPUT_BROKER_USER_PRESS && cannedMessageModule) {
             // The composer's keyboard, as the message screen types on it.
             const String key = cannedMessageModule->keyForCoordinates(event.touchX, event.touchY);
