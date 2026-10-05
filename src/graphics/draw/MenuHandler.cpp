@@ -5,6 +5,9 @@
 #include "DisplayFormatters.h"
 #include "GPS.h"
 #include "MenuHandler.h"
+#if HAS_HOST_POWEROFF
+#include "platform/portduino/LinuxPower.h"
+#endif
 #include "MeshRadio.h"
 #include "MeshService.h"
 #include "MessageStore.h"
@@ -1318,7 +1321,6 @@ void menuHandler::homeBaseMenu()
                 IF_SCREEN(if (!externalNotificationModule->getMute()) externalNotificationModule->stopNow();)
             }
         } else if (selected == Backlight) {
-            screen->setOn(false);
 #if HAS_BACKLIGHT && defined(USE_EINK)
             graphics::backlightToggle();
             saveUIConfig();
@@ -2876,7 +2878,7 @@ void menuHandler::traceRouteMenu()
 void menuHandler::testMenu()
 {
 
-    enum optionsNumbers { Back, NumberPicker, ShowChirpy };
+    enum optionsNumbers { Back, NumberPicker, ShowChirpy, HostPowerOff };
     static const char *optionsArray[5] = {"Back"};
     static int optionsEnumArray[5] = {Back};
     int options = 1;
@@ -2886,6 +2888,11 @@ void menuHandler::testMenu()
 
     optionsArray[options] = screen->isFrameHidden("chirpy") ? "Show Chirpy" : "Hide Chirpy";
     optionsEnumArray[options++] = ShowChirpy;
+#if HAS_HOST_POWEROFF
+    // Halts the computer meshtasticd runs on, not just the node. See hostPowerOffMenu().
+    optionsArray[options] = "Power Off Host";
+    optionsEnumArray[options++] = HostPowerOff;
+#endif
 
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = "Hidden Test Menu";
@@ -2900,12 +2907,47 @@ void menuHandler::testMenu()
             screen->toggleFrameVisibility("chirpy");
             screen->setFrames(Screen::FOCUS_SYSTEM);
 
+        } else if (selected == HostPowerOff) {
+#if HAS_HOST_POWEROFF
+            menuQueue = HostPowerOffMenu;
+            screen->runNow();
+#endif
         } else {
             menuQueue = SystemBaseMenu;
             screen->runNow();
         }
     };
     screen->showOverlayBanner(bannerOptions);
+}
+
+// Separate from shutdownMenu(): that one ends the node, this one ends the machine. Worth its own
+// confirmation because on a headless node nothing else will bring the host back.
+void menuHandler::hostPowerOffMenu()
+{
+#if HAS_HOST_POWEROFF
+    static const char *optionsArray[] = {"Back", "Confirm"};
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = "Power Off Host?";
+    if (currentResolution == ScreenResolution::UltraLow) {
+        bannerOptions.message = "Power Off?";
+    }
+    bannerOptions.optionsArrayPtr = optionsArray;
+    bannerOptions.optionsCount = 2;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        if (selected == 1) {
+            // Raise the flag first, then run the ordinary shutdown so the NodeDB and message store
+            // are saved exactly as they would be for a normal one; Power.cpp halts the host at the
+            // end instead of just exiting.
+            hostPowerOffRequested = true;
+            InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_SHUTDOWN, .kbchar = 0, .touchX = 0, .touchY = 0};
+            inputBroker->injectInputEvent(&event);
+        } else {
+            menuQueue = TestMenu;
+            screen->runNow();
+        }
+    };
+    screen->showOverlayBanner(bannerOptions);
+#endif
 }
 
 void menuHandler::numberTest()
@@ -3775,6 +3817,9 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
         break;
     case TraceRouteMenu:
         traceRouteMenu();
+        break;
+    case HostPowerOffMenu:
+        hostPowerOffMenu();
         break;
     case TestMenu:
         testMenu();

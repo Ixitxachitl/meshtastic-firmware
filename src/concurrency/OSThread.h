@@ -82,6 +82,12 @@ class OSThread : public Thread
      */
     void setIntervalFromNow(unsigned long _interval);
 
+    virtual void setInterval(unsigned long _interval)
+    {
+        fromNowDuringRun = false; // a later setInterval() wins
+        Thread::setInterval(_interval);
+    }
+
 #if defined(ARDUINO_ARCH_ESP32)
     /**
      * Ask for runOnce() to be driven by a dedicated FreeRTOS task instead of the
@@ -110,6 +116,10 @@ class OSThread : public Thread
 
     // Do not override this
     virtual void run();
+
+  private:
+    // setIntervalFromNow() ran during runOnce(); run() keeps its due time rather than re-basing it in runned()
+    volatile bool fromNowDuringRun = false;
 };
 
 /**
