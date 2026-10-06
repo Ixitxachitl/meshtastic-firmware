@@ -57,8 +57,10 @@
 #define BASEUI_FIXED_COMPASS_SIZE 1
 #define BASEUI_SPLASH_CORNER_INSET_PCT 25
 #define BASEUI_ICON_SCALE 2
-// The battery cluster reads fine at its authored size; doubled it crowds the header.
-#define BASEUI_BATTERY_ICON_SCALE 1
+// Doubled battery and mail icons. The battery follows its charge text, so the text stays where it was.
+#define BASEUI_BATTERY_ICON_SCALE 2
+#define BASEUI_MAIL_ICON_SCALE 2
+#define BASEUI_BATTERY_ICON_AFTER_TEXT 1
 // Pushed clear of the rounded top-right corner, which otherwise clips it. Tune against the panel.
 #define BASEUI_BATTERY_TOP_OFFSET 8
 // Emote picker cells are sized with BASEUI_ICON_SCALE already applied, so at scale 2 the

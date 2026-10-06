@@ -468,7 +468,16 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
 #endif
 
     bool useHorizontalBattery = (currentResolution == ScreenResolution::High && screenW >= screenH);
-    const int textY = y + (highlightHeight - FONT_HEIGHT_SMALL) / 2;
+    // The title's row. Centring in highlightHeight counted BASEUI_HEADER_MARGIN twice - y is already below it - and sank
+    // the status text past the header's bottom; with no margin the two agree.
+    const int textY = y;
+    // A header icon's top, moved up (or down) as needed to keep it inside the header as painted: from its top row to
+    // the one above the separator.
+    auto fitHeaderIcon = [&](int top, int h) -> int {
+        const int headerTop = y - HEADER_OFFSET_Y;
+        const int lowest = headerTop + headerHeight - 1 - h;
+        return std::max<int>(headerTop + 1, std::min<int>(top, lowest));
+    };
 #if GRAPHICS_TFT_COLORING_ENABLED
     bool hasBatteryFillRegion = false;
     int16_t batteryFillRegionX = 0;
@@ -481,85 +490,122 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
     }
 #endif
 
-    constexpr int iconScale = BASEUI_BATTERY_ICON_SCALE;
+    constexpr int iconScale = BASEUI_MAIL_ICON_SCALE; // the mail and mute icons at the right
     int batteryX = x + 1 + BASEUI_HEADER_LR_MARGIN;
     int batteryY = HEADER_OFFSET_Y + 1 + BASEUI_HEADER_MARGIN / 2 + BASEUI_BATTERY_TOP_OFFSET;
 #if !defined(OLED_TINY)
     // === Battery Icons ===
-    if (usbPowered && !isCharging) { // This is a basic check to determine USB Powered is flagged but not charging
-        batteryX += 1;
-        batteryY += 2;
+    // Draws the battery (or USB) icon at scale s from (bx, by) and returns how far it advances x. With draw false it only
+    // measures, so the text can keep its place when the icon moves after it.
+    auto batteryIcon = [&](int bx, int by, int s, bool draw) -> int {
+        const int startX = bx;
+        if (usbPowered && !isCharging) { // This is a basic check to determine USB Powered is flagged but not charging
+            bx += 1;
+            by += 2;
 #if GRAPHICS_HAS_RGB565_IMAGES
-        // imgUSB's colour version drawn at its own 20x16; imgUSB_HighResolution's would have to shrink to fit the header.
-        const bool colourUsb = currentResolution == ScreenResolution::High && findRGB565Image(imgUSB, 10, 8);
+            // imgUSB's colour version drawn at its own 20x16; imgUSB_HighResolution's would have to shrink to fit the header.
+            const bool colourUsb = currentResolution == ScreenResolution::High && findRGB565Image(imgUSB, 10, 8);
 #else
-        constexpr bool colourUsb = false;
+            constexpr bool colourUsb = false;
 #endif
-        if (colourUsb) {
-            batteryY -= 2; // 16 px tall, so start higher to stay clear of the separator row
-            drawScaledXbm(display, batteryX, batteryY, 10, 8, imgUSB, 2 * iconScale);
-            batteryX += 20 * iconScale + 1; // Icon + 1 pixel
-        } else if (currentResolution == ScreenResolution::High) {
-            drawScaledXbm(display, batteryX, batteryY, 19, 12, imgUSB_HighResolution, iconScale);
-            batteryX += 19 * iconScale + 1; // Icon + 1 pixel
-        } else {
-            drawScaledXbm(display, batteryX, batteryY, 10, 8, imgUSB, iconScale);
-            batteryX += 10 * iconScale + 1; // Icon + 1 pixel
-        }
-    } else {
-        if (useHorizontalBattery) {
-            batteryX += 1;
-            batteryY += 2;
-            drawScaledXbmMono(display, batteryX, batteryY, 9, 13, batteryBitmap_h_bottom, iconScale);
-            drawScaledXbmMono(display, batteryX + 9 * iconScale, batteryY, 9, 13, batteryBitmap_h_top, iconScale);
-            if (isCharging && isBoltVisibleShared)
-                drawScaledXbmMono(display, batteryX + 4 * iconScale, batteryY, 9, 13, lightning_bolt_h, iconScale);
-            else {
-                // Caps on the open ends of the two half-bitmaps; one bitmap pixel thick.
-                display->fillRect(batteryX + 5 * iconScale, batteryY, 6 * iconScale, iconScale);
-                display->fillRect(batteryX + 5 * iconScale, batteryY + 12 * iconScale, 6 * iconScale, iconScale);
-                int fillWidth = 14 * iconScale * chargePercent / 100;
-                display->fillRect(batteryX + iconScale, batteryY + iconScale, fillWidth, 11 * iconScale);
-#if GRAPHICS_TFT_COLORING_ENABLED
-                if (fillWidth > 0) {
-                    hasBatteryFillRegion = true;
-                    batteryFillRegionX = batteryX + iconScale;
-                    batteryFillRegionY = batteryY + iconScale;
-                    batteryFillRegionW = fillWidth;
-                    batteryFillRegionH = 11 * iconScale;
-                }
-#endif
+            if (colourUsb) {
+                by -= 2; // 16 px tall, so start higher to stay clear of the separator row
+                if (draw)
+                    drawScaledXbm(display, bx, by, 10, 8, imgUSB, 2 * s);
+                bx += 20 * s + 1; // Icon + 1 pixel
+            } else if (currentResolution == ScreenResolution::High) {
+                if (draw)
+                    drawScaledXbm(display, bx, by, 19, 12, imgUSB_HighResolution, s);
+                bx += 19 * s + 1; // Icon + 1 pixel
+            } else {
+                if (draw)
+                    drawScaledXbm(display, bx, by, 10, 8, imgUSB, s);
+                bx += 10 * s + 1; // Icon + 1 pixel
             }
-            batteryX += 18 * iconScale; // Icon + 2 pixels
+        } else if (useHorizontalBattery) {
+            bx += 1;
+            by += 2;
+            if (draw) {
+                drawScaledXbmMono(display, bx, by, 9, 13, batteryBitmap_h_bottom, s);
+                drawScaledXbmMono(display, bx + 9 * s, by, 9, 13, batteryBitmap_h_top, s);
+                if (isCharging && isBoltVisibleShared)
+                    drawScaledXbmMono(display, bx + 4 * s, by, 9, 13, lightning_bolt_h, s);
+                else {
+                    // Caps on the open ends of the two half-bitmaps; one bitmap pixel thick.
+                    display->fillRect(bx + 5 * s, by, 6 * s, s);
+                    display->fillRect(bx + 5 * s, by + 12 * s, 6 * s, s);
+                    int fillWidth = 14 * s * chargePercent / 100;
+                    display->fillRect(bx + s, by + s, fillWidth, 11 * s);
+#if GRAPHICS_TFT_COLORING_ENABLED
+                    if (fillWidth > 0) {
+                        hasBatteryFillRegion = true;
+                        batteryFillRegionX = bx + s;
+                        batteryFillRegionY = by + s;
+                        batteryFillRegionW = fillWidth;
+                        batteryFillRegionH = 11 * s;
+                    }
+#endif
+                }
+            }
+            bx += 18 * s; // Icon + 2 pixels
         } else {
 #ifdef USE_EINK
-            batteryY += 2;
+            by += 2;
 #endif
-            drawScaledXbm(display, batteryX, batteryY, 7, 11, batteryBitmap_v, iconScale);
-            if (isCharging && isBoltVisibleShared)
-                drawScaledXbm(display, batteryX + iconScale, batteryY + 3 * iconScale, 5, 5, lightning_bolt_v, iconScale);
-            else {
-                drawScaledXbm(display, batteryX - iconScale, batteryY + 4 * iconScale, 8, 3, batteryBitmap_sidegaps_v, iconScale);
-                int fillHeight = 8 * iconScale * chargePercent / 100;
-                int fillY = batteryY - fillHeight;
-                display->fillRect(batteryX + iconScale, fillY + 10 * iconScale, 5 * iconScale, fillHeight);
+            if (draw) {
+                drawScaledXbm(display, bx, by, 7, 11, batteryBitmap_v, s);
+                if (isCharging && isBoltVisibleShared)
+                    drawScaledXbm(display, bx + s, by + 3 * s, 5, 5, lightning_bolt_v, s);
+                else {
+                    drawScaledXbm(display, bx - s, by + 4 * s, 8, 3, batteryBitmap_sidegaps_v, s);
+                    int fillHeight = 8 * s * chargePercent / 100;
+                    int fillY = by - fillHeight;
+                    display->fillRect(bx + s, fillY + 10 * s, 5 * s, fillHeight);
 #if GRAPHICS_TFT_COLORING_ENABLED
-                if (fillHeight > 0) {
-                    hasBatteryFillRegion = true;
-                    batteryFillRegionX = batteryX + iconScale;
-                    batteryFillRegionY = fillY + 10 * iconScale;
-                    batteryFillRegionW = 5 * iconScale;
-                    batteryFillRegionH = fillHeight;
-                }
+                    if (fillHeight > 0) {
+                        hasBatteryFillRegion = true;
+                        batteryFillRegionX = bx + s;
+                        batteryFillRegionY = fillY + 10 * s;
+                        batteryFillRegionW = 5 * s;
+                        batteryFillRegionH = fillHeight;
+                    }
 #endif
+                }
             }
-            batteryX += 9 * iconScale; // Icon + 2 pixels
+            bx += 9 * s; // Icon + 2 pixels
         }
-    }
+        return bx - startX;
+    };
+    // How far below the y it is given the icon reaches at scale s - its height plus the nudge down the drawing above applies -
+    // so it can be centred on the text and kept inside the header when it follows the text.
+    auto batteryIconHeight = [&](int s) -> int {
+        if (usbPowered && !isCharging) {
+#if GRAPHICS_HAS_RGB565_IMAGES
+            if (currentResolution == ScreenResolution::High && findRGB565Image(imgUSB, 10, 8))
+                return 16 * s; // the colour version at twice the scale, already nudged back up
+#endif
+            return 2 + (currentResolution == ScreenResolution::High ? 12 : 8) * s;
+        }
+        if (useHorizontalBattery)
+            return 2 + 13 * s;
+#ifdef USE_EINK
+        return 2 + 11 * s;
+#else
+        return 11 * s;
+#endif
+    };
+
+#if BASEUI_BATTERY_ICON_AFTER_TEXT
+    // The text stays where it sits beside the icon at its authored size; the icon, at its own scale, follows it.
+    batteryX += batteryIcon(batteryX, batteryY, 1, false);
+#else
+    batteryX += batteryIcon(batteryX, batteryY, BASEUI_BATTERY_ICON_SCALE, true);
+#endif
 #if GRAPHICS_TFT_COLORING_ENABLED
     statusLeftEndX = batteryX + 2;
 #endif
 
+    int textEndX = batteryX; // where the battery cluster's text ends
     if (chargePercent != 101) {
         // === Battery % Display ===
         char chargeStr[4];
@@ -568,18 +614,36 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
         const int percentX = batteryX + chargeNumWidth - 1;
         display->drawString(batteryX, textY, chargeStr);
         display->drawString(percentX, textY, "%");
-#if GRAPHICS_TFT_COLORING_ENABLED
         const int percentWidth = display->getStringWidth("%");
+        textEndX = percentX + percentWidth;
+#if GRAPHICS_TFT_COLORING_ENABLED
         statusLeftEndX = percentX + percentWidth + 2;
 #endif
         if (isBold) {
             display->drawString(batteryX + 1, textY, chargeStr);
             display->drawString(percentX + 1, textY, "%");
+            textEndX = percentX + percentWidth + 1;
 #if GRAPHICS_TFT_COLORING_ENABLED
             statusLeftEndX = percentX + percentWidth + 3;
 #endif
         }
     }
+#if BASEUI_BATTERY_ICON_AFTER_TEXT
+    {
+        constexpr int s = BASEUI_BATTERY_ICON_SCALE;
+        const int iconX = textEndX + 2 * s;
+        const int iconY = fitHeaderIcon(textY + (FONT_HEIGHT_SMALL - batteryIconHeight(s)) / 2, batteryIconHeight(s));
+        const int iconEndX = iconX + batteryIcon(iconX, iconY, s, true);
+#if GRAPHICS_TFT_COLORING_ENABLED
+        statusLeftEndX = iconEndX + 2;
+#else
+        (void)iconEndX;
+#endif
+    }
+#else
+    (void)textEndX;
+    (void)batteryIconHeight;
+#endif
 
     // === Time and Right-aligned Icons ===
     uint32_t rtc_sec = getValidTime(RTCQuality::RTCQualityDevice, true);
@@ -649,7 +713,7 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
             if (useHorizontalBattery) {
                 int iconW = 16 * iconScale, iconH = 12 * iconScale;
                 int iconX = iconRightEdge - iconW;
-                int iconY = textY + (FONT_HEIGHT_SMALL - iconH) / 2 - 1;
+                int iconY = fitHeaderIcon(textY + (FONT_HEIGHT_SMALL - iconH) / 2 - 1, iconH);
                 if (useInvertedHeaderStyle) {
                     display->setColor(WHITE);
                     display->fillRect(iconX - 1, iconY - 1, iconW + 3, iconH + 2);
@@ -665,7 +729,7 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
             } else {
                 const int iconW = mail_width * iconScale, iconH = mail_height * iconScale;
                 int iconX = iconRightEdge - (iconW - 2);
-                int iconY = textY + (FONT_HEIGHT_SMALL - iconH) / 2;
+                int iconY = fitHeaderIcon(textY + (FONT_HEIGHT_SMALL - iconH) / 2, iconH);
                 if (useInvertedHeaderStyle) {
                     display->setColor(WHITE);
                     display->fillRect(iconX - 1, iconY - 1, iconW + 2, iconH + 2);
@@ -681,7 +745,7 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
             if (currentResolution == ScreenResolution::High) {
                 const int iconW = mute_symbol_big_width * iconScale, iconH = mute_symbol_big_height * iconScale;
                 int iconX = iconRightEdge - iconW;
-                int iconY = textY + (FONT_HEIGHT_SMALL - iconH) / 2;
+                int iconY = fitHeaderIcon(textY + (FONT_HEIGHT_SMALL - iconH) / 2, iconH);
 
                 if (useInvertedHeaderStyle) {
                     display->setColor(WHITE);
@@ -696,7 +760,7 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
             } else {
                 const int iconW = mute_symbol_width * iconScale, iconH = mute_symbol_height * iconScale;
                 int iconX = iconRightEdge - iconW;
-                int iconY = textY + (FONT_HEIGHT_SMALL - mail_height * iconScale) / 2;
+                int iconY = fitHeaderIcon(textY + (FONT_HEIGHT_SMALL - mail_height * iconScale) / 2, iconH);
 
                 if (useInvertedHeaderStyle) {
                     display->setColor(WHITE);
@@ -749,23 +813,25 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
             if (useHorizontalBattery) {
                 int iconW = 16 * iconScale, iconH = 12 * iconScale;
                 int iconX = iconRightEdge - iconW;
-                int iconY = textY + (FONT_HEIGHT_SMALL - iconH) / 2 - 1;
+                int iconY = fitHeaderIcon(textY + (FONT_HEIGHT_SMALL - iconH) / 2 - 1, iconH);
                 display->drawRect(iconX, iconY, iconW + 1, iconH);
                 display->drawLine(iconX, iconY, iconX + iconW / 2, iconY + iconH - 4 * iconScale);
                 display->drawLine(iconX + iconW, iconY, iconX + iconW / 2, iconY + iconH - 4 * iconScale);
             } else {
                 int iconX = iconRightEdge - mail_width * iconScale;
-                int iconY = textY + (FONT_HEIGHT_SMALL - mail_height * iconScale) / 2;
+                int iconY = fitHeaderIcon(textY + (FONT_HEIGHT_SMALL - mail_height * iconScale) / 2, mail_height * iconScale);
                 drawScaledXbm(display, iconX, iconY, mail_width, mail_height, mail, iconScale);
             }
         } else if (externalNotificationModule->getMute()) {
             if (currentResolution == ScreenResolution::High) {
                 int iconX = iconRightEdge - mute_symbol_big_width * iconScale;
-                int iconY = textY + (FONT_HEIGHT_SMALL - mute_symbol_big_height * iconScale) / 2;
+                int iconY = fitHeaderIcon(textY + (FONT_HEIGHT_SMALL - mute_symbol_big_height * iconScale) / 2,
+                                          mute_symbol_big_height * iconScale);
                 drawScaledXbm(display, iconX, iconY, mute_symbol_big_width, mute_symbol_big_height, mute_symbol_big, iconScale);
             } else {
                 int iconX = iconRightEdge - mute_symbol_width * iconScale;
-                int iconY = textY + (FONT_HEIGHT_SMALL - mail_height * iconScale) / 2;
+                int iconY =
+                    fitHeaderIcon(textY + (FONT_HEIGHT_SMALL - mail_height * iconScale) / 2, mute_symbol_height * iconScale);
                 drawScaledXbm(display, iconX, iconY, mute_symbol_width, mute_symbol_height, mute_symbol, iconScale);
             }
         }

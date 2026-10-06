@@ -127,6 +127,17 @@ namespace graphics
 #define BASEUI_BATTERY_ICON_SCALE BASEUI_ICON_SCALE
 #endif
 
+// The header's mail and mute icons. Follows the battery's scale unless a panel sets it apart.
+#ifndef BASEUI_MAIL_ICON_SCALE
+#define BASEUI_MAIL_ICON_SCALE BASEUI_BATTERY_ICON_SCALE
+#endif
+
+// Draw the battery icon after its charge text instead of before it. The text keeps the place it has beside the icon at
+// scale 1, so a larger icon grows rightward rather than pushing the text along.
+#ifndef BASEUI_BATTERY_ICON_AFTER_TEXT
+#define BASEUI_BATTERY_ICON_AFTER_TEXT 0
+#endif
+
 // Extra rows between the top of the header and the battery cluster. For rounded panels, where the
 // corner arc cuts across where it would otherwise sit.
 #ifndef BASEUI_BATTERY_TOP_OFFSET
