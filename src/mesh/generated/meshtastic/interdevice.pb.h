@@ -30,7 +30,12 @@ typedef enum _meshtastic_FileOperation {
     meshtastic_FileOperation_GET = 0,
     meshtastic_FileOperation_POST = 1,
     meshtastic_FileOperation_PUT = 2,
-    meshtastic_FileOperation_DELETE = 3
+    meshtastic_FileOperation_DELETE = 3, /* Removes a file, or a directory that is empty */
+    /* Creates the directory at filepath, and any missing parents. OK when it
+ already exists as a directory. */
+    meshtastic_FileOperation_MKDIR = 4,
+    /* Moves filepath to target_path, which must not exist yet. */
+    meshtastic_FileOperation_RENAME = 5
 } meshtastic_FileOperation;
 
 /* Outcome of a file or directory operation. The requester must be able to
@@ -90,7 +95,7 @@ typedef enum _meshtastic_I2CResult_Status {
 typedef PB_BYTES_ARRAY_T(4096) meshtastic_FileTransfer_filedata_t;
 /* Message for file operations */
 typedef struct _meshtastic_FileTransfer {
-    meshtastic_FileOperation operation; /* File operation (GET, POST, PUT, DELETE) */
+    meshtastic_FileOperation operation; /* File operation (GET, POST, PUT, DELETE, MKDIR, RENAME) */
     char filepath[256]; /* Path of the file on the SD card */
     meshtastic_FileTransfer_filedata_t filedata; /* Chunk content (POST/PUT request, GET response) */
     meshtastic_FileStatus status; /* Response: outcome of the operation */
@@ -101,6 +106,7 @@ typedef struct _meshtastic_FileTransfer {
  chunk; larger requests are truncated, visible in the filedata length. */
     uint32_t length;
     uint64_t file_size; /* GET response: total size of the file */
+    char target_path[256]; /* RENAME request: the path to move filepath to */
 } meshtastic_FileTransfer;
 
 /* Message for structured directory listing */
@@ -117,6 +123,10 @@ typedef struct _meshtastic_DirectoryListing {
     char message[255]; /* Response: human readable detail, may be empty */
     uint32_t offset; /* Request: skip this many entries (paging) */
     uint32_t total_count; /* Response: total number of entries in the directory */
+    /* Response: the size of each entry in filenames, in the same order; 0 for a
+ subdirectory */
+    pb_size_t sizes_count;
+    uint64_t sizes[16];
 } meshtastic_DirectoryListing;
 
 typedef PB_BYTES_ARRAY_T(256) meshtastic_I2CTransaction_write_data_t;
@@ -234,8 +244,8 @@ extern "C" {
 #define _meshtastic_InterdeviceVersion_ARRAYSIZE ((meshtastic_InterdeviceVersion)(meshtastic_InterdeviceVersion_INTERDEVICE_VERSION_CURRENT+1))
 
 #define _meshtastic_FileOperation_MIN meshtastic_FileOperation_GET
-#define _meshtastic_FileOperation_MAX meshtastic_FileOperation_DELETE
-#define _meshtastic_FileOperation_ARRAYSIZE ((meshtastic_FileOperation)(meshtastic_FileOperation_DELETE+1))
+#define _meshtastic_FileOperation_MAX meshtastic_FileOperation_RENAME
+#define _meshtastic_FileOperation_ARRAYSIZE ((meshtastic_FileOperation)(meshtastic_FileOperation_RENAME+1))
 
 #define _meshtastic_FileStatus_MIN meshtastic_FileStatus_FILE_UNSPECIFIED
 #define _meshtastic_FileStatus_MAX meshtastic_FileStatus_FILE_NOT_A_FILE
@@ -276,16 +286,16 @@ extern "C" {
 
 
 /* Initializer values for message structs */
-#define meshtastic_FileTransfer_init_default     {_meshtastic_FileOperation_MIN, "", {0, {0}}, _meshtastic_FileStatus_MIN, "", 0, 0, 0}
-#define meshtastic_DirectoryListing_init_default {"", 0, {"", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}, _meshtastic_FileStatus_MIN, "", 0, 0}
+#define meshtastic_FileTransfer_init_default     {_meshtastic_FileOperation_MIN, "", {0, {0}}, _meshtastic_FileStatus_MIN, "", 0, 0, 0, ""}
+#define meshtastic_DirectoryListing_init_default {"", 0, {"", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}, _meshtastic_FileStatus_MIN, "", 0, 0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}}
 #define meshtastic_I2CTransaction_init_default   {0, {0, {0}}, 0}
 #define meshtastic_SdCardInfo_init_default       {0, _meshtastic_SdCardInfo_CardType_MIN, _meshtastic_SdCardInfo_FatType_MIN, 0, 0, 0, 0, 0, 0}
 #define meshtastic_I2CResult_init_default        {_meshtastic_I2CResult_Status_MIN, {0, {0}}}
 #define meshtastic_Note_init_default             {0, 0}
 #define meshtastic_Beep_init_default             {0, {meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default, meshtastic_Note_init_default}, 0}
 #define meshtastic_InterdeviceMessage_init_default {0, {""}, 0}
-#define meshtastic_FileTransfer_init_zero        {_meshtastic_FileOperation_MIN, "", {0, {0}}, _meshtastic_FileStatus_MIN, "", 0, 0, 0}
-#define meshtastic_DirectoryListing_init_zero    {"", 0, {"", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}, _meshtastic_FileStatus_MIN, "", 0, 0}
+#define meshtastic_FileTransfer_init_zero        {_meshtastic_FileOperation_MIN, "", {0, {0}}, _meshtastic_FileStatus_MIN, "", 0, 0, 0, ""}
+#define meshtastic_DirectoryListing_init_zero    {"", 0, {"", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}, _meshtastic_FileStatus_MIN, "", 0, 0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}}
 #define meshtastic_I2CTransaction_init_zero      {0, {0, {0}}, 0}
 #define meshtastic_SdCardInfo_init_zero          {0, _meshtastic_SdCardInfo_CardType_MIN, _meshtastic_SdCardInfo_FatType_MIN, 0, 0, 0, 0, 0, 0}
 #define meshtastic_I2CResult_init_zero           {_meshtastic_I2CResult_Status_MIN, {0, {0}}}
@@ -302,12 +312,14 @@ extern "C" {
 #define meshtastic_FileTransfer_offset_tag       6
 #define meshtastic_FileTransfer_length_tag       7
 #define meshtastic_FileTransfer_file_size_tag    8
+#define meshtastic_FileTransfer_target_path_tag  9
 #define meshtastic_DirectoryListing_directory_tag 1
 #define meshtastic_DirectoryListing_filenames_tag 2
 #define meshtastic_DirectoryListing_status_tag   3
 #define meshtastic_DirectoryListing_message_tag  4
 #define meshtastic_DirectoryListing_offset_tag   5
 #define meshtastic_DirectoryListing_total_count_tag 6
+#define meshtastic_DirectoryListing_sizes_tag    7
 #define meshtastic_I2CTransaction_address_tag    1
 #define meshtastic_I2CTransaction_write_data_tag 2
 #define meshtastic_I2CTransaction_read_len_tag   3
@@ -351,7 +363,8 @@ X(a, STATIC,   SINGULAR, UENUM,    status,            4) \
 X(a, STATIC,   SINGULAR, STRING,   message,           5) \
 X(a, STATIC,   SINGULAR, UINT64,   offset,            6) \
 X(a, STATIC,   SINGULAR, UINT32,   length,            7) \
-X(a, STATIC,   SINGULAR, UINT64,   file_size,         8)
+X(a, STATIC,   SINGULAR, UINT64,   file_size,         8) \
+X(a, STATIC,   SINGULAR, STRING,   target_path,       9)
 #define meshtastic_FileTransfer_CALLBACK NULL
 #define meshtastic_FileTransfer_DEFAULT NULL
 
@@ -361,7 +374,8 @@ X(a, STATIC,   REPEATED, STRING,   filenames,         2) \
 X(a, STATIC,   SINGULAR, UENUM,    status,            3) \
 X(a, STATIC,   SINGULAR, STRING,   message,           4) \
 X(a, STATIC,   SINGULAR, UINT32,   offset,            5) \
-X(a, STATIC,   SINGULAR, UINT32,   total_count,       6)
+X(a, STATIC,   SINGULAR, UINT32,   total_count,       6) \
+X(a, STATIC,   REPEATED, UINT64,   sizes,             7)
 #define meshtastic_DirectoryListing_CALLBACK NULL
 #define meshtastic_DirectoryListing_DEFAULT NULL
 
@@ -451,11 +465,11 @@ extern const pb_msgdesc_t meshtastic_InterdeviceMessage_msg;
 /* Maximum encoded size of messages (where known) */
 #define MESHTASTIC_MESHTASTIC_INTERDEVICE_PB_H_MAX_SIZE meshtastic_InterdeviceMessage_size
 #define meshtastic_Beep_size                     642
-#define meshtastic_DirectoryListing_size         4657
-#define meshtastic_FileTransfer_size             4646
+#define meshtastic_DirectoryListing_size         4833
+#define meshtastic_FileTransfer_size             4904
 #define meshtastic_I2CResult_size                261
 #define meshtastic_I2CTransaction_size           271
-#define meshtastic_InterdeviceMessage_size       4666
+#define meshtastic_InterdeviceMessage_size       4913
 #define meshtastic_Note_size                     8
 #define meshtastic_SdCardInfo_size               45
 
