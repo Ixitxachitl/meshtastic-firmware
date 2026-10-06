@@ -27,6 +27,11 @@
 struct SDDrive : fs::SDFS {
     static uint8_t of(const fs::SDFS &sd) { return sd.*(&SDDrive::_pdrv); }
 };
+#elif defined(SENSECAP_INDICATOR)
+// The card is the RP2040's: its statistics come from the state the co-processor caches, without touching the card.
+#include "mesh/IndicatorSerial.h"
+#define SYSTEM_SHOWS_SD_USAGE 1
+#define SYSTEM_SD_REMOTE 1
 #endif
 
 #if HAS_WIFI && !defined(ARCH_PORTDUINO)
@@ -497,42 +502,63 @@ void drawSystemScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x
     // setupSDCard() mounts once at boot, so a card absent then stays absent. f_getfree() can walk the FAT; throttle it too.
     static uint32_t sdSampledAtMs = 0;
     static uint64_t sdUsedCached = 0, sdTotalCached = 0;
-    static uint8_t sdFsType = 0;
+    static const char *sdFsLabel = nullptr;
     static bool sdSampled = false;
     if (!sdSampled || Throttle::hasElapsed(sdSampledAtMs, SYSTEM_FLASH_USAGE_INTERVAL_MS)) {
-        concurrency::LockGuard g(spiLock);
         sdTotalCached = sdUsedCached = 0;
-        sdFsType = 0;
+        sdFsLabel = nullptr;
+#if defined(SYSTEM_SD_REMOTE)
+        // used/free arrive once the co-processor's background scan of the card is done; until then, no row.
+        meshtastic_SdCardInfo info = meshtastic_SdCardInfo_init_zero;
+        if (sensecapIndicator && sensecapIndicator->sd_info(&info) && info.present && info.stats_valid) {
+            sdTotalCached = info.used_bytes + info.free_bytes;
+            sdUsedCached = info.used_bytes;
+            switch (info.fat_type) {
+            case meshtastic_SdCardInfo_FatType_FAT16:
+                sdFsLabel = "SD FAT16:";
+                break;
+            case meshtastic_SdCardInfo_FatType_FAT32:
+                sdFsLabel = "SD FAT32:";
+                break;
+            case meshtastic_SdCardInfo_FatType_EXFAT:
+                sdFsLabel = "SD exFAT:";
+                break;
+            default:
+                break;
+            }
+        }
+#else
+        concurrency::LockGuard g(spiLock);
         FATFS *fatfs = nullptr;
         DWORD freeClusters = 0;
         const char drv[3] = {(char)('0' + SDDrive::of(SD)), ':', 0};
         if (SD.cardType() != CARD_NONE && f_getfree(drv, &freeClusters, &fatfs) == FR_OK && fatfs) {
             // Only fs_type, the first field: FATFS's later layout hangs on ffconf options the prebuilt lib may not share.
-            sdFsType = fatfs->fs_type;
+            switch (fatfs->fs_type) {
+            case FS_FAT12:
+                sdFsLabel = "SD FAT12:";
+                break;
+            case FS_FAT16:
+                sdFsLabel = "SD FAT16:";
+                break;
+            case FS_FAT32:
+                sdFsLabel = "SD FAT32:";
+                break;
+            case FS_EXFAT:
+                sdFsLabel = "SD exFAT:";
+                break;
+            }
             sdTotalCached = SD.totalBytes();
             sdUsedCached = SD.usedBytes();
         }
+#endif
         sdSampledAtMs = millis();
         sdSampled = true;
     }
     sdUsed = sdUsedCached;
     sdTotal = sdTotalCached;
-    if (currentResolution != ScreenResolution::UltraLow) {
-        switch (sdFsType) {
-        case FS_FAT12:
-            sdLabel = "SD FAT12:";
-            break;
-        case FS_FAT16:
-            sdLabel = "SD FAT16:";
-            break;
-        case FS_FAT32:
-            sdLabel = "SD FAT32:";
-            break;
-        case FS_EXFAT:
-            sdLabel = "SD exFAT:";
-            break;
-        }
-    }
+    if (currentResolution != ScreenResolution::UltraLow && sdFsLabel)
+        sdLabel = sdFsLabel;
 #endif
     // Make room for the SD label up front so every bar starts at the same x.
     if (sdTotal > 0 && barX < labelX + display->getStringWidth(sdLabel))
