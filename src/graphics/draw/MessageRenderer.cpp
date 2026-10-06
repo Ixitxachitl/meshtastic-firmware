@@ -487,9 +487,16 @@ static void drawThreadTabs(OLEDDisplay *display, int16_t x, int top, int height,
     registerTFTColorRegionDirect(activeX, top, widths[active], height - 1, bodyFg, bodyBg);
 #if BASEUI_NATIVE_RGB565
     TFTDisplay *const panel = static_cast<TFTDisplay *>(display);
+    // A vertical gradient, one row at a time: from `from` on the top row to `to` on the bottom one.
+    auto gradientRect = [&](int gx, int gw, uint16_t from, uint16_t to) {
+        const int rows = height - 1;
+        for (int r = 0; r < rows; r++)
+            panel->fillRect565(gx, top + r, gw, 1, TFTPalette::mix565(from, to, (uint8_t)(rows > 1 ? r * 255 / (rows - 1) : 0)));
+    };
     panel->fillRect565(x, top, SCREEN_WIDTH, height, bodyBg);
-    if (shadeRight > shadeLeft)
-        panel->fillRect565(shadeLeft, top, shadeRight - shadeLeft, height - 1, shade);
+    if (shadeRight > shadeLeft) // inactive tabs: a lighter shade fading down into the strip
+        gradientRect(shadeLeft, shadeRight - shadeLeft, TFTPalette::mix565(bodyBg, bodyFg, 80),
+                     TFTPalette::mix565(bodyBg, bodyFg, 24));
 #endif
 #endif
     display->setColor(WHITE);
@@ -499,10 +506,18 @@ static void drawThreadTabs(OLEDDisplay *display, int16_t x, int top, int height,
         if (tabX + widths[i] > x && tabX < x + SCREEN_WIDTH) {
             tabHits.push_back({(int16_t)tabX, (int16_t)(tabX + widths[i]), tabs[i]});
             if (i == active) {
+#if BASEUI_NATIVE_RGB565 && GRAPHICS_TFT_COLORING_ENABLED
+                // The active tab: the body colour shading slightly darker toward the strip, its label in the background.
+                gradientRect(tabX, widths[i], bodyFg, TFTPalette::mix565(bodyFg, bodyBg, 80));
+                panel->setPenColors(bodyBg, bodyBg);
+                display->drawString(tabX + TAB_PAD_X, labelY, labels[i].c_str());
+                panel->clearPen();
+#else
                 display->fillRect(tabX, top, widths[i], height - 1);
                 display->setColor(BLACK);
                 display->drawString(tabX + TAB_PAD_X, labelY, labels[i].c_str());
                 display->setColor(WHITE);
+#endif
             } else {
                 display->drawString(tabX + TAB_PAD_X, labelY, labels[i].c_str());
             }
