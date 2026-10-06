@@ -840,7 +840,9 @@ constexpr int16_t kMapControlHitPad = 0;
 void layoutMapControls(int16_t x, int16_t y, int16_t viewWidth, int16_t viewHeight, MapControlRect out[kMapControlCount])
 {
 #if GRAPHICS_HAS_RGB565_IMAGES
-    const int16_t w = kMapControlIconSize * BASEUI_ICON_SCALE;
+    // A cell per control, all of it the touch target: a seventh of the map's shorter side - a fingertip - and never
+    // smaller than the icon, which is drawn centred in it.
+    const int16_t w = std::max<int16_t>(kMapControlIconSize * BASEUI_ICON_SCALE, std::min(viewWidth, viewHeight) / 7);
     const int16_t h = w;
 #else
     const int16_t w = std::max<int16_t>(34, viewWidth / 7);
@@ -920,7 +922,8 @@ void drawMapControls(OLEDDisplay *display, int16_t x, int16_t y, int16_t viewWid
         // Inverted means active: a toggle holds it while it is on, and any tap flashes it. XORed, so tapping a
         // latched control flashes back to normal rather than showing nothing at all.
         const bool flashing = s_pressedControl == i && Throttle::isWithinTimespanMs(s_pressedAtMs, kMapControlFlashMs);
-        drawMapControlIcon(display, mapControlIcon(control), r.x, r.y, latched != flashing);
+        const int16_t icon = kMapControlIconSize * BASEUI_ICON_SCALE;
+        drawMapControlIcon(display, mapControlIcon(control), r.x + (r.w - icon) / 2, r.y + (r.h - icon) / 2, latched != flashing);
 #else
         // Always filled, never a bare outline, or the tile art shows straight through the cap.
         if (latched) {
@@ -1823,15 +1826,12 @@ void MapRenderer::drawMapFrame(OLEDDisplay *display, OLEDDisplayUiState *state, 
     viewHeight -= kHeaderHeight;
 
     ensureFollowMeLoaded();
-#if BASEUI_MAP_ADDRESS_SEARCH
-    MapNavigation::pollAddressSearch();
-    MapNavigation::pollAddressSuggestions();
-#endif
 #if BASEUI_MAP_NAVIGATION
     MapNavigation::update();
 #endif
 #if BASEUI_MAP_ROUTING
-    MapNavigation::pollSavedRoutes();
+    // The address search and saved-route polls run from Screen::runOnce(), outside handleMenuSwitch(): here they could fire
+    // inside a menu's own first draw, which then clears the menu they queued - or not at all, under a frozen menu.
     menuHandler::refreshNavigateMenu(); // drops Stop tile download from an open Navigate menu once the download ends
 #endif
     s_lastViewWidth = viewWidth;
@@ -2403,8 +2403,7 @@ bool MapRenderer::handleControlTap(int16_t tapX, int16_t tapY)
 
     for (int i = 0; i < kMapControlCount; ++i) {
         const MapControlRect &r = rects[i];
-        // Inflated by half the gap: bare icons are a smaller target than the caps they replaced, and a
-        // fingertip landing just off one should still count.
+        // Inflated by half the gap, so a fingertip landing between two cells still hits one.
         if (tapX < r.x - kMapControlHitPad || tapX >= r.x + r.w + kMapControlHitPad || tapY < r.y - kMapControlHitPad ||
             tapY >= r.y + r.h + kMapControlHitPad)
             continue;

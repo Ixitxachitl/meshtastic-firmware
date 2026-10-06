@@ -75,8 +75,13 @@ class menuHandler
 #if HAS_LORA_FEM
         LoraFemLnaToggleMenu,
 #endif
-#if BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
+#if BASEUI_HAS_MAP
         MapBaseMenu,
+#if !MESHTASTIC_EXCLUDE_WAYPOINT
+        MapWaypointsMenu,
+#endif
+#endif
+#if BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
         MapFollowMeMenu,
         MapZoomLevelMenu,
         MapPanMenu,
@@ -199,9 +204,14 @@ class menuHandler
     static void messageOrderMenu();
     static void hamModeConfirmMenu();
     static void licensedToNormalConfirmMenu();
-    // The Map frame's own menu; absent where the same controls are buttons on the frame instead.
-#if BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
+    // The Map frame's own menu. Where pan, zoom and Follow Me are buttons on the frame, it holds the rest.
+#if BASEUI_HAS_MAP
     static void mapBaseMenu();
+#if !MESHTASTIC_EXCLUDE_WAYPOINT
+    static void mapWaypointsMenu();
+#endif
+#endif
+#if BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
     static void mapFollowMeMenu();
     static void mapZoomLevelMenu();
     static void mapPanMenu();
@@ -281,8 +291,6 @@ using PositionMenuOption = MenuOption<int>;
 using ManageNodeOption = MenuOption<int>;
 using ClockFaceOption = MenuOption<bool>;
 #if BASEUI_HAS_MAP
-// Not narrowed to !BASEUI_MAP_ONSCREEN_CONTROLS with the Map menu itself: mapSourceMenu() is reached
-// from the style picker on those builds and still needs the toggle type.
 using MapMenuOption = MenuOption<int>;
 using MapToggleOption = MenuOption<bool>;
 #endif

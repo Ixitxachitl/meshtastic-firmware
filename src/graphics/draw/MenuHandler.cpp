@@ -3954,10 +3954,17 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
     case LicensedToNormalConfirm:
         licensedToNormalConfirmMenu();
         break;
-#if BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
+#if BASEUI_HAS_MAP
     case MapBaseMenu:
         mapBaseMenu();
         break;
+#if !MESHTASTIC_EXCLUDE_WAYPOINT
+    case MapWaypointsMenu:
+        mapWaypointsMenu();
+        break;
+#endif
+#endif
+#if BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
     case MapFollowMeMenu:
         mapFollowMeMenu();
         break;
@@ -4067,34 +4074,35 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
     menuQueue = MenuNone;
 }
 
-#if BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
+#if BASEUI_HAS_MAP
 void menuHandler::mapBaseMenu()
 {
     enum class MapAction {
         PanMode,
         FollowMe,
         ZoomLevel,
-#if BASEUI_MAP_PNG_TILES
         Style,
-#endif
-#if BASEUI_MAP_ONLINE_TILES
         Source,
-#endif
-#if BASEUI_MAP_NAVIGATION
         Navigate,
-#endif
+        Waypoints,
     };
 
+    // Pan, zoom and Follow Me are buttons on the frame where there are on-screen controls, so the menu leaves them out.
     static const MapMenuOption baseOptions[] = {
         {"Back", OptionsAction::Back},
 #if BASEUI_MAP_NAVIGATION
         {"Navigate", OptionsAction::Select, static_cast<int>(MapAction::Navigate)},
 #endif
+#if !MESHTASTIC_EXCLUDE_WAYPOINT
+        {"Waypoints", OptionsAction::Select, static_cast<int>(MapAction::Waypoints)},
+#endif
+#if !BASEUI_MAP_ONSCREEN_CONTROLS
         {"Pan", OptionsAction::Select, static_cast<int>(MapAction::PanMode)},
 #if !BASEUI_MAP_UPDOWN_ZOOMS // up/down zoom directly on the Map frame instead (see Screen::handleInputEvent)
         {"Zoom", OptionsAction::Select, static_cast<int>(MapAction::ZoomLevel)},
 #endif
         {"Follow Me", OptionsAction::Select, static_cast<int>(MapAction::FollowMe)},
+#endif
 #if BASEUI_MAP_PNG_TILES
         {"Style", OptionsAction::Select, static_cast<int>(MapAction::Style)},
 #endif
@@ -4110,6 +4118,7 @@ void menuHandler::mapBaseMenu()
             return;
 
         switch (static_cast<MapAction>(option.value)) {
+#if !BASEUI_MAP_ONSCREEN_CONTROLS
         case MapAction::PanMode:
 #if HAS_DIRECTIONAL_INPUT
             // Entered directly, held until Back is pressed on the Map frame itself (see
@@ -4138,6 +4147,7 @@ void menuHandler::mapBaseMenu()
             screen->runNow();
 #endif
             break;
+#endif
 #if BASEUI_MAP_PNG_TILES
         case MapAction::Style:
             menuQueue = MapStyleMenu;
@@ -4156,71 +4166,95 @@ void menuHandler::mapBaseMenu()
             screen->runNow();
             break;
 #endif
+#if !MESHTASTIC_EXCLUDE_WAYPOINT
+        case MapAction::Waypoints:
+            menuQueue = MapWaypointsMenu;
+            screen->runNow();
+            break;
+#endif
+        default:
+            break;
         }
     });
 
     screen->showOverlayBanner(bannerOptions);
 }
-#endif // BASEUI_HAS_MAP && !BASEUI_MAP_ONSCREEN_CONTROLS
+
+#if !MESHTASTIC_EXCLUDE_WAYPOINT
+// Map > Waypoints: making one here, and the waypoint frame's own actions, reachable from the map.
+void menuHandler::mapWaypointsMenu()
+{
+    enum Choice { Back, NewHere, GeofenceAlerts, RemoveWaypoint, ChoiceCount };
+    static const char *labels[ChoiceCount];
+    static int choices[ChoiceCount];
+    int count = 0;
+    labels[count] = "Back";
+    choices[count++] = Back;
+#if BASEUI_WAYPOINT_EDITOR
+#if BASEUI_MAP_NAVIGATION
+    double centerLat = 0, centerLng = 0;
+    const bool panned = graphics::MapRenderer::pannedCenter(centerLat, centerLng);
+#else
+    constexpr bool panned = false;
+#endif
+    labels[count] = panned ? "New Waypoint at Center" : "New Waypoint Here";
+    choices[count++] = NewHere;
+#endif
+    labels[count] = "Geofence Alerts";
+    choices[count++] = GeofenceAlerts;
+    labels[count] = "Remove Waypoint";
+    choices[count++] = RemoveWaypoint;
+
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = "Waypoints";
+    bannerOptions.optionsArrayPtr = labels;
+    bannerOptions.optionsEnumPtr = choices;
+    bannerOptions.optionsCount = count;
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        switch (selected) {
+#if BASEUI_WAYPOINT_EDITOR
+        case NewHere:
+            newWaypointHere(true);
+            return;
+#endif
+        case GeofenceAlerts:
+            menuQueue = GeofenceWaypointMenu;
+            break;
+        case RemoveWaypoint:
+            menuQueue = RemoveWaypointMenu;
+            break;
+        default:
+            menuQueue = MapBaseMenu;
+            break;
+        }
+        screen->runNow();
+    };
+    screen->showOverlayBanner(bannerOptions);
+}
+#endif
+#endif // BASEUI_HAS_MAP
 
 #if BASEUI_MAP_PNG_TILES
-#if BASEUI_MAP_ONLINE_TILES && BASEUI_MAP_ONSCREEN_CONTROLS
-// Row index of the Source entry below, or -1 while the menu is not up. The banner callback takes no
-// captures, so the index it has to recognise is parked here as the menu is built.
-static int mapStyleSourceRow = -1;
-#endif
-#if BASEUI_MAP_NAVIGATION && BASEUI_MAP_ONSCREEN_CONTROLS
-static int mapStyleNavigateRow = -1; // as mapStyleSourceRow
-#endif
-
 void menuHandler::mapStyleMenu()
 {
     // Labels point at MapRenderer's style names, which stay put until the next rescan (this menu's own).
-    // Back, the PNG folders, MAP.BIN, and the Source row where this menu is the only one left.
-    static const char *labels[graphics::MapRenderer::kMaxMapStyles + 4];
+    static const char *labels[graphics::MapRenderer::kMaxMapStyles + 2];
     const int count = graphics::MapRenderer::refreshMapStyles();
     labels[0] = "Back";
     for (int i = 0; i < count; i++)
         labels[i + 1] = graphics::MapRenderer::mapStyleLabel(i);
-    int optionsCount = count + 1;
-#if BASEUI_MAP_ONLINE_TILES && BASEUI_MAP_ONSCREEN_CONTROLS
-    // The on-screen buttons replaced the Map menu, so this picker is the only way left to reach the
-    // online/offline choice.
-    mapStyleSourceRow = optionsCount++;
-    labels[mapStyleSourceRow] = (uiconfig.has_map_data && uiconfig.map_data.online_tiles) ? "Source: Online" : "Source: Offline";
-#endif
-#if BASEUI_MAP_NAVIGATION && BASEUI_MAP_ONSCREEN_CONTROLS
-    mapStyleNavigateRow = optionsCount++;
-    labels[mapStyleNavigateRow] = "Navigate";
-#endif
 
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = count > 0 ? "Map Style" : "No maps found";
     bannerOptions.optionsArrayPtr = labels;
-    bannerOptions.optionsCount = optionsCount;
+    bannerOptions.optionsCount = count + 1;
     bannerOptions.InitialSelected = graphics::MapRenderer::activeMapStyle() + 1;
     bannerOptions.bannerCallback = [](int selected) -> void {
         if (selected <= 0) {
-#if !BASEUI_MAP_ONSCREEN_CONTROLS // otherwise there is no Map menu to go back to
             menuQueue = MapBaseMenu;
             screen->runNow();
-#endif
             return;
         }
-#if BASEUI_MAP_ONLINE_TILES && BASEUI_MAP_ONSCREEN_CONTROLS
-        if (selected == mapStyleSourceRow) {
-            menuQueue = MapSourceMenu;
-            screen->runNow();
-            return;
-        }
-#endif
-#if BASEUI_MAP_NAVIGATION && BASEUI_MAP_ONSCREEN_CONTROLS
-        if (selected == mapStyleNavigateRow) {
-            menuQueue = NavigateMenu;
-            screen->runNow();
-            return;
-        }
-#endif
         graphics::MapRenderer::setMapStyle(selected - 1);
         saveUIConfig();
     };
@@ -4243,11 +4277,7 @@ void menuHandler::mapSourceMenu()
 
     auto bannerOptions = createStaticBannerOptions("Map Source", options, labels, [](const MapToggleOption &option, int) -> void {
         if (option.action == OptionsAction::Back) {
-#if BASEUI_MAP_ONSCREEN_CONTROLS
-            menuQueue = MapStyleMenu; // where it was opened from; the on-screen buttons replaced the Map menu
-#else
             menuQueue = MapBaseMenu;
-#endif
             screen->runNow();
             return;
         }
@@ -4446,21 +4476,7 @@ void menuHandler::refreshNavigateMenu()
 // Map > Navigate: resume or stop the current target, or pick a new one.
 void menuHandler::navigateMenu()
 {
-    enum Choice {
-        Back,
-        Saved,
-        Download,
-        Stop,
-        Node,
-        Waypoint,
-        Coordinates,
-        Address,
-        MapCenter,
-        Travel,
-        View,
-        NewWaypoint,
-        ChoiceCount
-    };
+    enum Choice { Back, Saved, Download, Stop, Node, Waypoint, Coordinates, Address, MapCenter, Travel, View, ChoiceCount };
     static const char *labels[ChoiceCount];
     static int choices[ChoiceCount];
     static const char *const kTravelLabels[] = {"Travel: Car", "Travel: Bike", "Travel: Walk"};
@@ -4520,10 +4536,6 @@ void menuHandler::navigateMenu()
     labels[count] = kViewLabels[std::min<int>(MapNavigation::viewMode(), 2)];
     choices[count++] = View;
 #endif
-#if BASEUI_WAYPOINT_EDITOR
-    labels[count] = panned ? "New Waypoint at Center" : "New Waypoint Here";
-    choices[count++] = NewWaypoint;
-#endif
 
     BannerOverlayOptions bannerOptions;
     for (int i = 0; i < count; i++) {
@@ -4544,11 +4556,7 @@ void menuHandler::navigateMenu()
     bannerOptions.bannerCallback = [](int selected) -> void {
         switch (selected) {
         case Back:
-#if BASEUI_MAP_ONSCREEN_CONTROLS
-            menuQueue = MapStyleMenu; // where it was opened from; the on-screen buttons replaced the Map menu
-#else
             menuQueue = MapBaseMenu;
-#endif
             screen->runNow();
             break;
 #if BASEUI_MAP_ROUTING
@@ -4593,11 +4601,6 @@ void menuHandler::navigateMenu()
             menuQueue = NavigateMenu;
             screen->runNow();
             break;
-#if BASEUI_WAYPOINT_EDITOR
-        case NewWaypoint:
-            newWaypointHere(true);
-            break;
-#endif
         case MapCenter: {
             double lat, lng;
             if (graphics::MapRenderer::pannedCenter(lat, lng))

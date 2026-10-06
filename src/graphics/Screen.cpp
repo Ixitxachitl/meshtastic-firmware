@@ -2325,8 +2325,13 @@ int32_t Screen::runOnce()
         lastFrameIndex = currentFrameIndex;
     }
 
+    // Map searches and the saved-destinations read finish on the fetch task. Polled here, before queued menus open, so
+    // the menu they queue is not cleared by a menu switch already under way, and a frozen map is no obstacle.
+#if BASEUI_MAP_ADDRESS_SEARCH
+    MapNavigation::pollAddressSearch();
+    MapNavigation::pollAddressSuggestions();
+#endif
 #if BASEUI_MAP_ROUTING
-    // Opens the saved-destinations list once the card read is in, whether or not the map drew this pass.
     MapNavigation::pollSavedRoutes();
 #endif
     menuHandler::handleMenuSwitch(dispdev);
@@ -4048,14 +4053,10 @@ int Screen::handleInputEvent(const InputEvent *event)
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.gps && gps) {
                     menuHandler::positionBaseMenu();
 #endif
-#if BASEUI_HAS_MAP && (!BASEUI_MAP_ONSCREEN_CONTROLS || BASEUI_MAP_PNG_TILES)
+#if BASEUI_HAS_MAP
                 } else if (framesetInfo.positions.map != 255 &&
                            this->ui->getUiState()->currentFrame == framesetInfo.positions.map) {
-#if BASEUI_MAP_ONSCREEN_CONTROLS
-                    menuHandler::mapStyleMenu(); // the on-screen buttons hold everything else the Map menu had
-#else
                     menuHandler::mapBaseMenu();
-#endif
 #endif
                 } else if (this->ui->getUiState()->currentFrame == framesetInfo.positions.clock) {
                     menuHandler::clockMenu();
