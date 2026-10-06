@@ -52,6 +52,10 @@ class SensecapIndicator : public concurrency::OSThread
     bool file_write(const char *path, uint32_t offset, const uint8_t *data, size_t len, bool create, meshtastic_FileTransfer *out,
                     uint32_t timeout_ms = 1000);
     bool file_remove(const char *path, meshtastic_FileTransfer *out, uint32_t timeout_ms = 1000);
+    // Creates a directory and any missing parents; OK when it already exists
+    bool file_mkdir(const char *path, meshtastic_FileTransfer *out, uint32_t timeout_ms = 1000);
+    // Moves a file or directory; the target must not exist yet
+    bool file_rename(const char *from, const char *to, meshtastic_FileTransfer *out, uint32_t timeout_ms = 1000);
     // List directory entries starting at entry number `offset` (paged,
     // subdirectories get a trailing slash)
     // the first page of a large directory has to walk it to the end to count

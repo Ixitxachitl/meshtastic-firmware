@@ -208,6 +208,55 @@ class IndicatorRemoteFS
         return true;
     }
 
+    // Creates a directory and any missing parents; true when it exists afterwards.
+    bool mkdir(const char *path)
+    {
+        if (!sensecapIndicator)
+            return false;
+        Budget budget;
+        do {
+            memset(&result, 0, sizeof(result));
+            bool answered = sensecapIndicator->file_mkdir(path, &result);
+            if (answered && result.status == meshtastic_FileStatus_FILE_OK)
+                return true;
+            if (!retryable(answered, result.status, budget))
+                return false;
+        } while (true);
+    }
+
+    // Moves a file or directory. A retry after a lost response finds the move made and reports OK.
+    bool rename(const char *from, const char *to)
+    {
+        if (!sensecapIndicator)
+            return false;
+        Budget budget;
+        do {
+            memset(&result, 0, sizeof(result));
+            bool answered = sensecapIndicator->file_rename(from, to, &result);
+            if (answered && result.status == meshtastic_FileStatus_FILE_OK)
+                return true;
+            if (!retryable(answered, result.status, budget))
+                return false;
+        } while (true);
+    }
+
+    // One page of a directory from entry `offset`: names (subdirectories with a trailing slash), their sizes and the
+    // total. Valid until the next call on this instance; null when the directory cannot be listed.
+    const meshtastic_DirectoryListing *listPage(const char *path, uint32_t offset)
+    {
+        if (!sensecapIndicator)
+            return nullptr;
+        Budget budget;
+        while (true) {
+            memset(&listing, 0, sizeof(listing));
+            bool answered = sensecapIndicator->list_directory(path, offset, &listing);
+            if (answered && listing.status == meshtastic_FileStatus_FILE_OK)
+                return &listing;
+            if (!retryable(answered, listing.status, budget))
+                return nullptr;
+        }
+    }
+
     // Outcome of the last file operation, which the bool results fold together: FILE_NOT_FOUND
     // (or FILE_NO_CARD) against FILE_UNSPECIFIED for a link that never answered.
     meshtastic_FileStatus lastFileStatus() const { return result.status; }

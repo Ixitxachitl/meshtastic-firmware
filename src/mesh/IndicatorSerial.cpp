@@ -234,6 +234,37 @@ bool SensecapIndicator::file_remove(const char *path, meshtastic_FileTransfer *o
     return file_request(msg, out, timeout_ms);
 }
 
+bool SensecapIndicator::file_mkdir(const char *path, meshtastic_FileTransfer *out, uint32_t timeout_ms)
+{
+    InFlight busy(requests_in_flight);
+    concurrency::LockGuard guard(&link_lock);
+    if (!link_ready())
+        return false;
+
+    meshtastic_InterdeviceMessage &msg = tx_message;
+    memset(&msg, 0, sizeof(msg));
+    msg.which_data = meshtastic_InterdeviceMessage_file_transfer_tag;
+    msg.data.file_transfer.operation = meshtastic_FileOperation_MKDIR;
+    strncpy(msg.data.file_transfer.filepath, path, sizeof(msg.data.file_transfer.filepath) - 1);
+    return file_request(msg, out, timeout_ms);
+}
+
+bool SensecapIndicator::file_rename(const char *from, const char *to, meshtastic_FileTransfer *out, uint32_t timeout_ms)
+{
+    InFlight busy(requests_in_flight);
+    concurrency::LockGuard guard(&link_lock);
+    if (!link_ready())
+        return false;
+
+    meshtastic_InterdeviceMessage &msg = tx_message;
+    memset(&msg, 0, sizeof(msg));
+    msg.which_data = meshtastic_InterdeviceMessage_file_transfer_tag;
+    msg.data.file_transfer.operation = meshtastic_FileOperation_RENAME;
+    strncpy(msg.data.file_transfer.filepath, from, sizeof(msg.data.file_transfer.filepath) - 1);
+    strncpy(msg.data.file_transfer.target_path, to, sizeof(msg.data.file_transfer.target_path) - 1);
+    return file_request(msg, out, timeout_ms);
+}
+
 bool SensecapIndicator::list_directory(const char *path, uint32_t offset, meshtastic_DirectoryListing *out, uint32_t timeout_ms)
 {
     InFlight busy(requests_in_flight);

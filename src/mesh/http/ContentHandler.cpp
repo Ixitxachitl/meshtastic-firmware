@@ -43,8 +43,19 @@
 #define HAS_WEB_SDCARD_CHMOD 0
 #endif
 #define HAS_WEB_SDCARD 1
+#elif defined(SENSECAP_INDICATOR) && defined(ARCH_ESP32)
+// The Indicator's card is behind its RP2040: the browser reaches it through an fs::FS over the interdevice link.
+#include "mesh/http/IndicatorWebFS.h"
+#include <cerrno>
+#include <cstring>
+#define HAS_WEB_SDCARD_CHMOD 0
+#define HAS_WEB_SDCARD 1
+#define HAS_WEB_SDCARD_REMOTE 1
 #else
 #define HAS_WEB_SDCARD 0
+#endif
+#ifndef HAS_WEB_SDCARD_REMOTE
+#define HAS_WEB_SDCARD_REMOTE 0
 #endif
 
 // Read-only browsing of the device's own flash filesystem, /prefs included. Opt-in per variant with WEB_FLASH_BROWSER,
@@ -79,6 +90,15 @@
 using namespace httpsserver;
 
 #include "mesh/http/ContentHandler.h"
+
+#if HAS_WEB_SDCARD_REMOTE
+// Every call is a round trip over the serial link, not the SPI bus: holding spiLock for it would stall the radio.
+static concurrency::Lock indicatorWebSdLock;
+#define sdLock (&indicatorWebSdLock)
+#define SD indicatorWebSD
+#elif HAS_WEB_SDCARD
+#define sdLock spiLock
+#endif
 
 #define DEST_FS_USES_LITTLEFS
 
@@ -1427,7 +1447,7 @@ static size_t sdWriteWithRetry(File &file, const uint8_t *data, size_t len, int 
     for (int attempt = 0; attempt < SD_WRITE_ATTEMPTS; attempt++) {
         size_t written = 0;
         {
-            concurrency::LockGuard g(spiLock);
+            concurrency::LockGuard g(sdLock);
             errno = 0;
             written = file.write(data, len);
             lastErrno = errno;
@@ -1476,7 +1496,7 @@ static bool sdRemoveFile(const std::string &path, std::string &detail)
 // folder, and checking every level of the path for each of them was a large share of the per-file cost.
 static std::string sdLastParentMade;
 
-// Opens a new file for writing, creating missing parent folders. Caller holds spiLock.
+// Opens a new file for writing, creating missing parent folders. Caller holds sdLock.
 static File sdCreateFile(const std::string &path)
 {
     const size_t slash = path.find_last_of('/');
@@ -1514,7 +1534,7 @@ static SdRemoveResult sdRemoveTree(const std::string &path, std::string &detail,
 
     File dir;
     {
-        concurrency::LockGuard g(spiLock);
+        concurrency::LockGuard g(sdLock);
         dir = SD.open(path.c_str());
         if (!dir || !dir.isDirectory()) {
             if (dir)
@@ -1526,7 +1546,7 @@ static SdRemoveResult sdRemoveTree(const std::string &path, std::string &detail,
     }
 
     {
-        concurrency::LockGuard g(spiLock);
+        concurrency::LockGuard g(sdLock);
         dir.close(); // reopened per batch below; a handle held across removals loses its place on FAT
     }
 
@@ -1538,13 +1558,13 @@ static SdRemoveResult sdRemoveTree(const std::string &path, std::string &detail,
     for (;;) {
         std::vector<std::string> children;
         {
-            concurrency::LockGuard g(spiLock);
+            concurrency::LockGuard g(sdLock);
             dir = SD.open(path.c_str());
         }
         if (!dir)
             break;
         for (;;) {
-            concurrency::LockGuard g(spiLock);
+            concurrency::LockGuard g(sdLock);
             File child = dir.openNextFile();
             if (!child)
                 break;
@@ -1554,7 +1574,7 @@ static SdRemoveResult sdRemoveTree(const std::string &path, std::string &detail,
                 break;
         }
         {
-            concurrency::LockGuard g(spiLock);
+            concurrency::LockGuard g(sdLock);
             dir.close();
         }
         if (children.empty())
@@ -1570,7 +1590,7 @@ static SdRemoveResult sdRemoveTree(const std::string &path, std::string &detail,
             return SdRemoveResult::OutOfTime;
     }
 
-    concurrency::LockGuard g(spiLock);
+    concurrency::LockGuard g(sdLock);
     errno = 0;
     if (!SD.rmdir(path.c_str())) {
         const int firstErrno = errno;
@@ -1605,7 +1625,7 @@ void handleFsBrowseSD(HTTPRequest *req, HTTPResponse *res)
     }
     const std::string dir = sdNormalizeDir(requested);
 
-    concurrency::LockGuard g(spiLock);
+    concurrency::LockGuard g(sdLock);
     std::string fileList = sdListDir(SD, dir.c_str());
 
     uint64_t total = SD.totalBytes();
@@ -1699,7 +1719,7 @@ void handleFsMkdirSD(HTTPRequest *req, HTTPResponse *res)
 
     std::string detail;
     {
-        concurrency::LockGuard g(spiLock);
+        concurrency::LockGuard g(sdLock);
         errno = 0;
         if (SD.exists(path.c_str()))
             detail = "already exists";
@@ -1738,7 +1758,7 @@ void handleFsMoveSD(HTTPRequest *req, HTTPResponse *res)
 
     std::string detail;
     {
-        concurrency::LockGuard g(spiLock);
+        concurrency::LockGuard g(sdLock);
         bool intoFolder = false;
         if (SD.exists(to.c_str())) {
             File target = SD.open(to.c_str());
@@ -1831,7 +1851,7 @@ static void handleChunkUploadSD(HTTPRequest *req, HTTPResponse *res, const std::
     bool positioned = true;
     int openErrno = 0;
     {
-        concurrency::LockGuard g(spiLock);
+        concurrency::LockGuard g(sdLock);
         esp_task_wdt_reset();
         if (trySkip && SD.exists(pathname.c_str())) {
             File have = SD.open(pathname.c_str(), FILE_READ);
@@ -1890,7 +1910,7 @@ static void handleChunkUploadSD(HTTPRequest *req, HTTPResponse *res, const std::
         char out[128];
         snprintf(out, sizeof(out), "{\"status\":\"Error\",\"error\":\"offset mismatch\",\"have\":%u}", (unsigned)existing);
         {
-            concurrency::LockGuard g(spiLock);
+            concurrency::LockGuard g(sdLock);
             file.close();
         }
         res->setStatusCode(409);
@@ -1924,7 +1944,7 @@ static void handleChunkUploadSD(HTTPRequest *req, HTTPResponse *res, const std::
 
     uint64_t finalSize = offset + written;
     {
-        concurrency::LockGuard g(spiLock);
+        concurrency::LockGuard g(sdLock);
         // Only interrogate a handle the card was still talking to. After a run of write errors
         // flush()/size() go back through the same failed layer, and that is where this faulted -
         // close and report what we counted ourselves instead.
@@ -1974,7 +1994,7 @@ static TarUpload tarUpload;
 static void tarCloseFile()
 {
     if (tarUpload.file) {
-        concurrency::LockGuard g(spiLock);
+        concurrency::LockGuard g(sdLock);
         tarUpload.file.close();
     }
 }
@@ -2073,7 +2093,7 @@ static bool tarBeginEntry(std::string &detail)
     }
     const std::string path = t.base + name;
 
-    concurrency::LockGuard g(spiLock);
+    concurrency::LockGuard g(sdLock);
     esp_task_wdt_reset();
     if (isDir) {
         if (!SD.mkdir(path.c_str()))
@@ -2313,7 +2333,7 @@ void handleFormUploadSD(HTTPRequest *req, HTTPResponse *res)
     uint64_t budget = 0;
     File file;
     {
-        concurrency::LockGuard g(spiLock);
+        concurrency::LockGuard g(sdLock);
         // usedBytes() walks the whole allocation table, which on a card this size is seconds of
         // blocking with the bus held - long enough on its own to reach the watchdog.
         esp_task_wdt_reset();
@@ -2382,7 +2402,7 @@ void handleFormUploadSD(HTTPRequest *req, HTTPResponse *res)
     }
 
     {
-        concurrency::LockGuard g(spiLock);
+        concurrency::LockGuard g(sdLock);
         file.flush();
         file.close();
     }
@@ -2436,7 +2456,7 @@ void handleSDStatic(HTTPRequest *req, HTTPResponse *res)
 
     File file;
     {
-        concurrency::LockGuard g(spiLock);
+        concurrency::LockGuard g(sdLock);
         if (!SD.exists(filename.c_str())) {
             res->setStatusCode(404);
             res->println("Not found");
@@ -2468,7 +2488,7 @@ void handleSDStatic(HTTPRequest *req, HTTPResponse *res)
         const size_t want = remaining < sizeof(buffer) ? remaining : sizeof(buffer);
         size_t length = 0;
         {
-            concurrency::LockGuard g(spiLock);
+            concurrency::LockGuard g(sdLock);
             length = file.read((uint8_t *)buffer, want);
         }
         if (!length)
@@ -2477,7 +2497,7 @@ void handleSDStatic(HTTPRequest *req, HTTPResponse *res)
         remaining -= length;
     }
 
-    concurrency::LockGuard g(spiLock);
+    concurrency::LockGuard g(sdLock);
     file.close();
 }
 #endif
