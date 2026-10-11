@@ -1391,12 +1391,139 @@ class PanelInit_ST7701 : public lgfx::Panel_ST7701
     }
 };
 
+#ifdef SENSECAP_INDICATOR
+#include <Wire.h>
+#include <driver/i2c_master.h>
+
+// FT5x06 touch through ESP-IDF's I2C master driver, under the bus lock the IO expander's transfers take. LovyanGFX's
+// own I2C seizes the controller mid-transfer, which corrupted expander writes made by the radio's readout task.
+class Touch_FT5x06_Idf : public lgfx::ITouch
+{
+  public:
+    Touch_FT5x06_Idf()
+    {
+        _cfg.i2c_addr = 0x38;
+        _cfg.freq = 400000;
+    }
+
+    bool init() override
+    {
+        _inited = false;
+        if (_cfg.pin_rst >= 0) {
+            lgfx::pinMode(_cfg.pin_rst, lgfx::pin_mode_t::output);
+            lgfx::gpio_lo(_cfg.pin_rst);
+            lgfx::delay(1);
+            lgfx::gpio_hi(_cfg.pin_rst);
+        }
+        if (!dev) {
+            i2c_master_bus_handle_t bus = nullptr;
+            if (i2c_master_get_bus_handle((i2c_port_num_t)_cfg.i2c_port, &bus) != ESP_OK) {
+                Wire.begin(_cfg.pin_sda, _cfg.pin_scl); // the core creates the bus on first use
+                if (i2c_master_get_bus_handle((i2c_port_num_t)_cfg.i2c_port, &bus) != ESP_OK)
+                    return false;
+            }
+            i2c_device_config_t cfg = {};
+            cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+            cfg.device_address = _cfg.i2c_addr;
+            cfg.scl_speed_hz = _cfg.freq;
+            if (i2c_master_bus_add_device(bus, &cfg, &dev) != ESP_OK) {
+                dev = nullptr;
+                return false;
+            }
+        }
+        return checkInit();
+    }
+
+    void wakeup() override
+    {
+        if (checkInit())
+            writeReg(kPowerReg, 0x01); // monitor
+    }
+
+    void sleep() override
+    {
+        if (checkInit())
+            writeReg(kPowerReg, 0x03); // sleep in
+    }
+
+    // As LovyanGFX's driver: read until two reads agree, since the registers can change mid-read.
+    uint_fast8_t getTouchRaw(lgfx::touch_point_t *tp, uint_fast8_t count) override
+    {
+        if (!checkInit() || count == 0)
+            return 0;
+        uint8_t data[2][kMaxPoints * 6];
+        size_t len[2];
+        if ((len[0] = readData(data[0])) <= 1)
+            return 0;
+        int retry = 5;
+        do {
+            len[retry & 1] = readData(data[retry & 1]);
+        } while ((len[0] != len[1] || memcmp(data[0], data[1], len[0])) && --retry);
+
+        const uint_fast8_t points = (len[0] + 1) / 6;
+        if (count > points)
+            count = points;
+        for (uint_fast8_t i = 0; i < count; i++) {
+            const uint8_t *p = &data[0][i * 6];
+            tp[i].size = 1;
+            tp[i].x = (p[1] & 0x0F) << 8 | p[2];
+            tp[i].y = (p[3] & 0x0F) << 8 | p[4];
+            tp[i].id = p[3] >> 4;
+        }
+        return count;
+    }
+
+  private:
+    static constexpr uint8_t kMaxPoints = 5;
+    static constexpr uint8_t kCipherReg = 0xA3, kIntModeReg = 0xA4, kPowerReg = 0xA5;
+    static constexpr int kTimeoutMs = 50;
+    i2c_master_dev_handle_t dev = nullptr;
+
+    bool writeReg(uint8_t reg, uint8_t val)
+    {
+        const uint8_t buf[] = {reg, val};
+        return dev && i2c_master_transmit(dev, buf, sizeof(buf), kTimeoutMs) == ESP_OK;
+    }
+
+    bool readReg(uint8_t reg, uint8_t *data, size_t len)
+    {
+        return dev && i2c_master_transmit_receive(dev, &reg, 1, data, len, kTimeoutMs) == ESP_OK;
+    }
+
+    bool checkInit()
+    {
+        if (_inited)
+            return true;
+        uint8_t id[6] = {};
+        _inited = writeReg(0x00, 0x00) && readReg(kCipherReg, id, sizeof(id)) && writeReg(kIntModeReg, 0x00) && id[5];
+        return _inited;
+    }
+
+    // The point count from register 0x02, then 6 bytes per point after it (less the last one's unused two):
+    // 0 on a failed read, 1 when nothing is touched.
+    size_t readData(uint8_t *data)
+    {
+        if (!readReg(0x02, data, 5))
+            return 0;
+        const uint8_t points = std::min<uint8_t>(kMaxPoints, data[0] & 0x0F);
+        if (points <= 1)
+            return points ? 5 : 1;
+        const size_t len = points * 6 - 1;
+        return readReg(0x02, data, len) ? len : 0;
+    }
+};
+#endif
+
 class LGFX : public lgfx::LGFX_Device
 {
     PanelInit_ST7701 _panel_instance;
     lgfx::Bus_RGB _bus_instance;
     lgfx::Light_PWM _light_instance;
+#ifdef SENSECAP_INDICATOR
+    Touch_FT5x06_Idf _touch_instance;
+#else
     lgfx::Touch_FT5x06 _touch_instance;
+#endif
 
   public:
     LGFX(void)
