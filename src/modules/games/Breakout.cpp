@@ -1,5 +1,5 @@
 #include "Breakout.h"
-#include <cstring> // strcmp, for the joystick-source test in handleInput()
+#include <cstring> // strcmp, for the stick-source test in isPolledStickRepeat()
 
 // ===========================================================================
 // Pure BreakoutGame logic (no display/FS dependencies; always compiled)
@@ -185,6 +185,9 @@ bool BreakoutGame::step()
 #include "mesh/generated/meshtastic/game.pb.h"
 #include <pb_decode.h>
 #include <pb_encode.h>
+#if ARCH_PORTDUINO
+#include "input/ArcadeBonnet.h"
+#endif
 #if ARCH_PORTDUINO && defined(__linux__)
 #include "input/LinuxJoystick.h"
 #elif HAS_TFT && ARCH_PORTDUINO
@@ -232,6 +235,51 @@ int32_t Breakout::tickIntervalMs() const
     return iv / 2;
 }
 
+#if ARCH_PORTDUINO
+// The held horizontal zone (-1 / 0 / +1) of whichever polled stick is pushed: the USB gamepad's
+// D-pad, the Arcade Bonnet's joystick, or the desktop SDL window's arrow keys. All report it the
+// instant the stick moves, independent of their slow typematic repeat.
+static int heldPaddleZone()
+{
+#if defined(__linux__)
+    if (aLinuxJoystick && aLinuxJoystick->heldXZone() != 0)
+        return aLinuxJoystick->heldXZone();
+#elif HAS_TFT
+    // Desktop SDL window (e.g. native-windows-tft) always has the host's physical keyboard (see
+    // main.cpp's kb_found comment). TB_LEFT/TB_RIGHT are not real GPIO on this build (portduino's
+    // generic RPi-trackball default), so tick() takes this path instead of the GPIO one.
+    if (TFTDisplay::heldXZone() != 0)
+        return TFTDisplay::heldXZone();
+#endif
+    if (arcadeBonnet && arcadeBonnet->heldXZone() != 0)
+        return arcadeBonnet->heldXZone();
+    return 0;
+}
+
+// True if this LEFT/RIGHT is a polled stick's own repeat while that stick is held, which tick()
+// already turns into paddle movement. All three parts are load-bearing:
+//   source  -- the event actually came from that stick. Without it, LEFT/RIGHT from the keyboard
+//              or touchscreen is swallowed too; aLinuxJoystick is constructed on every Linux host
+//              whether or not a gamepad is configured, so a pointer check alone is true even with
+//              nothing attached.
+//   kbchar  -- no button produced it, so it is the stick axis. A shoulder button mapped to
+//              left/right is a discrete press the axis poll knows nothing about, and must still
+//              nudge the paddle.
+//   heldX   -- the axis is what is driving right now, so tick() already has it covered.
+static bool isPolledStickRepeat(const InputEvent *event)
+{
+    if (event->kbchar != 0 || !event->source)
+        return false;
+#if defined(__linux__)
+    if (aLinuxJoystick && aLinuxJoystick->originName() && strcmp(event->source, aLinuxJoystick->originName()) == 0)
+        return aLinuxJoystick->heldXZone() != 0;
+#endif
+    if (arcadeBonnet && arcadeBonnet->originName() && strcmp(event->source, arcadeBonnet->originName()) == 0)
+        return arcadeBonnet->heldXZone() != 0;
+    return false;
+}
+#endif
+
 bool Breakout::tick()
 {
 #if BREAKOUT_TOGGLE_PADDLE
@@ -242,22 +290,11 @@ bool Breakout::tick()
             (paddleVel < 0 && game.paddleX() <= 0))
             paddleVel = 0;
     }
-#elif ARCH_PORTDUINO && defined(__linux__)
-    if (aLinuxJoystick) {
-        const int held = aLinuxJoystick->heldXZone();
-        if (held < 0)
-            game.movePaddle(-PADDLE_POLL_STEP);
-        else if (held > 0)
-            game.movePaddle(PADDLE_POLL_STEP);
-    }
-#elif HAS_TFT && ARCH_PORTDUINO
-    // Desktop SDL window (e.g. native-windows-tft) always has the host's physical keyboard (see
-    // main.cpp's kb_found comment) -- poll the arrow keys directly each tick for continuous
-    // "hold to move" input, same as the Linux joystick path above. TB_LEFT/TB_RIGHT below are not
-    // real GPIO on this build (portduino's generic RPi-trackball default), so that branch is
-    // skipped in favour of this one.
+#elif ARCH_PORTDUINO && (defined(__linux__) || HAS_TFT)
+    // Poll the stick's held direction directly so the paddle glides continuously instead of
+    // creeping along at the D-pad's slow auto-repeat rate.
     {
-        const int held = TFTDisplay::heldXZone();
+        const int held = heldPaddleZone();
         if (held < 0)
             game.movePaddle(-PADDLE_POLL_STEP);
         else if (held > 0)
@@ -347,22 +384,9 @@ void Breakout::handleInput(const InputEvent *event)
     else if (ev == INPUT_BROKER_RIGHT)
         paddleVel = (paddleVel > 0) ? 0 : PADDLE_TOGGLE_VEL;
 #else
-#if ARCH_PORTDUINO && defined(__linux__)
-    // While the stick is held, tick() polls heldXZone() and moves the paddle itself, so the
-    // joystick's own discrete (and slow) repeat events would double-move. Suppress exactly
-    // those and nothing else.
-    //
-    // All three parts are load-bearing:
-    //   source  -- the event actually came from this gamepad. Without it, LEFT/RIGHT from the
-    //              keyboard or touchscreen is swallowed too; aLinuxJoystick is constructed on
-    //              every Linux host whether or not a gamepad is configured, so a pointer check
-    //              alone is true even with nothing attached.
-    //   kbchar  -- no button produced it, so it is the D-pad axis. A shoulder button mapped to
-    //              left/right is a discrete press the axis poll knows nothing about, and must
-    //              still nudge the paddle.
-    //   heldX   -- the axis is what is driving right now, so tick() already has it covered.
-    if (aLinuxJoystick && event->kbchar == 0 && event->source && aLinuxJoystick->originName() &&
-        strcmp(event->source, aLinuxJoystick->originName()) == 0 && aLinuxJoystick->heldXZone() != 0)
+#if ARCH_PORTDUINO
+    // While a polled stick is held, tick() moves the paddle itself; its repeats would double-move.
+    if ((ev == INPUT_BROKER_LEFT || ev == INPUT_BROKER_RIGHT) && isPolledStickRepeat(event))
         return;
 #endif
 #if defined(HAS_TRACKBALL) && defined(TB_THRESHOLD)
