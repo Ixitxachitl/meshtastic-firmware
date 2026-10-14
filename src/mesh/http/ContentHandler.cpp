@@ -51,6 +51,14 @@
 #define HAS_WEB_SDCARD_CHMOD 0
 #define HAS_WEB_SDCARD 1
 #define HAS_WEB_SDCARD_REMOTE 1
+#elif defined(HAS_SDCARD) && defined(HAS_SD_MMC) && defined(ARCH_ESP32)
+// An SDIO card: the same fs::FS calls on the SD_MMC global setupSDCard() mounts.
+#include <SD_MMC.h>
+#include <cerrno>
+#include <cstring>
+#define HAS_WEB_SDCARD_CHMOD 0
+#define HAS_WEB_SDCARD 1
+#define HAS_WEB_SDCARD_MMC 1
 #else
 #define HAS_WEB_SDCARD 0
 #endif
@@ -96,6 +104,11 @@ using namespace httpsserver;
 static concurrency::Lock indicatorWebSdLock;
 #define sdLock (&indicatorWebSdLock)
 #define SD indicatorWebSD
+#elif defined(HAS_WEB_SDCARD_MMC)
+// Off the SPI bus, so not spiLock: the VFS serialises card access, this keeps a handler's steps together.
+static concurrency::Lock mmcWebSdLock;
+#define sdLock (&mmcWebSdLock)
+static fs::SDMMCFS &SD = SD_MMC;
 #elif HAS_WEB_SDCARD
 #define sdLock spiLock
 #endif

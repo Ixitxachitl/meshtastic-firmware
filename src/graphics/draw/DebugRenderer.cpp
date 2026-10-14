@@ -27,6 +27,17 @@
 struct SDDrive : fs::SDFS {
     static uint8_t of(const fs::SDFS &sd) { return sd.*(&SDDrive::_pdrv); }
 };
+#elif defined(ARCH_ESP32) && defined(HAS_SDCARD) && defined(HAS_SD_MMC)
+#include "SPILock.h"
+#include <SD_MMC.h>
+#include <ff.h>
+#define SYSTEM_SHOWS_SD_USAGE 1
+static fs::SDMMCFS &SD = SD_MMC;
+
+// SDMMCFS keeps its FatFs drive number protected; a member pointer taken through a subclass reads it legally.
+struct SDDrive : fs::SDMMCFS {
+    static uint8_t of(const fs::SDMMCFS &sd) { return sd.*(&SDDrive::_pdrv); }
+};
 #elif defined(SENSECAP_INDICATOR)
 // The card is the RP2040's: its statistics come from the state the co-processor caches, without touching the card.
 #include "mesh/IndicatorSerial.h"

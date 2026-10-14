@@ -37,7 +37,11 @@ crashed a worldwide z0-10 bake (1.4M tiles) on the T-Deck: the old version loade
 #include "./MapTileBlobFormat.h" // TileBlobZoomRange, kTileBlobMaxDistinctZooms
 #include "./MapTileRenderer.h"
 
+#if defined(HAS_SD_MMC)
+#include "./MapCardMmc.h"
+#else
 #include <SdFat.h>
+#endif
 #include <memory>
 
 namespace NicheGraphics::MapTiles

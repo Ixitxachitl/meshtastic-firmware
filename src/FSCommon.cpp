@@ -113,6 +113,10 @@ SPIClass SPI_HSPI(HSPI);
 
 #endif // HAS_SDCARD
 
+#if defined(HAS_SD_MMC) && defined(ARCH_ESP32)
+#include <SD_MMC.h>
+#endif
+
 /**
  * Renames a file from pathFrom to pathTo.
  *
@@ -451,5 +455,14 @@ void setupSDCard()
     LOG_DEBUG("SD Card Size: %lu MB", (uint32_t)cardSize);
     LOG_DEBUG("Total space: %lu MB", (uint32_t)(SD.totalBytes() / (1024 * 1024)));
     LOG_DEBUG("Used space: %lu MB", (uint32_t)(SD.usedBytes() / (1024 * 1024)));
+#elif defined(HAS_SD_MMC) && defined(ARCH_ESP32)
+    // SDIO in 1-bit mode. The card is powered by the variant's early init; device-ui's own begin() finds it mounted.
+    SD_MMC.setPins(SD_SCLK_PIN, SD_MOSI_PIN, SD_MISO_PIN);
+    if (!SD_MMC.begin("/sdcard", true) || SD_MMC.cardType() == CARD_NONE) {
+        LOG_DEBUG("No SD_MMC card detected");
+        return;
+    }
+    LOG_DEBUG("SD_MMC card: %lu MB, %lu MB used", (uint32_t)(SD_MMC.totalBytes() / (1024 * 1024)),
+              (uint32_t)(SD_MMC.usedBytes() / (1024 * 1024)));
 #endif
 }

@@ -49,6 +49,13 @@ bool readEntryAt(FsFile &file, uint32_t indexTableStart, uint32_t entryIndex, Ti
 }
 } // namespace
 
+#if defined(HAS_SD_MMC)
+SdFs *NicheGraphics::MapTiles::mapSdCard()
+{
+    static SdFs sd;
+    return SD_MMC.cardType() != CARD_NONE ? &sd : nullptr; // mounted by setupSDCard()
+}
+#else
 SdFs *NicheGraphics::MapTiles::mapSdCard()
 {
     static SdFs sd;
@@ -62,6 +69,7 @@ SdFs *NicheGraphics::MapTiles::mapSdCard()
     }
     return begun ? &sd : nullptr;
 }
+#endif
 
 bool SDCardTileSource::begin(const char *path)
 {
