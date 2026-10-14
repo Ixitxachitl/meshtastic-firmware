@@ -2108,7 +2108,7 @@ char CannedMessageModule::keyboardChar(const String &key) const
     return shift ? c : (char)std::tolower((unsigned char)c);
 }
 
-String CannedMessageModule::keyForCoordinates(uint x, uint y)
+String CannedMessageModule::keyForCoordinates(int x, int y)
 {
     int outerSize = *(&this->keyboard[0] + 1) - this->keyboard[0];
 

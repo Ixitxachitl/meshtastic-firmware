@@ -86,7 +86,7 @@ class CannedMessageModule : public SinglePortModule, public Observable<const UIF
     // The composer's touch keyboard, for other text entry on touch-only boards to share: drawn in the lower part of
     // the screen, with the composer's own tap flash and shift. keyForCoordinates() reads the last draw's layout.
     void drawKeyboardKeys(OLEDDisplay *display, int16_t x, int16_t y, bool withEmoteKey);
-    String keyForCoordinates(uint x, uint y);
+    String keyForCoordinates(int x, int y);
     bool keyboardShift() const { return shift; }
     void setKeyboardShift(bool on) { shift = on; }
     void flashKeyboardKey(const String &key) { highlight = key; }

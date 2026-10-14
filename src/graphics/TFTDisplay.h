@@ -29,7 +29,7 @@ class TFTDisplay : public OLEDDisplay
     ~TFTDisplay();
 
     // Write the buffer to the display memory
-    virtual void display() override { display(false); };
+    virtual void display() override;
     virtual void display(bool fromBlank);
     void sdlLoop();
 
@@ -265,4 +265,6 @@ class TFTDisplay : public OLEDDisplay
             markNativeRowDirty(y);
     }
 #endif
+    bool panelAwake = false;
+    bool wakeRepaintPending = false;
 };
