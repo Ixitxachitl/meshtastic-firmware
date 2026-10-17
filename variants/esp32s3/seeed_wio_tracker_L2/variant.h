@@ -107,7 +107,8 @@
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  Display (NV3031B + QSPI via SPI3) - BaseUI adaptation
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-#if HAS_TFT
+// MUI (HAS_TFT) and the colour BaseUI build both drive the panel; without either the env is headless.
+#if HAS_TFT || BASEUI_NATIVE_RGB565
 #define HAS_SPI_TFT 1
 #define HAS_TOUCHSCREEN 1
 #define USE_TFTDISPLAY 1 // Enable legacy BaseUI TFTDisplay.cpp build
