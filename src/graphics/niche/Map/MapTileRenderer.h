@@ -14,6 +14,7 @@ TFTDisplay) have different drawing APIs.
 */
 
 #include "configuration.h" // BASEUI_HAS_MAP
+#include <stddef.h>
 #include <stdint.h>
 
 namespace NicheGraphics::MapTiles
@@ -79,6 +80,15 @@ class TileSource
 // Registers the active tile source. Pass nullptr to revert to the compiled-in MapTile.h data.
 // Caller retains ownership - MapTiles never deletes it.
 void setTileSource(TileSource *source);
+
+// Tiles looked up by position, alongside the compiled-in MapTile.h set (no TileSource active): InkHUD's SD card map.
+// The compiled-in tile wins where both have one. readTile fills kTileBufferBytes, in the compiled-in 256px format.
+struct CoordinateTiles {
+    bool (*hasZoom)(int zoom);
+    bool (*readTile)(int zoom, int x, int y, uint8_t *out, size_t outSize);
+};
+// nullptr to drop them. Caller retains ownership.
+void setCoordinateTiles(const CoordinateTiles *tiles);
 
 // Tile payload "kind" byte, shared by MapTile.h and any external TileSource's own index -
 // see MapTileBlobFormat.h / MapTile.h for the canonical definitions.

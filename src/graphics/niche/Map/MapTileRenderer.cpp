@@ -283,12 +283,66 @@ int tileCountCompiledIn()
     return map_tile_count;
 }
 
+const NicheGraphics::MapTiles::CoordinateTiles *s_coordTiles = nullptr;
+constexpr int kCoordMaxZoom = 22;
+// Cache keys for coordinate tiles: a per-zoom address stands in for the source, ty * 2^zoom + tx for the index,
+// which an int holds up to this zoom. Deeper tiles are still drawn, just not cached.
+char s_coordKeys[kCoordMaxZoom + 1];
+constexpr int kCoordMaxCachedZoom = 15;
+
+// They are in the compiled-in 256px format, so only a build decoding at that size can use them.
+bool coordTilesUsable()
+{
+    return s_coordTiles && NicheGraphics::MapTiles::kTileSizePx == 256;
+}
+
+bool coordHasZoom(int zoom)
+{
+    return coordTilesUsable() && zoom >= 0 && zoom <= kCoordMaxZoom && s_coordTiles->hasZoom(zoom);
+}
+
+bool compiledHasZoom(int zoom)
+{
+    const int count = usesGridTileLayout() ? map_tile_block_count : map_tile_count;
+    for (int i = 0; i < count; i++) {
+        if ((usesGridTileLayout() ? map_tile_block_zooms[i] : map_tile_zooms[i]) == zoom)
+            return true;
+    }
+    return false;
+}
+
+int findCompiledTile(int zoom, int tx, int ty)
+{
+    for (int i = 0; i < map_tile_count; i++) {
+        if (tileZoomAt(i) == zoom && tileTxAt(i) == tx && tileTyAt(i) == ty)
+            return i;
+    }
+    return -1;
+}
+
+// The Nth zoom either the compiled-in set or the coordinate tiles have, ascending; -1 past the end.
+int combinedZoomAt(int index)
+{
+    for (int zoom = 0; zoom <= kCoordMaxZoom; zoom++) {
+        if ((compiledHasZoom(zoom) || coordHasZoom(zoom)) && index-- == 0)
+            return zoom;
+    }
+    return -1;
+}
+
 } // namespace
 
 void NicheGraphics::MapTiles::setTileSource(TileSource *source)
 {
     s_activeSource = source;
     tileCacheInvalidateAll(); // The old cached tiles' data no longer applies.
+}
+
+void NicheGraphics::MapTiles::setCoordinateTiles(const CoordinateTiles *tiles)
+{
+    s_coordTiles = tiles;
+    if (s_tileCacheReady) // registered from a static constructor, before the cache's PSRAM slots can be allocated
+        tileCacheInvalidateAll();
 }
 
 bool NicheGraphics::MapTiles::decodeTilePayload(uint8_t kind, const uint8_t *compressed, int compressedSize, uint8_t *outBuf)
@@ -325,6 +379,12 @@ int NicheGraphics::MapTiles::zoomCount()
 {
     if (s_activeSource)
         return s_activeSource->zoomCount();
+    if (coordTilesUsable()) {
+        int count = 0;
+        while (combinedZoomAt(count) >= 0)
+            count++;
+        return count;
+    }
     return usesGridTileLayout() ? map_tile_block_count : map_tile_count;
 }
 
@@ -332,6 +392,8 @@ int NicheGraphics::MapTiles::zoomAt(int index)
 {
     if (s_activeSource)
         return s_activeSource->zoomAt(index);
+    if (coordTilesUsable())
+        return combinedZoomAt(index);
     return usesGridTileLayout() ? map_tile_block_zooms[index] : map_tile_zooms[index];
 }
 
@@ -339,7 +401,7 @@ bool NicheGraphics::MapTiles::hasTiles()
 {
     if (s_activeSource)
         return s_activeSource->tileCount() > 0;
-    return map_tile_count > 0;
+    return map_tile_count > 0 || (coordTilesUsable() && combinedZoomAt(0) >= 0);
 }
 
 // Draw tiles centered on latCenter/lngCenter. Falls back to the nearest available zoom if
@@ -362,7 +424,7 @@ void NicheGraphics::MapTiles::drawTileBackground(float latCenter, float lngCente
 #endif
 
     const int tileCount = s_activeSource ? s_activeSource->tileCount() : tileCountCompiledIn();
-    if (tileCount == 0 || metersToPx <= 0.0f)
+    if ((tileCount == 0 && (s_activeSource || !hasTiles())) || metersToPx <= 0.0f)
         return;
 
     const float R = 6378137.0f;
@@ -408,9 +470,9 @@ void NicheGraphics::MapTiles::drawTileBackground(float latCenter, float lngCente
     // either direction, and rendered at whichever shifted copy (if any) actually falls in view.
     const float worldWidthAtTileZoom = (float)(1 << tileZoom) * kWorldUnitsPerTile;
 
-    // Decodes tile `i` (at unwrapped position tx,ty) at most once, then blits every screen-space
-    // copy of it that falls in the (possibly antimeridian-wrapped) viewport.
-    auto blitTile = [&](int i, int tx, int ty) {
+    // Decodes tile `i` of cache key `key` (at unwrapped position tx,ty) at most once, via decode(dst), then blits every
+    // screen-space copy of it that falls in the (possibly antimeridian-wrapped) viewport. A negative i is never cached.
+    auto blitTile = [&](TileSource *key, int i, int tx, int ty, auto &&decode) {
         const float baseMinWx = tx * kWorldUnitsPerTile;
         const float tileMinWy = ty * kWorldUnitsPerTile;
         const float tileMaxWy = tileMinWy + kWorldUnitsPerTile;
@@ -426,7 +488,7 @@ void NicheGraphics::MapTiles::drawTileBackground(float latCenter, float lngCente
                 continue;
 
             if (!tile) { // Decode at most once per tile, regardless of how many copies are in view.
-                tile = tileCacheFind(s_activeSource, i);
+                tile = i >= 0 ? tileCacheFind(key, i) : nullptr;
                 if (tile) {
 #ifdef UI_PERF_DEBUG
                     s_tileCacheHits++;
@@ -436,14 +498,15 @@ void NicheGraphics::MapTiles::drawTileBackground(float latCenter, float lngCente
                     s_tileDecodes++;
 #endif
                     uint8_t *dst = tileCacheAcquire();
-                    const bool ok = dst && (s_activeSource ? s_activeSource->decodeTile(i, dst) : decodeSparseTileInto(i, dst));
+                    const bool ok = dst && decode(dst);
                     if (!ok) {
                         // A failed decode may have partially overwritten the slot (e.g. LZ4 erroring
                         // out mid-decompress). tileCacheAcquire() already left it marked empty and
                         // we don't commit it, so that garbage can never come back as a later hit.
                         break;
                     }
-                    tileCacheCommit(dst, s_activeSource, i);
+                    if (i >= 0)
+                        tileCacheCommit(dst, key, i);
                     tile = dst;
                 }
             }
@@ -484,11 +547,8 @@ void NicheGraphics::MapTiles::drawTileBackground(float latCenter, float lngCente
         }
     };
 
-    if (s_activeSource && s_activeSource->supportsDirectLookup()) {
-        // A worldwide deep-zoom bake is millions of tiles - iterating tileCount() below to find
-        // which ones overlap the viewport would be far too slow (this is what made a z0-10 bake
-        // effectively hang the T-Deck even after fixing the RAM crash). Compute directly which
-        // (small) handful of tx/ty tiles the viewport actually needs instead.
+    // Every tx/ty at tileZoom that the viewport needs, for sources that look tiles up by position.
+    auto forEachViewTile = [&](auto &&visit) {
         const int side = 1 << tileZoom;
         // blitTile does its own -1/0/+1 wrap pass, so where these tx ranges overlap a tile can be
         // visited more than once. Plotting is idempotent and the decode-once guard inside blitTile
@@ -514,14 +574,22 @@ void NicheGraphics::MapTiles::drawTileBackground(float latCenter, float lngCente
                 tyHi = side - 1;
 
             for (int ty = tyLo; ty <= tyHi; ty++) {
-                for (int tx = txLo; tx <= txHi; tx++) {
-                    const int i = s_activeSource->indexOf(tileZoom, tx, ty);
-                    if (i < 0)
-                        continue;
-                    blitTile(i, tx, ty);
-                }
+                for (int tx = txLo; tx <= txHi; tx++)
+                    visit(tx, ty);
             }
         }
+    };
+
+    if (s_activeSource && s_activeSource->supportsDirectLookup()) {
+        // A worldwide deep-zoom bake is millions of tiles - iterating tileCount() below to find
+        // which ones overlap the viewport would be far too slow (this is what made a z0-10 bake
+        // effectively hang the T-Deck even after fixing the RAM crash). Compute directly which
+        // (small) handful of tx/ty tiles the viewport actually needs instead.
+        forEachViewTile([&](int tx, int ty) {
+            const int i = s_activeSource->indexOf(tileZoom, tx, ty);
+            if (i >= 0)
+                blitTile(s_activeSource, i, tx, ty, [&](uint8_t *dst) { return s_activeSource->decodeTile(i, dst); });
+        });
         return;
     }
 
@@ -532,6 +600,20 @@ void NicheGraphics::MapTiles::drawTileBackground(float latCenter, float lngCente
 
         const int tx = s_activeSource ? s_activeSource->tileTxAt(i) : tileTxAt(i);
         const int ty = s_activeSource ? s_activeSource->tileTyAt(i) : tileTyAt(i);
-        blitTile(i, tx, ty);
+        blitTile(s_activeSource, i, tx, ty, [&](uint8_t *dst) {
+            return s_activeSource ? s_activeSource->decodeTile(i, dst) : decodeSparseTileInto(i, dst);
+        });
+    }
+
+    // Coordinate tiles fill in wherever the compiled-in set has no tile of its own.
+    if (!s_activeSource && coordHasZoom(tileZoom)) {
+        TileSource *key = reinterpret_cast<TileSource *>(&s_coordKeys[tileZoom]);
+        forEachViewTile([&](int tx, int ty) {
+            if (findCompiledTile(tileZoom, tx, ty) >= 0)
+                return;
+            const int i = tileZoom <= kCoordMaxCachedZoom ? ty * (1 << tileZoom) + tx : -1;
+            blitTile(key, i, tx, ty,
+                     [&](uint8_t *dst) { return s_coordTiles->readTile(tileZoom, tx, ty, dst, kTileBufferBytes); });
+        });
     }
 }

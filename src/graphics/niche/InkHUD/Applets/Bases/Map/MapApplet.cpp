@@ -1,6 +1,7 @@
 #ifdef MESHTASTIC_INCLUDE_INKHUD
 
 #include "./MapApplet.h"
+#include "./SDMapTiles.h"
 #include "WaypointStore.h"
 #include "WaypointUtils.h"
 #include "graphics/niche/Map/MapTileRenderer.h"
@@ -13,6 +14,14 @@ bool InkHUD::MapApplet::s_zoomLocked = false;
 int InkHUD::MapApplet::s_lockedZoom = -1;
 int InkHUD::MapApplet::s_lastRenderedZoom = -1;
 int InkHUD::MapApplet::s_autoFitZoom = -1;
+
+#if defined(INKHUD_USE_SDCARD_MAP_TILES)
+// The card's /Map/MapTile.bin fills in where the compiled-in tiles have none.
+static const MapTiles::CoordinateTiles kSdMapTiles = {&InkHUD::SDMapTiles::hasZoom, &InkHUD::SDMapTiles::readTile};
+static const struct SdMapTilesRegistration {
+    SdMapTilesRegistration() { MapTiles::setCoordinateTiles(&kSdMapTiles); }
+} s_sdMapTilesRegistration;
+#endif
 
 namespace
 {
@@ -686,7 +695,6 @@ void InkHUD::MapApplet::getMapCenter(float *lat, float *lng)
                         \- -----/                                   \- -----/
                          Pacific                                      South
         */
-
         float hypotenuse = sqrt((xAvg * xAvg) + (yAvg * yAvg)); // Distance from globe's north-south axis to surface intersect
         *lat = atan2(zAvg, hypotenuse) * RAD_TO_DEG;
     }
