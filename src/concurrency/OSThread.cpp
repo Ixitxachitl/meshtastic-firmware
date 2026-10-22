@@ -44,6 +44,12 @@ OSThread::~OSThread()
 #if defined(ARDUINO_ARCH_ESP32)
     stopFreeRTOSTask();
 #endif
+    // A thread can be destroyed while it is the running thread (exit_simulator exit()s from inside
+    // ServerAPI's runOnce), and the log path reads ThreadName through this pointer after the Thread
+    // base has freed it.
+    if (currentThread == this)
+        currentThread = NULL;
+
     if (controller)
         controller->remove(this);
 }

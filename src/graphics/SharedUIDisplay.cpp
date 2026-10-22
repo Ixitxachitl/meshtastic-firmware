@@ -741,7 +741,7 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
                 }
                 drawScaledXbm(display, iconX, iconY, mail_width, mail_height, mail, iconScale);
             }
-        } else if (externalNotificationModule->getMute()) {
+        } else if (externalNotificationModule && externalNotificationModule->getMute()) {
             if (currentResolution == ScreenResolution::High) {
                 const int iconW = mute_symbol_big_width * iconScale, iconH = mute_symbol_big_height * iconScale;
                 int iconX = iconRightEdge - iconW;
@@ -822,7 +822,7 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
                 int iconY = fitHeaderIcon(textY + (FONT_HEIGHT_SMALL - mail_height * iconScale) / 2, mail_height * iconScale);
                 drawScaledXbm(display, iconX, iconY, mail_width, mail_height, mail, iconScale);
             }
-        } else if (externalNotificationModule->getMute()) {
+        } else if (externalNotificationModule && externalNotificationModule->getMute()) {
             if (currentResolution == ScreenResolution::High) {
                 int iconX = iconRightEdge - mute_symbol_big_width * iconScale;
                 int iconY = fitHeaderIcon(textY + (FONT_HEIGHT_SMALL - mute_symbol_big_height * iconScale) / 2,
