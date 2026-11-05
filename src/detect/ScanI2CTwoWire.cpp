@@ -472,8 +472,29 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
 #ifdef HAS_LP5814
                 SCAN_SIMPLE_CASE(LP5814_ADDR, LP5814, "LP5814", (uint8_t)addr.address);
 #endif
+#if defined(HAS_ES7243E) || defined(HAS_BMM350)
+            case BMM350_ADDR: { // same as ES7243E_ADDR
 #ifdef HAS_ES7243E
-                SCAN_SIMPLE_CASE(ES7243E_ADDR, ES7243E, "ES7243E", (uint8_t)addr.address);
+                if (port == I2CPort::WIRE) { // the codec is on the internal bus; a Grove BMM350 can only be on WIRE1
+                    type = ES7243E;
+                    logFoundDevice("ES7243E", (uint8_t)addr.address);
+                    break;
+                }
+#endif
+#ifdef HAS_BMM350
+                // BMM350 reads lead with two dummy bytes, so the chip ID (0x33) is the third byte
+                uint8_t bmm350Id[3] = {0};
+                i2cBus->beginTransmission(addr.address);
+                i2cBus->write((uint8_t)0x00);
+                if (i2cBus->endTransmission() == 0 && i2cBus->requestFrom((int)addr.address, 3) == 3)
+                    i2cBus->readBytes(bmm350Id, 3);
+                if (bmm350Id[2] == 0x33) {
+                    type = BMM350;
+                    logFoundDevice("BMM350", (uint8_t)addr.address);
+                }
+#endif
+                break;
+            }
 #endif
             case XPOWERS_AXP192_AXP2101_ADDRESS:
                 // Qwiic Buzzer: ID register reads 0x5E and register 0x0A echoes its own address. Probe first,

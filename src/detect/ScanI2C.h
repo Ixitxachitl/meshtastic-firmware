@@ -116,7 +116,8 @@ class ScanI2C
         ES8311,
         ES7243E,
         MODULINO_BUZZER,
-        QWIIC_BUZZER
+        QWIIC_BUZZER,
+        BMM350
     } DeviceType;
 
     // typedef uint8_t DeviceAddress;

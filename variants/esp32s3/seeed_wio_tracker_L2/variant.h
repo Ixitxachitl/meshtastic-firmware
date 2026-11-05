@@ -9,6 +9,10 @@
 #define I2C_SDA 47
 #define I2C_SCL 48
 
+// M5Stack Unit DoF9 (BMI270 + BMM350) on the Grove port: tilt-compensated compass
+#define HAS_BMI270
+#define HAS_BMM350
+
 #define USE_POWERSAVE
 #define SLEEP_TIME 120
 

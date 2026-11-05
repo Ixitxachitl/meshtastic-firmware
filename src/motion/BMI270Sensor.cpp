@@ -563,6 +563,9 @@ int32_t BMI270Sensor::runOnce()
     int16_t y = (int16_t)((data[3] << 8) | data[2]);
     int16_t z = (int16_t)((data[5] << 8) | data[4]);
 
+    // In g (2G range: 16384 LSB/g), for a magnetometer on its own thread to tilt-compensate against
+    publishCompassAccelSample(x / 16384.0f, y / 16384.0f, z / 16384.0f);
+
     if (!hasBaseline) {
         prevX = x;
         prevY = y;

@@ -1,6 +1,10 @@
 #define I2C_SDA 39
 #define I2C_SCL 40
 
+// M5Stack Unit DoF9 (BMI270 + BMM350) on the Grove port: tilt-compensated compass
+#define HAS_BMI270
+#define HAS_BMM350
+
 // This board has a serial coprocessor for sensor readings
 #define SENSOR_RP2040_TXD 19
 #define SENSOR_RP2040_RXD 20
