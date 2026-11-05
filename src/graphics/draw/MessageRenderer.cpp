@@ -200,6 +200,9 @@ void nudgeScroll(int8_t direction)
 {
     if (direction == 0)
         return;
+#ifdef USE_EINK
+    manualScrolling = true; // or the next e-ink redraw puts the messages back at the top
+#endif
 
     if (cachedHeights.empty()) {
         scrollY = 0.0f;
@@ -1284,8 +1287,10 @@ void drawTextMessageFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
         scrollY = restScroll;
     }
 #else
-    // E-Ink: disable autoscroll, parking the list on the newest message at whichever end it lives.
-    scrollY = restScroll;
+    // E-Ink: no autoscroll (it would refresh the panel continuously), but keep where UP/DOWN scrolled to;
+    // otherwise park the list on the newest message at whichever end it lives.
+    if (!manualScrolling)
+        scrollY = restScroll;
     waitingToReset = false;
     scrollStarted = false;
     lastTime = millis();

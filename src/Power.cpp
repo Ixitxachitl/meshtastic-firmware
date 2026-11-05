@@ -1338,8 +1338,10 @@ void Power::logHeapUsage()
     char detail[64] = "";
     const uint32_t minFree = memGet.getMinFreeHeap();
     const uint32_t maxAlloc = memGet.getMaxAllocHeap();
-    if (minFree || maxAlloc)
+    if (minFree)
         snprintf(detail, sizeof(detail), ", min %u, largest block %u", minFree, maxAlloc);
+    else if (maxAlloc)
+        snprintf(detail, sizeof(detail), ", largest block %u", maxAlloc);
 
     const uint32_t psramTotal = memGet.getPsramSize();
 #ifdef ARCH_ESP32

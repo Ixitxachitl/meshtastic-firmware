@@ -7,7 +7,7 @@
 // Where device-ui is linked (HAS_TFT) this is its IRemoteFS backend, card management included. BaseUI-only
 // builds get the same file operations as a standalone class.
 #if HAS_TFT
-#include "graphics/map/RemoteSDService.h"
+#include "storage/RemoteStorage.h"
 #define INDICATOR_FS_OVERRIDE override
 #else
 #define INDICATOR_FS_OVERRIDE
@@ -18,8 +18,8 @@
 #include <string.h>
 #include <string>
 
-// Serves the UI map tiles from the SD card behind the RP2040, chunk-wise
-// over the interdevice link.
+// Serves the UI storage (map tiles, key backups) from the SD card behind the
+// RP2040, chunk-wise over the interdevice link.
 //
 // Retry policy: a lost frame (timeout) and a co-processor busy with card
 // maintenance (FILE_BUSY) are transient, so they are retried; a request the

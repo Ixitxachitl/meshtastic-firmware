@@ -218,7 +218,7 @@ bool loadTemplate()
 bool writeCardFile(const char *dir, const char *finalPath, const char *tempPath, const uint8_t *data, size_t len)
 {
 #if defined(SENSECAP_INDICATOR)
-    (void)dir; // the co-processor creates the folders, as device-ui's RemoteSDService::save() relies on
+    (void)dir; // the co-processor creates the folders, as device-ui's RemoteStorage::save() relies on
     (void)tempPath;
     IndicatorRemoteFS &fs = remoteCard();
     constexpr size_t kChunk = sizeof(meshtastic_FileTransfer_filedata_t::bytes);

@@ -165,7 +165,7 @@ int32_t TouchScreenBase::runOnce()
                 de.touchEvent = static_cast<char>(TOUCH_ACTION_DRAG_END);
                 de.x = x;
                 de.y = y;
-                LOG_DEBUG("action DRAG END(%d/%d)", x, y);
+                LOG_INPUT("action DRAG END(%d/%d)", x, y);
                 onEvent(de);
             }
 
@@ -180,10 +180,10 @@ int32_t TouchScreenBase::runOnce()
                 if (adx > ady && adx > TOUCH_THRESHOLD_X) {
                     if (0 > dx) { // swipe right to left
                         e.touchEvent = static_cast<char>(TOUCH_ACTION_LEFT);
-                        LOG_DEBUG("action SWIPE: right to left");
+                        LOG_INPUT("action SWIPE: right to left");
                     } else { // swipe left to right
                         e.touchEvent = static_cast<char>(TOUCH_ACTION_RIGHT);
-                        LOG_DEBUG("action SWIPE: left to right");
+                        LOG_INPUT("action SWIPE: left to right");
                     }
                     if (!wasDragging)
                         touchHapticPulse(TouchHaptic::Gesture);
@@ -192,10 +192,10 @@ int32_t TouchScreenBase::runOnce()
                 else if (ady > adx && ady > TOUCH_THRESHOLD_Y) {
                     if (0 > dy) { // swipe bottom to top
                         e.touchEvent = static_cast<char>(TOUCH_ACTION_UP);
-                        LOG_DEBUG("action SWIPE: bottom to top");
+                        LOG_INPUT("action SWIPE: bottom to top");
                     } else { // swipe top to bottom
                         e.touchEvent = static_cast<char>(TOUCH_ACTION_DOWN);
-                        LOG_DEBUG("action SWIPE: top to bottom");
+                        LOG_INPUT("action SWIPE: top to bottom");
                     }
                     if (!wasDragging)
                         touchHapticPulse(TouchHaptic::Gesture);
@@ -227,7 +227,7 @@ int32_t TouchScreenBase::runOnce()
                 _drag_x = _last_x;
                 _drag_y = _last_y;
                 e.touchEvent = static_cast<char>(TOUCH_ACTION_DRAG);
-                LOG_DEBUG("action DRAG START(%d/%d)", _last_x, _last_y);
+                LOG_INPUT("action DRAG START(%d/%d)", _last_x, _last_y);
                 touchHapticPulse(TouchHaptic::Gesture); // the start only: the view is about to follow the finger
             }
         } else if (abs(_last_x - _drag_x) >= TOUCH_DRAG_MIN_STEP || abs(_last_y - _drag_y) >= TOUCH_DRAG_MIN_STEP) {
@@ -306,13 +306,13 @@ int32_t TouchScreenBase::runOnce()
         if (_tapped) {
             _tapped = false;
             e.touchEvent = static_cast<char>(TOUCH_ACTION_TAP);
-            LOG_DEBUG("action TAP(%d/%d)", _last_x, _last_y);
+            LOG_INPUT("action TAP(%d/%d)", _last_x, _last_y);
         }
     } else {
         if (_tapped && Throttle::hasElapsed(_pressStartMs, TIME_LONG_PRESS - 50)) {
             _tapped = false;
             e.touchEvent = static_cast<char>(TOUCH_ACTION_TAP);
-            LOG_DEBUG("action TAP(%d/%d)", _last_x, _last_y);
+            LOG_INPUT("action TAP(%d/%d)", _last_x, _last_y);
         }
     }
 #else
@@ -320,7 +320,7 @@ int32_t TouchScreenBase::runOnce()
     if (_tapped) {
         _tapped = false;
         e.touchEvent = static_cast<char>(TOUCH_ACTION_TAP);
-        LOG_DEBUG("action TAP(%d/%d)", _last_x, _last_y);
+        LOG_INPUT("action TAP(%d/%d)", _last_x, _last_y);
     }
 #endif
 
@@ -336,7 +336,7 @@ int32_t TouchScreenBase::runOnce()
         _longPressSuppressed = true;
         _longPressSuppressUntilMs = nowMs + LONG_PRESS_REPEAT_SUPPRESS_MS;
         e.touchEvent = static_cast<char>(TOUCH_ACTION_LONG_PRESS);
-        LOG_DEBUG("action LONG PRESS(%d/%d)", _last_x, _last_y);
+        LOG_INPUT("action LONG PRESS(%d/%d)", _last_x, _last_y);
         touchHapticPulse(TouchHaptic::LongPress); // fires before release, so it also says "let go"
     }
 
