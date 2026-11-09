@@ -120,6 +120,22 @@
 #define TFT_WIDTH 320  // Required by BaseUI setGeometry
 #define TFT_HEIGHT 240 // Required by BaseUI setGeometry
 #define USE_VIRTUAL_KEYBOARD 1
+
+// Zoom, pan and Follow Me as buttons on the Map frame, stacked in the bottom corner of this landscape
+// panel; centred, they would split the map.
+#define BASEUI_MAP_ONSCREEN_CONTROLS 1
+#define BASEUI_MAP_CONTROLS_BOTTOM 1
+
+// Default Dark's navy canvas drawn as the topographic artwork in graphics/img/background.h,
+// which is authored at this panel's 320x240.
+#define BASEUI_BACKGROUND_IMAGE 1
+
+// Custom boot splash, shown for the second half of the boot screen: full-panel 320x240 artwork, drawn in
+// colour on colour-framebuffer builds. 1:1 scale - BASEUI_ICON_SCALE would double it off the panel.
+#define USERPREFS_OEM_TEXT "Ixitxachitl Build"
+#define USERPREFS_OEM_FONT_SIZE 1
+#define USERPREFS_OEM_IMAGE_SCALE 1
+#include "graphics/img/oem_splash.h"
 #endif
 
 // Battery
