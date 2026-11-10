@@ -338,6 +338,7 @@ uint8_t promptLength = 0, promptCursor = 0, promptMax = 0;
 constexpr int kMaxPromptSuggestions = 5;
 char promptSuggestions[kMaxPromptSuggestions][48];
 int promptSuggestionCount = 0, promptSuggestionSel = -1;
+int promptSuggestionShown = 0; // how many the last draw fitted above the touch keyboard; the rest wait
 int16_t suggestLeft = 0, suggestWidth = 0, suggestTop = 0, suggestRowH = 0; // where the last draw put them, for taps
 
 #if defined(USE_VIRTUAL_KEYBOARD)
@@ -395,6 +396,7 @@ void NotificationRenderer::startTextPrompt(const char *initialText, uint8_t maxL
     promptCursor = promptLength;
     promptSuggestionCount = 0;
     promptSuggestionSel = -1;
+    promptSuggestionShown = 0;
 #if defined(USE_VIRTUAL_KEYBOARD)
     promptShift = false;
     promptKeyCount = 0;
@@ -424,9 +426,9 @@ bool NotificationRenderer::handleTextPromptInput(const InputEvent &event)
     const std::string textBefore(promptText, promptLength);
     const bool touch = event.touchX != 0 || event.touchY != 0;
     // A tap on a suggestion picks it, keyboard or not.
-    if (touch && event.inputEvent == INPUT_BROKER_USER_PRESS && promptSuggestionCount > 0 && suggestRowH > 0 &&
+    if (touch && event.inputEvent == INPUT_BROKER_USER_PRESS && promptSuggestionShown > 0 && suggestRowH > 0 &&
         event.touchX >= suggestLeft && event.touchX < suggestLeft + suggestWidth && event.touchY >= suggestTop &&
-        event.touchY < suggestTop + suggestRowH * promptSuggestionCount) {
+        event.touchY < suggestTop + suggestRowH * promptSuggestionShown) {
         picked = (event.touchY - suggestTop) / suggestRowH;
     } else if (touch) {
 #if defined(USE_VIRTUAL_KEYBOARD)
@@ -502,7 +504,7 @@ bool NotificationRenderer::handleTextPromptInput(const InputEvent &event)
                 promptCursor++;
             break;
         case INPUT_BROKER_DOWN:
-            if (promptSuggestionSel + 1 < promptSuggestionCount)
+            if (promptSuggestionSel + 1 < promptSuggestionShown)
                 promptSuggestionSel++;
             break;
         case INPUT_BROKER_UP:
@@ -575,10 +577,22 @@ void NotificationRenderer::drawTextPrompt(OLEDDisplay *display, OLEDDisplayUiSta
     const int16_t boxLeft = (screenW - boxW) / 2;
     const int16_t fieldH = lineH + 4;
     const int16_t rowH = lineH + 2;
-    const int16_t suggestionsH = promptSuggestionCount ? promptSuggestionCount * rowH + 3 : 0;
+#if defined(USE_VIRTUAL_KEYBOARD)
+    const int16_t boxTop = pad;
+    // Only the suggestions that fit between the field and the keys: a row over the keyboard would hide keys and take
+    // their taps. The composer's keyboard has a fixed top; the fallback one keeps room for rows a finger can hit.
+    const int16_t kbLimit = cannedMessageModule ? (int16_t)(cannedMessageModule->keyboardKeysTop(display) - 2)
+                                                : (int16_t)(screenH - 2 - 22 * (kPromptRowCount + 1) - pad);
+    const int16_t suggestRoom = kbLimit - (boxTop + pad + lineH + 3 + fieldH + 3 + pad);
+    promptSuggestionShown = std::max<int>(0, std::min<int>(promptSuggestionCount, suggestRoom / rowH));
+#else
+    promptSuggestionShown = promptSuggestionCount;
+#endif
+    if (promptSuggestionSel >= promptSuggestionShown)
+        promptSuggestionSel = promptSuggestionShown - 1;
+    const int16_t suggestionsH = promptSuggestionShown ? promptSuggestionShown * rowH + 3 : 0;
 #if defined(USE_VIRTUAL_KEYBOARD)
     const int16_t boxH = pad + lineH + 3 + fieldH + suggestionsH + pad;
-    const int16_t boxTop = pad;
 #else
     const int16_t boxH = pad + lineH + 3 + fieldH + suggestionsH + 2 + lineH + pad;
     const int16_t boxTop = (screenH - boxH) / 2;
@@ -613,7 +627,7 @@ void NotificationRenderer::drawTextPrompt(OLEDDisplay *display, OLEDDisplayUiSta
     suggestWidth = fieldW;
     suggestTop = fieldY + fieldH + 3;
     suggestRowH = rowH;
-    for (int i = 0; i < promptSuggestionCount; i++) {
+    for (int i = 0; i < promptSuggestionShown; i++) {
         char row[sizeof(promptSuggestions[0])];
         strncpy(row, promptSuggestions[i], sizeof(row) - 1);
         row[sizeof(row) - 1] = '\0';
@@ -686,7 +700,7 @@ void NotificationRenderer::drawTextPrompt(OLEDDisplay *display, OLEDDisplayUiSta
 #else
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     display->drawString(boxLeft + boxW / 2, fieldY + fieldH + suggestionsH + 2,
-                        promptSuggestionCount ? "Down: suggestions   Enter: OK" : "Enter: OK   Esc: cancel");
+                        promptSuggestionShown ? "Down: suggestions   Enter: OK" : "Enter: OK   Esc: cancel");
 #endif
     display->setTextAlignment(TEXT_ALIGN_LEFT);
 }

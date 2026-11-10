@@ -18,6 +18,7 @@
 #include "graphics/EmoteRenderer.h"
 #include "graphics/Screen.h"
 #include "graphics/SharedUIDisplay.h"
+#include "graphics/TFTColorRegions.h"
 #include "graphics/draw/MessageRenderer.h"
 #include "graphics/draw/NotificationRenderer.h"
 #include "graphics/draw/UIRenderer.h"
@@ -49,6 +50,10 @@ extern MessageStore messageStore;
 
 #include "graphics/ScreenFonts.h"
 #include <Throttle.h>
+#if BASEUI_NATIVE_RGB565
+#include "graphics/TFTDisplay.h"
+#include "graphics/TFTPalette.h"
+#endif
 
 // Remove Canned message screen if no action is taken for some milliseconds
 #define INACTIVATE_AFTER_MS 20000
@@ -58,12 +63,18 @@ extern MessageStore messageStore;
 // key. Sized from the artwork it holds, so it grows with the variant's icon scale.
 #define EMOTE_BUTTON_SIZE (24 * BASEUI_ICON_SCALE)
 #define EMOTE_BUTTON_MARGIN 2
-// The same absolute radius the virtual keyboard gives a key cap, not the same proportion. What
-// makes a corner read as round is the arc's size in pixels: drawRoundedRect() plots a Bresenham
-// arc, and below about 7px it degenerates into a flat 45 degree chamfer with no curvature left.
-// The keyboard's 7 sits on a ~56px cap, so copying its 1/8 ratio onto a 24px button would mean a
-// 3px corner - squarer, not rounder. Scaled with the box so it holds at any BASEUI_ICON_SCALE.
+// An absolute radius, not a proportion of the box. What makes a corner read as round is the arc's
+// size in pixels: drawRoundedRect() plots a Bresenham arc, and below about 7px it degenerates into
+// a flat 45 degree chamfer with no curvature left. Scaled with the box so it holds at any BASEUI_ICON_SCALE.
 #define EMOTE_BUTTON_RADIUS (7 * BASEUI_ICON_SCALE)
+// The virtual keyboard's cap corner: deliberately small, so a key reads as a key rather than a pill.
+#define KEYCAP_RADIUS 4
+// Colour builds fill each cap with a shaded gradient and a drop shadow instead of drawing an outline.
+#if BASEUI_NATIVE_RGB565 && GRAPHICS_TFT_COLORING_ENABLED && defined(USE_VIRTUAL_KEYBOARD)
+#define KEYCAP_SHADED 1
+#else
+#define KEYCAP_SHADED 0
+#endif
 
 // One condition for the button's artwork and its hit box, so the two can't disagree about whether
 // it exists. A virtual keyboard carries its own emote key, EXCLUDE_EMOJI builds have no artwork to
@@ -2170,6 +2181,44 @@ void CannedMessageModule::drawKeyboard(OLEDDisplay *display, OLEDDisplayUiState 
     drawKeyboardKeys(display, x, y, true);
 }
 
+int CannedMessageModule::keyboardKeysTop(OLEDDisplay *display, int *cellHeightOut) const
+{
+    const int outerSize = *(&this->keyboard[0] + 1) - this->keyboard[0];
+    const int screenHeight = display->getHeight();
+    const int keyAreaBottom = screenHeight - screenHeight * BASEUI_KEYBOARD_BOTTOM_MARGIN_PCT / 100;
+    // Rows are sized to the space between the halfway mark and the bottom inset, then the block is
+    // anchored to that inset rather than grown downwards - so the padding is what the user sees, and
+    // any height the clamp leaves over goes to the draft above instead of a gap underneath.
+    const int baseCellHeight = std::min(45, std::max(20, (keyAreaBottom - screenHeight / 2 - 4) / outerSize));
+    // Clamp so a tall setting cannot push the rows up over the draft and header.
+    const int maxCellHeight = std::max(20, (keyAreaBottom - FONT_HEIGHT_SMALL * 3) / outerSize);
+    const int cellHeight = std::min(maxCellHeight, baseCellHeight * BASEUI_KEYBOARD_KEY_HEIGHT_PCT / 100);
+    if (cellHeightOut)
+        *cellHeightOut = cellHeight;
+    return keyAreaBottom - cellHeight * outerSize;
+}
+
+#if KEYCAP_SHADED
+// Fills a key cap's rounded outline, each row in its own colour: a gradient top to bottom, and a darker last row
+// as its shadow. The corner insets follow a circle of KEYCAP_RADIUS sampled at each row's centre.
+static void fillKeyCap565(OLEDDisplay *display, int x, int y, int w, int h, uint16_t top, uint16_t bottom, uint16_t shadow)
+{
+    TFTDisplay *const panel = static_cast<TFTDisplay *>(display);
+    const int r = std::min(KEYCAP_RADIUS, std::min(w, h) / 2);
+    for (int row = 0; row < h; row++) {
+        const int d = std::min(row, h - 1 - row); // rows from the nearer edge
+        int inset = 0;
+        if (d < r) {
+            const float dy = r - d - 0.5f;
+            inset = (int)lroundf(r - sqrtf((float)(r * r) - dy * dy));
+        }
+        const uint8_t t = (uint8_t)(h > 2 ? row * 255 / (h - 2) : 0);
+        const uint16_t c = (row == h - 1) ? shadow : graphics::TFTPalette::mix565(top, bottom, t);
+        panel->fillRect565(x + inset, y + row, w - inset * 2, 1, c);
+    }
+}
+#endif
+
 // The keys alone, in the lower part of the screen: the composer draws its header and draft above them, and a text
 // prompt on a touch-only board draws its popup there instead, so both type on the same keyboard.
 void CannedMessageModule::drawKeyboardKeys(OLEDDisplay *display, int16_t x, int16_t y, bool withEmoteKey)
@@ -2180,7 +2229,6 @@ void CannedMessageModule::drawKeyboardKeys(OLEDDisplay *display, int16_t x, int1
     // deliberately ignores BASEUI_BODY_LR_MARGIN - that one insets text, and fourteen columns cannot
     // spare it - so a device that needs its edges kept clear says so with the keyboard margins.
     const int screenWidth = display->getWidth();
-    const int screenHeight = display->getHeight();
     const int sideInset = screenWidth * BASEUI_KEYBOARD_LR_MARGIN_PCT / 100;
     const int visibleKeyAreaWidth = screenWidth - sideInset * 2;
     const int keyAreaWidth = visibleKeyAreaWidth * BASEUI_KEYBOARD_ZOOM_PCT / 100;
@@ -2193,7 +2241,6 @@ void CannedMessageModule::drawKeyboardKeys(OLEDDisplay *display, int16_t x, int1
     if (this->keyboardPanX > 0.0f)
         this->keyboardPanX = 0.0f;
     const int panX = (int)lroundf(this->keyboardPanX);
-    const int keyAreaBottom = screenHeight - screenHeight * BASEUI_KEYBOARD_BOTTOM_MARGIN_PCT / 100;
 
     int keyFontHeight;
     if (screenWidth >= 400) {
@@ -2207,16 +2254,9 @@ void CannedMessageModule::drawKeyboardKeys(OLEDDisplay *display, int16_t x, int1
         keyFontHeight = _fontHeight(FONT_SMALL_LOCAL);
     }
 
-    // Rows are sized to the space between the halfway mark and the bottom inset, then the block is
-    // anchored to that inset rather than grown downwards - so the padding is what the user sees, and
-    // any height the clamp leaves over goes to the draft above instead of a gap underneath.
-    const int baseCellHeight = std::min(45, std::max(20, (keyAreaBottom - screenHeight / 2 - 4) / outerSize));
-    // Clamp so a tall setting cannot push the rows up over the draft and header.
-    const int maxCellHeight = std::max(20, (keyAreaBottom - FONT_HEIGHT_SMALL * 3) / outerSize);
-    const int cellHeight = std::min(maxCellHeight, baseCellHeight * BASEUI_KEYBOARD_KEY_HEIGHT_PCT / 100);
-    int yOffset = y + keyAreaBottom - cellHeight * outerSize;
+    int cellHeight = 0;
+    int yOffset = y + keyboardKeysTop(display, &cellHeight);
     const int buttonPadding = 1;
-    const int buttonRadius = 7;
 
     // Icon artwork is nominally 15x12; scale it with the screen the same way the font is picked
     const float iconScale = (screenWidth >= 400) ? 1.2f : (screenWidth >= 280) ? 1.0f : 0.8f;
@@ -2305,19 +2345,36 @@ void CannedMessageModule::drawKeyboardKeys(OLEDDisplay *display, int16_t x, int1
             const bool isShiftKey = (letter.character == "⇧");
             const bool inverted =
                 isShiftKey ? this->shift : (this->highlight.length() > 0 && this->highlight == letter.character);
+            // Only for the transient tap flash, which clears itself at the end of this function. Shift's
+            // inversion latches, so asking for an immediate redraw here re-armed a zero interval on every
+            // frame for as long as shift was on - the module then span runOnce(), regenerating the
+            // frameset continuously, and the UI stopped responding to touches.
+            if (inverted && !isShiftKey)
+                setIntervalFromNow(0);
+#if KEYCAP_SHADED
+            {
+                // Character keys sit a step lighter than the modifiers around them, as on a real keyboard.
+                const bool isModifier = letter.character == "ESC" || isShiftKey || letter.character == "⌫" ||
+                                        letter.character == "↵" || letter.character == "\U0001F60A";
+                const uint16_t bg = graphics::getThemeBodyBg(), fg = graphics::getThemeBodyFg();
+                const uint8_t topMix = inverted ? 210 : isModifier ? 46 : 84;
+                const uint8_t bottomMix = inverted ? 160 : isModifier ? 20 : 40;
+                fillKeyCap565(display, capX, capY, capW, capH, graphics::TFTPalette::mix565(bg, fg, topMix),
+                              graphics::TFTPalette::mix565(bg, fg, bottomMix),
+                              graphics::TFTPalette::mix565(bg, graphics::TFTPalette::Black, 110));
+                if (inverted) // a dark label on the lit cap
+                    static_cast<TFTDisplay *>(display)->setPenColors(bg, bg);
+            }
+#else
+            // Small enough to read as a key rather than a pill; KEYCAP_SHADED fills the same corner.
+            const int buttonRadius = KEYCAP_RADIUS;
             if (inverted) {
                 graphics::fillRoundedRect(display, capX, capY, capW, capH, buttonRadius);
                 display->setColor(OLEDDISPLAY_COLOR::BLACK);
-                // Only for the transient tap flash, which clears itself at the end of this
-                // function. Shift's inversion latches, so asking for an immediate redraw here
-                // re-armed a zero interval on every frame for as long as shift was on - the
-                // module then span runOnce(), regenerating the frameset continuously, and the
-                // UI stopped responding to touches.
-                if (!isShiftKey)
-                    setIntervalFromNow(0);
             } else {
                 graphics::drawRoundedRect(display, capX, capY, capW, capH, buttonRadius);
             }
+#endif
 
             if (letter.character == "⇧") {
                 drawShiftIcon(display, centerX - iconWidth / 2, centerY - iconHeight / 2, iconScale);
@@ -2352,8 +2409,12 @@ void CannedMessageModule::drawKeyboardKeys(OLEDDisplay *display, int16_t x, int1
                 display->setTextAlignment(TEXT_ALIGN_LEFT);
             }
 
-            if (inverted)
+            if (inverted) {
+#if KEYCAP_SHADED
+                static_cast<TFTDisplay *>(display)->clearPen();
+#endif
                 display->setColor(OLEDDISPLAY_COLOR::WHITE);
+            }
         }
     }
 
@@ -2377,49 +2438,39 @@ void CannedMessageModule::drawShiftIcon(OLEDDisplay *display, int x, int y, floa
     }
 }
 
+// One stroke of a key glyph on the 15x12 icon grid, scaled. From scale 1 up it is two pixels wide, so the icon
+// carries the same weight as the key labels beside it; the second pixel goes down or right of the first.
+static void drawGlyphStroke(OLEDDisplay *display, int x, int y, float scale, int ax, int ay, int bx, int by)
+{
+    const int x0 = x + (int)lroundf(ax * scale), y0 = y + (int)lroundf(ay * scale);
+    const int x1 = x + (int)lroundf(bx * scale), y1 = y + (int)lroundf(by * scale);
+    display->drawLine(x0, y0, x1, y1);
+    if (scale < 1.0f)
+        return;
+    if (abs(x1 - x0) >= abs(y1 - y0))
+        display->drawLine(x0, y0 + 1, x1, y1 + 1);
+    else
+        display->drawLine(x0 + 1, y0, x1 + 1, y1);
+}
+
 void CannedMessageModule::drawBackspaceIcon(OLEDDisplay *display, int x, int y, float scale)
 {
-    PointStruct backspaceIcon[6] = {{0, 7}, {5, 2}, {15, 2}, {15, 12}, {5, 12}, {0, 7}};
-
-    int size = 6;
-
-    for (int i = 0; i < size - 1; i++) {
-        int x0 = x + (backspaceIcon[i].x * scale);
-        int y0 = y + (backspaceIcon[i].y * scale);
-        int x1 = x + (backspaceIcon[i + 1].x * scale);
-        int y1 = y + (backspaceIcon[i + 1].y * scale);
-
-        display->drawLine(x0, y0, x1, y1);
-    }
-
-    PointStruct backspaceIconX[4] = {{7, 4}, {13, 10}, {7, 10}, {13, 4}};
-
-    size = 4;
-
-    for (int i = 0; i < size - 1; i++) {
-        int x0 = x + (backspaceIconX[i].x * scale);
-        int y0 = y + (backspaceIconX[i].y * scale);
-        int x1 = x + (backspaceIconX[i + 1].x * scale);
-        int y1 = y + (backspaceIconX[i + 1].y * scale);
-
-        display->drawLine(x0, y0, x1, y1);
-    }
+    // A key tag pointing left, closed all the way round, with a cross in its body.
+    static const PointStruct body[] = {{0, 5}, {5, 0}, {13, 0}, {13, 10}, {5, 10}, {0, 5}};
+    for (size_t i = 0; i + 1 < sizeof(body) / sizeof(body[0]); i++)
+        drawGlyphStroke(display, x, y, scale, body[i].x, body[i].y, body[i + 1].x, body[i + 1].y);
+    drawGlyphStroke(display, x, y, scale, 7, 3, 10, 6);
+    drawGlyphStroke(display, x, y, scale, 10, 3, 7, 6);
 }
 
 void CannedMessageModule::drawEnterIcon(OLEDDisplay *display, int x, int y, float scale)
 {
-    PointStruct enterIcon[6] = {{0, 7}, {4, 3}, {4, 11}, {0, 7}, {15, 7}, {15, 0}};
-
-    int size = 6;
-
-    for (int i = 0; i < size - 1; i++) {
-        int x0 = x + (enterIcon[i].x * scale);
-        int y0 = y + (enterIcon[i].y * scale);
-        int x1 = x + (enterIcon[i + 1].x * scale);
-        int y1 = y + (enterIcon[i + 1].y * scale);
-
-        display->drawLine(x0, y0, x1, y1);
-    }
+    // The return arrow: a stem down the right that hooks left into a solid arrowhead.
+    drawGlyphStroke(display, x, y, scale, 13, 0, 13, 6);
+    drawGlyphStroke(display, x, y, scale, 13, 6, 5, 6);
+    const auto px = [&](int v) { return x + (int)lroundf(v * scale); };
+    const auto py = [&](int v) { return y + (int)lroundf(v * scale); };
+    display->fillTriangle(px(0), py(6), px(5), py(1), px(5), py(11));
 }
 
 #endif
