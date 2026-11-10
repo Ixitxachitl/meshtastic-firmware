@@ -20,6 +20,8 @@ class WakeKeyInterruptThread : public concurrency::OSThread
 
     static constexpr uint32_t SAMPLE_MS = 15;
     static constexpr uint32_t DEBOUNCE_MS = 25;
+    // On the lockscreen, a press held this long is the unlock gesture's hold; shorter is its tap.
+    static constexpr uint32_t LOCK_HOLD_MS = 600;
 
     static void IRAM_ATTR isr(void);
     void onInterruptEdge(void);
@@ -40,6 +42,9 @@ class WakeKeyInterruptThread : public concurrency::OSThread
     volatile bool rawIrqSignaled = false;
     volatile State state = State::REST;
     volatile uint32_t irqAtMs = 0;
+    bool lockPress = false;    // this press began on the lockscreen and feeds its unlock gesture
+    bool lockHoldSent = false; // the hold was already reported, so the release is not also a tap
+    uint32_t pressedAtMs = 0;
 
     WakeKeyInterruptThread(void);
     static WakeKeyInterruptThread *wakeKey;

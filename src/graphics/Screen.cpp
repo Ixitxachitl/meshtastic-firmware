@@ -1056,7 +1056,7 @@ void Screen::setup()
     ui->getUiState()->userData = this;     // Allow static callbacks to access Screen instance
 
     // Apply loaded brightness
-#if defined(ST7789_CS)
+#if defined(ST7789_CS) || defined(TFT_NV3031B)
     static_cast<TFTDisplay *>(dispdev)->setDisplayBrightness(brightness);
 #elif defined(USE_OLED) || defined(USE_SSD1306) || defined(USE_SH1106) || defined(USE_SH1107) || defined(USE_SPISSD1306)
     dispdev->setBrightness(brightness);
@@ -2072,7 +2072,7 @@ static constexpr uint32_t kLockUnlockBeatMs = 250;
 
 void Screen::setPanelBrightness(uint8_t level)
 {
-#if defined(ST7789_CS) && !defined(M5STACK)
+#if (defined(ST7789_CS) && !defined(M5STACK)) || defined(TFT_NV3031B)
     static_cast<TFTDisplay *>(dispdev)->setDisplayBrightness(level, true);
 #else
     (void)level; // no brightness control: the lockscreen simply appears and disappears
@@ -3293,7 +3293,7 @@ void Screen::increaseBrightness()
 #else
     brightness = ((brightness + 62) > 254) ? brightness : (brightness + 62);
 #endif
-#if defined(ST7789_CS)
+#if defined(ST7789_CS) || defined(TFT_NV3031B)
     // run the setDisplayBrightness function. This works on t-decks
     static_cast<TFTDisplay *>(dispdev)->setDisplayBrightness(brightness);
 #endif
@@ -3308,7 +3308,7 @@ void Screen::applyBrightness(uint8_t level)
     graphics::backlightSet(brightness);
 #elif defined(HELTEC_MESH_NODE_T114) || defined(HELTEC_VISION_MASTER_T190)
     analogWrite(VTFT_LEDA, brightness);
-#elif defined(ST7789_CS) || defined(ST7796_CS)
+#elif defined(ST7789_CS) || defined(ST7796_CS) || defined(TFT_NV3031B)
     static_cast<TFTDisplay *>(dispdev)->setDisplayBrightness(brightness);
 #elif defined(USE_OLED) || defined(USE_SSD1306) || defined(USE_SH1106) || defined(USE_SH1107) || defined(USE_SPISSD1306)
     dispdev->setBrightness(brightness);
@@ -3323,7 +3323,7 @@ void Screen::decreaseBrightness()
 #else
     brightness = (brightness < 70) ? brightness : (brightness - 62);
 #endif
-#if defined(ST7789_CS)
+#if defined(ST7789_CS) || defined(TFT_NV3031B)
     static_cast<TFTDisplay *>(dispdev)->setDisplayBrightness(brightness);
 #endif
 

@@ -2738,8 +2738,10 @@ void TFTDisplay::display()
     display(waking);
     if (waking) {
         wakeRepaintPending = false;
-        backlightEnable->set(true);
-        tft->setBrightness(172);
+        backlightEnable->set(true); // the level comes back through lightPanelAfterFirstPush()
+#if !BASEUI_NATIVE_RGB565
+        setDisplayBrightness(lastBrightness ? lastBrightness : BRIGHTNESS_DEFAULT, true); // no dark hold without it
+#endif
     }
 #else
     display(false);
@@ -3270,7 +3272,8 @@ void TFTDisplay::sendCommand(uint8_t com)
         if (panelAwake)
             break;
         panelAwake = true;
-        tft->setBrightness(0);
+        // Dark until the wake repaint lands, then back to the stored level - unless Screen sets one first (lockscreen).
+        holdPanelDarkUntilContent();
 #endif
 #if defined(TFT_NV3001B)
         // DISPLAYOFF cuts the panel rail, so the controller loses its configuration and sleep-out

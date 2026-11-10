@@ -120,6 +120,11 @@
 #define TFT_WIDTH 320  // Required by BaseUI setGeometry
 #define TFT_HEIGHT 240 // Required by BaseUI setGeometry
 #define USE_VIRTUAL_KEYBOARD 1
+// Display > Brightness: the LP5814 backlight takes an 8-bit PWM level, so it dims in real steps.
+#define BASEUI_HAS_BRIGHTNESS_CONTROL 1
+
+// Wake onto the clock lockscreen. Unlock with a short then a long press, of the wake button or the touchscreen.
+#define BASEUI_LOCKSCREEN 1
 
 // Zoom, pan and Follow Me as buttons on the Map frame, stacked in the bottom corner of this landscape
 // panel; centred, they would split the map.

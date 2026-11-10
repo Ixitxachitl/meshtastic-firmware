@@ -6,7 +6,9 @@
 #include "SPILock.h"
 #include "graphics/Screen.h"     // BaseUI
 #include "graphics/TFTDisplay.h" // BaseUI
+#include "input/InputBroker.h"
 #include "main.h"
+#include "mesh/Throttle.h"
 
 #if defined(HAS_TFT) && HAS_TFT
 #include "graphics/DeviceScreen.h" // MUI
@@ -22,6 +24,18 @@ static bool isPca9535WakeKeyPressed()
     concurrency::LockGuard guard(spiLock);
     return !io.digitalRead(EXPANDS_BTN_WAKE_UP);
 }
+
+#if defined(HAS_SCREEN) && HAS_SCREEN
+// The button is not on InputBroker, so hand its tap (SELECT) and hold (SELECT_LONG) to the lockscreen directly.
+static void feedLockscreen(input_broker_event event)
+{
+    if (!screen || !screen->isLockscreenShowing())
+        return;
+    powerFSM.trigger(EVENT_INPUT); // keeps the device awake, as InputBroker does for its own presses
+    InputEvent ev = {.source = "wakekey", .inputEvent = event, .kbchar = 0, .touchX = 0, .touchY = 0};
+    screen->lockscreenInput(ev);
+}
+#endif
 
 WakeKeyInterruptThread *WakeKeyInterruptThread::wakeKey = nullptr;
 
@@ -86,18 +100,30 @@ int32_t WakeKeyInterruptThread::runOnce(void)
 
         if (isPca9535WakeKeyPressed()) {
             LOG_DEBUG("wake button pressed");
+            bool wake = sleeping;
 #if defined(HAS_TFT) && HAS_TFT
             if (deviceScreen)
                 deviceScreen->toggleDisplay();
 #endif
 #if defined(HAS_SCREEN) && HAS_SCREEN
-            if (screen)
-                screen->setOn(sleeping);
+            // BaseUI: follow the panel itself, which the idle timeout and the lockscreen also turn off.
+            // Off wakes it (onto the lockscreen), the lockscreen takes a tap then a hold, anything else sleeps it.
+            if (screen) {
+                wake = !screen->isScreenOn();
+                if (!wake && screen->isLockscreenShowing()) {
+                    lockPress = true;
+                    lockHoldSent = false;
+                    pressedAtMs = now;
+                    state = State::PRESSED;
+                    return SAMPLE_MS;
+                }
+                screen->setOn(wake);
+            }
 #endif
-            if (sleeping) {
+            if (wake) {
                 powerFSM.trigger(EVENT_PRESS);
             }
-            sleeping = !sleeping;
+            sleeping = !wake;
             state = State::PRESSED;
             return SAMPLE_MS;
         }
@@ -108,9 +134,19 @@ int32_t WakeKeyInterruptThread::runOnce(void)
 
     case State::PRESSED: {
         if (isPca9535WakeKeyPressed()) {
+#if defined(HAS_SCREEN) && HAS_SCREEN
+            if (lockPress && !lockHoldSent && Throttle::hasElapsed(pressedAtMs, LOCK_HOLD_MS)) {
+                lockHoldSent = true;
+                feedLockscreen(INPUT_BROKER_SELECT_LONG);
+            }
+#endif
             return SAMPLE_MS;
         }
 
+#if defined(HAS_SCREEN) && HAS_SCREEN
+        if (lockPress && !lockHoldSent)
+            feedLockscreen(INPUT_BROKER_SELECT);
+#endif
         resetStateAndStop();
         return OSThread::disable();
     }
@@ -156,6 +192,7 @@ void WakeKeyInterruptThread::startThread(void)
 void WakeKeyInterruptThread::resetStateAndStop(void)
 {
     state = State::REST;
+    lockPress = false;
     if (OSThread::enabled) {
         OSThread::disable();
     }
