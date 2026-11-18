@@ -7,6 +7,10 @@
 #include <esp_heap_caps.h> // heap_caps_get_free_size(), for the per-gesture heap probe
 #endif
 
+#if defined(T_DECK_PRO) && defined(MESHTASTIC_INCLUDE_INKHUD)
+void tDeckProTouchFeedback();
+#endif
+
 #if defined(RAK14014) && !defined(MESHTASTIC_EXCLUDE_CANNEDMESSAGES)
 #include "modules/CannedMessageModule.h"
 #endif
@@ -54,12 +58,6 @@ static_assert(TIME_LONG_PRESS >= 50, "TIME_LONG_PRESS must be at least 50ms: see
 #define TOUCH_POLL_INTERVAL_RELEASE_FAST TOUCH_POLL_INTERVAL_RELEASE
 #endif
 
-// Ignore very short "finger lifted" glitches from noisy touch controllers.
-// A release is only accepted once we've seen no-touch for at least this duration.
-#ifndef TOUCH_RELEASE_GRACE_MS
-#define TOUCH_RELEASE_GRACE_MS 35
-#endif
-
 // move a minimum distance over the screen to detect a "swipe"
 #ifndef TOUCH_THRESHOLD_X
 #define TOUCH_THRESHOLD_X 30
@@ -102,6 +100,16 @@ void TouchScreenBase::init(bool hasTouch)
     }
 }
 
+void TouchScreenBase::resetTouchState()
+{
+    _state = TOUCH_EVENT_CLEARED;
+    _action = TOUCH_ACTION_NONE;
+    _touchedOld = false;
+    _tapped = false;
+    _longPressSuppressed = false;
+    _dragging = false;
+}
+
 int32_t TouchScreenBase::runOnce()
 {
     uint32_t nowMs = millis();
@@ -135,6 +143,9 @@ int32_t TouchScreenBase::runOnce()
     if (touched != _touchedOld) {
         if (touched) {
             // No haptic on touch-down: this could still be a tap on nothing. Each outcome below pulses for itself.
+#if defined(T_DECK_PRO) && defined(MESHTASTIC_INCLUDE_INKHUD)
+            tDeckProTouchFeedback(); // InkHUD has no per-outcome pulses, so it keeps the touch-down buzz
+#endif
             _state = TOUCH_EVENT_OCCURRED;
             _pressStartMs = nowMs;
             _longPressSuppressed = false;
@@ -330,8 +341,7 @@ int32_t TouchScreenBase::runOnce()
     const bool longPressSuppressed = _longPressSuppressed && !Throttle::deadlinePassed(_longPressSuppressUntilMs);
     // Never mid-drag: the finger having travelled says this gesture isn't a press, and firing here would
     // also clobber a TOUCH_ACTION_DRAG set for this same poll.
-    if (allowLongPress && touched && !_dragging && !longPressSuppressed &&
-        Throttle::hasElapsed(_pressStartMs, TIME_LONG_PRESS)) {
+    if (allowLongPress && touched && !_dragging && !longPressSuppressed && Throttle::hasElapsed(_pressStartMs, TIME_LONG_PRESS)) {
         // A finger held past the window re-reports LONG_PRESS once per window, as before.
         _longPressSuppressed = true;
         _longPressSuppressUntilMs = nowMs + LONG_PRESS_REPEAT_SUPPRESS_MS;

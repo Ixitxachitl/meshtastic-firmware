@@ -31,11 +31,9 @@ typedef enum _meshtastic_FileOperation {
     meshtastic_FileOperation_POST = 1,
     meshtastic_FileOperation_PUT = 2,
     meshtastic_FileOperation_DELETE = 3, /* Removes a file, or a directory that is empty */
-    /* Creates the directory at filepath, and any missing parents. OK when it
- already exists as a directory. */
-    meshtastic_FileOperation_MKDIR = 4,
-    /* Moves filepath to target_path, which must not exist yet. */
-    meshtastic_FileOperation_RENAME = 5
+    meshtastic_FileOperation_MKDIR = 4, /* Create a directory, parents included; OK when it already exists */
+    meshtastic_FileOperation_RMDIR = 5, /* Remove an empty directory; OK when it is already gone */
+    meshtastic_FileOperation_RENAME = 6 /* Move filepath to target_path, which must not exist yet */
 } meshtastic_FileOperation;
 
 /* Outcome of a file or directory operation. The requester must be able to
@@ -54,7 +52,8 @@ typedef enum _meshtastic_FileStatus {
  recognize its own chunk as already written after a lost response). */
     meshtastic_FileStatus_FILE_OFFSET_CONFLICT = 5,
     meshtastic_FileStatus_FILE_IO_ERROR = 6,
-    meshtastic_FileStatus_FILE_NOT_A_FILE = 7 /* path is a directory (GET) or not one (listing) */
+    meshtastic_FileStatus_FILE_NOT_A_FILE = 7, /* path is a directory (GET) or not one (listing, MKDIR, RMDIR) */
+    meshtastic_FileStatus_FILE_NOT_EMPTY = 8 /* RMDIR: the directory still has entries */
 } meshtastic_FileStatus;
 
 /* What to do with the SD card of the co-processor */
@@ -95,7 +94,7 @@ typedef enum _meshtastic_I2CResult_Status {
 typedef PB_BYTES_ARRAY_T(4096) meshtastic_FileTransfer_filedata_t;
 /* Message for file operations */
 typedef struct _meshtastic_FileTransfer {
-    meshtastic_FileOperation operation; /* File operation (GET, POST, PUT, DELETE, MKDIR, RENAME) */
+    meshtastic_FileOperation operation; /* File operation (GET, POST, PUT, DELETE, MKDIR, RMDIR, RENAME) */
     char filepath[256]; /* Path of the file on the SD card */
     meshtastic_FileTransfer_filedata_t filedata; /* Chunk content (POST/PUT request, GET response) */
     meshtastic_FileStatus status; /* Response: outcome of the operation */
@@ -248,8 +247,8 @@ extern "C" {
 #define _meshtastic_FileOperation_ARRAYSIZE ((meshtastic_FileOperation)(meshtastic_FileOperation_RENAME+1))
 
 #define _meshtastic_FileStatus_MIN meshtastic_FileStatus_FILE_UNSPECIFIED
-#define _meshtastic_FileStatus_MAX meshtastic_FileStatus_FILE_NOT_A_FILE
-#define _meshtastic_FileStatus_ARRAYSIZE ((meshtastic_FileStatus)(meshtastic_FileStatus_FILE_NOT_A_FILE+1))
+#define _meshtastic_FileStatus_MAX meshtastic_FileStatus_FILE_NOT_EMPTY
+#define _meshtastic_FileStatus_ARRAYSIZE ((meshtastic_FileStatus)(meshtastic_FileStatus_FILE_NOT_EMPTY+1))
 
 #define _meshtastic_SdCommand_MIN meshtastic_SdCommand_SD_COMMAND_UNSPECIFIED
 #define _meshtastic_SdCommand_MAX meshtastic_SdCommand_SD_FORMAT

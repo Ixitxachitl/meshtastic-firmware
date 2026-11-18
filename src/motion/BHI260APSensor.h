@@ -11,14 +11,15 @@
 #include <SensorBHI260AP.hpp>
 #include <Wire.h>
 #include <bosch/BoschSensorDataHelper.hpp>
+#include <memory>
 
 class BHI260APSensor : public MotionSensor
 {
   private:
     SensorBHI260AP sensor;
-    SensorStepCounter *stepCounter;
-    SensorStepDetector *stepDetector;
-    uint32_t steps = 0;
+    std::unique_ptr<SensorStepCounter> stepCounter;
+    bool stepCounterReady = false;
+    bool pollSensor();
 #ifdef BHI260AP_I2C_CLOCK_SPEED
     ReClockI2C reClockI2C; // reclocks the bus for the boot-time firmware upload
 #endif
@@ -40,6 +41,10 @@ class BHI260APSensor : public MotionSensor
     explicit BHI260APSensor(ScanI2C::FoundDevice foundDevice);
     virtual bool init() override;
     virtual int32_t runOnce() override;
+#ifdef MESHTASTIC_INCLUDE_INKHUD
+    StepSource stepSource() const override { return stepCounterReady ? StepSource::Hardware : StepSource::None; }
+    bool syncStepCounter() override { return stepCounterReady && pollSensor(); }
+#endif
 };
 
 #endif

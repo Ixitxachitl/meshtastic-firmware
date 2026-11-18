@@ -3,6 +3,7 @@
 #if !defined(ARCH_STM32WL) && !MESHTASTIC_EXCLUDE_I2C && defined(HAS_BHI260AP) && __has_include(<SensorBHI260AP.hpp>)
 #define BOSCH_BHI260_KLIO
 
+#include "detect/ScanI2CTwoWire.h"
 #include "mesh/Throttle.h"
 #include <BoschFirmware.h>
 #include <bosch/bhi260x/bhi3_defs.h>
@@ -55,14 +56,15 @@ bool BHI260APSensor::init()
     sensor.setBootFromFlash(bosch_firmware_type);
 
     // begin() uploads the ~124KB RAM firmware image on every boot, which is almost all I2C bit time: ~11s at 100kHz.
+    TwoWire *bus = ScanI2CTwoWire::fetchI2CBus(device.address);
     const uint32_t bootStart = millis();
     bool started;
     {
 #ifdef BHI260AP_I2C_CLOCK_SPEED
-        reClockI2C.setup(&Wire, devicePort());
+        reClockI2C.setup(bus, devicePort());
         ReClockI2CGuard clockGuard(reClockI2C, BHI260AP_I2C_CLOCK_SPEED);
 #endif
-        started = sensor.begin(Wire, deviceAddress());
+        started = sensor.begin(*bus, deviceAddress());
     }
     LOG_INFO("BHI260AP boot (%u byte firmware upload) took %ums", (unsigned)bosch_firmware_size,
              (unsigned)(millis() - bootStart));
@@ -78,8 +80,7 @@ bool BHI260APSensor::init()
         LOG_INFO("Host interface : %s\n", (info.getHostStatus() & BHY2_HST_HOST_PROTOCOL) ? "SPI" : "I2C");
         LOG_INFO("Feature status : 0x%02x\n", info.getFeatStatus());
 
-        stepCounter = new SensorStepCounter(sensor);
-        // stepDetector = new SensorStepDetector(sensor);
+        stepCounter = std::make_unique<SensorStepCounter>(sensor);
 
         // sensor.configAccelerometer(sensor.RANGE_2G, sensor.ODR_100HZ, sensor.BW_NORMAL_AVG4, sensor.PERF_CONTINUOUS_MODE);
         // sensor.enableAccelerometer();
@@ -92,8 +93,7 @@ bool BHI260APSensor::init()
         attachInterrupt(BHI260AP_INT, [] { BHI_IRQ = true; }, RISING);
 #endif
 
-        // stepDetector->enable(1.0, 0);
-        stepCounter->enable(1.0, 0);
+        stepCounterReady = stepCounter->enable(1.0, 0);
 
         // Wake-on-motion (config.display.wake_on_tap_or_motion). Unlike the BMA423 there is no
         // fixed tilt/doubletap feature to switch on - we enable whichever gesture virtual sensor
@@ -156,16 +156,37 @@ int32_t BHI260APSensor::runOnce()
     // The INT line is the fast path; the keepalive keeps the step counter alive without it.
     if (!BHI_IRQ && !Throttle::hasElapsed(lastPollMs, MOTION_SENSOR_IRQ_KEEPALIVE_MS))
         return MOTION_SENSOR_CHECK_INTERVAL_MS;
+#endif
+    pollSensor();
+
+#ifdef BHI260AP_INT
+    // Tick fast for gesture latency; the IRQ check above keeps each tick cheap.
+    return MOTION_SENSOR_CHECK_INTERVAL_MS;
+#else
+    // Without the INT line only an armed wake gesture justifies polling the part 20x a second
+    return (wakeGesture && config.display.wake_on_tap_or_motion) ? MOTION_SENSOR_CHECK_INTERVAL_MS : 1000;
+#endif
+}
+
+bool BHI260APSensor::pollSensor()
+{
+#ifdef BHI260AP_INT
     BHI_IRQ = false;
     lastPollMs = millis();
 #endif
 
     sensor.update();
-    if (stepCounter->hasUpdated()) {
-        steps = stepCounter->getStepCount();
+    const bool stepUpdated = stepCounterReady && stepCounter->hasUpdated();
+    if (stepUpdated) {
+        const uint32_t steps = stepCounter->getStepCount();
         LOG_DEBUG("Step count updated: %u", steps);
+#ifdef MESHTASTIC_INCLUDE_INKHUD
+        stepTracker().hardwareTotal(steps);
+#endif
+#if !defined(MESHTASTIC_EXCLUDE_SCREEN) && HAS_SCREEN
         if (screen)
             screen->steps = steps;
+#endif
     }
 
     if (wakeGestureFired) {
@@ -177,14 +198,7 @@ int32_t BHI260APSensor::runOnce()
         // report. Re-arming is a harmless rewrite of the config for the on-change ones.
         sensor.configure(wakeGesture, wakeGestureRate, 0);
     }
-
-#ifdef BHI260AP_INT
-    // Tick fast for gesture latency; the IRQ check above keeps each tick cheap.
-    return MOTION_SENSOR_CHECK_INTERVAL_MS;
-#else
-    // Without the INT line only an armed wake gesture justifies polling the part 20x a second
-    return (wakeGesture && config.display.wake_on_tap_or_motion) ? MOTION_SENSOR_CHECK_INTERVAL_MS : 1000;
-#endif
+    return stepUpdated;
 }
 
 #endif

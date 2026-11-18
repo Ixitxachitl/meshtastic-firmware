@@ -10,6 +10,7 @@
 #include "SPILock.h"
 #include "UptimeClock.h"
 #include "gps/RTC.h"
+#include "graphics/ScreenMirror.h"
 #include "input/InputBroker.h"
 #include "meshUtils.h"
 #include <ErriezCRC32.h>
@@ -702,6 +703,11 @@ bool AdminModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshta
         handleSendInputEvent(r->send_input_event);
         break;
     }
+    // Local connections handle these in PhoneAPI; frames never cross the mesh, so a remote request is refused.
+    case meshtastic_AdminMessage_get_display_frame_request_tag:
+    case meshtastic_AdminMessage_set_display_mirror_tag:
+        myReply = allocErrorResponse(meshtastic_Routing_Error_NOT_AUTHORIZED, &mp);
+        break;
 #ifdef ARCH_PORTDUINO
     case meshtastic_AdminMessage_exit_simulator_tag:
         LOG_INFO("Exiting simulator");
@@ -862,21 +868,28 @@ static void reconcileAccelerometerThread(bool wasOn, bool nowOn, bool otherFeatu
     if (!accelerometerThread) // null unless a sensor was detected at boot
         return;
 
-        // providesHeading() only covers a sensor that computes the heading itself. Where a separate
-        // magnetometer does it, this thread still feeds its tilt compensation - stopping it would drop
-        // the compass to an uncompensated flat heading, which is wrong at every angle but level.
+    // providesHeading() only covers a sensor that computes the heading itself. Where a separate
+    // magnetometer does it, this thread still feeds its tilt compensation - stopping it would drop
+    // the compass to an uncompensated flat heading, which is wrong at every angle but level.
 #if !MESHTASTIC_EXCLUDE_MAGNETOMETER
     const bool feedsCompass = accelerometerThread->providesHeading() || magnetometerThread != nullptr;
 #else
     const bool feedsCompass = accelerometerThread->providesHeading();
 #endif
 
+#ifdef MESHTASTIC_INCLUDE_INKHUD
+    if (!wasOn && nowOn)
+        accelerometerThread->setMotionPolling(true);
+    else if (wasOn && !nowOn && !otherFeatureOn && !feedsCompass)
+        accelerometerThread->setMotionPolling(false);
+#else
     if (!wasOn && nowOn && accelerometerThread->enabled == false) {
         accelerometerThread->enabled = true;
         accelerometerThread->start();
     } else if (wasOn && !nowOn && !otherFeatureOn && accelerometerThread->enabled == true && !feedsCompass) {
         accelerometerThread->disable();
     }
+#endif
 }
 #endif
 
@@ -1162,7 +1175,7 @@ void AdminModule::handleSetConfig(const meshtastic_Config &c, bool fromOthers)
         // Apply FEM LNA mode from config (only meaningful on hardware that supports it)
         // Note that a rejected lora config will revert this as well.
         if (loraFEMInterface.isLnaCanControl()) {
-            loraFEMInterface.setLNAEnable(validatedLora.fem_lna_mode != meshtastic_Config_LoRaConfig_FEM_LNA_Mode_DISABLED);
+            loraFEMInterface.setLnaMode(validatedLora.fem_lna_mode);
         } else if (validatedLora.fem_lna_mode != meshtastic_Config_LoRaConfig_FEM_LNA_Mode_NOT_PRESENT) {
             // Hardware FEM does not support LNA control; normalize stored config to match actual capability
             LOG_WARN("FEM LNA mode set but FEM lacks LNA control; normalizing to NOT_PRESENT");
@@ -2184,6 +2197,14 @@ void AdminModule::handleSendInputEvent(const meshtastic_AdminMessage_InputEvent 
 
     // Wake the device if asleep
     powerFSM.trigger(EVENT_INPUT);
+
+#if HAS_MUI_MIRROR
+    // MUI builds never construct an InputBroker (Modules.cpp skips it when
+    // displaymode is COLOR), so remote input reaches the LVGL UI directly.
+    if (graphics::muiInjectInputEvent(inputEvent.event_code, inputEvent.kb_char, inputEvent.touch_x, inputEvent.touch_y))
+        return;
+#endif
+
 #if !defined(MESHTASTIC_EXCLUDE_INPUTBROKER)
     // Inject the event through InputBroker
     if (inputBroker) {

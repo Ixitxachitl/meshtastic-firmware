@@ -1668,6 +1668,7 @@ static LGFX *tft = nullptr;
 
 #endif
 #include "SPILock.h"
+#include "ScreenMirror.h"
 #include "TFTColorRegions.h"
 #include "TFTDisplay.h"
 #include "TFTPalette.h"
@@ -2856,6 +2857,11 @@ void TFTDisplay::display(bool fromBlank)
         haveLastDefaults = true;
         lastDefaultOnColor = defaultOnColor;
         lastDefaultOffColor = defaultOffColor;
+#if HAS_SCREEN_MIRROR
+        // regions are cleared below; hand the mirror the palette this frame was painted with
+        graphics::screenMirror.capturePalette(colorFrameSignature, colorTftWhite, colorTftBlack, graphics::colorRegions,
+                                              graphics::getTFTColorRegionCount());
+#endif
         graphics::clearTFTColorRegions();
         return;
     }
@@ -3065,6 +3071,10 @@ void TFTDisplay::display(bool fromBlank)
     haveLastDefaults = true;
     lastDefaultOnColor = defaultOnColor;
     lastDefaultOffColor = defaultOffColor;
+#if HAS_SCREEN_MIRROR && GRAPHICS_TFT_COLORING_ENABLED
+    graphics::screenMirror.capturePalette(colorFrameSignature, colorTftWhite, colorTftBlack, graphics::colorRegions,
+                                          graphics::getTFTColorRegionCount());
+#endif
     graphics::clearTFTColorRegions();
 }
 #endif // !BASEUI_NATIVE_RGB565

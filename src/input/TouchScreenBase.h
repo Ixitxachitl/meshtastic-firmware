@@ -5,6 +5,10 @@
 #include "mesh/NodeDB.h"
 #include "time.h"
 
+#ifndef TOUCH_RELEASE_GRACE_MS
+#define TOUCH_RELEASE_GRACE_MS 35
+#endif
+
 typedef struct _TouchEvent {
     const char *source;
     char touchEvent;
@@ -42,6 +46,7 @@ class TouchScreenBase : public Observable<const InputEvent *>, public concurrenc
     // Whether to report TOUCH_ACTION_DRAG while the finger moves. Off in the base class so touch
     // panels that can't usefully redraw mid-gesture keep the release-only swipe behaviour.
     virtual bool dragEventsEnabled() const;
+    void resetTouchState();
 
     volatile TouchScreenBaseStateType _state = TOUCH_EVENT_CLEARED;
     volatile TouchScreenBaseEventType _action = TOUCH_ACTION_NONE;
