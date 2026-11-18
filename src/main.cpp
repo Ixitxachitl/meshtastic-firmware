@@ -1467,7 +1467,11 @@ extern meshtastic_DeviceMetadata getDeviceMetadata()
             deviceMetadata.has_display = true;
             deviceMetadata.display.width = dispdev->getWidth();
             deviceMetadata.display.height = dispdev->getHeight();
+#if HAS_NATIVE_MIRROR
+            deviceMetadata.display.format = meshtastic_DisplayFrame_Format_RGB565;
+#else
             deviceMetadata.display.format = meshtastic_DisplayFrame_Format_MONO_VLSB;
+#endif
 #if defined(ARCH_PORTDUINO)
             // The native panel is selected at runtime; UNSPECIFIED is honest until derived from portduino_config.
             deviceMetadata.display.panel_class = meshtastic_DisplayInfo_PanelClass_PANEL_CLASS_UNSPECIFIED;

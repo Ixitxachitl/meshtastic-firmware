@@ -1958,6 +1958,9 @@ TFTDisplay::~TFTDisplay()
     if (nativeInstance == this) {
         graphics::tftColorRegionAddedHook = nullptr;
         nativeInstance = nullptr;
+#if HAS_NATIVE_MIRROR
+        graphics::screenMirror.setNativeSnapshot(nullptr);
+#endif
     }
     free(rgbPixels);
     free(rgbPushed);
@@ -2640,6 +2643,9 @@ void TFTDisplay::display(bool fromBlank)
     static_assert(kFullRepaintChunkRows == kNativeBandRows, "dirty bands must line up with push bands");
     const bool pushAll = fromBlank || forceNativePush;
     forceNativePush = false;
+#if HAS_NATIVE_MIRROR
+    const bool mirrorBands = graphics::screenMirror.wantsIncrementalRects();
+#endif
 
     beginPixelBatch();
     uint8_t chunkSlot = 0;
@@ -2704,6 +2710,10 @@ void TFTDisplay::display(bool fromBlank)
 #endif
         }
         pushPixelBlock(first, yStart, spanW, rows, chunk);
+#if HAS_NATIVE_MIRROR
+        if (mirrorBands)
+            graphics::screenMirror.onMuiRect(first, yStart, spanW, rows, rgbPixels + yStart * displayWidth + first, displayWidth);
+#endif
     }
     endPixelBatch();
     for (auto &word : nativeDirtyBands)
@@ -3940,6 +3950,14 @@ bool TFTDisplay::connect()
         nativeInstance = this;
         graphics::tftColorRegionAddedHook = onColorRegionAdded;
         forceNativePush = true;
+#if HAS_NATIVE_MIRROR
+        graphics::screenMirror.setMuiSource(nullptr, displayWidth, displayHeight, true); // rgbPixels is big-endian
+        graphics::screenMirror.setNativeSnapshot([]() {
+            if (nativeInstance)
+                graphics::screenMirror.onMuiRect(0, 0, nativeInstance->displayWidth, nativeInstance->displayHeight,
+                                                 nativeInstance->rgbPixels, nativeInstance->displayWidth);
+        });
+#endif
     }
 #endif
     LOG_DEBUG("TFT pixel buffers: dma=%d chunkSlots=%u", (int)allBuffersDmaCapable, (unsigned)this->chunkBufferSlots);

@@ -42,7 +42,7 @@ void ScreenMirror::freeSnapshotLocked()
     }
     paletteSig = 0;
     paletteCount = 0;
-#if HAS_MUI_MIRROR
+#if HAS_RECT_MIRROR
     if (muiPool) {
         if (!muiPoolInPsram)
             memaudit::add(kMemTag, -(int32_t)muiPoolBytes);
@@ -58,7 +58,7 @@ void ScreenMirror::freeSnapshotLocked()
 
 void ScreenMirror::releaseLocked(const void *client)
 {
-#if HAS_MUI_MIRROR
+#if HAS_RECT_MIRROR
     if (muiOwner == client) {
         muiOwner = nullptr;
         muiRectSendOffset = 0; // the next owner starts the head rect from its first byte
@@ -87,7 +87,7 @@ void ScreenMirror::failCaptureLocked()
 // Called outside the lock: the screen thread captures on its next pass, even while the panel is off.
 void ScreenMirror::kickCapture()
 {
-#if HAS_MUI_MIRROR
+#if HAS_RECT_MIRROR
     if (muiRefresh)
         muiRefresh();
 #endif
@@ -164,6 +164,18 @@ void ScreenMirror::cursorAtHead(uint32_t &clientFrameId, uint16_t &clientOffset)
 
 void ScreenMirror::onRendered(OLEDDisplay *display)
 {
+#if HAS_NATIVE_MIRROR
+    // The colour frame streams as rects from the display; here only a client that needs a full picture is served.
+    (void)display;
+    {
+        concurrency::LockGuard g(&lock);
+        if (!armedLocked() || captureFailed || !captureRequested || !nativeSnapshot)
+            return;
+        captureRequested = false;
+    }
+    nativeSnapshot();
+    return;
+#endif
     {
         concurrency::LockGuard g(&lock);
         if (!armedLocked() || captureFailed)
@@ -292,7 +304,7 @@ bool ScreenMirror::copyPaletteChunk(uint32_t &clientPaletteSig, uint8_t &clientR
     return true;
 }
 
-#if HAS_MUI_MIRROR
+#if HAS_RECT_MIRROR
 void ScreenMirror::onMuiRect(int16_t x, int16_t y, uint16_t w, uint16_t h, const uint16_t *pixels, uint16_t stride)
 {
     bool wake = false;
@@ -348,6 +360,9 @@ void ScreenMirror::onMuiRect(int16_t x, int16_t y, uint16_t w, uint16_t h, const
             muiRectSendOffset = 0;
             if (muiRefresh)
                 muiRefresh();
+#if HAS_NATIVE_MIRROR
+            captureRequested = true; // onRendered() queues the whole frame next
+#endif
             return;
         }
         uint8_t *dst = muiPool + at;
@@ -412,7 +427,7 @@ bool ScreenMirror::copyMuiChunkLocked(uint32_t &clientFrameId, meshtastic_Displa
 bool ScreenMirror::hasChunkFor(const void *client, uint32_t clientFrameId, uint16_t clientOffset)
 {
     concurrency::LockGuard g(&lock);
-#if HAS_MUI_MIRROR
+#if HAS_RECT_MIRROR
     // one shared rect cursor: another connection sees no rects rather than half of each
     if (muiCount && (muiOwner == nullptr || muiOwner == client))
         return true;
@@ -423,7 +438,7 @@ bool ScreenMirror::hasChunkFor(const void *client, uint32_t clientFrameId, uint1
 bool ScreenMirror::copyChunk(const void *client, uint32_t &clientFrameId, uint16_t &clientOffset, meshtastic_DisplayFrame &out)
 {
     concurrency::LockGuard g(&lock);
-#if HAS_MUI_MIRROR
+#if HAS_RECT_MIRROR
     if (muiCount) {
         if (muiOwner == nullptr)
             muiOwner = client; // first drainer claims the stream

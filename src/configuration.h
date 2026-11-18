@@ -932,6 +932,14 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define HAS_MUI_MIRROR 0
 #endif
 
+// BaseUI's native RGB565 frame streamed as RGB565 rects. Opt-in per variant: the rect pool wants PSRAM.
+#if HAS_SCREEN_MIRROR && BASEUI_NATIVE_RGB565 && BASEUI_NATIVE_MIRROR && !HAS_MUI_MIRROR
+#define HAS_NATIVE_MIRROR 1
+#else
+#define HAS_NATIVE_MIRROR 0
+#endif
+#define HAS_RECT_MIRROR (HAS_MUI_MIRROR || HAS_NATIVE_MIRROR)
+
 #ifndef USE_ETHERNET_DEFAULT
 #define USE_ETHERNET_DEFAULT 0
 #endif

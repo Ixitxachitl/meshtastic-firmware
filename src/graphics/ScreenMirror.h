@@ -58,8 +58,8 @@ class ScreenMirror
     bool hasPaletteChunkFor(uint32_t clientPaletteSig, uint8_t clientRegionOffset);
     bool copyPaletteChunk(uint32_t &clientPaletteSig, uint8_t &clientRegionOffset, meshtastic_DisplayPalette &out);
 
-#if HAS_MUI_MIRROR
-    /// LVGL thread: queues one dirty rect as tightly packed little-endian RGB565.
+#if HAS_RECT_MIRROR
+    /// LVGL thread (or BaseUI's native display): queues one dirty rect as tightly packed little-endian RGB565.
     void onMuiRect(int16_t x, int16_t y, uint16_t w, uint16_t h, const uint16_t *pixels, uint16_t stride);
 
     using FullRefreshFn = void (*)();
@@ -70,6 +70,14 @@ class ScreenMirror
         muiPanelH = panelHeight;
         muiByteSwapped = byteSwapped;
     }
+#endif
+
+#if HAS_NATIVE_MIRROR
+    /// Unlocked hint for the native display: stream changed bands, unless a whole frame is already due.
+    bool wantsIncrementalRects() const { return (subscribers || pendingRequests) && !captureFailed && !captureRequested; }
+    /// Queues the whole current frame through onMuiRect; onRendered() calls it when a client needs a full picture.
+    using SnapshotFn = void (*)();
+    void setNativeSnapshot(SnapshotFn fn) { nativeSnapshot = fn; }
 #endif
 
   private:
@@ -104,7 +112,11 @@ class ScreenMirror
     uint16_t paletteDefaultOn = 0;
     uint16_t paletteDefaultOff = 0;
 
-#if HAS_MUI_MIRROR
+#if HAS_NATIVE_MIRROR
+    SnapshotFn nativeSnapshot = nullptr;
+#endif
+
+#if HAS_RECT_MIRROR
     // FIFO rect headers over a ring of whole-rect pixel runs; one consumer at a time.
     struct MuiRect {
         uint16_t x, y, w, h;
