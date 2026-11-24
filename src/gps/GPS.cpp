@@ -142,6 +142,8 @@ constexpr uint8_t AIROHA_SLEEP_ATTEMPTS = 2;
 #endif
 // Stop parking a receiver that never acks, rather than blocking for the budget every cycle forever.
 constexpr uint8_t AIROHA_SLEEP_MAX_MISSES = 3;
+// The ack can precede the transition itself, so give the receiver time before its core supply goes.
+constexpr uint32_t AIROHA_SLEEP_SETTLE_MS = 50;
 #endif
 #ifdef HAS_AIROHA_SOFT_RTC
 constexpr uint32_t AIROHA_POWER_SETTLE_MS = 50;
@@ -149,8 +151,6 @@ constexpr uint32_t AIROHA_RTC_INT_PULSE_MS = 3;
 constexpr uint32_t AIROHA_WAKE_SETTLE_MS = 50;
 #elif defined(HAS_AIROHA_SLEEP)
 constexpr uint32_t AIROHA_IDLE_INT_LEAD_MS = 50;
-// The ack can precede the transition itself, so give the receiver time before its core supply goes.
-constexpr uint32_t AIROHA_SLEEP_SETTLE_MS = 50;
 #endif
 #ifdef HAS_AIROHA_RESET_WAKE
 constexpr uint32_t AIROHA_POWER_SETTLE_MS = 50;
@@ -1694,6 +1694,7 @@ void GPS::airohaEnterSleep()
         _serial_gps->write(sleepCmd);
         if (getACK(sleepAck, AIROHA_SLEEP_ACK_MS) == GNSS_RESPONSE_OK) {
             airohaSleepMisses = 0;
+            delay(AIROHA_SLEEP_SETTLE_MS);
             return;
         }
         // Only start another attempt while a whole ack window still fits inside the budget.
