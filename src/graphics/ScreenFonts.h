@@ -20,6 +20,10 @@
 #include "graphics/fonts/OLEDDisplayFontsGR.h"
 #endif
 
+#ifdef OLED_COMPACT_UI
+#include "graphics/fonts/OLEDDisplayFontsTiny.h"
+#endif
+
 #if (defined(CROWPANEL_ESP32S3_5_EPAPER) || defined(T5_S3_EPAPER_PRO)) && defined(USE_EINK)
 #include "graphics/fonts/EinkDisplayFonts.h"
 #endif
@@ -31,7 +35,6 @@
 // Tom Thumb 4x6: a tiny fixed-width face for dense layouts on small screens.
 // Deliberately not wired into FONT_SMALL/MEDIUM/LARGE - renderers opt in per call site.
 #include "graphics/fonts/OLEDDisplayFontsTomThumb.h"
-#define FONT_TINY TomThumb4x6
 
 #ifdef OLED_GR
 #define FONT_SMALL_LOCAL ArialMT_Plain_10_GR // Height: 13
@@ -140,6 +143,13 @@
 #define FONT_SMALL FONT_LARGE_LOCAL     // Height: 28
 #define FONT_MEDIUM DejaVuSans_plain_32 // Height: 38
 #define FONT_LARGE DejaVuSans_plain_32  // Height: 38
+#endif
+
+// 3x5 font for compact panels; Tom Thumb 4x6 elsewhere (renderers opt in per call site).
+#ifdef OLED_COMPACT_UI
+#define FONT_TINY TomThumb_6 // Height: 7
+#else
+#define FONT_TINY TomThumb4x6
 #endif
 
 #define _fontHeight(font) ((font)[1] + 1) // height is position 1

@@ -200,7 +200,8 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
                       uint16_t title_color_override = 0);
 
 // Shared battery/time/mail header
-void drawCommonFooter(OLEDDisplay *display, int16_t x, int16_t y);
+// wipe=false omits the black band behind the icon.
+void drawCommonFooter(OLEDDisplay *display, int16_t x, int16_t y, bool wipe = true);
 // drawCommonFooter() as an OLEDDisplayUi overlay. Register it before the nav bar and the banner, so both
 // of those still draw over it. Frames must not call drawCommonFooter() themselves as well.
 void drawConnectionFooterOverlay(OLEDDisplay *display, OLEDDisplayUiState *state);

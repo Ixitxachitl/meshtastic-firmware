@@ -909,14 +909,14 @@ void drawConnectionFooterOverlay(OLEDDisplay *display, OLEDDisplayUiState *state
     drawCommonFooter(display, 0, 0);
 }
 
-void drawCommonFooter(OLEDDisplay *display, int16_t x, int16_t y)
+void drawCommonFooter(OLEDDisplay *display, int16_t x, int16_t y, bool wipe)
 {
     if (isCompactPanel(display)) {
         display->setColor(WHITE); // Reset for other UI - normally done at the end of this function
         return;
     }
 
-    if (!isAPIConnected(service->api_state))
+    if (!isAPIConnected(service ? service->api_state : 0))
         return;
 
     const int scale = ((currentResolution == ScreenResolution::High) ? 2 : 1) * BASEUI_ICON_SCALE;
@@ -957,23 +957,25 @@ void drawCommonFooter(OLEDDisplay *display, int16_t x, int16_t y)
     setAndRegisterTFTColorRole(TFTColorRole::ConnectionIcon, TFTPalette::Blue, TFTPalette::Black, iconX, iconY, iconW, iconH);
 #endif
 
-    display->setColor(BLACK);
+    if (wipe) {
+        display->setColor(BLACK);
 #if GRAPHICS_TFT_COLORING_ENABLED
-    // The full-width bar reads as a clean footer where there is room below the body, but the band is
-    // the bottom (connection_icon_height + 2) rows and the body grid does not shrink with the panel:
-    // textSixthLine is 58 whatever the height, so on a 64-row display the bar lands exactly on it and
-    // erases the last thing the frame drew (the sixth body line, the LoRa ChUtil bar, the clock).
-    // Only the icon's own rect is colour-tinted, so the wide fill buys the tint nothing - fall back to
-    // the icon-width fill, as the monochrome path already does, whenever it would overlap the body.
-    const int bodyBottom = getTextPositions(display)[6] + FONT_HEIGHT_SMALL;
-    if (footerY >= bodyBottom)
-        display->fillRect(0, footerY, SCREEN_WIDTH, footerH);
-    else
-        display->fillRect(0, footerY, iconW + scale, footerH);
+        // The full-width bar reads as a clean footer where there is room below the body, but the band is
+        // the bottom (connection_icon_height + 2) rows and the body grid does not shrink with the panel:
+        // textSixthLine is 58 whatever the height, so on a 64-row display the bar lands exactly on it and
+        // erases the last thing the frame drew (the sixth body line, the LoRa ChUtil bar, the clock).
+        // Only the icon's own rect is colour-tinted, so the wide fill buys the tint nothing - fall back to
+        // the icon-width fill, as the monochrome path already does, whenever it would overlap the body.
+        const int bodyBottom = getTextPositions(display)[6] + FONT_HEIGHT_SMALL;
+        if (footerY >= bodyBottom)
+            display->fillRect(0, footerY, SCREEN_WIDTH, footerH);
+        else
+            display->fillRect(0, footerY, iconW + scale, footerH);
 #else
-    // Scaled: the source-pixel width this used to be left the right of the glyph unbacked at scale > 1.
-    display->fillRect(0, footerY, iconW + scale, footerH);
+        // Scaled: the source-pixel width this used to be left the right of the glyph unbacked at scale > 1.
+        display->fillRect(0, footerY, iconW + scale, footerH);
 #endif
+    }
     display->setColor(WHITE);
     drawScaledXbm(display, iconX, iconY, connection_icon_width, connection_icon_height, connection_icon, scale);
 }
