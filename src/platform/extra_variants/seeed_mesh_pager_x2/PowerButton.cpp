@@ -9,10 +9,12 @@
 #include "mesh/Throttle.h"
 #ifdef X2_POWER_KEY_UI
 #include "PowerFSM.h"
-#include "graphics/DeviceScreen.h"
 #include "graphics/Screen.h"
 #include "sleep.h"
+#if HAS_TFT
+#include "graphics/DeviceScreen.h"
 extern DeviceScreen *deviceScreen;
+#endif
 #endif
 
 namespace
@@ -69,9 +71,12 @@ class PowerButtonThread : public concurrency::OSThread
             }
 #ifdef X2_POWER_KEY_UI
             else if (!wakePress) {
+#if HAS_TFT
                 if (deviceScreen) {
                     deviceScreen->toggleDisplay();
-                } else if (screen) {
+                } else
+#endif
+                    if (screen) {
                     const bool waking = !screen->isScreenOn();
                     screen->setOn(waking);
                     if (waking)
@@ -119,9 +124,12 @@ class PowerButtonThread : public concurrency::OSThread
             wakePress = true;
             stablePressed = pendingPressed = true;
             pressedSinceMs = Time::stampMillis();
+#if HAS_TFT
             if (deviceScreen)
                 deviceScreen->forceWakeup();
-            else if (screen)
+            else
+#endif
+                if (screen)
                 screen->setOn(true);
             powerFSM.trigger(EVENT_INPUT);
         }

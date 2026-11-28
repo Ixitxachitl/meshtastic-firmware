@@ -196,3 +196,25 @@ void x2RunChargeMode(bool (*readPort)(uint8_t, uint8_t &), bool (*drivePin)(uint
 #define LEDC_CHANNEL LEDC_CHANNEL_0
 #define LEDC_DUTY_RES LEDC_TIMER_13_BIT
 #define LEDC_FREQUENCY 5000 // 5 kHz PWM
+
+// Personal BaseUI build (env:seeed_meshpager_x2), matched to the ThinkNode M9: same 320x240 landscape panel, keys only.
+#if !HAS_TFT
+// The arrow-key slide is timed and drawn from snapshots, so this only sets how many frames fill it;
+// frames the panel can't keep up with are dropped rather than stretching the slide.
+#undef SCREEN_TRANSITION_FRAMERATE
+#define SCREEN_TRANSITION_FRAMERATE 60
+#define SCREEN_NAV_TRANSITION_MS 200 // same slide length as the M9
+// Without WiFi the CPU otherwise drops to 80MHz after boot, and every colour frame takes ~3x as long.
+#define CPU_FAST_WHILE_SCREEN_ON
+// Compass screens redraw at the magnetometer's cadence rather than the default 20fps.
+#define COMPASS_ACTIVE_FRAMERATE 50
+// Default Dark's navy canvas drawn as the topographic artwork in graphics/img/background.h.
+#define BASEUI_BACKGROUND_IMAGE 1
+
+// Custom boot splash, shown for the second half of the boot screen: full-panel 320x240 artwork, drawn in
+// colour on colour-framebuffer builds. 1:1 scale - BASEUI_ICON_SCALE would double it off the panel.
+#define USERPREFS_OEM_TEXT "Ixitxachitl Build"
+#define USERPREFS_OEM_FONT_SIZE 1
+#define USERPREFS_OEM_IMAGE_SCALE 1
+#include "graphics/img/oem_splash.h"
+#endif

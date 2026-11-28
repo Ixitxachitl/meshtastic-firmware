@@ -1,7 +1,6 @@
 #if defined(SEEED_MESHPAGER_X2) && defined(X2_POWER_KEY_UI)
 
 #include "Arduino.h"
-#include "graphics/LGFX/LGFX_GENERIC.h"
 #include "mesh/Throttle.h"
 #include "variant.h"
 #include <driver/gpio.h>
@@ -9,6 +8,67 @@
 #include <esp_sleep.h>
 #include <esp_system.h>
 #include <initializer_list>
+
+#if HAS_TFT
+#include "graphics/LGFX/LGFX_GENERIC.h"
+using ChargeLcd = LGFX_GENERIC;
+#else
+#include <LovyanGFX.hpp>
+// BaseUI builds carry no device-ui, so no LGFX_GENERIC: the same panel, configured from variant.h as TFTDisplay does.
+class ChargeLcd : public lgfx::LGFX_Device
+{
+    lgfx::Panel_ST7789P3 panel;
+    lgfx::Bus_SPI bus;
+    lgfx::Light_PWM light;
+
+  public:
+    ChargeLcd()
+    {
+        {
+            auto cfg = bus.config();
+            cfg.spi_host = ST7789_SPI_HOST;
+            cfg.spi_mode = 0;
+            cfg.freq_write = SPI_FREQUENCY;
+            cfg.freq_read = SPI_READ_FREQUENCY;
+            cfg.spi_3wire = true;
+            cfg.use_lock = true;
+            cfg.dma_channel = SPI_DMA_CH_AUTO;
+            cfg.pin_sclk = ST7789_SCK;
+            cfg.pin_mosi = ST7789_SDA;
+            cfg.pin_miso = ST7789_MISO;
+            cfg.pin_dc = ST7789_RS;
+            bus.config(cfg);
+            panel.setBus(&bus);
+        }
+        {
+            auto cfg = panel.config();
+            cfg.pin_cs = ST7789_CS;
+            cfg.pin_rst = ST7789_RESET;
+            cfg.pin_busy = ST7789_BUSY;
+            cfg.memory_width = TFT_WIDTH;
+            cfg.memory_height = TFT_HEIGHT;
+            cfg.panel_width = TFT_WIDTH;
+            cfg.panel_height = TFT_HEIGHT;
+            cfg.offset_x = TFT_OFFSET_X;
+            cfg.offset_y = TFT_OFFSET_Y;
+            cfg.offset_rotation = TFT_OFFSET_ROTATION;
+            cfg.readable = false;
+            cfg.invert = true;
+            cfg.rgb_order = false;
+            cfg.bus_shared = false;
+            panel.config(cfg);
+        }
+        {
+            auto cfg = light.config();
+            cfg.pin_bl = ST7789_BL;
+            cfg.invert = false;
+            light.config(cfg);
+            panel.setLight(&light);
+        }
+        setPanel(&panel);
+    }
+};
+#endif
 
 using namespace meshpager_x2;
 
@@ -41,7 +101,7 @@ int batterySegments()
     return 0;
 }
 
-void drawBatteryFrame(LGFX_GENERIC &lcd)
+void drawBatteryFrame(ChargeLcd &lcd)
 {
     lcd.fillRoundRect(100, 30, 120, 180, 8, 0xFFFF);
     lcd.fillRoundRect(104, 34, 112, 172, 4, 0);
@@ -49,7 +109,7 @@ void drawBatteryFrame(LGFX_GENERIC &lcd)
 }
 
 // Only repaint segments whose color changed; repainting the whole battery flickers.
-void drawBatterySegments(LGFX_GENERIC &lcd, int segments, bool pulse, int32_t (&shown)[4])
+void drawBatterySegments(ChargeLcd &lcd, int segments, bool pulse, int32_t (&shown)[4])
 {
     for (int segment = 0; segment < 4; ++segment) {
         const uint16_t color = segment < segments ? 0x07E0 : (segment == segments && pulse ? 0x03E0 : 0);
@@ -93,7 +153,7 @@ void x2RunChargeMode(bool (*readPort)(uint8_t, uint8_t &), bool (*drivePin)(uint
     if (!ready)
         ESP.restart();
 
-    LGFX_GENERIC lcd;
+    ChargeLcd lcd;
     if (!lcd.init())
         ESP.restart();
     lcd.setBrightness(0);
