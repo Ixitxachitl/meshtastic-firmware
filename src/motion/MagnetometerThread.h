@@ -82,14 +82,14 @@ class MagnetometerThread : public concurrency::OSThread
             sensor.reset(new QMC6309Sensor(device));
             break;
 #endif
+#if __has_include(<DFRobot_BMM350.h>)
+        case ScanI2C::DeviceType::BMM350:
+            sensor.reset(new BMM350Sensor(device));
+            break;
+#endif
 #if __has_include(<DFRobot_BMM150.h>) && !MESHTASTIC_EXCLUDE_ACCELEROMETER // keeps the driver out of plain ESP32 builds
         case ScanI2C::DeviceType::BMM150:
             sensor.reset(new BMM150Sensor(device));
-            break;
-#endif
-#if defined(HAS_BMM350) && __has_include(<DFRobot_BMM350.h>)
-        case ScanI2C::DeviceType::BMM350:
-            sensor.reset(new BMM350Sensor(device));
             break;
 #endif
         default:

@@ -1,5 +1,6 @@
 #include "TouchScreenBase.h"
 #include "TouchHaptics.h"
+#include "UptimeClock.h"
 #include "main.h"
 #include "mesh/Throttle.h"
 
@@ -105,6 +106,7 @@ void TouchScreenBase::resetTouchState()
     _state = TOUCH_EVENT_CLEARED;
     _action = TOUCH_ACTION_NONE;
     _touchedOld = false;
+    _ignoreContact = false;
     _tapped = false;
     _longPressSuppressed = false;
     _dragging = false;
@@ -112,7 +114,7 @@ void TouchScreenBase::resetTouchState()
 
 int32_t TouchScreenBase::runOnce()
 {
-    uint32_t nowMs = millis();
+    uint32_t nowMs = Time::getMillis();
     if (nowMs - _lastRun < TOUCH_MIN_POLL_INTERVAL) { // suppress too fast consecutive runOnce() executions
         return TOUCH_MIN_POLL_INTERVAL;
     }
@@ -132,11 +134,11 @@ int32_t TouchScreenBase::runOnce()
     if (x < 0 || y < 0) // T-deck can emit phantom touch events with a negative value when turning off the screen
         touched = false;
     if (touched) {
-        _lastTouchSeenMs = millis();
+        _lastTouchSeenMs = nowMs;
         this->setInterval(fastTapMode ? TOUCH_POLL_INTERVAL_ACTIVE_FAST : TOUCH_POLL_INTERVAL_ACTIVE);
         _last_x = x;
         _last_y = y;
-    } else if (_touchedOld && ((uint32_t)millis() - _lastTouchSeenMs) < TOUCH_RELEASE_GRACE_MS) {
+    } else if (_touchedOld && (nowMs - _lastTouchSeenMs) < TOUCH_RELEASE_GRACE_MS) {
         // Treat brief no-touch samples as continuous touch to preserve long-press detection.
         touched = true;
     }
@@ -148,17 +150,35 @@ int32_t TouchScreenBase::runOnce()
 #endif
             _state = TOUCH_EVENT_OCCURRED;
             _pressStartMs = nowMs;
+            // The time the finger came down, when the interrupt saw it (this run may be late). A down time from before
+            // the last release belongs to the previous press: this one's interrupt hasn't run yet
+            uint32_t downMs, upMs;
+            _pressDownTimed = touchEdgeTimes(downMs, upMs) && (int32_t)(downMs - upMs) > 0 && (int32_t)(nowMs - downMs) >= 0;
+            if (_pressDownTimed)
+                _pressStartMs = downMs;
             _longPressSuppressed = false;
             _first_x = x;
             _first_y = y;
             _dragging = false;
             _drag_x = x;
             _drag_y = y;
+        } else if (_ignoreContact) {
+            _state = TOUCH_EVENT_CLEARED;
+            _ignoreContact = false;
+            _pressDownTimed = false;
+            _tapped = false;
         } else {
             _state = TOUCH_EVENT_CLEARED;
             // A drag already pulsed as it started, so the swipe classified from the same finger must not again.
             const bool wasDragging = _dragging;
             uint32_t duration = nowMs - _pressStartMs;
+            // The time the finger lifted, when the interrupt saw it: a tap during a slow redraw stays a tap
+            uint32_t upMs;
+            const bool releaseTimed = timedRelease(nowMs, upMs);
+            _pressDownTimed = false;
+            if (releaseTimed)
+                duration = upMs - _pressStartMs;
+            LOG_INPUT("release after %u ms%s", (unsigned)duration, releaseTimed ? " (interrupt)" : "");
             x = _last_x;
             y = _last_y;
             this->setInterval(fastTapMode ? TOUCH_POLL_INTERVAL_RELEASE_FAST : TOUCH_POLL_INTERVAL_RELEASE);
@@ -221,6 +241,12 @@ int32_t TouchScreenBase::runOnce()
                         }
                     } else {
                         _tapped = false;
+                        // Held long enough, but this thread wasn't running to see it while the finger was down
+                        if (releaseTimed && allowLongPress && !_longPressSuppressed) {
+                            e.touchEvent = static_cast<char>(TOUCH_ACTION_LONG_PRESS);
+                            LOG_INPUT("action LONG PRESS(%d/%d), seen at release", _last_x, _last_y);
+                            touchHapticPulse(TouchHaptic::LongPress);
+                        }
                     }
                 }
             }
@@ -339,9 +365,12 @@ int32_t TouchScreenBase::runOnce()
     // Armed and expired are asked separately; folding the deadline into the press stamp repeated
     // LONG_PRESS every poll across the wrap on 64-bit time_t hosts.
     const bool longPressSuppressed = _longPressSuppressed && !Throttle::deadlinePassed(_longPressSuppressUntilMs);
+    uint32_t releasedMs;
     // Never mid-drag: the finger having travelled says this gesture isn't a press, and firing here would
-    // also clobber a TOUCH_ACTION_DRAG set for this same poll.
-    if (allowLongPress && touched && !_dragging && !longPressSuppressed && Throttle::hasElapsed(_pressStartMs, TIME_LONG_PRESS)) {
+    // also clobber a TOUCH_ACTION_DRAG set for this same poll. A release edge means the finger is up, though
+    // the grace window still counts it as held: the release decides.
+    if (allowLongPress && touched && !_dragging && !_ignoreContact && !longPressSuppressed &&
+        Throttle::hasElapsed(_pressStartMs, TIME_LONG_PRESS) && !timedRelease(nowMs, releasedMs)) {
         // A finger held past the window re-reports LONG_PRESS once per window, as before.
         _longPressSuppressed = true;
         _longPressSuppressUntilMs = nowMs + LONG_PRESS_REPEAT_SUPPRESS_MS;
@@ -358,6 +387,14 @@ int32_t TouchScreenBase::runOnce()
     }
 
     return interval;
+}
+
+bool TouchScreenBase::timedRelease(uint32_t nowMs, uint32_t &upMs)
+{
+    // Only while the latest down edge is still this touch's: a later touch overwrites the release we'd want
+    uint32_t downMs;
+    return _pressDownTimed && touchEdgeTimes(downMs, upMs) && downMs == _pressStartMs && (int32_t)(upMs - downMs) >= 0 &&
+           (int32_t)(nowMs - upMs) >= 0;
 }
 
 bool TouchScreenBase::fastTapModeEnabled() const

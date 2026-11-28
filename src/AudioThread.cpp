@@ -214,7 +214,13 @@ void AudioThread::preloadRing()
     // or pop. The silence-preloaded ring used to provide 46ms of cover implicitly; give
     // a deliberate 10ms instead - that is now the entire startup latency of a click.
     memset(staging, 0, sizeof(staging));
-    for (size_t remaining = kAmpLeadInFrames; remaining;) {
+    size_t leadInFrames = kAmpLeadInFrames;
+#ifdef AUDIO_TAKE_LEAD_IN_MS
+    // A codec that swallows its first frames after power-up reports how long, once (consume-once). Silence past what
+    // the ring holds is dropped, so a lead-in longer than the ring is only partly covered.
+    leadInFrames += (size_t)((uint64_t)RtttlPcm::kSampleRate * AUDIO_TAKE_LEAD_IN_MS() / 1000);
+#endif
+    for (size_t remaining = leadInFrames; remaining;) {
         size_t chunk = remaining < kStagingFrames ? remaining : kStagingFrames;
         size_t took = sink->preloadFrames(staging, chunk);
         if (!took)

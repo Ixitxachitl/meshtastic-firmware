@@ -5,6 +5,7 @@
 #include "graphics/Screen.h"
 #include "main.h"
 #include "mesh/http/WebServer.h"
+#include "mesh/http/WebSocketAPI.h"
 #include "mesh/wifi/WiFiAPClient.h"
 #include "sleep.h"
 #include <HTTPBodyParser.hpp>
@@ -339,7 +340,10 @@ int32_t WebServerThread::runOnce()
         ESP.restart();
     }
 
-    return getAdaptiveInterval();
+    // Nothing signals inbound WebSocket data, so an attached client keeps the poll short.
+    const bool webSocketAttached = serviceWebSocketAPI();
+    const int32_t interval = getAdaptiveInterval();
+    return webSocketAttached && interval > MEDIUM_INTERVAL_MS ? MEDIUM_INTERVAL_MS : interval;
 }
 
 void initWebServer()
@@ -351,6 +355,7 @@ void initWebServer()
     insecureServer = new HTTPServer();
 
     registerHandlers(insecureServer, secureServer);
+    registerWebSocketAPI(insecureServer, secureServer);
 
     if (secureServer) {
         LOG_INFO("Start Secure Web Server");

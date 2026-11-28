@@ -232,12 +232,7 @@ static void drawLockscreenFrame(OLEDDisplay *display, OLEDDisplayUiState *state,
 static inline void prepareFrameColorRegions()
 {
 #if GRAPHICS_TFT_COLORING_ENABLED
-    clearTFTColorRegions();
-    // Full-frame FrameMono inversion for themes that need it (e.g. light themes).
-    if (isThemeFullFrameInvert()) {
-        setAndRegisterTFTColorRole(TFTColorRole::FrameMono, getThemeBodyFg(), getThemeBodyBg(), 0, 0, screen->getWidth(),
-                                   screen->getHeight());
-    }
+    resetTFTColorRegions(screen->getWidth(), screen->getHeight());
 #endif
 }
 #endif
@@ -2272,6 +2267,30 @@ bool Screen::isShowingBootScreen() const
     return useDisplay && showingBootScreen && !Throttle::hasElapsed(serialSinceMsec, logo_timeout);
 }
 
+void Screen::applyQuarterTurns()
+{
+#if HAS_SCREEN_AUTO_ROTATE && USE_TFTDISPLAY
+    const int8_t turns = pendingQuarterTurns.exchange(-1);
+    if (turns < 0)
+        return;
+    auto *tft = static_cast<TFTDisplay *>(dispdev);
+    if (tft->getQuarterTurns() == turns)
+        return;
+    tft->setQuarterTurns(turns);
+    displayWidth = dispdev->width();
+    displayHeight = dispdev->height();
+    graphics::currentResolution = graphics::determineScreenResolution(displayHeight, displayWidth);
+    // Messages are wrapped to the old width
+    graphics::MessageRenderer::clearMessageCache();
+#if HAS_TOUCHSCREEN
+    // A finger down during the turn moved between frames: no swipe from it
+    if (touchScreenImpl1)
+        touchScreenImpl1->ignoreCurrentContact();
+#endif
+    setFastFramerate();
+#endif
+}
+
 int32_t Screen::runOnce()
 {
     // How long the last frame took. Read below to pace this thread; the destructor updates it after
@@ -2350,6 +2369,10 @@ int32_t Screen::runOnce()
 #if BASEUI_MAP_ROUTING
     MapNavigation::pollSavedRoutes();
 #endif
+#if HAS_SCREEN_AUTO_ROTATE && USE_TFTDISPLAY
+    applyQuarterTurns();
+#endif
+
     menuHandler::handleMenuSwitch(dispdev);
 
     // Show boot screen for first logo_timeout seconds, then switch to normal operation.

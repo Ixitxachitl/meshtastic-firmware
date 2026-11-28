@@ -1,5 +1,6 @@
 #include "ScanI2CTwoWire.h"
 #include "configuration.h"
+#include "detect/DS248XDetection.h"
 #include "detect/INA219Detection.h"
 #include "detect/ScanI2C.h"
 
@@ -11,6 +12,9 @@
 #endif
 #if defined(SENSECAP_INDICATOR)
 #include "mesh/comms/I2CProxy.h"
+#endif
+#ifdef YSN8900E_RTC
+#include <YSN8900ERTC.h>
 #endif
 #if !defined(ARCH_PORTDUINO) && !defined(ARCH_STM32)
 #include "meshUtils.h" // vformat
@@ -416,6 +420,19 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
 #ifdef RX8130CE_RTC
                 SCAN_SIMPLE_CASE(RX8130CE_RTC, RTC_RX8130CE, "RX8130CE", (uint8_t)addr.address)
 #endif
+#ifdef YSN8900E_RTC
+            case YSN8900E_RTC: {
+                YSN8900ERTC ysn;
+                if (ysn.begin(*i2cBus, (uint8_t)addr.address)) {
+                    type = RTC_YSN8900E;
+                    logFoundDevice("YSN8900E", (uint8_t)addr.address);
+                    // Vendor firmware leaves a periodic timer pulsing /INT.
+                    if (!ysn.disableInterrupts())
+                        LOG_WARN("YSN8900E: failed to disable interrupts");
+                }
+                break;
+            }
+#endif
 
 #ifdef PCF85063_RTC
                 SCAN_SIMPLE_CASE(PCF85063_RTC, RTC_PCF85063, "PCF85063", (uint8_t)addr.address)
@@ -453,7 +470,7 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
             case BBQ10_KB_ADDR:
                 // Check status register (0xF0) for DS284X status and one-wire reset
                 registerValue = getRegisterValue(ScanI2CTwoWire::RegisterLocation(addr, 0xF0), 1);
-                if (registerValue & 0x16) { // One-wire reset after power-on
+                if (matchesDs248xResetStatus(registerValue)) {
                     type = DS248X;
                     logFoundDevice("DS2482-800", (uint8_t)addr.address);
                     break;
@@ -497,6 +514,19 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
                 break;
             }
 #endif
+            case BMM350_ADDR_ALT: {
+                i2cBus->beginTransmission(addr.address);
+                i2cBus->write((uint8_t)0x00);
+                if (i2cBus->endTransmission() == 0 && i2cBus->requestFrom((int)addr.address, 3) == 3) {
+                    i2cBus->read();
+                    i2cBus->read();
+                    if (i2cBus->read() == 0x33) {
+                        logFoundDevice("BMM350", (uint8_t)addr.address);
+                        type = BMM350;
+                    }
+                }
+                break;
+            }
             case XPOWERS_AXP192_AXP2101_ADDRESS:
                 // Qwiic Buzzer: ID register reads 0x5E and register 0x0A echoes its own address. Probe first,
                 // it answers the 0x90 read below with 0xFF and would pass as a PMU.
@@ -719,7 +749,7 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
 
                     // Check status register (0xF0) for DS284X status and one-wire reset
                     registerValue = getRegisterValue(ScanI2CTwoWire::RegisterLocation(addr, 0xF0), 1);
-                    if (registerValue & 0x16) { // One-wire reset after power-on
+                    if (matchesDs248xResetStatus(registerValue)) {
                         type = DS248X;
                         logFoundDevice("DS248X", (uint8_t)addr.address);
                     }
@@ -786,7 +816,7 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
             case DS248X_ADDR_ALT3:
                 // Check status register (0xF0) for DS284X status and one-wire reset
                 registerValue = getRegisterValue(ScanI2CTwoWire::RegisterLocation(addr, 0xF0), 1);
-                if (registerValue & 0x16) { // One-wire reset after power-on
+                if (matchesDs248xResetStatus(registerValue)) {
                     type = DS248X;
                     logFoundDevice("DS2482-800", (uint8_t)addr.address);
                     break;
@@ -796,7 +826,7 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
             case QMC6310U_ADDR:
                 // Check status register (0xF0) for DS284X status and one-wire reset
                 registerValue = getRegisterValue(ScanI2CTwoWire::RegisterLocation(addr, 0xF0), 1);
-                if (registerValue & 0x16) { // One-wire reset after power-on
+                if (matchesDs248xResetStatus(registerValue)) {
                     type = DS248X;
                     logFoundDevice("DS2482-800", (uint8_t)addr.address);
                     break;
@@ -859,7 +889,7 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
 
                 // Check status register (0xF0) for DS284X status and one-wire reset
                 registerValue = getRegisterValue(ScanI2CTwoWire::RegisterLocation(addr, 0xF0), 1);
-                if (registerValue & 0x16) { // One-wire reset after power-on
+                if (matchesDs248xResetStatus(registerValue)) {
                     type = DS248X;
                     logFoundDevice("DS2482-800", (uint8_t)addr.address);
                     break;
@@ -899,7 +929,7 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
 
                 // Check status register (0xF0) for DS284X status and one-wire reset
                 registerValue = getRegisterValue(ScanI2CTwoWire::RegisterLocation(addr, 0xF0), 1);
-                if (registerValue & 0x16) { // One-wire reset after power-on
+                if (matchesDs248xResetStatus(registerValue)) {
                     type = DS248X;
                     logFoundDevice("DS2482-800", (uint8_t)addr.address);
                     break;
@@ -932,7 +962,26 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
 
                 break;
 
-                SCAN_SIMPLE_CASE(LSM6DS3_ADDR, LSM6DS3, "LSM6DS3", (uint8_t)addr.address);
+            case LSM6DS3_ADDR: {
+#ifdef SEEED_MESHPAGER_X2
+                uint8_t imuId = 0;
+                if (!readByteRegister(i2cBus, addr.address, 0x0F, imuId)) {
+                    LOG_WARN("Failed to read IMU WHO_AM_I at 0x%x", (uint8_t)addr.address);
+                } else if (imuId == 0x6C) {
+                    type = LSM6DSOX;
+                    logFoundDevice("LSM6DSOX", (uint8_t)addr.address);
+                } else if (imuId == 0x6A) {
+                    type = LSM6DS3;
+                    logFoundDevice("LSM6DS3", (uint8_t)addr.address);
+                } else {
+                    LOG_WARN("Unsupported IMU WHO_AM_I 0x%x at 0x%x", imuId, (uint8_t)addr.address);
+                }
+#else
+                type = LSM6DS3;
+                logFoundDevice("LSM6DS3", (uint8_t)addr.address);
+#endif
+                break;
+            }
             case VEML7700_ADDR: { // same as BMM150 with CSB and SDO low
                 // VEML7700 ID (0x07) low byte is 0x81. A BMM150 chip ID (0x40) reads 0x32, but only once the power bit
                 // (0x4B bit 0) has taken it out of suspend
@@ -987,7 +1036,7 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
             case DFROBOT_RAIN_ADDR:
                 // Check status register (0xF0) for DS284X status and one-wire reset
                 registerValue = getRegisterValue(ScanI2CTwoWire::RegisterLocation(addr, 0xF0), 1);
-                if (registerValue & 0x16) { // One-wire reset after power-on
+                if (matchesDs248xResetStatus(registerValue)) {
                     type = DS248X;
                     logFoundDevice("DS2482-800", (uint8_t)addr.address);
                     break;
@@ -1001,7 +1050,7 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
             case CST328_ADDR:
                 // Check status register (0xF0) for DS284X status and one-wire reset
                 registerValue = getRegisterValue(ScanI2CTwoWire::RegisterLocation(addr, 0xF0), 1);
-                if (registerValue & 0x16) { // One-wire reset after power-on
+                if (matchesDs248xResetStatus(registerValue)) {
                     type = DS248X;
                     logFoundDevice("DS2482-800", (uint8_t)addr.address);
                     break;
@@ -1011,14 +1060,15 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
                     // T-Deck pro V1.1 new touch panel use CST3530
                     int retry = 5;
                     while (retry--) {
-                        uint8_t buffer[7];
+                        uint8_t buffer[7] = {};
                         uint8_t r_cmd[] = {0x0d0, 0x03, 0x00, 0x00};
                         i2cBus->beginTransmission(addr.address);
                         i2cBus->write(r_cmd, sizeof(r_cmd));
                         if (i2cBus->endTransmission() == 0) {
-                            i2cBus->requestFrom((int)addr.address, 7);
-                            i2cBus->readBytes(buffer, 7);
-                            if (buffer[2] == 0xCA && buffer[3] == 0xCA) {
+                            // A short read must not match: the CST3530 result is final and skips the CST226SE/CST328 check
+                            const int received = i2cBus->requestFrom((int)addr.address, 7);
+                            const int read = i2cBus->readBytes(buffer, 7);
+                            if (received == 7 && read == 7 && buffer[2] == 0xCA && buffer[3] == 0xCA) {
                                 logFoundDevice("CST3530", (uint8_t)addr.address);
                                 type = CST3530;
                                 break;
@@ -1031,6 +1081,8 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
                         delay(50);
                     }
                 }
+                if (type == CST3530) // the break above only left the retry loop
+                    break;
                 registerValue = getRegisterValue(ScanI2CTwoWire::RegisterLocation(addr, 0xAB), 1);
                 if (registerValue == 0xA9) {
                     type = CST226SE;

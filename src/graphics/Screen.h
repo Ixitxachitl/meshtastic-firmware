@@ -81,6 +81,7 @@ class Screen
     void setOn(bool) {}
     void doDeepSleep() {}
     void forceDisplay(bool forceUiUpdate = false) {}
+    void requestQuarterTurns(uint8_t) {}
     void startFirmwareUpdateScreen() {}
     void increaseBrightness() {}
     void decreaseBrightness() {}
@@ -772,6 +773,10 @@ class Screen : public concurrency::OSThread
     /// Used to force (super slow) eink displays to draw critical frames
     void forceDisplay(bool forceUiUpdate = false);
 
+    /// Turn the picture by quarter turns clockwise from the build's orientation (0 to 3), as the device was turned: the
+    /// accelerometer's request, applied between frames (HAS_SCREEN_AUTO_ROTATE builds; ignored by the others)
+    void requestQuarterTurns(uint8_t turns) { pendingQuarterTurns = turns & 3; }
+
     /// Draws our SSL cert screen during boot (called from WebServer)
     void setSSLFrames();
 
@@ -804,6 +809,8 @@ class Screen : public concurrency::OSThread
     uint16_t displayHeight = 0;
 
   private:
+    std::atomic<int8_t> pendingQuarterTurns{-1}; // -1: no request
+    void applyQuarterTurns();
     // nullptr for every build with no modal module, which is why the three sites are unchanged.
     const MeshModule *modalModule = nullptr;
 

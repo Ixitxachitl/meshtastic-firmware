@@ -603,7 +603,7 @@ class LGFX : public lgfx::LGFX_Device
 
 static LGFX *tft = nullptr;
 
-#elif defined(ST7789_CS)
+#elif defined(ST7789_CS) || defined(ST7789P3_PANEL)
 #include <LovyanGFX.hpp> // Graphics and font library for ST7735 driver chip
 #if defined(HELTEC_V4_TFT) || defined(HELTEC_V4_R8_TFT)
 #include "chsc6x.h"
@@ -662,7 +662,11 @@ class TOUCH_CHSC6X : public ITouch
 #endif
 class LGFX : public lgfx::LGFX_Device
 {
+#if defined(ST7789P3_PANEL)
+    lgfx::Panel_ST7789P3 _panel_instance;
+#else
     lgfx::Panel_ST7789 _panel_instance;
+#endif
     lgfx::Bus_SPI _bus_instance;
     lgfx::Light_PWM _light_instance;
 #if HAS_TOUCHSCREEN
@@ -2755,7 +2759,35 @@ void TFTDisplay::display()
 #endif
     }
 #else
-    display(false);
+    display(rotationRepaintPending);
+#endif
+    rotationRepaintPending = false;
+}
+
+void TFTDisplay::setQuarterTurns(uint8_t turns)
+{
+#if HAS_SCREEN_AUTO_ROTATE
+    turns &= 3;
+    if (turns == quarterTurns || tft == nullptr)
+        return;
+    concurrency::LockGuard g(spiLock);
+    quarterTurns = turns;
+    // The buffer keeps its size (w x h / 8 bytes either way); a quarter turn swaps its width and height
+    if (turns & 1)
+        setGeometry(GEOMETRY_RAWMODE, baseHeight, baseWidth);
+    else
+        setGeometry(GEOMETRY_RAWMODE, baseWidth, baseHeight);
+    memset(buffer, 0, displayBufferSize);
+#ifdef OLEDDISPLAY_DOUBLE_BUFFER
+    memset(buffer_back, 0, displayBufferSize);
+#endif
+    // A panel rotation step turns the picture a quarter turn clockwise: undo the device's turn
+    tft->setRotation((baseRotation + 4 - turns) & 3);
+    tft->fillScreen(getThemeDefaultOffColor());
+    rotationRepaintPending = true;
+    LOG_INFO("TFT: %u quarter turns, %ux%u", turns, displayWidth, displayHeight);
+#else
+    (void)turns;
 #endif
 }
 
@@ -3848,7 +3880,7 @@ bool TFTDisplay::connect()
 #elif defined(T_WATCH_S3)
     tft->setRotation(2); // T-Watch S3 left-handed orientation
 #elif ARCH_PORTDUINO || defined(SENSECAP_INDICATOR) || defined(T_LORA_PAGER) || defined(T_WATCH_ULTRA) ||                        \
-    defined(SEEED_WIO_TRACKER_L2)
+    defined(SEEED_WIO_TRACKER_L2) || defined(SEEED_MESHPAGER_X2)
     tft->setRotation(0); // use config.yaml to set rotation
 #else
     tft->setRotation(3); // Orient horizontal and wide underneath the silkscreen name label
@@ -3875,6 +3907,24 @@ bool TFTDisplay::connect()
     graphics::backlightOn();
 #endif
 
+#if HAS_SCREEN_AUTO_ROTATE
+    // connect() runs again on a wake: the build's orientation is the first one, and a turned picture stays turned
+    if (baseWidth == 0) {
+        baseRotation = tft->getRotation();
+        baseWidth = displayWidth;
+        baseHeight = displayHeight;
+    } else if (quarterTurns != 0) {
+        tft->setRotation((baseRotation + 4 - quarterTurns) & 3);
+        rotationRepaintPending = true;
+    }
+#endif
+#if HAS_SCREEN_AUTO_ROTATE
+    // Rows as wide as the screen in either orientation
+    const uint32_t lineWidth = displayWidth > displayHeight ? displayWidth : displayHeight;
+#else
+    const uint32_t lineWidth = displayWidth;
+#endif
+
     // Both buffers have to be DMA-reachable before display() can use the DMA push, so track the
     // two allocations together.
     bool allBuffersDmaCapable = true;
@@ -3887,9 +3937,9 @@ bool TFTDisplay::connect()
         // At the worst case (x = 0, full-width span) that is exactly rowsPerPush * displayWidth.
         // Span widening can only grow a push rightwards to the panel edge, so x + rowsPerPush * span
         // still tops out at rowsPerPush * displayWidth.
-        const size_t linePixels = (size_t)displayWidth * CO5300_ROWS_PER_PUSH;
+        const size_t linePixels = (size_t)lineWidth * CO5300_ROWS_PER_PUSH;
 #else
-        const size_t linePixels = (size_t)displayWidth;
+        const size_t linePixels = (size_t)lineWidth;
 #endif
         this->linePixelBuffer = allocPixelBuffer(linePixels, &thisBufferDmaCapable);
 
@@ -3901,7 +3951,7 @@ bool TFTDisplay::connect()
         memaudit::add("display", sizeof(uint16_t) * linePixels, this->linePixelBuffer);
     }
     if (this->repaintChunkBuffer == NULL) {
-        const size_t chunkPixels = (size_t)displayWidth * kFullRepaintChunkRows;
+        const size_t chunkPixels = (size_t)lineWidth * kFullRepaintChunkRows;
 
         // Two slots let a chunk's pixel conversion overlap the previous chunk's transfer, but that
         // is only worth having if the internal heap can spare it - so ask for the pair, and drop to

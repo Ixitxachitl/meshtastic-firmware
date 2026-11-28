@@ -87,6 +87,8 @@ void clearTFTColorRegions();
 // that resolves colour at draw time, so it can repaint pixels drawn before the region existed.
 extern void (*tftColorRegionAddedHook)(int16_t x, int16_t y, int16_t width, int16_t height, uint16_t onColorBe,
                                        uint16_t offColorBe);
+// Start a frame's regions over: clear them, then add the full-frame region of themes that invert the whole frame
+void resetTFTColorRegions(int16_t width, int16_t height);
 uint16_t resolveTFTColorPixel(int16_t x, int16_t y, bool isset, uint16_t defaultOnColor, uint16_t defaultOffColor);
 // Resolve effective region-mapped OFF color at a coordinate in native-endian RGB565.
 uint16_t resolveTFTOffColorAt(int16_t x, int16_t y, uint16_t defaultOffColor);

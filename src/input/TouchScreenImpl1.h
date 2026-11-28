@@ -39,6 +39,7 @@ class TouchScreenImpl1 : public TouchScreenBase
     bool fastTapModeEnabled() const override;
     bool longPressEnabled() const override;
     bool dragEventsEnabled() const override;
+    bool touchEdgeTimes(uint32_t &downMs, uint32_t &upMs) override;
 
     // Attach/detach a hardware interrupt on the touch IRQ pin (SCREEN_TOUCH_INT) so a new touch
     // wakes the polling thread immediately. No-op on boards without a usable touch interrupt line.

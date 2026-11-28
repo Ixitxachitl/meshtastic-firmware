@@ -934,6 +934,14 @@ void clearTFTColorRegions()
     colorRegionGeneration++;
 }
 
+void resetTFTColorRegions(int16_t width, int16_t height)
+{
+    clearTFTColorRegions();
+    // Full-frame FrameMono inversion for themes that need it (e.g. light themes)
+    if (isThemeFullFrameInvert())
+        setAndRegisterTFTColorRole(TFTColorRole::FrameMono, getThemeBodyFg(), getThemeBodyBg(), 0, 0, width, height);
+}
+
 // Per-row culling fast path (see TFTColorRegions.h / resolveTFTColorPixelRow()).
 uint8_t tftColorRowRegions[MAX_TFT_COLOR_REGIONS];
 uint8_t tftColorRowCount = 0;

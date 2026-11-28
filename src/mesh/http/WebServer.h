@@ -22,6 +22,8 @@ class WebServerThread : private concurrency::OSThread
     void markActivity();
     // An SD upload or delete is under way: poll almost continuously so each request is answered as it lands.
     void markTransfer();
+    /// Run on the next loop pass instead of waiting out the idle interval.
+    void wake() { setIntervalFromNow(0); }
 
   protected:
     virtual int32_t runOnce() override;
@@ -42,6 +44,7 @@ class WebServerThread
     uint32_t requestRestart = 0;
     void markActivity() {}
     void markTransfer() {}
+    void wake() {}
 };
 
 inline WebServerThread *webServerThread = nullptr;
